@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useAgentStore } from '../../stores/agentStore';
-import { sendAgentMessage } from '../../lib/api';
+import { cancelAgent, sendAgentMessage } from '../../lib/api';
 import { useWorkspaceEvents } from '../../hooks/useWorkspaceEvents';
+import { Button } from '../ui/button';
 import { MessageList } from './MessageList';
 import { Composer } from './Composer';
 
@@ -47,8 +48,24 @@ export function AgentPanel({
     }
   }
 
+  async function cancel() {
+    try {
+      await cancelAgent(workspaceId, sessionId);
+    } catch {
+      /* 忽略取消失败 */
+    }
+  }
+
   return (
     <div className="flex h-full flex-col">
+      {running && (
+        <div className="flex items-center justify-between border-b px-4 py-2">
+          <span className="text-xs text-muted-foreground">agent 正在执行…</span>
+          <Button size="sm" variant="outline" onClick={cancel}>
+            取消
+          </Button>
+        </div>
+      )}
       <MessageList messages={rt?.messages ?? []} />
       {postError && (
         <div className="border-t border-destructive/30 bg-destructive/10 px-4 py-2 text-xs text-destructive">

@@ -7,6 +7,7 @@ import {
 import { Bubble, BubbleContent } from '../ui/bubble';
 import type { MessageVM } from '../../stores/agentStore';
 import { Markdown } from './markdown';
+import { ToolCallCard } from './ToolCallCard';
 import { cn } from '../../lib/utils';
 
 const ROLE_LABEL: Record<MessageVM['role'], string> = {
@@ -54,15 +55,14 @@ export function MessageItem({ vm }: { vm: MessageVM }) {
                       <div className="mt-1 whitespace-pre-wrap">{d.thinking}</div>
                     </details>
                   );
-                case 'tool_call':
+                case 'tool_call': {
+                  const tc = d as { id: string; name: string; input: string; finished?: boolean };
                   return (
-                    <div
-                      key={i}
-                      className="rounded-md border px-3 py-2 font-mono text-xs text-muted-foreground"
-                    >
-                      工具: {d.name}
+                    <div key={i}>
+                      <ToolCallCard call={tc as never} />
                     </div>
                   );
+                }
                 case 'finish':
                   return (
                     <div key={i} className="text-xs text-muted-foreground">
