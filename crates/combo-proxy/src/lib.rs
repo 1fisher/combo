@@ -1,4 +1,5 @@
 pub mod handler;
+pub mod rune;
 pub mod router;
 pub mod upstream;
 

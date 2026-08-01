@@ -416,15 +416,17 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "bytes",
  "futures-util",
+ "hex",
  "http-body-util",
  "hyper",
  "hyper-util",
+ "hyperlocal",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tokio",
- "tokio-util",
  "tower-http 0.5.2",
 ]
 
@@ -1436,6 +1438,21 @@ dependencies = [
  "tower-service",
  "tracing",
  "windows-registry",
+]
+
+[[package]]
+name = "hyperlocal"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "986c5ce3b994526b3cd75578e62554abd09f0899d6206de48b3e96ab34ccc8c7"
+dependencies = [
+ "hex",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "pin-project-lite",
+ "tokio",
+ "tower-service",
 ]
 
 [[package]]
