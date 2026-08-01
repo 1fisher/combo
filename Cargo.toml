@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/combo-proxy", "src-tauri"]
+resolver = "2"

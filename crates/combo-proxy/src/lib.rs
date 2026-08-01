@@ -1,0 +1,49 @@
+pub mod handler;
+pub mod rune;
+pub mod router;
+pub mod upstream;
+
+pub use router::build_router;
+pub use upstream::Upstream;
+
+/// Parses a `--upstream` argument into an [`Upstream`].
+/// Bare paths are unix sockets; `tcp://host:port` is a TCP upstream.
+pub fn parse_upstream(s: &str) -> anyhow::Result<Upstream> {
+    if let Some(rest) = s.strip_prefix("tcp://") {
+        Ok(Upstream::Tcp(rest.parse()?))
+    } else {
+        Ok(Upstream::Unix(std::path::PathBuf::from(s)))
+    }
+}
+
+/// Runs the proxy on `listener`, forwarding to `upstream`.
+pub async fn serve(
+    listener: tokio::net::TcpListener,
+    upstream: Upstream,
+    allowed_origins: Vec<String>,
+) -> anyhow::Result<()> {
+    let app = build_router(upstream, allowed_origins);
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod parse_tests {
+    use super::*;
+
+    #[test]
+    fn parses_unix_path() {
+        match parse_upstream("/tmp/crush.sock").unwrap() {
+            Upstream::Unix(p) => assert_eq!(p, std::path::PathBuf::from("/tmp/crush.sock")),
+            _ => panic!("expected unix"),
+        }
+    }
+
+    #[test]
+    fn parses_tcp_addr() {
+        match parse_upstream("tcp://127.0.0.1:1234").unwrap() {
+            Upstream::Tcp(a) => assert_eq!(a.to_string(), "127.0.0.1:1234"),
+            _ => panic!("expected tcp"),
+        }
+    }
+}
