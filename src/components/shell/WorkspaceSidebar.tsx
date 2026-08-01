@@ -1,18 +1,18 @@
 import { useEffect, useState } from 'react';
 import { ArrowLeft, FolderPlus } from 'lucide-react';
 import { Button } from '../ui/button';
-import { Input } from '../ui/input';
 import { ScrollArea } from '../ui/scroll-area';
 import { useWorkspaces } from '../../hooks/useWorkspaces';
 import { useAgentStore } from '../../stores/agentStore';
 import { useEditorStore } from '../../stores/editorStore';
 import { getFileContent } from '../../lib/api';
+import { isTauri } from '../../lib/connection';
 import { FileExplorer } from '../editor/FileExplorer';
 import { cn } from '../../lib/utils';
 
 export function WorkspaceSidebar() {
   const { workspaces, isLoading, create } = useWorkspaces();
-  const [path, setPath] = useState('');
+  const [picking, setPicking] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const active = useAgentStore((s) => s.activeWorkspaceId);
   const setActive = useAgentStore((s) => s.setActiveWorkspace);
@@ -25,14 +25,23 @@ export function WorkspaceSidebar() {
     }
   }, [workspaces, active, setActive]);
 
-  async function onCreate() {
-    if (!path.trim()) return;
+  async function onPickDirectory() {
     setFileError(null);
+    if (!isTauri()) {
+      setFileError('请在桌面版中选择项目目录');
+      return;
+    }
+    setPicking(true);
     try {
-      await create(path.trim());
-      setPath('');
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const dir = await open({ directory: true, multiple: false });
+      if (typeof dir === 'string') {
+        await create(dir);
+      }
     } catch (e) {
       setFileError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPicking(false);
     }
   }
 
@@ -90,7 +99,7 @@ export function WorkspaceSidebar() {
             ))}
             {!isLoading && workspaces?.length === 0 && (
               <div className="p-3 text-xs leading-relaxed text-muted-foreground">
-                还没有项目。输入项目路径添加一个,然后从文件树打开文件。
+                还没有项目。点击「添加项目」选择项目目录,然后从文件树打开文件。
               </div>
             )}
           </>
@@ -106,16 +115,9 @@ export function WorkspaceSidebar() {
       </ScrollArea>
       {!activeWs && (
         <div className="border-t p-2">
-          <Input
-            placeholder="输入项目路径"
-            value={path}
-            onChange={(e) => setPath(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && onCreate()}
-            className="mb-2 h-7 text-xs"
-          />
-          <Button size="sm" className="w-full" onClick={onCreate} disabled={!path.trim()}>
+          <Button size="sm" className="w-full" onClick={onPickDirectory} disabled={picking}>
             <FolderPlus className="h-3.5 w-3.5" />
-            添加项目
+            {picking ? '选择中…' : '添加项目'}
           </Button>
         </div>
       )}
