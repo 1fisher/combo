@@ -5,6 +5,7 @@ import { WorkspaceSidebar } from './WorkspaceSidebar';
 import { SessionTabs } from './SessionTabs';
 import { StatusBar } from './StatusBar';
 import { AgentPanel } from '../agent/AgentPanel';
+import { ModalQueue } from '../agent/ModalQueue';
 import { useAgentStore } from '../../stores/agentStore';
 
 const qc = new QueryClient();
@@ -35,6 +36,7 @@ export function AppShell() {
         </div>
         <StatusBar />
       </div>
+      {workspaceId && <ModalQueue workspaceId={workspaceId} />}
     </QueryClientProvider>
   );
 }
