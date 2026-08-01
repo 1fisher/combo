@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach } from 'vitest';
 import { applyEvent } from './dispatch';
 import { useAgentStore } from '../../stores/agentStore';
 
@@ -16,12 +16,15 @@ describe('applyEvent', () => {
     applyEvent(s, {
       type: 'message',
       payload: {
-        id: 'm1',
-        session_id: 's1',
-        role: 'assistant',
-        parts: [],
-        created_at: 1,
-        updated_at: 1,
+        type: 'created',
+        payload: {
+          id: 'm1',
+          session_id: 's1',
+          role: 'assistant',
+          parts: [],
+          created_at: 1,
+          updated_at: 1,
+        },
       },
     });
     const after = useAgentStore.getState();
@@ -33,23 +36,29 @@ describe('applyEvent', () => {
     applyEvent(s, {
       type: 'message',
       payload: {
-        id: 'm1',
-        session_id: 's1',
-        role: 'assistant',
-        parts: [],
-        created_at: 1,
-        updated_at: 1,
+        type: 'created',
+        payload: {
+          id: 'm1',
+          session_id: 's1',
+          role: 'assistant',
+          parts: [],
+          created_at: 1,
+          updated_at: 1,
+        },
       },
     });
     applyEvent(s, {
       type: 'message',
       payload: {
-        id: 'm1',
-        session_id: 's1',
-        role: 'assistant',
-        parts: [{ type: 'text', data: { text: 'hi' } }],
-        created_at: 1,
-        updated_at: 2,
+        type: 'updated',
+        payload: {
+          id: 'm1',
+          session_id: 's1',
+          role: 'assistant',
+          parts: [{ type: 'text', data: { text: 'hi' } }],
+          created_at: 1,
+          updated_at: 2,
+        },
       },
     });
     const after = useAgentStore.getState();
@@ -64,17 +73,23 @@ describe('applyEvent', () => {
     applyEvent(s, {
       type: 'permission_request',
       payload: {
-        id: 'p1',
-        tool_call_id: 'tc1',
-        tool_name: 'bash',
-        description: 'run ls',
-        action: '',
-        path: '',
+        type: 'created',
+        payload: {
+          id: 'p1',
+          tool_call_id: 'tc1',
+          tool_name: 'bash',
+          description: 'run ls',
+          action: '',
+          path: '',
+        },
       },
     });
     applyEvent(s, {
       type: 'permission_notification',
-      payload: { tool_call_id: 'tc1', granted: true },
+      payload: {
+        type: 'updated',
+        payload: { tool_call_id: 'tc1', granted: true },
+      },
     });
     expect(useAgentStore.getState().permissionQueue).toEqual([]);
   });
@@ -83,12 +98,15 @@ describe('applyEvent', () => {
     const s = useAgentStore.getState();
     applyEvent(s, {
       type: 'question_batch_request',
-      payload: { id: 'q1', session_id: 's1', tool_call_id: 'tc1', questions: [] },
+      payload: {
+        type: 'created',
+        payload: { id: 'q1', session_id: 's1', tool_call_id: 'tc1', questions: [] },
+      },
     });
     expect(useAgentStore.getState().questionQueue).toHaveLength(1);
     applyEvent(s, {
       type: 'question_batch_notification',
-      payload: { batch_id: 'q1' },
+      payload: { type: 'updated', payload: { batch_id: 'q1' } },
     });
     expect(useAgentStore.getState().questionQueue).toEqual([]);
   });
@@ -98,17 +116,23 @@ describe('applyEvent', () => {
     applyEvent(s, {
       type: 'message',
       payload: {
-        id: 'm1',
-        session_id: 's1',
-        role: 'assistant',
-        parts: [],
-        created_at: 1,
-        updated_at: 1,
+        type: 'created',
+        payload: {
+          id: 'm1',
+          session_id: 's1',
+          role: 'assistant',
+          parts: [],
+          created_at: 1,
+          updated_at: 1,
+        },
       },
     });
     applyEvent(s, {
       type: 'run_complete',
-      payload: { session_id: 's1', run_id: 'r1', message_id: 'm1', text: 'ok' },
+      payload: {
+        type: 'updated',
+        payload: { session_id: 's1', run_id: 'r1', message_id: 'm1', text: 'ok' },
+      },
     });
     expect(useAgentStore.getState().bySession['s1'].run).toEqual({
       runId: 'r1',

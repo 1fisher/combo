@@ -26,7 +26,10 @@ describe('WorkspaceEventSource', () => {
     const seen: EventEnvelope[] = [];
     vi.mocked(fetch).mockResolvedValue(
       new Response(
-        streamOf(['data: {"type":"message","payload":{"id":"m1",', '"x":1}}\n\ndata: {"type":"session"}\n\n']),
+        streamOf([
+          'data: {"type":"message","payload":{"type":"created","payload":{"id":"m1",',
+          '"x":1}}}\n\ndata: {"type":"session","payload":{"type":"created","payload":{}}}\n\n',
+        ]),
         {
           status: 200,
           headers: { 'Content-Type': 'text/event-stream' },
@@ -38,7 +41,7 @@ describe('WorkspaceEventSource', () => {
     await vi.waitFor(() => expect(seen.length).toBe(2), { timeout: 2000 });
     src.stop();
     expect(seen[0].type).toBe('message');
-    expect((seen[0].payload as { id: string }).id).toBe('m1');
+    expect((seen[0].payload.payload as { id: string }).id).toBe('m1');
     expect(seen[1].type).toBe('session');
   });
 
@@ -47,7 +50,9 @@ describe('WorkspaceEventSource', () => {
     vi.mocked(fetch)
       .mockRejectedValueOnce(new TypeError('failed to fetch'))
       .mockResolvedValueOnce(
-        new Response(streamOf(['data: {"type":"permission_request","payload":{"id":"p1"}}\n\n']), {
+        new Response(
+          streamOf(['data: {"type":"permission_request","payload":{"type":"created","payload":{"id":"p1"}}}\n\n']),
+          {
           status: 200,
           headers: { 'Content-Type': 'text/event-stream' },
         })
@@ -57,7 +62,7 @@ describe('WorkspaceEventSource', () => {
     await vi.waitFor(() => expect(seen.length).toBe(1), { timeout: 2000 });
     src.stop();
     // 首次失败后必然重连;EOF 后还会继续重连,故只断言 >= 2
-    expect(fetch.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
   it('sends client_id query param', async () => {

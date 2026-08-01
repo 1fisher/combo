@@ -37,6 +37,12 @@ describe('apiRequest', () => {
     expect(out).toBeUndefined();
   });
 
+  it('returns undefined for 200 with empty body (202-style Accepted)', async () => {
+    vi.mocked(fetch).mockResolvedValue(new Response('', { status: 202 }));
+    const out = await apiRequest<void>('/v1/workspaces');
+    expect(out).toBeUndefined();
+  });
+
   it('throws ApiError(0) on network error', async () => {
     vi.mocked(fetch).mockRejectedValue(new TypeError('failed to fetch'));
     await expect(apiRequest('/v1/workspaces')).rejects.toMatchObject({
