@@ -33,15 +33,15 @@ fn tracing_like_error(_err: &anyhow::Error) {
     // client as 502. Debug logging is optional and deliberately quiet here.
 }
 
-async fn forward(upstream: &Upstream, req: axum::extract::Request) -> anyhow::Result<Response> {
-    let (parts, body) = req.into_parts();
-    let body_bytes = body.collect().await?.to_bytes();
-
-    let path_query = parts
-        .uri
-        .path_and_query()
-        .map(|x| x.as_str())
-        .unwrap_or("/");
+/// 向 upstream 发送请求并原样透传响应(SSE 流式不缓冲)。
+/// 代理 fallback 与文件服务模块共用。
+pub(crate) async fn upstream_call(
+    upstream: &Upstream,
+    method: axum::http::Method,
+    path_query: &str,
+    headers: &axum::http::HeaderMap,
+    body_bytes: Vec<u8>,
+) -> anyhow::Result<Response> {
     let (uri, _scheme) = match upstream {
         // hyperlocal requires unix://<hex-encoded socket path>/<api path>
         Upstream::Unix(path) => {
@@ -52,15 +52,15 @@ async fn forward(upstream: &Upstream, req: axum::extract::Request) -> anyhow::Re
     };
     let uri: axum::http::Uri = uri.parse()?;
 
-    let mut builder = axum::http::Request::builder().method(parts.method).uri(uri);
-    for (k, v) in parts.headers.iter() {
+    let mut builder = axum::http::Request::builder().method(method).uri(uri);
+    for (k, v) in headers.iter() {
         if k == HOST || k == CONNECTION || k == CONTENT_LENGTH || k == TRANSFER_ENCODING {
             continue;
         }
         builder = builder.header(k, v.clone());
     }
     builder = builder.header("X-Forwarded-Proto", "http");
-    let up_req = builder.body(Full::from(body_bytes.to_vec()))?;
+    let up_req = builder.body(Full::from(body_bytes))?;
 
     let resp: hyper::Response<hyper::body::Incoming> = match upstream {
         Upstream::Unix(_) => {
@@ -89,6 +89,24 @@ async fn forward(upstream: &Upstream, req: axum::extract::Request) -> anyhow::Re
         chunk.map_err(axum::Error::new)
     });
     Ok(rb.body(Body::from_stream(stream))?)
+}
+
+async fn forward(upstream: &Upstream, req: axum::extract::Request) -> anyhow::Result<Response> {
+    let (parts, body) = req.into_parts();
+    let body_bytes = body.collect().await?.to_bytes();
+    let path_query = parts
+        .uri
+        .path_and_query()
+        .map(|x| x.as_str())
+        .unwrap_or("/");
+    upstream_call(
+        upstream,
+        parts.method,
+        path_query,
+        &parts.headers,
+        body_bytes.to_vec(),
+    )
+    .await
 }
 
 #[cfg(test)]

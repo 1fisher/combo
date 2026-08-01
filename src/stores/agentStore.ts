@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type { Api } from '../lib/api/types';
 
 export interface MessageVM {
@@ -39,9 +40,16 @@ interface AgentState {
 
 const emptyRuntime = (): SessionRuntime => ({ messages: [], run: null, queued: false });
 
-export const useAgentStore = create<AgentState>((set) => ({
+export const useAgentStore = create<AgentState>()(
+  persist(
+    (set) => ({
   activeWorkspaceId: null,
-  setActiveWorkspace: (id) => set({ activeWorkspaceId: id }),
+  setActiveWorkspace: (id) =>
+    set((st) => ({
+      activeWorkspaceId: id,
+      // 切换项目时清空会话,避免把上一个项目的会话带到新项目
+      ...(id !== st.activeWorkspaceId ? { activeSessionId: null } : {}),
+    })),
   activeSessionId: null,
   setActiveSessionId: (id) => set({ activeSessionId: id }),
 
@@ -110,4 +118,14 @@ export const useAgentStore = create<AgentState>((set) => ({
       const { [sessionId]: _drop, ...rest } = st.bySession;
       return { bySession: rest };
     }),
-}));
+    }),
+    {
+      name: 'combo.agent',
+      // 只持久化选中态,SSE 实时状态(消息/队列)不入库
+      partialize: (s) => ({
+        activeWorkspaceId: s.activeWorkspaceId,
+        activeSessionId: s.activeSessionId,
+      }),
+    }
+  )
+);

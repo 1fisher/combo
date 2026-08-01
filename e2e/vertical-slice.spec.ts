@@ -1,4 +1,5 @@
 import { mkdirSync, rmSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { test, expect } from '@playwright/test';
 
 const hasCrush = !!process.env.COMBO_CRUSH_BIN;
@@ -18,9 +19,19 @@ test.describe('M1 vertical slice', () => {
     await page.goto('/');
     await expect(page.getByText('已连接 rune')).toBeVisible({ timeout: 15_000 });
 
-    // 添加项目
-    await page.getByPlaceholder('输入项目路径').fill(tmp);
-    await page.getByRole('button', { name: '添加项目' }).click();
+    // 添加项目:浏览器模式无法弹原生目录对话框,经 API 前置创建工作区
+    const cid = randomUUID();
+    await page.evaluate(
+      async ({ dir, clientId }) => {
+        localStorage.setItem('combo.clientId', clientId);
+        await fetch(`http://127.0.0.1:18234/v1/workspaces?client_id=${clientId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: dir, client_id: clientId }),
+        });
+      },
+      { dir: tmp, clientId: cid }
+    );
     const wsRow = page.getByText(tmp);
     await expect(wsRow).toBeVisible({ timeout: 15_000 });
 

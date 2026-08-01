@@ -1985,4 +1985,15 @@ export namespace Api {
     batch_request_id: string;
     responses: QuestionResponse[];
   };
+
+  // 文件服务(combo-proxy 本地端点,swagger 无此定义)
+  export type FileEntryType = 'dir' | 'file';
+  export type FileEntry = {
+    name: string;
+    path: string;
+    type: FileEntryType;
+    size: number;
+  };
+  export type FileContent = { content: string };
+  export type WriteFileResult = { ok: boolean };
 }

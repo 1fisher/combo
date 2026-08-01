@@ -171,3 +171,97 @@ async fn cors_echoes_allowed_origin_and_rejects_others() {
         "disallowed origin must not receive access-control-allow-origin"
     );
 }
+
+#[tokio::test]
+async fn file_service_lists_reads_writes_and_blocks_traversal() {
+    // 准备一个临时 workspace 目录
+    let ws = std::env::temp_dir().join(format!("combo-fs-test-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&ws);
+    std::fs::create_dir_all(ws.join("sub")).unwrap();
+    std::fs::write(ws.join("hello.txt"), "hi there").unwrap();
+    std::fs::write(ws.join("sub").join("nested.txt"), "nested").unwrap();
+
+    // stub upstream:只回 workspace 元信息
+    let ws_path = ws.to_string_lossy().to_string();
+    let app = Router::new().route(
+        "/v1/workspaces/:id",
+        get(move || async move {
+            axum::Json(serde_json::json!({ "id": "w1", "path": ws_path }))
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    let proxy = start_proxy(addr, vec![]).await;
+    let client = reqwest::Client::new();
+    let base = format!("http://{proxy}/v1/workspaces/w1/files");
+
+    // 列目录:文件与目录都在,目录排前
+    let resp = client.get(format!("{base}/list")).send().await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let entries: serde_json::Value = resp.json().await.unwrap();
+    let names: Vec<&str> = entries
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"hello.txt"));
+    assert!(names.contains(&"sub"));
+    assert_eq!(entries[0]["type"].as_str().unwrap(), "dir");
+    assert_eq!(entries[0]["path"].as_str().unwrap(), "sub");
+
+    // 读文件
+    let resp = client
+        .get(format!("{base}/content"))
+        .query(&[("path", "hello.txt")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(body["content"].as_str().unwrap(), "hi there");
+
+    // 写文件(覆盖)
+    let resp = client
+        .put(format!("{base}/content"))
+        .query(&[("path", "hello.txt")])
+        .json(&serde_json::json!({ "content": "updated" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(std::fs::read_to_string(ws.join("hello.txt")).unwrap(), "updated");
+
+    // 目录穿越与绝对路径被拒
+    let resp = client
+        .get(format!("{base}/content"))
+        .query(&[("path", "../evil.txt")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    let resp = client
+        .get(format!("{base}/list"))
+        .query(&[("path", "/etc")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // 不存在文件
+    let resp = client
+        .get(format!("{base}/content"))
+        .query(&[("path", "missing.txt")])
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    std::fs::remove_dir_all(&ws).unwrap();
+    handle.abort();
+}
+
