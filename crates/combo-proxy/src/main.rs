@@ -9,11 +9,13 @@ async fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let mut upstream_arg = None;
     let mut port: u16 = 0;
+    let mut host: std::net::IpAddr = [127, 0, 0, 1].into();
     let mut origins = Vec::new();
     while let Some(a) = args.next() {
         match a.as_str() {
             "--upstream" => upstream_arg = Some(args.next().unwrap()),
             "--port" => port = args.next().unwrap().parse()?,
+            "--host" => host = args.next().unwrap().parse()?,
             "--origin" => origins.push(args.next().unwrap()),
             _ => {}
         }
@@ -31,7 +33,7 @@ async fn main() -> Result<()> {
         }
     };
 
-    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], port))).await?;
+    let listener = TcpListener::bind(SocketAddr::new(host, port)).await?;
     let actual = listener.local_addr()?.port();
     println!("COMBO_PROXY_PORT={actual}");
     serve(listener, upstream, origins).await?;
