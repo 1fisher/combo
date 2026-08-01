@@ -157,8 +157,8 @@ provided.
   `reuseExistingServer: true`. The spec skips itself unless `COMBO_CRUSH_BIN` is
   set. It **wipes the workspace dir (`/tmp/combo-e2e`) before running** because
   rune persists state (`.crush/`) inside the workspace. Selectors rely on Chinese
-  UI text (e.g. `getByPlaceholder('输入项目路径')`, button `添加项目`, `发送`,
-  title `新建会话`).
+  UI text (e.g. button `添加项目`, `发送`, title `新建会话`).「添加项目」在
+  桌面模式弹原生目录对话框,浏览器模式仅提示;e2e 改为经 API 创建工作区.
 
 ## Gotchas summary
 
