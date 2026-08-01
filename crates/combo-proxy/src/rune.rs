@@ -35,7 +35,8 @@ where
 }
 
 fn uid() -> Option<String> {
-    std::env::var("UID").ok()
+    // `UID` is a bash-only variable (not exported), so read the real euid.
+    Some(unsafe { libc::geteuid() }.to_string())
 }
 
 /// Replicates rune's default socket location:
