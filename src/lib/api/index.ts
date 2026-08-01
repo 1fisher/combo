@@ -85,3 +85,24 @@ export function answerQuestion(
     body: answer,
   });
 }
+
+// 文件服务:combo-proxy 提供的受限本地读写(路径必须相对工作区根目录)
+export function listFiles(workspaceId: string, path = ''): Promise<Api.FileEntry[]> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/files/list`, { query: { path } });
+}
+
+export function getFileContent(workspaceId: string, path: string): Promise<Api.FileContent> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/files/content`, { query: { path } });
+}
+
+export function putFileContent(
+  workspaceId: string,
+  path: string,
+  content: string
+): Promise<Api.WriteFileResult> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/files/content`, {
+    method: 'PUT',
+    query: { path },
+    body: { content },
+  });
+}

@@ -67,7 +67,7 @@ export function AgentPanel({
           </Button>
         </div>
       )}
-      <MessageList messages={rt?.messages ?? []} />
+      <MessageList messages={rt?.messages ?? []} workspaceId={workspaceId} />
       {postError && (
         <div className="border-t border-destructive/30 bg-destructive/10 px-4 py-2 text-xs text-destructive">
           发送失败:{postError}

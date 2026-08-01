@@ -1,3 +1,4 @@
+pub mod fs;
 pub mod handler;
 pub mod rune;
 pub mod router;

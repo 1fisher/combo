@@ -17,11 +17,13 @@ Tauri Webview (React/TS)
 
 Three components, three languages/dirs:
 
-- **`crates/combo-proxy`** (Rust, axum) — pure reverse proxy. Forwards every
-  request under `/v1/*` to rune; streams SSE bodies through un-buffered.
-  Also contains `RuneManager` (`src/rune.rs`), which spawns/guards the `crush
-  server` subprocess (health-poll, auto-restart is via `ensure_running`, graceful
-  shutdown via `/v1/control`).
+- **`crates/combo-proxy`** (Rust, axum) — reverse proxy. Forwards every request
+  under `/v1/*` to rune; streams SSE bodies through un-buffered. Also serves
+  **local file read/write** (`fs.rs`, only `/v1/workspaces/{id}/files/*`):
+  list-dir / read / write with canonicalize prefix checks against the
+  workspace root (rune has no file API). Contains `RuneManager` (`src/rune.rs`),
+  which spawns/guards the `crush server` subprocess (health-poll, auto-restart
+  is via `ensure_running`, graceful shutdown via `/v1/control`).
 - **`src-tauri`** (Rust, Tauri v2) — thin shell. `init_backend` in `src/lib.rs`
   starts `RuneManager` + proxy on `127.0.0.1:0` (random port), emits Tauri events
   `proxy-ready` (`{port}`) and `rune-status` (`{connected}`). On rune failure it
@@ -74,6 +76,18 @@ provided.
 
 ## Architecture & data flow
 
+- **File service** (`crates/combo-proxy/src/fs.rs`): `GET .../files/list?path=`
+  lists one directory (hidden files skipped, dirs first), `GET .../files/content`
+  reads text (≤1MB, binary rejected), `PUT .../files/content` writes atomically.
+  `path` must be relative; the proxy resolves the workspace root by calling
+  `GET /v1/workspaces/{id}` on rune. Frontend: `src/lib/api` wrappers +
+  `stores/editorStore.ts` + `FileExplorer`/`EditorPane`.
+- **Selection persistence**: `agentStore` uses `zustand/persist`
+  (`localStorage` key `combo.agent`) storing only `activeWorkspaceId` +
+  `activeSessionId`; SSE state stays in-memory. `setActiveWorkspace` clears the
+  session when switching projects; `useSessions` clears restored-but-invalid
+  session ids (guarded by a `lastCreated` ref so a freshly created session is
+  never clobbered while the list refetches).
 - **`client_id` is the identity mechanism.** `apiRequest` (`src/lib/api/client.ts`)
   auto-injects a `client_id` query param (UUID persisted in `localStorage`
   `combo.clientId`; `randomUUID` in `src/lib/clientId.ts` deliberately avoids
@@ -160,5 +174,9 @@ provided.
 7. Keep Chinese for user-facing strings; the e2e suite depends on it.
 8. `tsc -b` (project references) is incremental; `tsconfig.node.tsbuildinfo` /
    `tsconfig.app.tsbuildinfo` are gitignored but regenerate on build.
-9. `agentStore` state is in-memory only — reloading the page loses messages;
+9. `agentStore` SSE state is in-memory only — reloading loses live messages;
    history is refetched via `getSessionHistory` when a session is activated.
+   Only the active workspace/session selection is persisted (see above).
+10. **axum 0.7 route params use `:id`, not `{id}`** (that's axum 0.8 syntax).
+    The file-service routes in `router.rs` and the stub in `proxy_test.rs` both
+    use `:id`; a `{id}` route silently falls through to the proxy fallback.

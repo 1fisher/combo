@@ -5,8 +5,10 @@ import { WorkspaceSidebar } from './WorkspaceSidebar';
 import { SessionTabs } from './SessionTabs';
 import { StatusBar } from './StatusBar';
 import { AgentPanel } from '../agent/AgentPanel';
+import { EditorPane } from '../editor/EditorPane';
 import { ModalQueue } from '../agent/ModalQueue';
 import { useAgentStore } from '../../stores/agentStore';
+import { useEditorStore } from '../../stores/editorStore';
 
 const qc = new QueryClient();
 
@@ -17,13 +19,19 @@ export function AppShell() {
 
   const workspaceId = useAgentStore((s) => s.activeWorkspaceId);
   const sessionId = useAgentStore((s) => s.activeSessionId);
+  const resetOpenFiles = useEditorStore((s) => s.resetOpenFiles);
+
+  // 切换项目时清空编辑器里打开的文件
+  useEffect(() => {
+    resetOpenFiles();
+  }, [workspaceId, resetOpenFiles]);
 
   return (
     <QueryClientProvider client={qc}>
       <div className="flex h-screen w-screen flex-col overflow-hidden">
         <div className="flex min-h-0 flex-1">
           <WorkspaceSidebar />
-          <main className="flex flex-1 flex-col">
+          <main className="flex min-w-0 flex-1 flex-col">
             <SessionTabs />
             {workspaceId && sessionId ? (
               <AgentPanel workspaceId={workspaceId} sessionId={sessionId} />
@@ -33,6 +41,7 @@ export function AppShell() {
               </div>
             )}
           </main>
+          {workspaceId && <EditorPane workspaceId={workspaceId} />}
         </div>
         <StatusBar />
       </div>

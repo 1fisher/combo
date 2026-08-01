@@ -17,13 +17,26 @@ const ROLE_LABEL: Record<MessageVM['role'], string> = {
   system: '系统',
 };
 
-export function MessageItem({ vm }: { vm: MessageVM }) {
+export function MessageItem({
+  vm,
+  workspaceId,
+}: {
+  vm: MessageVM;
+  workspaceId?: string;
+}) {
   const isUser = vm.role === 'user';
+  const time = new Date(vm.createdAt).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
   return (
     <Message align={isUser ? 'end' : 'start'}>
       <MessageContent>
         <MessageHeader>
           {ROLE_LABEL[vm.role]}
+          {!vm.streaming && (
+            <span className="ml-2 font-mono text-[10px] text-muted-foreground/60">{time}</span>
+          )}
           {vm.streaming && (
             <span
               className={cn('ml-2 animate-pulse text-primary', isUser && 'sr-only')}
@@ -44,7 +57,13 @@ export function MessageItem({ vm }: { vm: MessageVM }) {
               };
               switch (part.type) {
                 case 'text':
-                  return <Markdown key={i} text={d.text ?? ''} />;
+                  return (
+                    <Markdown
+                      key={i}
+                      text={d.text ?? ''}
+                      streaming={vm.streaming && vm.role === 'assistant'}
+                    />
+                  );
                 case 'reasoning':
                   return (
                     <details
@@ -59,14 +78,19 @@ export function MessageItem({ vm }: { vm: MessageVM }) {
                   const tc = d as { id: string; name: string; input: string; finished?: boolean };
                   return (
                     <div key={i}>
-                      <ToolCallCard call={tc as never} />
+                      <ToolCallCard call={tc as never} workspaceId={workspaceId} />
                     </div>
                   );
                 }
                 case 'finish':
                   return (
-                    <div key={i} className="text-xs text-muted-foreground">
-                      finish: {d.reason ?? ''}
+                    <div
+                      key={i}
+                      className="flex items-center gap-2 py-0.5 text-xs text-muted-foreground"
+                    >
+                      <span className="h-px flex-1 bg-border" />
+                      <span className="font-mono">完成 · {d.reason ?? ''}</span>
+                      <span className="h-px flex-1 bg-border" />
                     </div>
                   );
                 default:

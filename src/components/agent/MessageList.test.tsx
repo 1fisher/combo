@@ -30,10 +30,12 @@ describe('MessageList', () => {
     render(<MessageList messages={msgs} />);
     expect(screen.getByText('帮我重构')).toBeTruthy();
     expect(screen.getByText('思考中…')).toBeTruthy();
-    // react-markdown 渲染加粗(**好的** 拆成 strong + 文本节点)
+    // react-markdown 渲染加粗(**好的** 拆成 strong + 文本节点);
+    // 流式消息末尾会带 ▍ 光标
     expect(
       screen.getByText(
-        (_, el) => el?.tagName === 'P' && el.textContent === '好的,开始。'
+        (_, el) =>
+          el?.tagName === 'P' && (el.textContent ?? '').includes('好的,开始。')
       )
     ).toBeTruthy();
   });
