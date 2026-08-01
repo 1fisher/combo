@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { randomUUID } from '../../lib/clientId';
 import { useAgentStore } from '../../stores/agentStore';
 import { cancelAgent, sendAgentMessage } from '../../lib/api';
 import { useWorkspaceEvents } from '../../hooks/useWorkspaceEvents';
@@ -22,7 +23,7 @@ export function AgentPanel({
 
   async function onSend(prompt: string) {
     setPostError(null);
-    const runId = crypto.randomUUID();
+    const runId = randomUUID();
     // 乐观插入用户消息
     const st = useAgentStore.getState();
     st.upsertMessage(sessionId, {
