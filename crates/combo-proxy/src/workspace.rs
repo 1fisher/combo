@@ -39,6 +39,8 @@ pub async fn create(
         .and_then(|v| v.as_str())
         .map(|s| match s {
             "opencode" => BackendType::OpenCode,
+            "claude_code" => BackendType::ClaudeCode,
+            "codex" => BackendType::Codex,
             _ => BackendType::Crush,
         })
         .unwrap_or(BackendType::Crush);
@@ -108,6 +110,8 @@ fn backend_str(bt: BackendType) -> &'static str {
     match bt {
         BackendType::Crush => "crush",
         BackendType::OpenCode => "opencode",
+        BackendType::ClaudeCode => "claude_code",
+        BackendType::Codex => "codex",
     }
 }
 

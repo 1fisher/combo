@@ -8,6 +8,8 @@ use std::sync::Arc;
 pub struct BackendRegistry {
     crush: Arc<dyn Backend>,
     opencode: Option<Arc<dyn Backend>>,
+    claude_code: Option<Arc<dyn Backend>>,
+    codex: Option<Arc<dyn Backend>>,
 }
 
 impl BackendRegistry {
@@ -15,6 +17,8 @@ impl BackendRegistry {
         Self {
             crush,
             opencode: None,
+            claude_code: None,
+            codex: None,
         }
     }
 
@@ -22,11 +26,21 @@ impl BackendRegistry {
         self.opencode = Some(backend);
     }
 
+    pub fn set_claude_code(&mut self, backend: Arc<dyn Backend>) {
+        self.claude_code = Some(backend);
+    }
+
+    pub fn set_codex(&mut self, backend: Arc<dyn Backend>) {
+        self.codex = Some(backend);
+    }
+
     /// 按 backend_type 直接获取。
     pub fn by_type(&self, bt: BackendType) -> Option<&Arc<dyn Backend>> {
         match bt {
             BackendType::Crush => Some(&self.crush),
             BackendType::OpenCode => self.opencode.as_ref(),
+            BackendType::ClaudeCode => self.claude_code.as_ref(),
+            BackendType::Codex => self.codex.as_ref(),
         }
     }
 
@@ -35,6 +49,8 @@ impl BackendRegistry {
         match meta.get(ws_id) {
             Some(m) => match m.backend_type {
                 BackendType::OpenCode => self.opencode.as_ref().unwrap_or(&self.crush),
+                BackendType::ClaudeCode => self.claude_code.as_ref().unwrap_or(&self.crush),
+                BackendType::Codex => self.codex.as_ref().unwrap_or(&self.crush),
                 BackendType::Crush => &self.crush,
             },
             None => &self.crush,

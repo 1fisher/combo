@@ -10,7 +10,7 @@ export function listWorkspaces(): Promise<Api.Workspace[]> {
 
 export function createWorkspace(
   path: string,
-  backend: 'crush' | 'opencode' = 'crush'
+  backend: 'crush' | 'opencode' | 'claude_code' | 'codex' = 'crush'
 ): Promise<Api.Workspace> {
   // rune 从请求体校验 client_id(UUID),而不是查询参数
   return apiRequest('/v1/workspaces', {

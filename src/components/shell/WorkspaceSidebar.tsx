@@ -14,7 +14,9 @@ export function WorkspaceSidebar() {
   const { workspaces, isLoading, create } = useWorkspaces();
   const [picking, setPicking] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
-  const [backend, setBackend] = useState<'crush' | 'opencode'>('crush');
+  const [backend, setBackend] = useState<
+    'crush' | 'opencode' | 'claude_code' | 'codex'
+  >('crush');
   const active = useAgentStore((s) => s.activeWorkspaceId);
   const setActive = useAgentStore((s) => s.setActiveWorkspace);
   const activeWs = workspaces?.find((w) => w.id === active) ?? null;
@@ -125,11 +127,17 @@ export function WorkspaceSidebar() {
         <div className="space-y-1.5 border-t p-2">
           <select
             value={backend}
-            onChange={(e) => setBackend(e.target.value as 'crush' | 'opencode')}
+            onChange={(e) =>
+              setBackend(
+                e.target.value as 'crush' | 'opencode' | 'claude_code' | 'codex'
+              )
+            }
             className="w-full rounded border bg-background px-2 py-1 text-xs"
           >
             <option value="crush">后端: Crush</option>
             <option value="opencode">后端: OpenCode</option>
+            <option value="claude_code">后端: Claude Code</option>
+            <option value="codex">后端: Codex</option>
           </select>
           <Button size="sm" className="w-full" onClick={onPickDirectory} disabled={picking}>
             <FolderPlus className="h-3.5 w-3.5" />

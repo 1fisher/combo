@@ -9,6 +9,8 @@ pub mod router;
 pub mod upstream;
 pub mod workspace;
 
+pub use backend::claude_code::ClaudeCodeBackend;
+pub use backend::codex::CodexBackend;
 pub use backend::crush::CrushBackend;
 pub use backend::opencode::OpenCodeBackend;
 pub use backend::{Backend, BackendType};

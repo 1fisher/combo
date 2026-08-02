@@ -1,3 +1,5 @@
+pub mod claude_code;
+pub mod codex;
 pub mod crush;
 pub mod opencode;
 
@@ -11,6 +13,8 @@ use std::path::PathBuf;
 pub enum BackendType {
     Crush,
     OpenCode,
+    ClaudeCode,
+    Codex,
 }
 
 /// combo-proxy 面向 agent 后端的统一接口。
