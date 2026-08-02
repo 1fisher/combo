@@ -99,7 +99,8 @@ pub async fn list(
     Path(id): Path<String>,
     Query(q): Query<PathQuery>,
 ) -> Response {
-    let root = match state.backend.workspace_root(&id).await {
+    let backend = state.registry.for_workspace(&id, &state.meta);
+    let root = match backend.workspace_root(&id).await {
         Ok(r) => r,
         Err(e) => return error(StatusCode::BAD_GATEWAY, &format!("{e:#}")),
     };
@@ -156,7 +157,8 @@ pub async fn read(
     Path(id): Path<String>,
     Query(q): Query<PathQuery>,
 ) -> Response {
-    let root = match state.backend.workspace_root(&id).await {
+    let backend = state.registry.for_workspace(&id, &state.meta);
+    let root = match backend.workspace_root(&id).await {
         Ok(r) => r,
         Err(e) => return error(StatusCode::BAD_GATEWAY, &format!("{e:#}")),
     };
@@ -196,7 +198,8 @@ pub async fn write(
     Query(q): Query<PathQuery>,
     axum::extract::Json(body): axum::extract::Json<WriteBody>,
 ) -> Response {
-    let root = match state.backend.workspace_root(&id).await {
+    let backend = state.registry.for_workspace(&id, &state.meta);
+    let root = match backend.workspace_root(&id).await {
         Ok(r) => r,
         Err(e) => return error(StatusCode::BAD_GATEWAY, &format!("{e:#}")),
     };

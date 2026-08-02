@@ -5,8 +5,18 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use http_body_util::BodyExt;
 
-/// 反向代理 handler:将请求转发到后端 backend,
-/// 响应体流式透传(SSE 不缓冲)。
+/// 从 URL path 中提取 workspace_id。
+/// 路径格式:/v1/workspaces/{id}/...  →  返回 {id}
+fn extract_workspace_id(path: &str) -> Option<&str> {
+    let segments: Vec<&str> = path.trim_start_matches('/').split('/').collect();
+    if segments.len() >= 3 && segments[0] == "v1" && segments[1] == "workspaces" {
+        Some(segments[2])
+    } else {
+        None
+    }
+}
+
+/// 反向代理 handler:按 workspace 的后端类型路由。
 pub async fn proxy(State(state): State<AppState>, req: axum::extract::Request) -> Response {
     let (parts, body) = req.into_parts();
     let body_bytes = match body.collect().await {
@@ -23,8 +33,11 @@ pub async fn proxy(State(state): State<AppState>, req: axum::extract::Request) -
         .path_and_query()
         .map(|x| x.as_str())
         .unwrap_or("/");
-    match state
-        .backend
+
+    let ws_id = extract_workspace_id(path_query).unwrap_or("");
+    let backend = state.registry.for_workspace(ws_id, &state.meta);
+
+    match backend
         .forward(parts.method, path_query, &parts.headers, body_bytes)
         .await
     {
@@ -40,7 +53,7 @@ pub async fn proxy(State(state): State<AppState>, req: axum::extract::Request) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CrushBackend, MetaStore, Upstream};
+    use crate::{BackendRegistry, CrushBackend, MetaStore, Upstream};
     use axum::http::header::ACCEPT;
     use axum::http::Request;
     use std::sync::Arc;
@@ -48,10 +61,10 @@ mod tests {
     #[tokio::test]
     async fn proxy_returns_502_for_unreachable_upstream() {
         let state = AppState {
-            backend: Arc::new(CrushBackend::new(Upstream::Tcp(
-                "127.0.0.1:1".parse().unwrap(),
-            ))),
             meta: Arc::new(MetaStore::new()),
+            registry: Arc::new(BackendRegistry::new(Arc::new(CrushBackend::new(
+                Upstream::Tcp("127.0.0.1:1".parse().unwrap()),
+            )))),
         };
         let req = Request::builder()
             .uri("/v1/health")
@@ -60,5 +73,15 @@ mod tests {
             .unwrap();
         let resp = proxy(State(state), req).await;
         assert_eq!(resp.status(), StatusCode::BAD_GATEWAY);
+    }
+
+    #[test]
+    fn extract_workspace_id_parses_valid_path() {
+        assert_eq!(
+            extract_workspace_id("/v1/workspaces/ws1/sessions"),
+            Some("ws1")
+        );
+        assert_eq!(extract_workspace_id("/v1/workspaces/ws1"), Some("ws1"));
+        assert_eq!(extract_workspace_id("/v1/health"), None);
     }
 }

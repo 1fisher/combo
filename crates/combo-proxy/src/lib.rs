@@ -2,6 +2,7 @@ pub mod backend;
 pub mod fs;
 pub mod handler;
 pub mod meta;
+pub mod registry;
 pub mod rune;
 pub mod router;
 pub mod upstream;
@@ -9,6 +10,7 @@ pub mod upstream;
 pub use backend::crush::CrushBackend;
 pub use backend::{Backend, BackendType};
 pub use meta::{MetaStore, WorkspaceMeta};
+pub use registry::BackendRegistry;
 pub use router::build_router;
 pub use upstream::Upstream;
 
@@ -17,8 +19,8 @@ use std::sync::Arc;
 /// 所有 axum handler 共享的应用状态。
 #[derive(Clone)]
 pub struct AppState {
-    pub backend: Arc<dyn Backend>,
     pub meta: Arc<MetaStore>,
+    pub registry: Arc<BackendRegistry>,
 }
 
 /// Parses a `--upstream` argument into an [`Upstream`].

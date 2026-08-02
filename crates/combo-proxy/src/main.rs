@@ -1,6 +1,6 @@
 use anyhow::Result;
 use combo_proxy::rune::RuneManager;
-use combo_proxy::{parse_upstream, serve, AppState, CrushBackend, MetaStore, Upstream};
+use combo_proxy::{parse_upstream, serve, AppState, BackendRegistry, CrushBackend, MetaStore, Upstream};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -35,8 +35,8 @@ async fn main() -> Result<()> {
     };
 
     let state = AppState {
-        backend: Arc::new(CrushBackend::new(upstream)),
         meta: Arc::new(MetaStore::new()),
+        registry: Arc::new(BackendRegistry::new(Arc::new(CrushBackend::new(upstream)))),
     };
 
     let listener = TcpListener::bind(SocketAddr::new(host, port)).await?;

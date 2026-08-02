@@ -9,6 +9,7 @@ use std::path::PathBuf;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BackendType {
     Crush,
+    OpenCode,
 }
 
 /// combo-proxy 面向 agent 后端的统一接口。

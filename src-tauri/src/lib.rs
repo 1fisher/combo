@@ -31,7 +31,7 @@ pub fn run() {
 
 async fn init_backend(app: &tauri::AppHandle) {
     use combo_proxy::rune::RuneManager;
-    use combo_proxy::{serve, AppState, CrushBackend, MetaStore, Upstream};
+    use combo_proxy::{serve, AppState, BackendRegistry, CrushBackend, MetaStore, Upstream};
     use std::net::SocketAddr;
     use std::sync::Arc;
     use tokio::net::TcpListener;
@@ -52,8 +52,8 @@ async fn init_backend(app: &tauri::AppHandle) {
     };
 
     let state = AppState {
-        backend: Arc::new(CrushBackend::new(upstream)),
         meta: Arc::new(MetaStore::new()),
+        registry: Arc::new(BackendRegistry::new(Arc::new(CrushBackend::new(upstream)))),
     };
 
     let listener = match TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await {
