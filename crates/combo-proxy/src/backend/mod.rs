@@ -1,4 +1,5 @@
 pub mod crush;
+pub mod opencode;
 
 use anyhow::Result;
 use axum::http::{HeaderMap, Method};

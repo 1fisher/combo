@@ -8,6 +8,7 @@ pub mod router;
 pub mod upstream;
 
 pub use backend::crush::CrushBackend;
+pub use backend::opencode::OpenCodeBackend;
 pub use backend::{Backend, BackendType};
 pub use meta::{MetaStore, WorkspaceMeta};
 pub use registry::BackendRegistry;
