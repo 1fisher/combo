@@ -1,94 +1,209 @@
 # combo
 
-combo 是一款配合 [rune](https://charm.sh/crush)(Charm Crush 服务端)的多 agent IDE。Tauri 桌面壳 + React/TypeScript 前端,前端通过内置反向代理与 rune server 通信,支持多个工作区/会话并发的 agent 对话、工具调用、权限与提问弹窗。
+<div align="center">
+
+**一个界面,多个 Agent 后端。**
+
+combo 是一款开源的多 Agent IDE 桌面应用:用统一的界面同时驱动
+[crush (rune)](https://charm.sh/crush)、[OpenCode](https://github.com/sst/opencode)、
+[Claude Code](https://docs.anthropic.com/en/docs/claude-code) 与
+[Codex](https://github.com/openai/codex) 等 coding agent,
+在一个工作区里并发跑多个会话、对比不同模型的输出。
+
+Tauri v2 桌面壳 + React 19 / TypeScript 前端,通过内置 Rust 反向代理
+(`combo-proxy`)与各 agent 后端通信——所有协议差异(REST、stdio streaming-JSON、
+JSON-RPC)都在代理层吸收,前端永远只面对一套统一的 REST + SSE 契约。
+
+</div>
+
+---
+
+## 功能特性
+
+- 🤖 **多后端统一前端** —— 在同一个 UI 里切换 / 并发使用 crush、OpenCode、Claude Code、Codex。
+  代理层为每个后端实现 adapter,把原生协议翻译成 combo 统一的消息 / 工具 / 权限 / SSE 模型。
+- 💬 **多会话并发** —— 每个工作区可同时打开多个会话,SSE 实时推送,按 `sessionId` 分片管理状态。
+- 🛠️ **工具调用与权限弹窗** —— agent 的工具调用、权限请求、提问都在 UI 内以模态队列呈现,
+  支持逐条批准 / 拒绝。
+- 📂 **内置文件浏览与编辑** —— 代理层提供本地文件读写服务(目录列表 / 读取 / 原子写入),
+  前端 FileExplorer + EditorPane 可直接查看与编辑工作区文件。
+- 🖥️ **纯浏览器可开发** —— 前端不依赖任何 Tauri API,`npm run dev` 即可在浏览器中完整调试。
+- 🔌 **进程托管** —— Tauri 壳内 `RuneManager` 自动 spawn / 守护 agent 子进程,
+  健康轮询、崩溃自动重启、退出优雅关停。
+- 🌊 **SSE 流式透传** —— 代理层不缓冲流式响应,token 逐字到达前端。
 
 ## 架构
 
 ```
-Tauri Webview (React/TS)
-   fetch / EventSource ──→ http://127.0.0.1:<随机端口>/v1/*
-                                  │ combo-proxy(axum 反向代理,仅转发,CORS + SSE 透传)
-                                  ▼
-                        rune server(crush server 子进程, unix socket)
+┌──────────────────────────────────────────────────────────────┐
+│                    Tauri Webview (React / TS)                │
+│   fetch / EventSource                                        │
+└──────────────────────────┬───────────────────────────────────┘
+                           │  http://127.0.0.1:<随机端口>/v1/*
+                           ▼
+┌──────────────────────────────────────────────────────────────┐
+│            combo-proxy  (axum 反向代理 + adapter 层)          │
+│   Backend trait  →  CrushBackend / OpenCodeBackend /          │
+│                    ClaudeCodeBackend / CodexBackend           │
+│   · 协议翻译 (REST / stdio JSON / JSON-RPC → 统一模型)        │
+│   · CORS + SSE 流式透传                                       │
+│   · 本地文件读写服务 (fs.rs)                                  │
+└──────┬───────────────┬──────────────┬──────────────┬─────────┘
+       ▼               ▼              ▼              ▼
+  crush server    opencode serve   claude -p      codex app-server
+  (unix socket)   (:4096 HTTP)    (stdio JSON)   (JSON-RPC)
 ```
 
-- **combo-proxy**(`crates/combo-proxy`):纯转发反向代理,监听 `127.0.0.1:0` 随机端口,把 `/v1/*` 转发到 rune 的 unix socket;SSE 流式透传不缓冲;CORS 放行 `tauri://localhost` 与 `http://localhost:5173`。
-- **RuneManager**(`src-tauri/src/lib.rs`):Tauri 壳内启动/守护 rune 子进程(`crush server`),健康轮询,崩溃自动重启,退出时优雅关停;代理端口通过 Tauri event 推送给前端。
-- **前端**:React 19 + Vite + shadcn/ui(Radix + Tailwind)。TanStack Query 管 REST 数据,Zustand 以 sessionId 分片管 SSE 实时状态。
+三大组件:
+
+| 组件 | 目录 | 说明 |
+|------|------|------|
+| **combo-proxy** | `crates/combo-proxy/` | Rust 反向代理 + adapter 层。监听 `127.0.0.1:0` 随机端口,把 `/v1/*` 路由到工作区绑定的后端 adapter;SSE 流式透传;CORS 放行 `tauri://localhost` 与 `http://localhost:5173`。 |
+| **Tauri 壳** | `src-tauri/` | 启动 `RuneManager` + 代理,健康轮询,崩溃自动重启,退出优雅关停;代理端口通过 Tauri event 推送给前端。 |
+| **前端** | `src/` | React 19 + Vite + shadcn/ui(Radix + Tailwind)。TanStack Query 管 REST,Zustand 按 `sessionId` 分片管 SSE 实时状态。 |
 
 ## 运行前提
 
-- Node.js ≥ 20,npm
-- Rust ≥ 1.80(`~/.cargo/bin` 记得加入 PATH)
-- [crush](https://charm.sh/crush) 二进制(可选;桌面模式自动 spawn,dev 模式通过 `COMBO_CRUSH_BIN` 指定)
-- Tauri 系统依赖(`libwebkit2gtk-4.1-dev libgtk-3-dev libdbus-1-dev pkg-config build-essential`)
+- **Node.js** ≥ 20 与 npm
+- **Rust** ≥ 1.80(确保 `~/.cargo/bin` 在 `PATH` 中)
+- **Tauri 系统依赖**:
+  - macOS:Xcode Command Line Tools
+  - Linux:`libwebkit2gtk-4.1-dev libgtk-3-dev libdbus-1-dev pkg-config build-essential`
+  - Windows:Microsoft C++ Build Tools 与 WebView2
+- **Agent 后端二进制**(按需,至少一个):
+  - [crush](https://charm.sh/crush)(rune server)—— 默认后端
+  - [opencode](https://github.com/sst/opencode)
+  - [claude](https://docs.anthropic.com/en/docs/claude-code)(Claude Code CLI)
+  - [codex](https://github.com/openai/codex)
 
-## 运行方式
+## 安装与使用
 
-### 桌面应用(Tauri)
+### 方式一:桌面应用(Tauri)
 
 ```bash
+git clone https://github.com/1fisher/combo.git
+cd combo
 npm install
-npm run tauri dev
 ```
 
-Tauri 壳自动启动 combo-proxy 与 rune server,无需手动配置。
-
-### 纯浏览器开发模式(推荐日常调试)
-
-终端 1:启动 Vite,并通过 `VITE_PROXY_URL` 直连 combo-proxy
+使用 Tauri CLI 启动(需 Rust 工具链自带的 `cargo tauri`):
 
 ```bash
-bash scripts/dev-proxy.sh   # 等价于 VITE_PROXY_URL=http://127.0.0.1:18234 npm run dev
+cargo tauri dev
 ```
 
-终端 2:启动 combo-proxy(自动 spawn rune;rune 二进制默认取 PATH 上的 `crush`,可用环境变量覆盖)
+Tauri 壳会自动启动 combo-proxy 与 rune server,无需手动配置。
+启动后通过 UI「添加项目」创建工作区,选择后端类型即可开始对话。
+
+> ⚠️ 注意:仓库内**没有** `tauri` npm 脚本,也未安装 `@tauri-apps/cli`,
+> 请使用 `cargo tauri dev`(Rust 工具链)。`bundle.active` 当前为 `false`,
+> 打包流程尚未配置。
+
+### 方式二:纯浏览器开发模式(推荐日常调试)
+
+需要两个终端。
+
+**终端 1** —— 启动 Vite,并通过 `VITE_PROXY_URL` 直连 combo-proxy:
+
+```bash
+bash scripts/dev-proxy.sh
+# 等价于:VITE_PROXY_URL=http://127.0.0.1:18234 npm run dev
+```
+
+**终端 2** —— 启动 combo-proxy(自动 spawn rune;rune 二进制默认取 `PATH` 上的 `crush`):
 
 ```bash
 cargo run -p combo-proxy --bin combo-proxy -- --port 18234
-# COMBO_CRUSH_BIN=/path/to/crush 覆盖 rune 二进制路径
 ```
 
-然后浏览器打开 http://localhost:5173。
+然后浏览器打开 **http://localhost:5173**。
 
 ## 环境变量
 
 | 变量 | 说明 |
-|---|---|
-| `COMBO_CRUSH_BIN` | rune 服务端二进制路径(默认取 PATH 上的 `crush`) |
-| `VITE_PROXY_URL` | 浏览器模式下代理基地址,如 `http://127.0.0.1:18234`;Tauri 模式自动取代理事件端口 |
+|------|------|
+| `COMBO_CRUSH_BIN` | rune 服务端二进制路径(默认取 `PATH` 上的 `crush`)。E2E 与 rune 集成测试必须设置。 |
+| `COMBO_RUNE_IT` | 设为 `1` 启用 rune 集成测试(`crates/combo-proxy/tests/rune_integration_test.rs`),否则跳过。 |
+| `COMBO_IT_DIR` | E2E 工作区目录(默认 `/tmp/combo-e2e`)。 |
+| `VITE_PROXY_URL` | 浏览器模式下代理基地址,如 `http://127.0.0.1:18234`。Tauri 模式自动取代理事件端口(2s 回退到 `:18234`)。 |
+
+## 常用脚本
+
+```bash
+npm run dev                 # Vite dev server(strictPort 5173,浏览器模式)
+npm run build               # tsc -b && vite build(生产构建,输出 dist/)
+npm run tsc                 # tsc -b(项目引用增量类型检查)
+npm test                    # vitest run(jsdom 环境)
+npm run test:e2e            # Playwright(未设 COMBO_CRUSH_BIN 时自动跳过)
+npm run gen:api             # 由 swagger/swagger.json 重新生成 src/lib/api/types.ts
+cargo test -p combo-proxy   # Rust 单测 + 集成测试
+cargo run -p combo-proxy --bin combo-proxy -- --port 18234   # 代理独立运行
+```
 
 ## 测试
 
 ```bash
-cargo test -p combo-proxy              # Rust 单测 + 集成(含 rune 集成,需 COMBO_CRUSH_BIN)
-npx vitest run                         # 前端单测(Vitest + Testing Library)
-npx tsc --noEmit                       # 类型检查
-npm run build                          # 生产构建
-COMBO_CRUSH_BIN=/path/to/crush npx playwright test   # E2E(需真实 rune 二进制)
+# 前端
+npm test                              # Vitest 单测(Testing Library + jsdom)
+npx tsc --noEmit                      # 类型检查
+npm run build                         # 生产构建
+
+# Rust
+cargo test -p combo-proxy             # 单测 + proxy 集成(内存 stub upstream)
+
+# E2E(需真实 rune 二进制)
+COMBO_CRUSH_BIN=/path/to/crush npx playwright test
 ```
+
+> E2E 会在运行前**清空工作区目录**(`/tmp/combo-e2e`),因为 rune 会在工作区内持久化
+> 状态(`.crush/`)。未设置 `COMBO_CRUSH_BIN` 时 spec 自动跳过。
 
 ## 目录结构
 
 ```
-crates/combo-proxy/   Rust 反向代理(库 + 二进制)
-src-tauri/            Tauri 壳(启动 RuneManager + 代理)
-src/
-  components/         UI(shadcn 基础组件 + shell/agent 业务组件)
-  hooks/              TanStack Query hooks + SSE 生命周期(useWorkspaceEvents)
-  lib/
-    api/              API client(types.ts 由 swagger 生成,index.ts 封装)
-    events/           SSE 客户端 + 事件分发(dispatch 处理 rune 事件信封)
-    connection.ts     代理地址发现 + 健康轮询
-  stores/             Zustand(agentStore:按 sessionId 分片,权限/提问队列)
-swagger/              从 rune 仓库复制的 OpenAPI 契约(来源 commit 见 swagger/README.md)
-e2e/                  Playwright 端到端测试
-scripts/              开发辅助脚本(dev-proxy.sh、gen-api.sh)
+combo/
+├── crates/combo-proxy/   Rust 反向代理 + Backend adapter 层(库 + 二进制)
+│   └── src/              handler / router / rune / upstream / fs / backend trait
+├── src-tauri/            Tauri 壳(启动 RuneManager + 代理,init_backend)
+├── src/                  前端(React 19 + Vite + TS + shadcn/ui)
+│   ├── components/       ui/(shadcn 基础组件) shell/(应用骨架) agent/(对话/工具/弹窗)
+│   ├── hooks/            TanStack Query hooks + SSE 生命周期(useWorkspaceEvents)
+│   ├── lib/
+│   │   ├── api/          API client(types.ts 由 swagger 生成 + 手维护 Api 命名空间)
+│   │   ├── events/       SSE 客户端 + 事件分发(dispatch 解包双层信封)
+│   │   └── connection.ts 代理地址发现 + 健康轮询
+│   └── stores/           Zustand(agentStore:按 sessionId 分片,权限 / 提问队列)
+├── swagger/              从 rune 仓库复制的 OpenAPI 契约(来源 commit 见 swagger/README.md)
+├── e2e/                  Playwright 端到端测试
+├── docs/superpowers/     设计文档与实现计划(specs / plans)
+└── scripts/              开发辅助脚本(dev-proxy.sh、gen-api.sh)
 ```
 
-## 关键约定
+## 工作原理要点
 
-- API 契约以 `swagger/swagger.json` 为准(复制自 rune 仓库,来源 commit 见 `swagger/README.md`);运行 `npm run gen:api` 重新生成 `src/lib/api/types.ts`。
-- 所有 rune 请求由 `apiRequest` 自动注入 `client_id` 查询参数(UUID,持久化于 localStorage `combo.clientId`);`createWorkspace` 额外在 body 携带 `client_id`(rune 从 body 校验)。
-- SSE 订阅:`GET /v1/workspaces/{id}/events?client_id=<uuid>`,`Accept: text/event-stream`。事件信封为 `{ "type": "<payload_type>", "payload": { "type": "created|updated|deleted", "payload": <真实数据> } }`,由 `src/lib/events/dispatch.ts` 解包后写入 store。
-- 前端数据路径不依赖 Tauri API(纯浏览器可开发调试);M1 的目录选择用路径输入框降级方案。
+- **统一内部协议**:combo 对外永远暴露同一套 `/v1/*` REST + 双层 SSE 信封
+  `{ type, payload: { type, payload } }`,以 crush 协议为基线。`CrushBackend` 近似恒等映射,
+  其他后端各自把自己的协议(stdio JSON / JSON-RPC)翻译成这套形状。前端无需关心后端是谁。
+- **`client_id` 身份机制**:`apiRequest` 自动注入 `client_id` 查询参数(UUID,持久化于
+  `localStorage`)。注意 `createWorkspace` 必须把 `client_id` **同时放进请求 body**(rune 从
+  body 校验)。SSE 订阅也携带它。
+- **SSE 双层信封**:`GET /v1/workspaces/{id}/events?client_id=...`,`Accept: text/event-stream`。
+  每个 `data:` 是 `{ type: <PayloadType>, payload: { type: "created"|"updated"|"deleted", payload: <data> } }`,
+  由 `src/lib/events/dispatch.ts` 解包一层后写入 Zustand store。
+- **Run 生命周期**:`onSend` 生成 `runId`,乐观插入用户消息,POST 后标记 run 为 `running`;
+  `run_complete` 事件标记 `done`。注意 message 的 `streaming` 标志一旦置 `true` 不会重置——
+  完成与否看 **run 状态**,不是 message 标志。
+- **前端不依赖 Tauri API**:整个应用在纯浏览器中可开发调试;目录选择用路径输入框降级。
+
+## 贡献
+
+欢迎提 Issue 与 Pull Request!请确保:
+
+1. 新增 / 修改的代码附带相应测试(Rust `cargo test`、前端 `npm test` 通过)。
+2. 用户可见文案保持**中文**(与现有 UI、e2e 选择器一致)。
+3. 涉及 API 契约变更时,同步更新 `swagger/` 与重新生成 `types.ts`(`npm run gen:api`)。
+4. 提交信息遵循 [Conventional Commits](https://www.conventionalcommits.org/)。
+
+## 许可证
+
+本项目基于 [MIT License](./LICENSE) 开源,欢迎自由使用、修改与分发。
