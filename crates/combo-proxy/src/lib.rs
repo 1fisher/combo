@@ -1,9 +1,14 @@
+pub mod backend;
 pub mod fs;
 pub mod handler;
+pub mod meta;
 pub mod rune;
 pub mod router;
 pub mod upstream;
 
+pub use backend::crush::CrushBackend;
+pub use backend::{Backend, BackendType};
+pub use meta::{MetaStore, WorkspaceMeta};
 pub use router::build_router;
 pub use upstream::Upstream;
 
