@@ -8,7 +8,8 @@ export function useWorkspaces() {
     queryFn: listWorkspaces,
   });
   const create = useMutation({
-    mutationFn: createWorkspace,
+    mutationFn: (vars: { path: string; backend?: 'crush' | 'opencode' }) =>
+      createWorkspace(vars.path, vars.backend),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['workspaces'] }),
   });
   return {

@@ -14,6 +14,7 @@ export function WorkspaceSidebar() {
   const { workspaces, isLoading, create } = useWorkspaces();
   const [picking, setPicking] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
+  const [backend, setBackend] = useState<'crush' | 'opencode'>('crush');
   const active = useAgentStore((s) => s.activeWorkspaceId);
   const setActive = useAgentStore((s) => s.setActiveWorkspace);
   const activeWs = workspaces?.find((w) => w.id === active) ?? null;
@@ -36,7 +37,7 @@ export function WorkspaceSidebar() {
       const { open } = await import('@tauri-apps/plugin-dialog');
       const dir = await open({ directory: true, multiple: false });
       if (typeof dir === 'string') {
-        await create(dir);
+        await create({ path: dir, backend });
       }
     } catch (e) {
       setFileError(e instanceof Error ? e.message : String(e));
@@ -94,7 +95,14 @@ export function WorkspaceSidebar() {
                 )}
               >
                 <div className="truncate font-mono text-xs">{w.path}</div>
-                <div className="truncate text-xs text-muted-foreground">{w.id}</div>
+                <div className="flex items-center gap-1.5">
+                  <span className="truncate text-xs text-muted-foreground">{w.id}</span>
+                  {w.backend && (
+                    <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground">
+                      {w.backend}
+                    </span>
+                  )}
+                </div>
               </button>
             ))}
             {!isLoading && workspaces?.length === 0 && (
@@ -114,7 +122,15 @@ export function WorkspaceSidebar() {
         )}
       </ScrollArea>
       {!activeWs && (
-        <div className="border-t p-2">
+        <div className="space-y-1.5 border-t p-2">
+          <select
+            value={backend}
+            onChange={(e) => setBackend(e.target.value as 'crush' | 'opencode')}
+            className="w-full rounded border bg-background px-2 py-1 text-xs"
+          >
+            <option value="crush">后端: Crush</option>
+            <option value="opencode">后端: OpenCode</option>
+          </select>
           <Button size="sm" className="w-full" onClick={onPickDirectory} disabled={picking}>
             <FolderPlus className="h-3.5 w-3.5" />
             {picking ? '选择中…' : '添加项目'}
