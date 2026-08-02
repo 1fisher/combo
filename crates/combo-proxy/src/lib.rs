@@ -1,11 +1,33 @@
+pub mod backend;
 pub mod fs;
 pub mod handler;
+pub mod manager;
+pub mod meta;
+pub mod registry;
 pub mod rune;
 pub mod router;
 pub mod upstream;
+pub mod workspace;
 
+pub use backend::claude_code::ClaudeCodeBackend;
+pub use backend::codex::CodexBackend;
+pub use backend::crush::CrushBackend;
+pub use backend::opencode::OpenCodeBackend;
+pub use backend::{Backend, BackendType};
+pub use manager::opencode::OpenCodeManager;
+pub use meta::{MetaStore, WorkspaceMeta};
+pub use registry::BackendRegistry;
 pub use router::build_router;
 pub use upstream::Upstream;
+
+use std::sync::Arc;
+
+/// 所有 axum handler 共享的应用状态。
+#[derive(Clone)]
+pub struct AppState {
+    pub meta: Arc<MetaStore>,
+    pub registry: Arc<BackendRegistry>,
+}
 
 /// Parses a `--upstream` argument into an [`Upstream`].
 /// Bare paths are unix sockets; `tcp://host:port` is a TCP upstream.
@@ -17,13 +39,13 @@ pub fn parse_upstream(s: &str) -> anyhow::Result<Upstream> {
     }
 }
 
-/// Runs the proxy on `listener`, forwarding to `upstream`.
+/// Runs the proxy on `listener`.
 pub async fn serve(
     listener: tokio::net::TcpListener,
-    upstream: Upstream,
+    state: AppState,
     allowed_origins: Vec<String>,
 ) -> anyhow::Result<()> {
-    let app = build_router(upstream, allowed_origins);
+    let app = build_router(state, allowed_origins);
     axum::serve(listener, app).await?;
     Ok(())
 }

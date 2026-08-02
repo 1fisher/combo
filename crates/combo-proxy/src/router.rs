@@ -1,14 +1,13 @@
 use crate::fs;
 use crate::handler::proxy;
-use crate::upstream::Upstream;
+use crate::workspace;
+use crate::AppState;
 use axum::routing::get;
 use axum::Router;
-use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 
-/// Builds the proxy router. When `allowed_origins` is empty the CORS
-/// layer is permissive (development mode).
-pub fn build_router(upstream: Upstream, allowed_origins: Vec<String>) -> Router {
+/// 构建 proxy router。`allowed_origins` 为空时 CORS 全开放(开发模式)。
+pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
     let cors = if allowed_origins.is_empty() {
         CorsLayer::permissive()
     } else {
@@ -25,12 +24,14 @@ pub fn build_router(upstream: Upstream, allowed_origins: Vec<String>) -> Router 
             .allow_headers(Any)
     };
     Router::new()
+        .route("/v1/workspaces", get(workspace::list).post(workspace::create))
+        .route("/v1/workspaces/:id", get(workspace::get))
         .route("/v1/workspaces/:id/files/list", get(fs::list))
         .route(
             "/v1/workspaces/:id/files/content",
             get(fs::read).put(fs::write),
         )
         .fallback(proxy)
-        .with_state(Arc::new(upstream))
+        .with_state(state)
         .layer(cors)
 }

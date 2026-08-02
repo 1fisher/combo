@@ -8,11 +8,14 @@ export function listWorkspaces(): Promise<Api.Workspace[]> {
   return apiRequest('/v1/workspaces');
 }
 
-export function createWorkspace(path: string): Promise<Api.Workspace> {
+export function createWorkspace(
+  path: string,
+  backend: 'crush' | 'opencode' | 'claude_code' | 'codex' = 'crush'
+): Promise<Api.Workspace> {
   // rune 从请求体校验 client_id(UUID),而不是查询参数
   return apiRequest('/v1/workspaces', {
     method: 'POST',
-    body: { path, client_id: getClientId() },
+    body: { path, client_id: getClientId(), backend },
   });
 }
 

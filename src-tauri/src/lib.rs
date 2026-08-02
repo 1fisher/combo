@@ -31,8 +31,9 @@ pub fn run() {
 
 async fn init_backend(app: &tauri::AppHandle) {
     use combo_proxy::rune::RuneManager;
-    use combo_proxy::{serve, Upstream};
+    use combo_proxy::{serve, AppState, BackendRegistry, ClaudeCodeBackend, CodexBackend, CrushBackend, MetaStore, OpenCodeBackend, OpenCodeManager, Upstream};
     use std::net::SocketAddr;
+    use std::sync::Arc;
     use tokio::net::TcpListener;
 
     let bin = std::env::var("COMBO_CRUSH_BIN").unwrap_or_else(|_| "crush".into());
@@ -49,6 +50,37 @@ async fn init_backend(app: &tauri::AppHandle) {
             Upstream::Tcp("127.0.0.1:1".parse().unwrap())
         }
     };
+
+    let mut registry = BackendRegistry::new(Arc::new(CrushBackend::new(upstream)));
+
+    // 可选:启动 OpenCode 后端
+    if let Ok(oc_bin) = std::env::var("COMBO_OPENCODE_BIN") {
+        let mut oc_mgr = OpenCodeManager::new(oc_bin);
+        match oc_mgr.ensure_running().await {
+            Ok(url) => {
+                registry.set_opencode(Arc::new(OpenCodeBackend::new(url)));
+            }
+            Err(e) => {
+                eprintln!("opencode server failed: {e:?}");
+            }
+        }
+    }
+
+    // 可选:启动 Claude Code 后端
+    if let Ok(cc_bin) = std::env::var("COMBO_CLAUDE_BIN") {
+        registry.set_claude_code(Arc::new(ClaudeCodeBackend::new(cc_bin)));
+    }
+
+    // 可选:启动 Codex 后端
+    if let Ok(cx_bin) = std::env::var("COMBO_CODEX_BIN") {
+        registry.set_codex(Arc::new(CodexBackend::new(cx_bin)));
+    }
+
+    let state = AppState {
+        meta: Arc::new(MetaStore::new()),
+        registry: Arc::new(registry),
+    };
+
     let listener = match TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await {
         Ok(l) => l,
         Err(e) => {
@@ -62,7 +94,7 @@ async fn init_backend(app: &tauri::AppHandle) {
         "http://localhost:5173".to_string(),
     ];
     let _ = app.emit(EVENT_PROXY_READY, ProxyReady { port });
-    if let Err(e) = serve(listener, upstream, origins).await {
+    if let Err(e) = serve(listener, state, origins).await {
         eprintln!("proxy exited: {e:?}");
     }
 }

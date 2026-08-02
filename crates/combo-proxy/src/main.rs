@@ -1,7 +1,8 @@
 use anyhow::Result;
 use combo_proxy::rune::RuneManager;
-use combo_proxy::{parse_upstream, serve, Upstream};
+use combo_proxy::{parse_upstream, serve, AppState, BackendRegistry, ClaudeCodeBackend, CodexBackend, CrushBackend, MetaStore, OpenCodeBackend, OpenCodeManager, Upstream};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::net::TcpListener;
 
 #[tokio::main]
@@ -33,9 +34,42 @@ async fn main() -> Result<()> {
         }
     };
 
+    let mut registry = BackendRegistry::new(Arc::new(CrushBackend::new(upstream)));
+
+    // 可选:启动 OpenCode 后端
+    if let Ok(oc_bin) = std::env::var("COMBO_OPENCODE_BIN") {
+        let mut oc_mgr = OpenCodeManager::new(oc_bin);
+        match oc_mgr.ensure_running().await {
+            Ok(url) => {
+                registry.set_opencode(Arc::new(OpenCodeBackend::new(url)));
+                println!("COMBO_OPENCODE_STATUS=connected");
+            }
+            Err(e) => {
+                eprintln!("COMBO_OPENCODE_STATUS=failed: {e:?}");
+            }
+        }
+    }
+
+    // 可选:启动 Claude Code 后端
+    if let Ok(cc_bin) = std::env::var("COMBO_CLAUDE_BIN") {
+        registry.set_claude_code(Arc::new(ClaudeCodeBackend::new(cc_bin)));
+        println!("COMBO_CLAUDE_STATUS=connected");
+    }
+
+    // 可选:启动 Codex 后端
+    if let Ok(cx_bin) = std::env::var("COMBO_CODEX_BIN") {
+        registry.set_codex(Arc::new(CodexBackend::new(cx_bin)));
+        println!("COMBO_CODEX_STATUS=connected");
+    }
+
+    let state = AppState {
+        meta: Arc::new(MetaStore::new()),
+        registry: Arc::new(registry),
+    };
+
     let listener = TcpListener::bind(SocketAddr::new(host, port)).await?;
     let actual = listener.local_addr()?.port();
     println!("COMBO_PROXY_PORT={actual}");
-    serve(listener, upstream, origins).await?;
+    serve(listener, state, origins).await?;
     Ok(())
 }

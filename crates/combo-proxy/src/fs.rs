@@ -5,15 +5,13 @@
 
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
-use axum::http::{header, Method, StatusCode};
+use axum::http::{header, StatusCode};
 use axum::response::Response;
 use serde::Deserialize;
 use serde_json::json;
 use std::path::{Component, Path as FsPath, PathBuf};
-use std::sync::Arc;
 
-use crate::handler::upstream_call;
-use crate::upstream::Upstream;
+use crate::AppState;
 
 /// 单文件读取上限(1MB),超过视为过大。
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
@@ -42,33 +40,6 @@ fn ok_json(value: serde_json::Value) -> Response {
 
 fn error(status: StatusCode, message: &str) -> Response {
     json_response(status, json!({ "message": message }))
-}
-
-/// 向 rune 查询 workspace 并返回其真实路径。
-async fn workspace_root(upstream: &Upstream, id: &str) -> anyhow::Result<PathBuf> {
-    let path_query = format!("/v1/workspaces/{id}");
-    let resp = upstream_call(
-        upstream,
-        Method::GET,
-        &path_query,
-        &Default::default(),
-        Vec::new(),
-    )
-    .await
-    .map_err(|e| anyhow::anyhow!("无法查询 workspace: {e:#}"))?;
-    let status = resp.status();
-    let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
-        .await
-        .map_err(|e| anyhow::anyhow!("读取 workspace 响应失败: {e}"))?;
-    if !status.is_success() {
-        anyhow::bail!("查询 workspace 返回 {status}");
-    }
-    let v: serde_json::Value = serde_json::from_slice(&bytes)?;
-    let path = v
-        .get("path")
-        .and_then(|p| p.as_str())
-        .ok_or_else(|| anyhow::anyhow!("workspace 响应缺少 path 字段"))?;
-    Ok(PathBuf::from(path))
 }
 
 /// 在 workspace 根内安全拼接相对路径。
@@ -124,11 +95,12 @@ fn safe_join(root: &FsPath, rel: &str) -> anyhow::Result<PathBuf> {
 /// GET /v1/workspaces/{id}/files/list?path=<相对目录>
 /// 返回单层目录条目:dir 在前,file 在后,各按名称排序。
 pub async fn list(
-    State(upstream): State<Arc<Upstream>>,
+    State(state): State<AppState>,
     Path(id): Path<String>,
     Query(q): Query<PathQuery>,
 ) -> Response {
-    let root = match workspace_root(&upstream, &id).await {
+    let backend = state.registry.for_workspace(&id, &state.meta);
+    let root = match backend.workspace_root(&id).await {
         Ok(r) => r,
         Err(e) => return error(StatusCode::BAD_GATEWAY, &format!("{e:#}")),
     };
@@ -181,11 +153,12 @@ pub async fn list(
 /// GET /v1/workspaces/{id}/files/content?path=<相对文件>
 /// 读取文件文本;含 NUL 判定为二进制,超过 1MB 拒绝。
 pub async fn read(
-    State(upstream): State<Arc<Upstream>>,
+    State(state): State<AppState>,
     Path(id): Path<String>,
     Query(q): Query<PathQuery>,
 ) -> Response {
-    let root = match workspace_root(&upstream, &id).await {
+    let backend = state.registry.for_workspace(&id, &state.meta);
+    let root = match backend.workspace_root(&id).await {
         Ok(r) => r,
         Err(e) => return error(StatusCode::BAD_GATEWAY, &format!("{e:#}")),
     };
@@ -220,12 +193,13 @@ pub async fn read(
 /// PUT /v1/workspaces/{id}/files/content?path=<相对文件>  body: { "content": ... }
 /// 原子写:同目录临时文件 + rename,避免写一半。
 pub async fn write(
-    State(upstream): State<Arc<Upstream>>,
+    State(state): State<AppState>,
     Path(id): Path<String>,
     Query(q): Query<PathQuery>,
     axum::extract::Json(body): axum::extract::Json<WriteBody>,
 ) -> Response {
-    let root = match workspace_root(&upstream, &id).await {
+    let backend = state.registry.for_workspace(&id, &state.meta);
+    let root = match backend.workspace_root(&id).await {
         Ok(r) => r,
         Err(e) => return error(StatusCode::BAD_GATEWAY, &format!("{e:#}")),
     };

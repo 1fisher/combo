@@ -4,8 +4,9 @@ use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
 use axum::routing::{get, post};
 use axum::Router;
-use combo_proxy::{serve, Upstream};
+use combo_proxy::{serve, AppState, BackendRegistry, CrushBackend, MetaStore, Upstream};
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tokio::net::TcpListener;
 
 /// In-memory stub upstream echoing request method + path.
@@ -58,9 +59,13 @@ async fn start_proxy(upstream_addr: SocketAddr, origins: Vec<String>) -> SocketA
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let proxy_addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        serve(listener, Upstream::Tcp(upstream_addr), origins)
-            .await
-            .unwrap();
+        let state = AppState {
+            meta: Arc::new(MetaStore::new()),
+            registry: Arc::new(BackendRegistry::new(Arc::new(CrushBackend::new(
+                Upstream::Tcp(upstream_addr),
+            )))),
+        };
+        serve(listener, state, origins).await.unwrap();
     });
     proxy_addr
 }

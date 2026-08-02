@@ -1856,6 +1856,7 @@ export namespace Api {
   export type Workspace = {
     id: string;
     path: string;
+    backend?: string;
     yolo?: boolean;
     debug?: boolean;
     data_dir?: string;
