@@ -119,42 +119,7 @@ impl RuneManager {
 
     /// GET /v1/health over the upstream (Unix socket or TCP).
     pub async fn health_check(&self, upstream: &Upstream) -> bool {
-        let uri = match upstream {
-            Upstream::Unix(path) => {
-                let hex_host = hex::encode(path.to_string_lossy().as_bytes());
-                format!("unix://{hex_host}/v1/health")
-            }
-            Upstream::Tcp(addr) => format!("http://{addr}/v1/health"),
-        };
-        let uri: hyper::Uri = match uri.parse() {
-            Ok(u) => u,
-            Err(_) => return false,
-        };
-        let req = match hyper::Request::builder()
-            .uri(uri)
-            .body(Full::new(bytes::Bytes::new()))
-        {
-            Ok(r) => r,
-            Err(_) => return false,
-        };
-        let resp = match upstream {
-            Upstream::Unix(_) => {
-                let connector = hyperlocal::UnixConnector;
-                let client: Client<_, Full<bytes::Bytes>> =
-                    Client::builder(TokioExecutor::new()).build(connector);
-                client.request(req).await
-            }
-            Upstream::Tcp(_) => {
-                let connector = HttpConnector::new();
-                let client: Client<_, Full<bytes::Bytes>> =
-                    Client::builder(TokioExecutor::new()).build(connector);
-                client.request(req).await
-            }
-        };
-        match resp {
-            Ok(r) => r.status().is_success(),
-            Err(_) => false,
-        }
+        crate::backend::crush::check_health(upstream).await
     }
 
     /// Shuts the spawned rune server down: POST /v1/control shutdown,

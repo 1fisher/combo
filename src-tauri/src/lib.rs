@@ -31,8 +31,9 @@ pub fn run() {
 
 async fn init_backend(app: &tauri::AppHandle) {
     use combo_proxy::rune::RuneManager;
-    use combo_proxy::{serve, Upstream};
+    use combo_proxy::{serve, AppState, CrushBackend, MetaStore, Upstream};
     use std::net::SocketAddr;
+    use std::sync::Arc;
     use tokio::net::TcpListener;
 
     let bin = std::env::var("COMBO_CRUSH_BIN").unwrap_or_else(|_| "crush".into());
@@ -49,6 +50,12 @@ async fn init_backend(app: &tauri::AppHandle) {
             Upstream::Tcp("127.0.0.1:1".parse().unwrap())
         }
     };
+
+    let state = AppState {
+        backend: Arc::new(CrushBackend::new(upstream)),
+        meta: Arc::new(MetaStore::new()),
+    };
+
     let listener = match TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await {
         Ok(l) => l,
         Err(e) => {
@@ -62,7 +69,7 @@ async fn init_backend(app: &tauri::AppHandle) {
         "http://localhost:5173".to_string(),
     ];
     let _ = app.emit(EVENT_PROXY_READY, ProxyReady { port });
-    if let Err(e) = serve(listener, upstream, origins).await {
+    if let Err(e) = serve(listener, state, origins).await {
         eprintln!("proxy exited: {e:?}");
     }
 }

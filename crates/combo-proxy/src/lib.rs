@@ -12,6 +12,15 @@ pub use meta::{MetaStore, WorkspaceMeta};
 pub use router::build_router;
 pub use upstream::Upstream;
 
+use std::sync::Arc;
+
+/// 所有 axum handler 共享的应用状态。
+#[derive(Clone)]
+pub struct AppState {
+    pub backend: Arc<dyn Backend>,
+    pub meta: Arc<MetaStore>,
+}
+
 /// Parses a `--upstream` argument into an [`Upstream`].
 /// Bare paths are unix sockets; `tcp://host:port` is a TCP upstream.
 pub fn parse_upstream(s: &str) -> anyhow::Result<Upstream> {
@@ -22,13 +31,13 @@ pub fn parse_upstream(s: &str) -> anyhow::Result<Upstream> {
     }
 }
 
-/// Runs the proxy on `listener`, forwarding to `upstream`.
+/// Runs the proxy on `listener`.
 pub async fn serve(
     listener: tokio::net::TcpListener,
-    upstream: Upstream,
+    state: AppState,
     allowed_origins: Vec<String>,
 ) -> anyhow::Result<()> {
-    let app = build_router(upstream, allowed_origins);
+    let app = build_router(state, allowed_origins);
     axum::serve(listener, app).await?;
     Ok(())
 }
