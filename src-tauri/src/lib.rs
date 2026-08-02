@@ -31,7 +31,7 @@ pub fn run() {
 
 async fn init_backend(app: &tauri::AppHandle) {
     use combo_proxy::rune::RuneManager;
-    use combo_proxy::{serve, AppState, BackendRegistry, CrushBackend, MetaStore, Upstream};
+    use combo_proxy::{serve, AppState, BackendRegistry, CrushBackend, MetaStore, OpenCodeBackend, OpenCodeManager, Upstream};
     use std::net::SocketAddr;
     use std::sync::Arc;
     use tokio::net::TcpListener;
@@ -51,9 +51,24 @@ async fn init_backend(app: &tauri::AppHandle) {
         }
     };
 
+    let mut registry = BackendRegistry::new(Arc::new(CrushBackend::new(upstream)));
+
+    // 可选:启动 OpenCode 后端
+    if let Ok(oc_bin) = std::env::var("COMBO_OPENCODE_BIN") {
+        let mut oc_mgr = OpenCodeManager::new(oc_bin);
+        match oc_mgr.ensure_running().await {
+            Ok(url) => {
+                registry.set_opencode(Arc::new(OpenCodeBackend::new(url)));
+            }
+            Err(e) => {
+                eprintln!("opencode server failed: {e:?}");
+            }
+        }
+    }
+
     let state = AppState {
         meta: Arc::new(MetaStore::new()),
-        registry: Arc::new(BackendRegistry::new(Arc::new(CrushBackend::new(upstream)))),
+        registry: Arc::new(registry),
     };
 
     let listener = match TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await {

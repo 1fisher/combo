@@ -37,6 +37,10 @@ impl MetaStore {
     pub fn remove(&self, id: &str) {
         self.workspaces.lock().unwrap().remove(id);
     }
+
+    pub fn list(&self) -> Vec<WorkspaceMeta> {
+        self.workspaces.lock().unwrap().values().cloned().collect()
+    }
 }
 
 #[cfg(test)]
