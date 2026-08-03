@@ -84,6 +84,7 @@ mod tests {
         meta.insert(crate::WorkspaceMeta {
             id: "ws1".into(),
             path: "/tmp".into(),
+            name: "ws1".into(),
             backend_type: BackendType::Crush,
         });
         let backend = reg.for_workspace("ws1", &meta);
@@ -97,6 +98,7 @@ mod tests {
         meta.insert(crate::WorkspaceMeta {
             id: "ws3".into(),
             path: "/tmp".into(),
+            name: "ws3".into(),
             backend_type: BackendType::OpenCode,
         });
         let backend = reg.for_workspace("ws3", &meta);

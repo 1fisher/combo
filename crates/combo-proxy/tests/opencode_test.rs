@@ -75,6 +75,7 @@ fn make_state(oc_addr: std::net::SocketAddr) -> AppState {
     meta.insert(WorkspaceMeta {
         id: "ws_oc".into(),
         path: "/tmp/test".into(),
+        name: "ws_oc".into(),
         backend_type: BackendType::OpenCode,
     });
     AppState {

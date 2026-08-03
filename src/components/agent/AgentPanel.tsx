@@ -1,34 +1,73 @@
+import { useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { Folder } from 'lucide-react';
 import { randomUUID } from '../../lib/clientId';
 import { useAgentStore } from '../../stores/agentStore';
 import { cancelAgent, sendAgentMessage } from '../../lib/api';
 import { useWorkspaceEvents } from '../../hooks/useWorkspaceEvents';
+import { useWorkspaces } from '../../hooks/useWorkspaces';
+import { useSessions } from '../../hooks/useSessions';
 import { Button } from '../ui/button';
 import { MessageList } from './MessageList';
 import { Composer } from './Composer';
+import { ChatEmptyState } from './ChatEmptyState';
+import { cn } from '../../lib/utils';
 
-export function AgentPanel({
-  workspaceId,
-  sessionId,
-}: {
-  workspaceId: string;
-  sessionId: string;
-}) {
+const BACKEND_LABEL: Record<string, string> = {
+  crush: 'Crush',
+  opencode: 'OpenCode',
+  claude_code: 'Claude Code',
+  codex: 'Codex',
+};
+
+function basename(p: string): string {
+  const clean = p.replace(/[\\/]+$/, '');
+  const idx = Math.max(clean.lastIndexOf('/'), clean.lastIndexOf('\\'));
+  return idx >= 0 ? clean.slice(idx + 1) : clean;
+}
+
+export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
   useWorkspaceEvents(workspaceId);
+  const qc = useQueryClient();
+  const sessionId = useAgentStore((s) => s.activeSessionId);
+  const setActiveWorkspace = useAgentStore((s) => s.setActiveWorkspace);
+  const { workspaces } = useWorkspaces();
+  const { create: createSessionIn } = useSessions(workspaceId);
+
   const rt = useAgentStore((s) => (sessionId ? s.bySession[sessionId] : undefined));
   const setQueued = useAgentStore((s) => s.setQueued);
   const [postError, setPostError] = useState<string | null>(null);
+  const [draft, setDraft] = useState('');
+  const [wsMenuOpen, setWsMenuOpen] = useState(false);
 
   const running = rt?.run?.status === 'running';
+  const messages = rt?.messages ?? [];
+  const ws = workspaces?.find((w) => w.id === workspaceId) ?? null;
+  const wsName = ws ? (ws.name?.trim() ? ws.name : basename(ws.path)) : undefined;
+  const backend = ws ? (BACKEND_LABEL[ws.backend ?? 'crush'] ?? ws.backend) : 'Crush';
 
-  async function onSend(prompt: string) {
+  async function doSend(prompt: string) {
+    if (!workspaceId) {
+      setPostError('请先在侧边栏添加/选择一个项目');
+      return;
+    }
     setPostError(null);
+    let sid = sessionId;
+    if (!sid) {
+      // 首个消息:先创建会话(useSessions 的 create 会顺带激活并做防清除保护)
+      try {
+        const s = await createSessionIn(prompt.slice(0, 20) || '新任务');
+        sid = s.id;
+      } catch (e) {
+        setPostError(e instanceof Error ? e.message : String(e));
+        return;
+      }
+    }
     const runId = randomUUID();
-    // 乐观插入用户消息
     const st = useAgentStore.getState();
-    st.upsertMessage(sessionId, {
+    st.upsertMessage(sid!, {
       id: `local-${runId}`,
-      session_id: sessionId,
+      session_id: sid!,
       role: 'user',
       parts: [{ type: 'text', data: { text: prompt } }],
       model: '',
@@ -36,20 +75,21 @@ export function AgentPanel({
       created_at: Date.now(),
       updated_at: Date.now(),
     } as never);
-    setQueued(sessionId, true);
+    setQueued(sid!, true);
     try {
-      await sendAgentMessage(workspaceId, { sessionId, runId, prompt });
-      st.markRun(sessionId, runId, 'running');
+      await sendAgentMessage(workspaceId, { sessionId: sid!, runId, prompt });
+      st.markRun(sid!, runId, 'running');
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setPostError(msg);
-      st.deleteMessage(sessionId, `local-${runId}`);
+      st.deleteMessage(sid!, `local-${runId}`);
     } finally {
-      setQueued(sessionId, false);
+      setQueued(sid!, false);
     }
   }
 
   async function cancel() {
+    if (!workspaceId || !sessionId) return;
     try {
       await cancelAgent(workspaceId, sessionId);
     } catch {
@@ -58,22 +98,75 @@ export function AgentPanel({
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="relative flex h-full min-h-0 w-full flex-1 flex-col">
       {running && (
-        <div className="flex items-center justify-between border-b px-4 py-2">
-          <span className="text-xs text-muted-foreground">agent 正在执行…</span>
-          <Button size="sm" variant="outline" onClick={cancel}>
+        <div className="flex shrink-0 items-center justify-between border-b px-4 py-1.5">
+          <span className="text-xs text-foreground-subtle">agent 正在执行…</span>
+          <Button size="sm" variant="outline" className="h-6 px-2 text-xs" onClick={cancel}>
             取消
           </Button>
         </div>
       )}
-      <MessageList messages={rt?.messages ?? []} workspaceId={workspaceId} />
       {postError && (
-        <div className="border-t border-destructive/30 bg-destructive/10 px-4 py-2 text-xs text-destructive">
+        <div className="shrink-0 border-t border-destructive/30 bg-destructive/10 px-4 py-2 text-xs text-destructive">
           发送失败:{postError}
         </div>
       )}
-      <Composer onSend={onSend} disabled={running} />
+      {/* 时间线 */}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        {messages.length === 0 ? (
+          <ChatEmptyState
+            onPickTemplate={(p) => {
+              setDraft(p);
+            }}
+          />
+        ) : (
+          <MessageList messages={messages} workspaceId={workspaceId ?? undefined} />
+        )}
+      </div>
+      {/* 输入区 */}
+      <div className="relative z-20 w-full shrink-0">
+        {wsMenuOpen && (
+          <div className="absolute bottom-full left-1/2 z-30 mb-2 w-64 -translate-x-1/2 rounded-xl border border-border bg-popover p-1.5 shadow-xl">
+            <div className="px-2 py-1 text-xs font-medium text-foreground-subtlest">选择项目</div>
+            {workspaces?.map((w) => {
+              const name = w.name?.trim() ? w.name : basename(w.path);
+              return (
+                <button
+                  key={w.id}
+                  type="button"
+                  onClick={() => {
+                    setActiveWorkspace(w.id);
+                    setWsMenuOpen(false);
+                    void qc.invalidateQueries({ queryKey: ['sessions', w.id] });
+                  }}
+                  className={cn(
+                    'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-hover',
+                    w.id === workspaceId && 'bg-surface-hover'
+                  )}
+                >
+                  <Folder className="size-4 shrink-0 text-foreground-subtlest" />
+                  <span className="min-w-0 flex-1 truncate">{name}</span>
+                </button>
+              );
+            })}
+            {!workspaces?.length && (
+              <div className="px-2 py-1.5 text-[13px] text-foreground-subtle">
+                还没有项目,请在侧边栏「项目」分区添加。
+              </div>
+            )}
+          </div>
+        )}
+        <Composer
+          workspaceName={wsName}
+          backend={backend}
+          value={draft}
+          onChange={setDraft}
+          onSend={() => void doSend(draft)}
+          disabled={running}
+          onPickWorkspace={() => setWsMenuOpen((o) => !o)}
+        />
+      </div>
     </div>
   );
 }

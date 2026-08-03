@@ -1,4 +1,5 @@
 pub mod backend;
+pub mod db;
 pub mod fs;
 pub mod handler;
 pub mod manager;
@@ -6,6 +7,7 @@ pub mod meta;
 pub mod registry;
 pub mod rune;
 pub mod router;
+pub mod session;
 pub mod upstream;
 pub mod workspace;
 
@@ -14,6 +16,7 @@ pub use backend::codex::CodexBackend;
 pub use backend::crush::CrushBackend;
 pub use backend::opencode::OpenCodeBackend;
 pub use backend::{Backend, BackendType};
+pub use db::{ComboDb, ConversationMeta, default_db_path};
 pub use manager::opencode::OpenCodeManager;
 pub use meta::{MetaStore, WorkspaceMeta};
 pub use registry::BackendRegistry;

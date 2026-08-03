@@ -12,12 +12,14 @@ test.describe('M1 vertical slice', () => {
   }) => {
     // 预置:确保存在一个可用的 workspace 路径(用临时目录)
     const tmp = process.env.COMBO_IT_DIR ?? '/tmp/combo-e2e';
+    // 侧边栏显示项目名(basename),而不是完整路径
+    const projName = tmp.split('/').filter(Boolean).pop()!;
     // rune 会在工作区目录内持久化状态(.crush/),每次运行前清空,避免会话序号/标题残留
     rmSync(tmp, { recursive: true, force: true });
     mkdirSync(tmp, { recursive: true });
 
     await page.goto('/');
-    await expect(page.getByText('已连接 rune')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText('已连接', { exact: true })).toBeVisible({ timeout: 15_000 });
 
     // 添加项目:浏览器模式无法弹原生目录对话框,经 API 前置创建工作区
     const cid = randomUUID();
@@ -32,7 +34,7 @@ test.describe('M1 vertical slice', () => {
       },
       { dir: tmp, clientId: cid }
     );
-    const wsRow = page.getByText(tmp);
+    const wsRow = page.getByText(projName, { exact: true });
     await expect(wsRow).toBeVisible({ timeout: 15_000 });
 
     // 激活工作区
@@ -43,7 +45,7 @@ test.describe('M1 vertical slice', () => {
     await expect(page.getByText('会话 1')).toBeVisible({ timeout: 15_000 });
 
     // 发送任务
-    await page.getByPlaceholder(/给 agent 下任务/).fill('执行 pwd 并返回当前目录');
+    await page.getByPlaceholder(/向 combo 提问/).fill('执行 pwd 并返回当前目录');
     await page.getByRole('button', { name: '发送' }).click();
 
     // 等待工具调用卡片出现(可能触发权限弹窗;若出现则允许)

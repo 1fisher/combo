@@ -2,18 +2,22 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { SessionTabs } from './SessionTabs';
+import { ConversationList } from './ConversationList';
 import { useAgentStore } from '../../stores/agentStore';
 
-const sessions: { id: string; title: string }[] = [
-  { id: 's1', title: '会话一' },
-  { id: 's2', title: '会话二' },
+const sessions: { id: string; title: string; created_at: number }[] = [
+  { id: 's1', title: '会话一', created_at: 1_700_000_000 },
+  { id: 's2', title: '会话二', created_at: 1_700_000_100 },
 ];
 
 vi.mock('../../lib/api', () => ({
   listSessions: vi.fn(async () => [...sessions]),
   createSession: vi.fn(async (_w: string, title: string) => {
-    const s = { id: `s${sessions.length + 1}`, title };
+    const s = {
+      id: `s${sessions.length + 1}`,
+      title,
+      created_at: 1_700_000_200,
+    };
     sessions.push(s);
     return s;
   }),
@@ -21,17 +25,17 @@ vi.mock('../../lib/api', () => ({
   getSessionHistory: vi.fn(async () => []),
 }));
 
-describe('SessionTabs', () => {
+describe('ConversationList', () => {
   it('lists sessions and creates a new one', async () => {
     useAgentStore.setState({ activeWorkspaceId: 'w1', activeSessionId: null });
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={qc}>
-        <SessionTabs />
+        <ConversationList />
       </QueryClientProvider>
     );
     expect(await screen.findByText('会话一')).toBeTruthy();
-    await userEvent.click(screen.getByText('＋'));
+    await userEvent.click(screen.getByRole('button', { name: /新建会话/ }));
     expect(await screen.findByText('会话 3')).toBeTruthy();
     expect(useAgentStore.getState().activeSessionId).toBe('s3');
   });

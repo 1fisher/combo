@@ -1,16 +1,20 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { useEffect, useRef, useState, type PointerEvent } from 'react';
+import { ArrowLeft, ArrowRight, CircleHelp, PanelLeftClose, SquareTerminal } from 'lucide-react';
 import { connectLoop } from '../../lib/connection';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
-import { SessionTabs } from './SessionTabs';
-import { StatusBar } from './StatusBar';
 import { AgentPanel } from '../agent/AgentPanel';
 import { EditorPane } from '../editor/EditorPane';
 import { ModalQueue } from '../agent/ModalQueue';
 import { useAgentStore } from '../../stores/agentStore';
 import { useEditorStore } from '../../stores/editorStore';
+import { Button } from '../ui/button';
+import { cn } from '../../lib/utils';
 
 const qc = new QueryClient();
+
+const SIDEBAR_MIN = 264;
+const SIDEBAR_DEFAULT = 372;
 
 export function AppShell() {
   useEffect(() => {
@@ -18,7 +22,6 @@ export function AppShell() {
   }, []);
 
   const workspaceId = useAgentStore((s) => s.activeWorkspaceId);
-  const sessionId = useAgentStore((s) => s.activeSessionId);
   const resetOpenFiles = useEditorStore((s) => s.resetOpenFiles);
 
   // 切换项目时清空编辑器里打开的文件
@@ -26,24 +29,96 @@ export function AppShell() {
     resetOpenFiles();
   }, [workspaceId, resetOpenFiles]);
 
+  const [width, setWidth] = useState(SIDEBAR_DEFAULT);
+  const [collapsed, setCollapsed] = useState(false);
+  const dragRef = useRef<{ startX: number; startW: number } | null>(null);
+
+  function onHandleDown(e: PointerEvent<HTMLDivElement>) {
+    dragRef.current = { startX: e.clientX, startW: width };
+    const onMove = (ev: globalThis.PointerEvent) => {
+      if (!dragRef.current) return;
+      const d = ev.clientX - dragRef.current.startX;
+      const max = Math.round(window.innerWidth * 0.5);
+      setWidth(Math.min(max, Math.max(SIDEBAR_MIN, dragRef.current.startW + d)));
+    };
+    const onUp = () => {
+      dragRef.current = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }
+
   return (
     <QueryClientProvider client={qc}>
-      <div className="flex h-screen w-screen flex-col overflow-hidden">
-        <div className="flex min-h-0 flex-1">
-          <WorkspaceSidebar />
-          <main className="flex min-w-0 flex-1 flex-col">
-            <SessionTabs />
-            {workspaceId && sessionId ? (
-              <AgentPanel workspaceId={workspaceId} sessionId={sessionId} />
-            ) : (
-              <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-                {workspaceId ? '选择或新建一个会话' : '先添加/选择项目'}
-              </div>
+      <div className="relative flex h-dvh flex-col overflow-hidden bg-background-alt text-foreground">
+        <div className="relative flex min-h-0 flex-1">
+          {/* 侧边栏 */}
+          <div
+            data-panel="sidebar"
+            className={cn(
+              'flex-none overflow-hidden transition-[width,opacity] duration-200 ease-out',
+              collapsed && 'w-0 opacity-0'
             )}
-          </main>
+            style={{ width: collapsed ? undefined : width }}
+          >
+            <WorkspaceSidebar />
+          </div>
+          {/* 顶栏悬浮层:侧边栏开关 + 后退/前进 */}
+          <div className="pointer-events-none absolute left-0 top-0 z-20 flex h-14 items-center pl-2 pt-1">
+            <div className="pointer-events-auto flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                onClick={() => setCollapsed((c) => !c)}
+                aria-label="切换侧边栏"
+                title={collapsed ? '展开侧边栏' : '收起侧边栏'}
+              >
+                <PanelLeftClose className="size-4" />
+              </Button>
+              {!collapsed && (
+                <>
+                  <Button variant="ghost" size="icon-sm" disabled aria-label="后退" title="后退">
+                    <ArrowLeft className="size-4" />
+                  </Button>
+                  <Button variant="ghost" size="icon-sm" disabled aria-label="前进" title="前进">
+                    <ArrowRight className="size-4" />
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
+          {/* 调整侧边栏宽度 */}
+          {!collapsed && (
+            <div
+              role="separator"
+              tabIndex={0}
+              aria-orientation="vertical"
+              aria-label="调整侧边栏宽度"
+              onPointerDown={onHandleDown}
+              className="group/handle relative z-10 my-6 flex w-px shrink-0 cursor-ew-resize touch-none items-center justify-center bg-transparent outline-none transition-colors hover:bg-border-hover/60 focus-visible:bg-border-hover/60"
+            />
+          )}
+          {/* 主内容区 */}
+          <div data-panel="content" className="flex min-w-0 flex-1 flex-col p-1 pl-0 pt-0">
+            <div className="h-1 w-full" />
+            <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-background">
+              <header className="relative flex h-10 shrink-0 items-center justify-end gap-0.5 pr-2.5">
+                <Button variant="ghost" size="icon-sm" aria-label="帮助" title="帮助">
+                  <CircleHelp className="size-4" />
+                </Button>
+                <Button variant="ghost" size="icon-sm" aria-label="切换终端" title="切换终端">
+                  <SquareTerminal className="size-4" />
+                </Button>
+              </header>
+              <div className="flex min-h-0 flex-1">
+                <AgentPanel workspaceId={workspaceId} />
+              </div>
+            </section>
+          </div>
           {workspaceId && <EditorPane workspaceId={workspaceId} />}
         </div>
-        <StatusBar />
       </div>
       {workspaceId && <ModalQueue workspaceId={workspaceId} />}
     </QueryClientProvider>

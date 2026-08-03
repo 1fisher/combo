@@ -63,9 +63,16 @@ async fn main() -> Result<()> {
     }
 
     let state = AppState {
-        meta: Arc::new(MetaStore::new()),
+        meta: Arc::new(MetaStore::open_default()?),
         registry: Arc::new(registry),
     };
+
+    // crush 为内存态,重启后 workspace 会被遗忘:启动时把元数据库里的
+    // workspace 重新注册/对齐,否则转发到 crush 的请求会 404。
+    let failed = combo_proxy::workspace::reconcile_all(&state).await;
+    if failed > 0 {
+        eprintln!("COMBO_RECONCILE_WARN={failed} workspaces failed to register with crush");
+    }
 
     let listener = TcpListener::bind(SocketAddr::new(host, port)).await?;
     let actual = listener.local_addr()?.port();

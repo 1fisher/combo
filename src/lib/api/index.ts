@@ -23,6 +23,13 @@ export function getWorkspace(id: string): Promise<Api.Workspace> {
   return apiRequest(`/v1/workspaces/${id}`);
 }
 
+export function renameWorkspace(id: string, name: string): Promise<Api.Workspace> {
+  return apiRequest(`/v1/workspaces/${id}`, {
+    method: 'PATCH',
+    body: { name },
+  });
+}
+
 export function listSessions(workspaceId: string): Promise<Api.Session[]> {
   return apiRequest(`/v1/workspaces/${workspaceId}/sessions`);
 }

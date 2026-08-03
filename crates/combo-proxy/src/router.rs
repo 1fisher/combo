@@ -1,8 +1,9 @@
 use crate::fs;
 use crate::handler::proxy;
+use crate::session;
 use crate::workspace;
 use crate::AppState;
-use axum::routing::get;
+use axum::routing::{delete, get};
 use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
 
@@ -25,7 +26,18 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
     };
     Router::new()
         .route("/v1/workspaces", get(workspace::list).post(workspace::create))
-        .route("/v1/workspaces/:id", get(workspace::get))
+        .route(
+            "/v1/workspaces/:id",
+            get(workspace::get).patch(workspace::rename),
+        )
+        .route(
+            "/v1/workspaces/:id/sessions",
+            get(session::list).post(session::create),
+        )
+        .route(
+            "/v1/workspaces/:id/sessions/:sid",
+            delete(session::delete),
+        )
         .route("/v1/workspaces/:id/files/list", get(fs::list))
         .route(
             "/v1/workspaces/:id/files/content",

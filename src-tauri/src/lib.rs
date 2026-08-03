@@ -1,5 +1,6 @@
 use serde::Serialize;
-use tauri::Emitter;
+use std::sync::Mutex;
+use tauri::{Emitter, Manager};
 
 #[derive(Clone, Serialize)]
 pub struct ProxyReady {
@@ -11,13 +12,25 @@ pub struct RuneStatus {
     pub connected: bool,
 }
 
+/// 在 Tauri state 中存储 proxy 端口,供前端 invoke 主动查询,
+/// 消除 proxy-ready 事件的竞态(webview JS 注册 listener 前 emit 丢失)。
+#[derive(Default)]
+pub struct ProxyPort(Mutex<Option<u16>>);
+
 pub const EVENT_PROXY_READY: &str = "proxy-ready";
 pub const EVENT_RUNE_STATUS: &str = "rune-status";
+
+#[tauri::command]
+fn get_proxy_port(state: tauri::State<ProxyPort>) -> Option<u16> {
+    *state.0.lock().unwrap()
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .manage(ProxyPort::default())
+        .invoke_handler(tauri::generate_handler![get_proxy_port])
         .setup(|app| {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -77,9 +90,16 @@ async fn init_backend(app: &tauri::AppHandle) {
     }
 
     let state = AppState {
-        meta: Arc::new(MetaStore::new()),
+        meta: Arc::new(MetaStore::open_default().unwrap_or_else(|_| MetaStore::new())),
         registry: Arc::new(registry),
     };
+
+    // crush 为内存态,重启后 workspace 会被遗忘:启动时把元数据库里的
+    // workspace 重新注册/对齐,否则转发到 crush 的请求会 404。
+    let failed = combo_proxy::workspace::reconcile_all(&state).await;
+    if failed > 0 {
+        eprintln!("rune workspace reconcile failed for {failed} workspaces");
+    }
 
     let listener = match TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await {
         Ok(l) => l,
@@ -89,11 +109,24 @@ async fn init_backend(app: &tauri::AppHandle) {
         }
     };
     let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
+    // 存入 Tauri state,前端可通过 get_proxy_port command 主动查询
+    if let Some(state) = app.try_state::<ProxyPort>() {
+        *state.0.lock().unwrap() = Some(port);
+    }
     let origins = vec![
         "tauri://localhost".to_string(),
         "http://localhost:5173".to_string(),
     ];
+    // emit 事件(兼容已有逻辑),同时持续重发以覆盖前端 listener 注册竞态
     let _ = app.emit(EVENT_PROXY_READY, ProxyReady { port });
+    let app_clone = app.clone();
+    tauri::async_runtime::spawn(async move {
+        use std::time::Duration;
+        for _ in 0..20 {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            let _ = app_clone.emit(EVENT_PROXY_READY, ProxyReady { port });
+        }
+    });
     if let Err(e) = serve(listener, state, origins).await {
         eprintln!("proxy exited: {e:?}");
     }

@@ -68,6 +68,7 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
 | `COMBO_CRUSH_BIN` | Path to the rune server binary (default: `crush` from PATH). Required for E2E and rune integration tests. |
 | `COMBO_RUNE_IT` | Set to `1` to enable the rune integration test in `crates/combo-proxy/tests/rune_integration_test.rs` (skips otherwise). |
 | `COMBO_IT_DIR` | E2E workspace directory (default `/tmp/combo-e2e`). |
+| `COMBO_DATA_DIR` | combo sqlite 数据目录(默认 `$XDG_DATA_HOME/combo`,macOS 无 XDG 时 `~/.local/share/combo`)。 |
 | `VITE_PROXY_URL` | Proxy base URL for browser mode (e.g. `http://127.0.0.1:18234`). In Tauri mode the port comes from the `proxy-ready` event with a 2s fallback to `:18234`. |
 
 `crush` is **not** installed in this environment — anything requiring it
@@ -82,6 +83,17 @@ provided.
   `path` must be relative; the proxy resolves the workspace root by calling
   `GET /v1/workspaces/{id}` on rune. Frontend: `src/lib/api` wrappers +
   `stores/editorStore.ts` + `FileExplorer`/`EditorPane`.
+- **Sqlite 持久化** (`crates/combo-proxy/src/db.rs`): combo 自有元数据落盘在
+  sqlite(默认 `~/.local/share/combo/combo.db`,`COMBO_DATA_DIR` 可覆盖)。
+  表 `workspaces`(项目元数据,含可重命名的 `name`)与 `conversations`
+  (rune session 的本地镜像)。`MetaStore` (`meta.rs`)是 sqlite-backed:
+  `WorkspaceMeta.name` 创建时默认取目录 basename,`PATCH /v1/workspaces/{id}`
+  可重命名并跨重启保留。**Session 镜像** (`session.rs`)拦截
+  `GET/POST/DELETE /v1/workspaces/{id}/sessions`:创建/删除转发 rune 成功后
+  双写 sqlite,列表直接从 sqlite 读(不依赖 rune 在线,首次访问自动回源
+  补齐历史会话);其余 session 子路径(history/messages/events 等)仍走
+  fallback 透传给 rune。项目列表在左侧显示 `name`(不再是完整路径),
+  hover 出现铅笔按钮可重命名。
 - **Selection persistence**: `agentStore` uses `zustand/persist`
   (`localStorage` key `combo.agent`) storing only `activeWorkspaceId` +
   `activeSessionId`; SSE state stays in-memory. `setActiveWorkspace` clears the
@@ -102,12 +114,14 @@ provided.
   ignored (`run_complete` marks the run done, `message` upserts, permission/question
   types feed the modal queues). `useWorkspaceEvents` intercepts `session` events to
   invalidate the TanStack sessions query instead.
-- **Run lifecycle:** `AgentPanel.onSend` generates a `runId` (UUID), optimistically
+- **Run lifecycle:** `AgentPanel.doSend` generates a `runId` (UUID), optimistically
   inserts a user message with id `` `local-${runId}` `` (fake `created_at` via
   `Date.now()`), POSTs `/v1/workspaces/{id}/agent`, then marks the run `running`.
-  On failure it deletes the optimistic message. `run_complete` sets the run to
-  `done`. Note: `MessageVM.streaming` is set to `true` on every upsert and never
-  flipped back — completion is signaled by run status, not message flags.
+  If no session is active yet, it first creates one via `useSessions().create`
+  (title = 首条消息截断 20 字). On failure it deletes the optimistic message.
+  `run_complete` sets the run to `done`. Note: `MessageVM.streaming` is set to
+  `true` on every upsert and never flipped back — completion is signaled by run
+  status, not message flags.
 - **Proxy gotchas** (`crates/combo-proxy/src/handler.rs`): strips `HOST`,
   `CONNECTION`, `CONTENT_LENGTH`, `TRANSFER_ENCODING` headers in both directions.
   Unix-socket upstream URIs must be `unix://<hex-encoded-socket-path>/<path>`.
@@ -123,8 +137,17 @@ provided.
   `rune`, `upstream`), `pub` API re-exported from `lib.rs`. Workspace root
   `Cargo.toml` has members `crates/combo-proxy` and `src-tauri`.
 - **Frontend layout:** `src/components/{ui,shell,agent}` — `ui/` is generated
-  shadcn primitives, `shell/` is app chrome (sidebar, tabs, status bar), `agent/`
-  is the chat/tool/modal UI. `src/hooks/` wraps TanStack queries + SSE lifecycle;
+  shadcn primitives, `shell/` is app chrome, `agent/` is the chat/tool/modal UI.
+  The shell is a 1:1 仿写 ZCode 的 agent 布局:左侧 `WorkspaceSidebar`(默认 372px,
+  可拖拽调宽/收起,含 新建任务/搜索/自动化/技能 按钮、「分组/项目」视图切换、
+  「项目/任务/文件」可折叠分区、底部用户与连接状态) + 可拖拽分隔条 + 主内容区
+  (顶栏帮助/终端按钮;无会话时显示 `ChatEmptyState` 问候语 + 订阅横幅 + 模板卡片,
+  会话中显示消息列表,底部为 ZCode 风格 `Composer` 输入坞:项目 chip + 工具栏
+  [添加上下文/模式/用量环/后端/思考等级/发送])。`index.html` 固定 `class="dark"`,
+  新增 theme token(`--surface`/`--foreground-subtle`/`--brand` 等,见 `index.css`)。
+  `StatusBar` 已从布局移除,连接状态折进侧边栏底部;`EditorPane`(文件编辑器)
+  仍在右侧,打开文件时才渲染。
+  `src/hooks/` wraps TanStack queries + SSE lifecycle;
   `src/lib/api/` is the typed client (`types.ts` generated, `index.ts` hand-written
   endpoint wrappers); `src/lib/events/` is SSE + dispatch; `src/lib/connection.ts`
   is proxy address discovery + health polling; `src/stores/` is Zustand.
@@ -148,16 +171,20 @@ provided.
   with `vi.stubGlobal` and drive the base URL via `setProxyBaseUrl` (a module-level
   mutable in `connection.ts` — reset per test). `dispatch-real.test.ts` replays
   captured real rune SSE envelopes through `applyEvent`. Store and component tests
-  assert against the Zustand store directly.
+  assert against the Zustand store directly. **`src/test-setup.ts`** polyfills
+  `localStorage` (jsdom 25 + Node 26 下 getter 失效)和 `ResizeObserver`
+  (radix ScrollArea 依赖),并在每个测试前清空持久化状态,所有 Vitest 测试共用。
 - **Rust:** in-module `#[cfg(test)]` units plus `tests/proxy_test.rs` (spins an
   in-memory stub axum upstream and asserts proxying incl. SSE passthrough) and
   `tests/rune_integration_test.rs` (real rune, gated on `COMBO_RUNE_IT=1`).
+  sqlite 用 `ComboDb::in_memory()`,不落盘。
 - **E2E (Playwright):** `playwright.config.ts` `webServer` auto-starts both Vite
   (`bash scripts/dev-proxy.sh`) and the proxy (`cargo run ... --port 18234`) with
   `reuseExistingServer: true`. The spec skips itself unless `COMBO_CRUSH_BIN` is
   set. It **wipes the workspace dir (`/tmp/combo-e2e`) before running** because
   rune persists state (`.crush/`) inside the workspace. Selectors rely on Chinese
-  UI text (e.g. button `添加项目`, `发送`, title `新建会话`).「添加项目」在
+  UI text (e.g. button `添加项目`, `发送`, title `新建会话`);项目在左侧以
+  basename 显示,会话列表在中间(`ConversationList`)。「添加项目」在
   桌面模式弹原生目录对话框,浏览器模式仅提示;e2e 改为经 API 创建工作区.
 
 ## Gotchas summary
@@ -180,3 +207,9 @@ provided.
 10. **axum 0.7 route params use `:id`, not `{id}`** (that's axum 0.8 syntax).
     The file-service routes in `router.rs` and the stub in `proxy_test.rs` both
     use `:id`; a `{id}` route silently falls through to the proxy fallback.
+11. **会话列表来自 sqlite 镜像,不是 rune。** `GET .../sessions` 由
+    `session.rs` 本地接管(从 sqlite 读);新建会话必须走 proxy
+    (`POST .../sessions`),直接调 rune 创建的会话不会进 sqlite 镜像,
+    需要删库或等首次空列表回源补齐(仅当该 workspace 无任何记录时)。
+12. **sqlite 用 `std::sync::Mutex<Connection>`**,`rusqlite` 连接不是 `Sync`;
+    `list_*` 方法里 lock 的临时值要绑定到 `let`,否则借用检查报 E0716。

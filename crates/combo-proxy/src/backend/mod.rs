@@ -17,6 +17,28 @@ pub enum BackendType {
     Codex,
 }
 
+impl BackendType {
+    /// 序列化为与 wire/URL 一致的字符串。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            BackendType::Crush => "crush",
+            BackendType::OpenCode => "opencode",
+            BackendType::ClaudeCode => "claude_code",
+            BackendType::Codex => "codex",
+        }
+    }
+
+    /// 解析后端字符串,未知值回退到 Crush。
+    pub fn parse(s: &str) -> BackendType {
+        match s {
+            "opencode" => BackendType::OpenCode,
+            "claude_code" => BackendType::ClaudeCode,
+            "codex" => BackendType::Codex,
+            _ => BackendType::Crush,
+        }
+    }
+}
+
 /// combo-proxy 面向 agent 后端的统一接口。
 ///
 /// 每个后端(crush、opencode、claude code 等)各自实现此 trait。
