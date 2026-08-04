@@ -53,6 +53,11 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
 
   return (
     <aside className="flex w-[480px] shrink-0 flex-col border-l bg-card">
+      {saveError && (
+        <div className="border-b border-destructive/30 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
+          保存失败:{saveError}
+        </div>
+      )}
       <div className="flex items-center border-b bg-muted/30">
         <div className="flex min-w-0 flex-1 overflow-x-auto">
           {openFiles.map((f) => (
@@ -103,11 +108,6 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
       ) : (
         <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
           从左侧文件树打开文件
-        </div>
-      )}
-      {saveError && (
-        <div className="border-t border-destructive/30 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
-          保存失败:{saveError}
         </div>
       )}
     </aside>
