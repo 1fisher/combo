@@ -124,6 +124,26 @@ pub async fn rename(
     }
 }
 
+/// DELETE /v1/workspaces/{id} — 删除项目。
+/// 清理 combo sqlite 元数据 + 会话镜像,并 best-effort 转发 DELETE 给 crush。
+pub async fn delete(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    // best-effort:通知 crush 删除其内存中的 workspace(失败不阻断)
+    if let Some(crush) = state.registry.by_type(BackendType::Crush) {
+        let _ = crush
+            .forward(
+                axum::http::Method::DELETE,
+                &format!("/v1/workspaces/{id}"),
+                &Default::default(),
+                Vec::new(),
+            )
+            .await;
+    }
+    // 级联清理会话镜像 + workspace 元数据
+    let _ = state.meta.db().delete_conversations_by_workspace(&id);
+    state.meta.remove(&id);
+    json_ok(&json!({ "ok": true }))
+}
+
 fn workspace_json(w: &crate::WorkspaceMeta) -> Value {
     json!({
         "id": w.id,

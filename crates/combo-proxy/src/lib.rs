@@ -1,11 +1,12 @@
 pub mod backend;
+pub mod control;
 pub mod db;
 pub mod fs;
 pub mod handler;
 pub mod manager;
 pub mod meta;
-pub mod registry;
 pub mod rune;
+pub mod registry;
 pub mod router;
 pub mod session;
 pub mod skills;
@@ -22,6 +23,7 @@ pub use manager::opencode::OpenCodeManager;
 pub use meta::{MetaStore, WorkspaceMeta};
 pub use registry::BackendRegistry;
 pub use router::build_router;
+pub use rune::RuneManager;
 pub use upstream::Upstream;
 
 use std::sync::Arc;
@@ -31,6 +33,9 @@ use std::sync::Arc;
 pub struct AppState {
     pub meta: Arc<MetaStore>,
     pub registry: Arc<BackendRegistry>,
+    /// crush 进程守护器(仅当 combo 托管 crush 生命周期时存在)。
+    /// 后台监控和 HTTP control 端点通过它重启 crush。
+    pub crush_supervisor: Option<Arc<RuneManager>>,
 }
 
 /// Parses a `--upstream` argument into an [`Upstream`].

@@ -5,7 +5,7 @@ async fn spawns_real_rune_and_becomes_healthy() {
         return;
     }
     let bin = std::env::var("COMBO_CRUSH_BIN").unwrap_or_else(|_| "crush".into());
-    let mut mgr = combo_proxy::rune::RuneManager::new(bin);
+    let mgr = combo_proxy::rune::RuneManager::new(bin);
     let upstream = mgr
         .ensure_running()
         .await

@@ -13,20 +13,30 @@ import {
   MessageSquare,
   Pencil,
   Plus,
+  RefreshCw,
   Search,
   Settings,
   Smartphone,
+  Trash2,
   WandSparkles,
   X,
 } from 'lucide-react';
 import { Button } from '../ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../ui/dialog';
 import { cn } from '../../lib/utils';
 import { useWorkspaces } from '../../hooks/useWorkspaces';
 import { useSessions } from '../../hooks/useSessions';
 import { useAgentStore } from '../../stores/agentStore';
 import { useEditorStore } from '../../stores/editorStore';
 import { useConnectionStore } from '../../stores/connectionStore';
-import { getFileContent } from '../../lib/api';
+import { getFileContent, ensureCrush } from '../../lib/api';
 import { isTauri } from '../../lib/connection';
 import { FileExplorer } from '../editor/FileExplorer';
 import { ConversationList } from './ConversationList';
@@ -117,7 +127,13 @@ function Section({
 }
 
 /** 分组视图:每个项目一个分区,展开其下的任务 */
-function WorkspaceGroup({ ws }: { ws: { id: string; name?: string; path: string } }) {
+function WorkspaceGroup({
+  ws,
+  onContextMenu,
+}: {
+  ws: { id: string; name?: string; path: string };
+  onContextMenu: (e: React.MouseEvent, ws: { id: string; name?: string; path: string }) => void;
+}) {
   const [open, setOpen] = useState(true);
   const { sessions, activate } = useSessions(ws.id);
   const setActive = useAgentStore((s) => s.setActiveWorkspace);
@@ -128,6 +144,7 @@ function WorkspaceGroup({ ws }: { ws: { id: string; name?: string; path: string 
         <button
           type="button"
           onClick={() => setOpen((o) => !o)}
+          onContextMenu={(e) => onContextMenu(e, ws)}
           aria-expanded={open}
           className="flex h-7 min-w-0 flex-1 items-center gap-1.5 px-2.5 text-left text-[13px] font-medium text-foreground-subtlest outline-none transition-colors hover:text-foreground"
         >
@@ -160,7 +177,7 @@ function WorkspaceGroup({ ws }: { ws: { id: string; name?: string; path: string 
 }
 
 export function WorkspaceSidebar() {
-  const { workspaces, isLoading, create, rename } = useWorkspaces();
+  const { workspaces, isLoading, create, rename, remove } = useWorkspaces();
   const active = useAgentStore((s) => s.activeWorkspaceId);
   const setActive = useAgentStore((s) => s.setActiveWorkspace);
   const connStatus = useConnectionStore((s) => s.status);
@@ -181,6 +198,20 @@ export function WorkspaceSidebar() {
   const [draftName, setDraftName] = useState('');
   const [sidebarError, setSidebarError] = useState<string | null>(null);
   const [skillsOpen, setSkillsOpen] = useState(false);
+  // 右键上下文菜单位置 + 目标 workspace
+  const [ctxMenu, setCtxMenu] = useState<{
+    x: number;
+    y: number;
+    ws: { id: string; name?: string; path: string };
+  } | null>(null);
+  // 删除确认对话框
+  const [deleteTarget, setDeleteTarget] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  // 手动重启 crush
+  const [restarting, setRestarting] = useState(false);
   // 供 ⌘/Ctrl+N 快捷键调用的最新 onNewTask(避免闭包过期)
   const onNewTaskRef = useRef<() => void>(() => {});
 
@@ -278,6 +309,63 @@ export function WorkspaceSidebar() {
       setSidebarError(e instanceof Error ? e.message : String(e));
     }
   }
+
+  function openContextMenu(
+    e: React.MouseEvent,
+    ws: { id: string; name?: string; path: string }
+  ) {
+    e.preventDefault();
+    e.stopPropagation();
+    setCtxMenu({ x: e.clientX, y: e.clientY, ws });
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    setSidebarError(null);
+    try {
+      await remove(deleteTarget.id);
+      setDeleteTarget(null);
+    } catch (e) {
+      setSidebarError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  async function restartCrush() {
+    setRestarting(true);
+    setSidebarError(null);
+    try {
+      const r = await ensureCrush();
+      if (!r.healthy) {
+        setSidebarError('crush 重启后仍不可用,请检查 crush 是否已安装');
+      }
+    } catch (e) {
+      setSidebarError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRestarting(false);
+    }
+  }
+
+  // 点击外部 / Escape 关闭右键菜单
+  useEffect(() => {
+    if (!ctxMenu) return;
+    function close() {
+      setCtxMenu(null);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setCtxMenu(null);
+    }
+    window.addEventListener('click', close);
+    window.addEventListener('contextmenu', close);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('click', close);
+      window.removeEventListener('contextmenu', close);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [ctxMenu]);
 
   const connLabel =
     connStatus === 'connected' ? '已连接' : connStatus === 'connecting' ? '连接中' : '离线';
@@ -417,6 +505,7 @@ export function WorkspaceSidebar() {
                       active === w.id && 'bg-surface-hover'
                     )}
                     onClick={() => setActive(w.id)}
+                    onContextMenu={(e) => openContextMenu(e, w)}
                   >
                     <Folder
                       className={cn(
@@ -536,7 +625,7 @@ export function WorkspaceSidebar() {
               )}
             </>
           ) : (
-            workspaces?.map((w) => <WorkspaceGroup key={w.id} ws={w} />)
+            workspaces?.map((w) => <WorkspaceGroup key={w.id} ws={w} onContextMenu={openContextMenu} />)
           )}
           {!isLoading && tab === 'grouped' && workspaces?.length === 0 && (
             <div className="px-3 py-2 text-[13px] leading-relaxed text-foreground-subtle">
@@ -589,6 +678,19 @@ export function WorkspaceSidebar() {
           </span>
         </button>
         <div className="flex shrink-0 items-center gap-1.5">
+          {connStatus !== 'connected' && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="shrink-0 text-foreground-subtle hover:bg-surface-hover hover:text-foreground"
+              aria-label="重启 crush 服务"
+              title="重启 crush 服务"
+              onClick={() => void restartCrush()}
+              disabled={restarting}
+            >
+              <RefreshCw className={cn('size-4', restarting && 'animate-spin')} />
+            </Button>
+          )}
           <Button
             variant="ghost"
             size="icon-sm"
@@ -610,6 +712,73 @@ export function WorkspaceSidebar() {
         </div>
       </div>
       <SkillsPanel open={skillsOpen} onOpenChange={setSkillsOpen} />
+      {/* 右键上下文菜单 */}
+      {ctxMenu && (
+        <div
+          className="fixed z-50 min-w-[140px] rounded-lg border border-border bg-popover p-1 text-[13px] text-popover-foreground shadow-lg"
+          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors hover:bg-surface-hover"
+            onClick={() => {
+              startRename(ctxMenu.ws);
+              setCtxMenu(null);
+            }}
+          >
+            <Pencil className="size-3.5 shrink-0 text-foreground-subtle" />
+            <span>重命名</span>
+          </button>
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-destructive transition-colors hover:bg-destructive/10"
+            onClick={() => {
+              setDeleteTarget({
+                id: ctxMenu.ws.id,
+                name: projectName(ctxMenu.ws),
+              });
+              setCtxMenu(null);
+            }}
+          >
+            <Trash2 className="size-3.5 shrink-0" />
+            <span>删除项目</span>
+          </button>
+        </div>
+      )}
+      {/* 删除确认对话框 */}
+      <Dialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !deleting) setDeleteTarget(null);
+        }}
+      >
+        <DialogContent showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>删除项目</DialogTitle>
+            <DialogDescription>
+              确定删除「{deleteTarget?.name}」吗?该操作会移除项目及其所有会话记录,且不可撤销。磁盘文件不会被删除。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setDeleteTarget(null)}
+              disabled={deleting}
+            >
+              取消
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => void confirmDelete()}
+              disabled={deleting}
+            >
+              {deleting ? '删除中…' : '删除'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </aside>
   );
 }

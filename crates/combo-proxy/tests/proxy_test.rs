@@ -64,6 +64,7 @@ async fn start_proxy(upstream_addr: SocketAddr, origins: Vec<String>) -> SocketA
             registry: Arc::new(BackendRegistry::new(Arc::new(CrushBackend::new(
                 Upstream::Tcp(upstream_addr),
             )))),
+            crush_supervisor: None,
         };
         serve(listener, state, origins).await.unwrap();
     });

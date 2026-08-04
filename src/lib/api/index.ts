@@ -30,6 +30,10 @@ export function renameWorkspace(id: string, name: string): Promise<Api.Workspace
   });
 }
 
+export function deleteWorkspace(id: string): Promise<void> {
+  return apiRequest(`/v1/workspaces/${id}`, { method: 'DELETE' });
+}
+
 export function listSessions(workspaceId: string): Promise<Api.Session[]> {
   return apiRequest(`/v1/workspaces/${workspaceId}/sessions`);
 }
@@ -120,6 +124,11 @@ export function putFileContent(
 // 技能:combo-proxy 本地端点,扫描 ~/.config/crush/skills/
 export function listSkills(): Promise<Api.Skill[]> {
   return apiRequest('/v1/skills');
+}
+
+// 确保 crush server 运行中(若已死则重启)。combo-proxy 本地端点。
+export function ensureCrush(): Promise<{ healthy: boolean }> {
+  return apiRequest('/v1/control/ensure-crush', { method: 'POST' });
 }
 
 // 配置:rune 透传

@@ -6,16 +6,23 @@ use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Mutex;
 use std::time::Duration;
 use tokio::process::{Child, Command};
+use tokio::sync::Mutex as AsyncMutex;
 use tokio::time::{sleep, timeout};
 
 /// Manages the rune (Crush) server subprocess lifecycle: ensures it is
 /// running, waits until healthy, and shuts it down on exit.
+///
+/// 内部使用 `Mutex` 实现 `&self` 可变性,可安全包装在 `Arc` 中跨任务共享
+/// (后台健康监控 + HTTP control 端点并发调用)。
 pub struct RuneManager {
     bin: String,
     log_path: PathBuf,
-    child: Option<Child>,
+    child: Mutex<Option<Child>>,
+    /// 串行化 `ensure_running`,防止多个调用者同时启动 crush。
+    op_lock: AsyncMutex<()>,
 }
 
 /// Polls `probe` until it returns true, up to `max_attempts` checks
@@ -68,7 +75,8 @@ impl RuneManager {
         Self {
             bin,
             log_path,
-            child: None,
+            child: Mutex::new(None),
+            op_lock: AsyncMutex::new(()),
         }
     }
 
@@ -84,23 +92,30 @@ impl RuneManager {
     /// Ensures a healthy rune server: reuses one already listening on
     /// the default socket, otherwise spawns `bin server` and polls
     /// `/v1/health` until ready (up to 15s).
-    pub async fn ensure_running(&mut self) -> Result<Upstream> {
+    pub async fn ensure_running(&self) -> Result<Upstream> {
+        let _guard = self.op_lock.lock().await;
         let sock = default_socket_path();
         let upstream = Upstream::Unix(sock.clone());
         if self.health_check(&upstream).await {
             return Ok(upstream);
         }
 
+        // 先清理上一轮残留的子进程(crush 可能已 crash 但 socket 残留)
+        let old_child = { self.child.lock().unwrap().take() };
+        if let Some(mut c) = old_child {
+            let _ = c.kill().await;
+            let _ = c.wait().await;
+        }
+
         let log = std::fs::File::create(&self.log_path)?;
         let stderr = Stdio::from(log);
-        self.child = Some(
-            Command::new(&self.bin)
-                .arg("server")
-                .stdout(stderr)
-                .stderr(Stdio::inherit())
-                .spawn()
-                .map_err(|e| anyhow::anyhow!("failed to spawn {}: {e}", self.bin))?,
-        );
+        let spawned = Command::new(&self.bin)
+            .arg("server")
+            .stdout(stderr)
+            .stderr(Stdio::inherit())
+            .spawn()
+            .map_err(|e| anyhow::anyhow!("failed to spawn {}: {e}", self.bin))?;
+        *self.child.lock().unwrap() = Some(spawned);
 
         let ready = poll_until(
             || self.health_check(&upstream),
@@ -117,6 +132,12 @@ impl RuneManager {
         Ok(upstream)
     }
 
+    /// 快速健康检查(不加 op_lock,不阻塞 ensure_running)。
+    pub async fn is_healthy(&self) -> bool {
+        let upstream = Upstream::Unix(default_socket_path());
+        self.health_check(&upstream).await
+    }
+
     /// GET /v1/health over the upstream (Unix socket or TCP).
     pub async fn health_check(&self, upstream: &Upstream) -> bool {
         crate::backend::crush::check_health(upstream).await
@@ -124,12 +145,13 @@ impl RuneManager {
 
     /// Shuts the spawned rune server down: POST /v1/control shutdown,
     /// wait up to 5s, then kill as a fallback.
-    pub async fn shutdown(&mut self) -> Result<()> {
+    pub async fn shutdown(&self) -> Result<()> {
         let sock = default_socket_path();
         let upstream = Upstream::Unix(sock);
         let _ = self.post_control_shutdown(&upstream).await;
 
-        if let Some(mut child) = self.child.take() {
+        let mut child_opt = { self.child.lock().unwrap().take() };
+        if let Some(mut child) = child_opt.take() {
             match timeout(Duration::from_secs(5), child.wait()).await {
                 Ok(_) => {}
                 Err(_) => {

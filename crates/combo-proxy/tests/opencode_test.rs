@@ -81,6 +81,7 @@ fn make_state(oc_addr: std::net::SocketAddr) -> AppState {
     AppState {
         meta: Arc::new(meta),
         registry: Arc::new(registry),
+        crush_supervisor: None,
     }
 }
 

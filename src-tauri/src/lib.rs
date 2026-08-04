@@ -50,19 +50,20 @@ async fn init_backend(app: &tauri::AppHandle) {
     use tokio::net::TcpListener;
 
     let bin = std::env::var("COMBO_CRUSH_BIN").unwrap_or_else(|_| "crush".into());
-    let mut mgr = RuneManager::new(bin);
-    let upstream = match mgr.ensure_running().await {
-        Ok(u) => {
+    let supervisor = Arc::new(RuneManager::new(bin));
+
+    // 尝试启动 crush,best-effort:即使失败也用 Unix socket 路径,
+    // 后台监控会持续重试拉起 crush。
+    let upstream = Upstream::Unix(combo_proxy::rune::default_socket_path());
+    match supervisor.ensure_running().await {
+        Ok(_) => {
             let _ = app.emit(EVENT_RUNE_STATUS, RuneStatus { connected: true });
-            u
         }
         Err(e) => {
             eprintln!("rune server failed: {e:?}");
             let _ = app.emit(EVENT_RUNE_STATUS, RuneStatus { connected: false });
-            // 用不可达 TCP 地址保持代理存活,UI 显示断开
-            Upstream::Tcp("127.0.0.1:1".parse().unwrap())
         }
-    };
+    }
 
     let mut registry = BackendRegistry::new(Arc::new(CrushBackend::new(upstream)));
 
@@ -92,6 +93,7 @@ async fn init_backend(app: &tauri::AppHandle) {
     let state = AppState {
         meta: Arc::new(MetaStore::open_default().unwrap_or_else(|_| MetaStore::new())),
         registry: Arc::new(registry),
+        crush_supervisor: Some(Arc::clone(&supervisor)),
     };
 
     // crush 为内存态,重启后 workspace 会被遗忘:启动时把元数据库里的
@@ -99,6 +101,46 @@ async fn init_backend(app: &tauri::AppHandle) {
     let failed = combo_proxy::workspace::reconcile_all(&state).await;
     if failed > 0 {
         eprintln!("rune workspace reconcile failed for {failed} workspaces");
+    }
+
+    // 后台健康监控:crush 崩溃时自动重启并发事件通知前端
+    {
+        let sup = Arc::clone(&supervisor);
+        let app_h = app.clone();
+        tauri::async_runtime::spawn(async move {
+            use std::time::Duration;
+            let mut was_healthy = sup.is_healthy().await;
+            loop {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                let now_healthy = sup.is_healthy().await;
+                if !now_healthy {
+                    eprintln!("crush 健康检查失败,尝试重启...");
+                    match sup.ensure_running().await {
+                        Ok(_) => {
+                            eprintln!("crush 重启成功");
+                            if !was_healthy {
+                                let _ = app_h
+                                    .emit(EVENT_RUNE_STATUS, RuneStatus { connected: true });
+                            }
+                            was_healthy = true;
+                        }
+                        Err(e) => {
+                            eprintln!("crush 重启失败: {e}");
+                            if was_healthy {
+                                let _ = app_h.emit(
+                                    EVENT_RUNE_STATUS,
+                                    RuneStatus { connected: false },
+                                );
+                            }
+                            was_healthy = false;
+                        }
+                    }
+                } else if !was_healthy {
+                    was_healthy = true;
+                    let _ = app_h.emit(EVENT_RUNE_STATUS, RuneStatus { connected: true });
+                }
+            }
+        });
     }
 
     let listener = match TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await {

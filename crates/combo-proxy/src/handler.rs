@@ -65,6 +65,7 @@ mod tests {
             registry: Arc::new(BackendRegistry::new(Arc::new(CrushBackend::new(
                 Upstream::Tcp("127.0.0.1:1".parse().unwrap()),
             )))),
+            crush_supervisor: None,
         };
         let req = Request::builder()
             .uri("/v1/health")

@@ -144,6 +144,15 @@ impl ComboDb {
         Ok(())
     }
 
+    /// 删除某个 workspace 下的所有会话镜像(删除项目时级联清理)。
+    pub fn delete_conversations_by_workspace(&self, workspace_id: &str) -> anyhow::Result<()> {
+        self.conn.lock().unwrap().execute(
+            "DELETE FROM conversations WHERE workspace_id=?1",
+            params![workspace_id],
+        )?;
+        Ok(())
+    }
+
     pub fn rename_workspace(&self, id: &str, name: &str) -> anyhow::Result<()> {
         self.conn
             .lock()
