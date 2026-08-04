@@ -1,24 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Save, X } from 'lucide-react';
 import { putFileContent } from '../../lib/api';
 import { useEditorStore } from '../../stores/editorStore';
 import { Button } from '../ui/button';
 import { cn } from '../../lib/utils';
-
-function LineNumbers({ text }: { text: string }) {
-  const count = text.split('\n').length;
-  return (
-    <div
-      aria-hidden
-      className="select-none overflow-hidden border-r bg-muted/30 py-3 text-right font-mono text-[13px] leading-5 text-muted-foreground/60"
-      style={{ width: 24 + String(count).length * 8 }}
-    >
-      {Array.from({ length: count }, (_, i) => (
-        <div key={i}>{i + 1}</div>
-      ))}
-    </div>
-  );
-}
+import { CodeEditor } from './CodeEditor';
 
 /**
  * 右侧编辑器面板:打开文件 tabs + 行号 + textarea + 保存。
@@ -34,8 +20,6 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
 
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const gutterRef = useRef<HTMLDivElement>(null);
-  const areaRef = useRef<HTMLTextAreaElement>(null);
 
   const active = openFiles.find((f) => f.path === activePath) ?? null;
 
@@ -64,12 +48,6 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   });
-
-  function syncScroll() {
-    if (gutterRef.current && areaRef.current) {
-      gutterRef.current.scrollTop = areaRef.current.scrollTop;
-    }
-  }
 
   if (openFiles.length === 0) return null;
 
@@ -115,17 +93,11 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
         </Button>
       </div>
       {active ? (
-        <div className="flex min-h-0 flex-1">
-          <div ref={gutterRef} className="shrink-0 overflow-hidden">
-            <LineNumbers text={active.content} />
-          </div>
-          <textarea
-            ref={areaRef}
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <CodeEditor
             value={active.content}
-            onChange={(e) => setContent(active.path, e.target.value)}
-            onScroll={syncScroll}
-            spellCheck={false}
-            className="h-full min-w-0 flex-1 resize-none bg-background p-3 font-mono text-[13px] leading-5 text-foreground outline-none"
+            filename={active.name}
+            onChange={(val) => setContent(active.path, val)}
           />
         </div>
       ) : (
