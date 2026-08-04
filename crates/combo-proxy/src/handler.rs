@@ -35,10 +35,22 @@ pub async fn proxy(State(state): State<AppState>, req: axum::extract::Request) -
         .unwrap_or("/");
 
     let ws_id = extract_workspace_id(path_query).unwrap_or("");
+
+    // crush 为内存态,重启后会遗忘 workspace:先确保已注册(必要时重建),
+    // 若 id 发生变化则把 path_query 中的旧 id 替换为新 id。
+    let effective_path_query = if !ws_id.is_empty() {
+        match crate::workspace::ensure_ws(&state, ws_id).await {
+            Some(eid) if eid != ws_id => path_query.replacen(ws_id, &eid, 1),
+            _ => path_query.to_string(),
+        }
+    } else {
+        path_query.to_string()
+    };
+
     let backend = state.registry.for_workspace(ws_id, &state.meta);
 
     match backend
-        .forward(parts.method, path_query, &parts.headers, body_bytes)
+        .forward(parts.method, &effective_path_query, &parts.headers, body_bytes)
         .await
     {
         Ok(resp) => resp,

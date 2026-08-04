@@ -11,6 +11,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::path::{Component, Path as FsPath, PathBuf};
 
+use crate::workspace::ensure_ws;
 use crate::AppState;
 
 /// 单文件读取上限(1MB),超过视为过大。
@@ -99,8 +100,11 @@ pub async fn list(
     Path(id): Path<String>,
     Query(q): Query<PathQuery>,
 ) -> Response {
-    let backend = state.registry.for_workspace(&id, &state.meta);
-    let root = match backend.workspace_root(&id).await {
+    let Some(effective_id) = ensure_ws(&state, &id).await else {
+        return error(StatusCode::BAD_GATEWAY, "workspace 在 crush 中不存在且注册失败");
+    };
+    let backend = state.registry.for_workspace(&effective_id, &state.meta);
+    let root = match backend.workspace_root(&effective_id).await {
         Ok(r) => r,
         Err(e) => return error(StatusCode::BAD_GATEWAY, &format!("{e:#}")),
     };
@@ -157,8 +161,11 @@ pub async fn read(
     Path(id): Path<String>,
     Query(q): Query<PathQuery>,
 ) -> Response {
-    let backend = state.registry.for_workspace(&id, &state.meta);
-    let root = match backend.workspace_root(&id).await {
+    let Some(effective_id) = ensure_ws(&state, &id).await else {
+        return error(StatusCode::BAD_GATEWAY, "workspace 在 crush 中不存在且注册失败");
+    };
+    let backend = state.registry.for_workspace(&effective_id, &state.meta);
+    let root = match backend.workspace_root(&effective_id).await {
         Ok(r) => r,
         Err(e) => return error(StatusCode::BAD_GATEWAY, &format!("{e:#}")),
     };
@@ -198,8 +205,11 @@ pub async fn write(
     Query(q): Query<PathQuery>,
     axum::extract::Json(body): axum::extract::Json<WriteBody>,
 ) -> Response {
-    let backend = state.registry.for_workspace(&id, &state.meta);
-    let root = match backend.workspace_root(&id).await {
+    let Some(effective_id) = ensure_ws(&state, &id).await else {
+        return error(StatusCode::BAD_GATEWAY, "workspace 在 crush 中不存在且注册失败");
+    };
+    let backend = state.registry.for_workspace(&effective_id, &state.meta);
+    let root = match backend.workspace_root(&effective_id).await {
         Ok(r) => r,
         Err(e) => return error(StatusCode::BAD_GATEWAY, &format!("{e:#}")),
     };
