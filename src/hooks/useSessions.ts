@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createSession,
+  deleteSession,
   getSessionHistory,
   listSessions,
   setCurrentSession,
@@ -35,6 +36,15 @@ export function useSessions(workspaceId: string | null) {
       qc.invalidateQueries({ queryKey: ['history', workspaceId, sessionId] });
     }
   }
+  const remove = useMutation({
+    mutationFn: (sessionId: string) => deleteSession(workspaceId!, sessionId),
+    onSuccess: (_data, deletedId) => {
+      qc.invalidateQueries({ queryKey: ['sessions', workspaceId] });
+      if (activeSessionId === deletedId) {
+        setActiveSessionId(null);
+      }
+    },
+  });
   // 持久化恢复的会话不属于当前项目(或已被删除)时清除,不主动选第一个
   useEffect(() => {
     if (!workspaceId || !q.data || activeSessionId == null) return;
@@ -44,7 +54,7 @@ export function useSessions(workspaceId: string | null) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId, q.data, activeSessionId]);
-  return { sessions: q.data, isLoading: q.isLoading, create: create.mutateAsync, activate };
+  return { sessions: q.data, isLoading: q.isLoading, create: create.mutateAsync, activate, remove: remove.mutateAsync };
 }
 
 export function useSessionHistory(workspaceId: string | null, sessionId: string | null) {

@@ -59,6 +59,12 @@ export function setCurrentSession(workspaceId: string, sessionId: string): Promi
   });
 }
 
+export function deleteSession(workspaceId: string, sessionId: string): Promise<void> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/sessions/${sessionId}`, {
+    method: 'DELETE',
+  });
+}
+
 export function sendAgentMessage(
   workspaceId: string,
   req: { sessionId: string; runId: string; prompt: string }

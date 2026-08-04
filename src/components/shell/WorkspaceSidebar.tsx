@@ -135,7 +135,7 @@ function WorkspaceGroup({
   onContextMenu: (e: React.MouseEvent, ws: { id: string; name?: string; path: string }) => void;
 }) {
   const [open, setOpen] = useState(true);
-  const { sessions, activate } = useSessions(ws.id);
+  const { sessions, activate, remove } = useSessions(ws.id);
   const setActive = useAgentStore((s) => s.setActiveWorkspace);
 
   return (
@@ -155,17 +155,31 @@ function WorkspaceGroup({
       {open && (
         <div className="pb-1">
           {sessions?.map((s) => (
-            <button
+            <div
               key={s.id}
-              onClick={() => {
-                setActive(ws.id);
-                void activate(s.id);
-              }}
-              className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 pl-7 text-left text-[13px] transition-colors hover:bg-surface-hover"
+              className="group flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 pl-7 text-left text-[13px] transition-colors hover:bg-surface-hover"
             >
               <MessageSquare className="size-3.5 shrink-0 text-foreground-subtlest" />
-              <span className="min-w-0 flex-1 truncate">{s.title}</span>
-            </button>
+              <button
+                className="min-w-0 flex-1 truncate"
+                onClick={() => {
+                  setActive(ws.id);
+                  void activate(s.id);
+                }}
+              >
+                {s.title}
+              </button>
+              <button
+                className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100 hover:text-destructive"
+                title="删除会话"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (window.confirm('确定删除此会话?')) void remove(s.id);
+                }}
+              >
+                <Trash2 className="size-3.5" />
+              </button>
+            </div>
           ))}
           {!sessions?.length && (
             <div className="px-7 py-1.5 text-[13px] text-foreground-subtle">还没有任务</div>
