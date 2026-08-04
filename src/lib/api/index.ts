@@ -116,3 +116,25 @@ export function putFileContent(
     body: { content },
   });
 }
+
+// 技能:combo-proxy 本地端点,扫描 ~/.config/crush/skills/
+export function listSkills(): Promise<Api.Skill[]> {
+  return apiRequest('/v1/skills');
+}
+
+// 配置:rune 透传
+export function getWorkspaceConfig(workspaceId: string): Promise<Api.WorkspaceConfig> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/config`);
+}
+
+export function setConfigKey(
+  workspaceId: string,
+  key: string,
+  value: unknown,
+  scope: Api.ConfigScope = 1
+): Promise<void> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/config/set`, {
+    method: 'POST',
+    body: { key, value, scope } satisfies Api.ConfigSetRequest,
+  });
+}

@@ -20,6 +20,9 @@ vi.mock('../../lib/api', () => ({
     if (w) w.name = name;
     return w;
   }),
+  listSkills: vi.fn(async () => []),
+  getWorkspaceConfig: vi.fn(async () => ({ options: {} })),
+  setConfigKey: vi.fn(async () => undefined),
 }));
 
 vi.mock('../../lib/connection', () => ({

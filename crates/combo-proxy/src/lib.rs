@@ -8,6 +8,7 @@ pub mod registry;
 pub mod rune;
 pub mod router;
 pub mod session;
+pub mod skills;
 pub mod upstream;
 pub mod workspace;
 

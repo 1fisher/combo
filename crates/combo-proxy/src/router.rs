@@ -1,6 +1,7 @@
 use crate::fs;
 use crate::handler::proxy;
 use crate::session;
+use crate::skills;
 use crate::workspace;
 use crate::AppState;
 use axum::routing::{delete, get};
@@ -25,6 +26,7 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
             .allow_headers(Any)
     };
     Router::new()
+        .route("/v1/skills", get(skills::list))
         .route("/v1/workspaces", get(workspace::list).post(workspace::create))
         .route(
             "/v1/workspaces/:id",

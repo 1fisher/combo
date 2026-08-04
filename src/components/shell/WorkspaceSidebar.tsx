@@ -30,6 +30,7 @@ import { getFileContent } from '../../lib/api';
 import { isTauri } from '../../lib/connection';
 import { FileExplorer } from '../editor/FileExplorer';
 import { ConversationList } from './ConversationList';
+import { SkillsPanel } from './SkillsPanel';
 
 function basename(p: string): string {
   const clean = p.replace(/[\\/]+$/, '');
@@ -179,6 +180,7 @@ export function WorkspaceSidebar() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('');
   const [sidebarError, setSidebarError] = useState<string | null>(null);
+  const [skillsOpen, setSkillsOpen] = useState(false);
   // 供 ⌘/Ctrl+N 快捷键调用的最新 onNewTask(避免闭包过期)
   const onNewTaskRef = useRef<() => void>(() => {});
 
@@ -314,6 +316,7 @@ export function WorkspaceSidebar() {
           </button>
           <button
             type="button"
+            onClick={() => setSkillsOpen(true)}
             className="flex h-8 w-full shrink-0 cursor-pointer items-center gap-2 overflow-hidden rounded-lg pl-2.5 pr-2.5 text-left transition-colors hover:bg-surface-hover hover:text-foreground"
             title="技能"
           >
@@ -606,6 +609,7 @@ export function WorkspaceSidebar() {
           </Button>
         </div>
       </div>
+      <SkillsPanel open={skillsOpen} onOpenChange={setSkillsOpen} />
     </aside>
   );
 }

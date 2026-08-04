@@ -1998,4 +1998,28 @@ export namespace Api {
   };
   export type FileContent = { content: string };
   export type WriteFileResult = { ok: boolean };
+
+  // 技能(combo-proxy 本地端点,扫描 ~/.config/crush/skills/)
+  export type Skill = {
+    name: string;
+    dir_name: string;
+    description: string;
+    path: string;
+  };
+
+  // 配置(rune 透传)
+  export type ConfigScope = 0 | 1; // 0=global, 1=workspace
+  export type ConfigSetRequest = {
+    key: string;
+    value: unknown;
+    scope?: ConfigScope;
+  };
+  export type WorkspaceConfig = {
+    options?: {
+      disabled_skills?: string[];
+      skills_paths?: string[];
+      [key: string]: unknown;
+    };
+    [key: string]: unknown;
+  };
 }
