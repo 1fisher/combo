@@ -149,8 +149,15 @@ export const useAgentStore = create<AgentState>()(
   markRun: (sessionId, runId, status) =>
     set((st) => {
       const rt = st.bySession[sessionId] ?? emptyRuntime();
+      const messages =
+        status === 'done'
+          ? rt.messages.map((m) => ({ ...m, streaming: false }))
+          : rt.messages;
       return {
-        bySession: { ...st.bySession, [sessionId]: { ...rt, run: { runId, status } } },
+        bySession: {
+          ...st.bySession,
+          [sessionId]: { ...rt, run: { runId, status }, messages },
+        },
       };
     }),
 

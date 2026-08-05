@@ -206,5 +206,7 @@ describe('applyEvent', () => {
       runId: 'r1',
       status: 'done',
     });
+    // run_complete 应同时清除消息的 streaming 标志
+    expect(useAgentStore.getState().bySession['s1'].messages[0].streaming).toBe(false);
   });
 });

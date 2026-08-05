@@ -283,7 +283,15 @@ pub async fn ensure_ws(state: &AppState, ws_id: &str) -> Option<String> {
         }
     }
     // crush 不认识:用元数据库里的 path 重新注册
-    let meta = state.meta.get(ws_id)?;
+    let meta = match state.meta.get(ws_id) {
+        Some(m) => m,
+        None => {
+            // 元数据丢失:通常是 crush 重启后分配了新 ID,而前端 localStorage
+            // 仍持有旧 ID。proxy handler 已对此返回 404,前端应清除选中态。
+            // 这里不再每次都 eprintln(前端可能循环重试导致刷屏)。
+            return None;
+        }
+    };
     if meta.backend_type != BackendType::Crush {
         return Some(ws_id.to_string());
     }
@@ -326,12 +334,19 @@ pub async fn ensure_ws(state: &AppState, ws_id: &str) -> Option<String> {
         return None;
     }
     if new_id != ws_id {
-        // crush 重建了 workspace,id 变了:更新元数据库 + 迁移会话镜像
-        state.meta.remove(ws_id);
+        // crush 重建了 workspace,id 变了:先插入新 ID,确认成功后再删旧 ID,
+        // 避免插入失败导致元数据丢失(之前的 bug:先删后插,insert 静默吞错)
         let mut m = meta.clone();
         m.id = new_id.clone();
         state.meta.insert(m);
-        let _ = state.meta.db().move_conversations(ws_id, &new_id);
+        if state.meta.get(&new_id).is_some() {
+            state.meta.remove(ws_id);
+            let _ = state.meta.db().move_conversations(ws_id, &new_id);
+        } else {
+            eprintln!(
+                "ensure_ws: 新 workspace id {new_id} 写入 sqlite 失败,保留旧 id {ws_id}"
+            );
+        }
     }
     Some(new_id)
 }

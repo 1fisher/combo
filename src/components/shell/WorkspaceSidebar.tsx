@@ -34,6 +34,7 @@ import {
 import { cn } from '../../lib/utils';
 import { useWorkspaces } from '../../hooks/useWorkspaces';
 import { useSessions } from '../../hooks/useSessions';
+import { useActiveWorkspaceId } from '../../hooks/useActiveWorkspaceId';
 import { useAgentStore } from '../../stores/agentStore';
 import { useEditorStore } from '../../stores/editorStore';
 import { useConnectionStore } from '../../stores/connectionStore';
@@ -193,7 +194,7 @@ function WorkspaceGroup({
 
 export function WorkspaceSidebar() {
   const { workspaces, isLoading, create, rename, changePath, remove } = useWorkspaces();
-  const active = useAgentStore((s) => s.activeWorkspaceId);
+  const active = useActiveWorkspaceId();
   const setActive = useAgentStore((s) => s.setActiveWorkspace);
   const connStatus = useConnectionStore((s) => s.status);
   const {
@@ -239,13 +240,6 @@ export function WorkspaceSidebar() {
   const onNewTaskRef = useRef<() => void>(() => {});
 
   const activeWs = workspaces?.find((w) => w.id === active) ?? null;
-
-  // 持久化恢复的 workspace 已不存在时自动清除
-  useEffect(() => {
-    if (workspaces && active && !workspaces.some((w) => w.id === active)) {
-      setActive(null);
-    }
-  }, [workspaces, active, setActive]);
 
   // ⌘/Ctrl+N 新建任务
   useEffect(() => {

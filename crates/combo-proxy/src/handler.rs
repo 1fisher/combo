@@ -41,7 +41,16 @@ pub async fn proxy(State(state): State<AppState>, req: axum::extract::Request) -
     let effective_path_query = if !ws_id.is_empty() {
         match crate::workspace::ensure_ws(&state, ws_id).await {
             Some(eid) if eid != ws_id => path_query.replacen(ws_id, &eid, 1),
-            _ => path_query.to_string(),
+            Some(_) => path_query.to_string(),
+            None => {
+                return Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(
+                        r#"{"message":"workspace 不存在或已被删除"}"#,
+                    ))
+                    .unwrap();
+            }
         }
     } else {
         path_query.to_string()

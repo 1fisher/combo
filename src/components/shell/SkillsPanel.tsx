@@ -7,7 +7,7 @@ import {
   DialogTitle,
 } from '../ui/dialog';
 import { useSkills, useWorkspaceDisabledSkills } from '../../hooks/useSkills';
-import { useAgentStore } from '../../stores/agentStore';
+import { useActiveWorkspaceId } from '../../hooks/useActiveWorkspaceId';
 import { cn } from '../../lib/utils';
 
 export function SkillsPanel({
@@ -18,7 +18,7 @@ export function SkillsPanel({
   onOpenChange: (v: boolean) => void;
 }) {
   const { data: skills, isLoading } = useSkills();
-  const activeWorkspaceId = useAgentStore((s) => s.activeWorkspaceId);
+  const activeWorkspaceId = useActiveWorkspaceId();
   const { isDisabled, toggle, toggling } = useWorkspaceDisabledSkills(
     activeWorkspaceId
   );

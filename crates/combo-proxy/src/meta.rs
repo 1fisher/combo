@@ -45,7 +45,13 @@ impl MetaStore {
     }
 
     pub fn insert(&self, meta: WorkspaceMeta) {
-        let _ = self.db.upsert_workspace(&meta);
+        if let Err(e) = self.db.upsert_workspace(&meta) {
+            eprintln!(
+                "MetaStore::insert 失败 (id={}, path={}): {e}",
+                meta.id,
+                meta.path.display()
+            );
+        }
     }
 
     pub fn get(&self, id: &str) -> Option<WorkspaceMeta> {

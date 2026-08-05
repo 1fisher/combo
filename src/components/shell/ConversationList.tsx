@@ -1,6 +1,7 @@
 import { MessageSquare, MessageSquarePlus, Trash2 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { useSessions } from '../../hooks/useSessions';
+import { useActiveWorkspaceId } from '../../hooks/useActiveWorkspaceId';
 import { useAgentStore } from '../../stores/agentStore';
 import { cn } from '../../lib/utils';
 
@@ -17,7 +18,7 @@ function formatTime(secs: number | undefined): string {
 
 /** 侧边栏「任务」分区内容:当前项目下的会话列表 */
 export function ConversationList() {
-  const workspaceId = useAgentStore((s) => s.activeWorkspaceId);
+  const workspaceId = useActiveWorkspaceId();
   const activeSessionId = useAgentStore((s) => s.activeSessionId);
   const { sessions, isLoading, create, activate, remove } = useSessions(workspaceId);
 

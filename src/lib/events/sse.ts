@@ -4,18 +4,26 @@ import type { EventEnvelope } from './payloadTypes';
 
 export type OnPayload = (env: EventEnvelope) => void;
 
+export interface EventSourceOpts {
+  backoffMs?: number;
+  /** workspace 不存在(404)时回调,通常用于清除过期的选中态 */
+  onGone?: () => void;
+}
+
 export class WorkspaceEventSource {
   private controller: AbortController | null = null;
   private stopped = false;
   connected = false;
   private readonly backoffMs: number;
+  private readonly onGone?: () => void;
 
   constructor(
     private readonly workspaceId: string,
     private readonly onPayload: OnPayload,
-    opts?: { backoffMs?: number }
+    opts?: EventSourceOpts
   ) {
     this.backoffMs = opts?.backoffMs ?? 1000;
+    this.onGone = opts?.onGone;
   }
 
   start(): void {
@@ -53,7 +61,13 @@ export class WorkspaceEventSource {
       headers: { Accept: 'text/event-stream' },
       signal: controller.signal,
     });
-    if (!res.ok || !res.body) throw new Error(`sse status ${res.status}`);
+    if (!res.ok || !res.body) {
+      if (res.status === 404) {
+        this.stopped = true;
+        this.onGone?.();
+      }
+      throw new Error(`sse status ${res.status}`);
+    }
     this.connected = true;
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
