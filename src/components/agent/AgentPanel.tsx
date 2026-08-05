@@ -6,6 +6,7 @@ import { useAgentStore } from '../../stores/agentStore';
 import { cancelAgent, sendAgentMessage } from '../../lib/api';
 import { useSessionHistory } from '../../hooks/useSessions';
 import { useWorkspaceEvents } from '../../hooks/useWorkspaceEvents';
+import { useAgentMode } from '../../hooks/useAgentMode';
 import { useWorkspaces } from '../../hooks/useWorkspaces';
 import { useSessions } from '../../hooks/useSessions';
 import { Button } from '../ui/button';
@@ -29,11 +30,12 @@ function basename(p: string): string {
 
 export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
   useWorkspaceEvents(workspaceId);
+  useAgentMode(workspaceId);
   const qc = useQueryClient();
   const sessionId = useAgentStore((s) => s.activeSessionId);
   const setActiveWorkspace = useAgentStore((s) => s.setActiveWorkspace);
   const { workspaces } = useWorkspaces();
-  const { create: createSessionIn } = useSessions(workspaceId);
+  const { create: createSessionIn, remove: removeSession } = useSessions(workspaceId);
 
   const rt = useAgentStore((s) => (sessionId ? s.bySession[sessionId] : undefined));
   const hydrateMessages = useAgentStore((s) => s.hydrateMessages);
@@ -57,6 +59,21 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
   const wsName = ws ? (ws.name?.trim() ? ws.name : basename(ws.path)) : undefined;
   const backend = ws ? (BACKEND_LABEL[ws.backend ?? 'crush'] ?? ws.backend) : 'Crush';
 
+  async function discardCreatedSession(sid: string | null) {
+    if (!sid) return;
+    const st = useAgentStore.getState();
+    st.clearSessionRuntime(sid);
+    if (st.activeSessionId === sid) {
+      st.setActiveSessionId(null);
+    }
+    qc.invalidateQueries({ queryKey: ['sessions', workspaceId] });
+    try {
+      await removeSession(sid);
+    } catch {
+      /* rune 离线时删除可能失败,本地状态已清理 */
+    }
+  }
+
   async function doSend(prompt: string) {
     if (!workspaceId) {
       setPostError('请先在侧边栏添加/选择一个项目');
@@ -64,11 +81,15 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
     }
     setPostError(null);
     let sid = sessionId;
+    let reused = !!sid;
+    // 本次发送新建的会话:发送失败时需删除,避免侧边栏残留空会话
+    let createdSid: string | null = null;
     if (!sid) {
-      // 首个消息:先创建会话(useSessions 的 create 会顺带激活并做防清除保护)
+      // 首个消息:先创建会话,发送成功后才保留(失败时自动删除)
       try {
         const s = await createSessionIn(prompt.slice(0, 20) || '新任务');
         sid = s.id;
+        createdSid = s.id;
       } catch (e) {
         setPostError(e instanceof Error ? e.message : String(e));
         return;
@@ -91,9 +112,41 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
       await sendAgentMessage(workspaceId, { sessionId: sid!, runId, prompt });
       st.markRun(sid!, runId, 'running');
     } catch (e) {
+      const err = e as { status?: number; message?: string };
+      // crush 重启后会话丢失(404):若是复用的旧会话则自动重建后重试一次
+      if (reused && err?.status === 404) {
+        st.deleteMessage(sid!, `local-${runId}`);
+        try {
+          const s = await createSessionIn(prompt.slice(0, 20) || '新任务');
+          sid = s.id;
+          createdSid = s.id;
+          const retryRunId = randomUUID();
+          st.upsertMessage(sid, {
+            id: `local-${retryRunId}`,
+            session_id: sid,
+            role: 'user',
+            parts: [{ type: 'text', data: { text: prompt } }],
+            model: '',
+            provider: '',
+            created_at: Date.now(),
+            updated_at: Date.now(),
+          } as never);
+          setQueued(sid, true);
+          await sendAgentMessage(workspaceId, { sessionId: sid, runId: retryRunId, prompt });
+          st.markRun(sid, retryRunId, 'running');
+          return;
+        } catch (e2) {
+          await discardCreatedSession(createdSid);
+          setPostError(e2 instanceof Error ? e2.message : String(e2));
+          return;
+        } finally {
+          if (sid) setQueued(sid, false);
+        }
+      }
       const msg = e instanceof Error ? e.message : String(e);
       setPostError(msg);
       st.deleteMessage(sid!, `local-${runId}`);
+      await discardCreatedSession(createdSid);
     } finally {
       setQueued(sid!, false);
     }

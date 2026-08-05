@@ -78,50 +78,30 @@ pub async fn create(
         .unwrap_or_else(|_| json_err(StatusCode::INTERNAL_SERVER_ERROR, "响应构造失败"))
 }
 
-/// DELETE /v1/workspaces/{id}/sessions/{sid} — 转发 rune,成功后删镜像。
+/// DELETE /v1/workspaces/{id}/sessions/{sid} — 先删本地 sqlite 镜像,
+/// 再尽力转发 rune。会话列表以 sqlite 为准,确保 rune 离线时也能删除。
 pub async fn delete(
     State(state): State<AppState>,
     Path((id, sid)): Path<(String, String)>,
 ) -> Response {
-    let Some(backend) = state.registry.by_type(BackendType::Crush) else {
-        return json_err(StatusCode::BAD_GATEWAY, "crush 后端不可用");
-    };
-    let Some(effective_id) = crate::workspace::ensure_ws(&state, &id).await else {
-        return json_err(
-            StatusCode::NOT_FOUND,
-            "workspace 在 crush 中不存在且注册失败",
-        );
-    };
-    let resp = match backend
-        .forward(
-            Method::DELETE,
-            &format!("/v1/workspaces/{effective_id}/sessions/{sid}"),
-            &axum::http::HeaderMap::new(),
-            Vec::new(),
-        )
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            return json_err(
-                StatusCode::BAD_GATEWAY,
-                &format!("转发删除会话失败: {e}"),
-            );
+    // 先删除本地 sqlite 镜像(会话列表的真正数据源)
+    let _ = state.meta.db().delete_conversation(&sid);
+
+    // 尽力转发给 rune(rune 可能已不持有该会话,忽略其返回)
+    if let Some(backend) = state.registry.by_type(BackendType::Crush) {
+        if let Some(effective_id) = crate::workspace::ensure_ws(&state, &id).await {
+            let _ = backend
+                .forward(
+                    Method::DELETE,
+                    &format!("/v1/workspaces/{effective_id}/sessions/{sid}"),
+                    &axum::http::HeaderMap::new(),
+                    Vec::new(),
+                )
+                .await;
         }
-    };
-    let status = resp.status();
-    if status.is_success() {
-        let _ = state.meta.db().delete_conversation(&sid);
     }
-    let bytes = match axum::body::to_bytes(resp.into_body(), 65536).await {
-        Ok(b) => b.to_vec(),
-        Err(_) => Vec::new(),
-    };
-    Response::builder()
-        .status(status)
-        .header("content-type", "application/json")
-        .body(Body::from(bytes))
-        .unwrap_or_else(|_| json_err(StatusCode::INTERNAL_SERVER_ERROR, "响应构造失败"))
+
+    json_ok(&json!({ "deleted": true }))
 }
 
 /// 把 rune 返回的 session JSON 镜像进 sqlite。字段缺失时用默认值兜底。

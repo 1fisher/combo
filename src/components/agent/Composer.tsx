@@ -1,7 +1,8 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import {
   ArrowUp,
   Brain,
+  Check,
   ChevronDown,
   Folder,
   Package,
@@ -9,13 +10,15 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import { Button } from '../ui/button';
+import { useAgentStore, type AgentMode } from '../../stores/agentStore';
+import { cn } from '../../lib/utils';
 
-const MODES = [
-  { id: 'build', label: '变更前确认' },
-  { id: 'edit', label: '自动编辑' },
-  { id: 'plan', label: '计划模式' },
-  { id: 'yolo', label: '完全访问' },
-] as const;
+const MODES: { id: AgentMode; label: string; desc: string }[] = [
+  { id: 'yolo', label: '完全访问', desc: '自动放行全部权限,不弹窗' },
+  { id: 'edit', label: '自动编辑', desc: '自动放行写操作,其余确认' },
+  { id: 'build', label: '变更前确认', desc: '所有权限均弹窗确认' },
+  { id: 'plan', label: '计划模式', desc: '只读模式,不允许变更' },
+];
 
 const THOUGHT_LEVELS = [
   { id: 'nothink', label: '不思考' },
@@ -41,7 +44,10 @@ export function Composer({
   onPickWorkspace?: () => void;
 }) {
   const areaRef = useRef<HTMLTextAreaElement>(null);
-  const mode = MODES[MODES.length - 1];
+  const agentMode = useAgentStore((s) => s.agentMode);
+  const setAgentMode = useAgentStore((s) => s.setAgentMode);
+  const mode = MODES.find((m) => m.id === agentMode) ?? MODES[0];
+  const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const thought = THOUGHT_LEVELS[1];
 
   function autosize() {
@@ -123,7 +129,8 @@ export function Composer({
                   </Button>
                   <button
                     type="button"
-                    className="flex h-7 shrink-0 items-center justify-center gap-0 rounded-lg p-0 text-warning hover:bg-surface-hover hover:text-warning"
+                    onClick={() => setModeMenuOpen((o) => !o)}
+                    className="relative flex h-7 shrink-0 items-center justify-center gap-0 rounded-lg p-0 text-warning hover:bg-surface-hover hover:text-warning"
                     aria-label="切换模式"
                     title="切换模式"
                   >
@@ -133,6 +140,43 @@ export function Composer({
                     </span>
                     <ChevronDown className="pointer-events-none hidden size-3.5 text-foreground-subtle" />
                   </button>
+                  {modeMenuOpen && (
+                    <>
+                      <div
+                        className="fixed inset-0 z-40"
+                        onClick={() => setModeMenuOpen(false)}
+                      />
+                      <div className="absolute bottom-full left-0 z-50 mb-2 w-64 rounded-xl border border-border bg-popover p-1.5 shadow-xl">
+                        <div className="px-2 py-1 text-xs font-medium text-foreground-subtlest">
+                          Agent 模式
+                        </div>
+                        {MODES.map((m) => (
+                          <button
+                            key={m.id}
+                            type="button"
+                            onClick={() => {
+                              setAgentMode(m.id);
+                              setModeMenuOpen(false);
+                            }}
+                            className={cn(
+                              'flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-hover',
+                              m.id === agentMode && 'bg-surface-hover'
+                            )}
+                          >
+                            <span className="flex min-w-0 flex-1 flex-col">
+                              <span className="truncate font-medium">{m.label}</span>
+                              <span className="truncate text-[11px] text-foreground-subtle">
+                                {m.desc}
+                              </span>
+                            </span>
+                            {m.id === agentMode && (
+                              <Check className="size-3.5 shrink-0 text-brand" />
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
                 </div>
                 <div className="flex items-center gap-1.5">
                   {/* 用量圆环 */}

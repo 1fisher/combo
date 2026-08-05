@@ -96,6 +96,17 @@ export function grantPermission(
   });
 }
 
+export function setPermissionSkip(workspaceId: string, skip: boolean): Promise<{ skip: boolean }> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/permissions/skip`, {
+    method: 'POST',
+    body: { skip },
+  });
+}
+
+export function getPermissionSkip(workspaceId: string): Promise<{ skip: boolean }> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/permissions/skip`);
+}
+
 export function answerQuestion(
   workspaceId: string,
   answer: Api.QuestionAnswer

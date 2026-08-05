@@ -17,11 +17,26 @@ export interface SessionRuntime {
   queued: boolean;
 }
 
+/** Agent 模式:与 crush 的 permission mode 对齐 */
+export type AgentMode = 'yolo' | 'build' | 'edit' | 'plan';
+
+/** yolo 模式自动放行全部权限;edit 模式自动放行写操作(build/edit 工具) */
+export const WRITE_TOOL_NAMES = new Set([
+  'write',
+  'edit',
+  'multiedit',
+  'lsp_replace_symbol',
+  'lsp_rename',
+  'bash',
+]);
+
 interface AgentState {
   activeWorkspaceId: string | null;
   setActiveWorkspace: (id: string | null) => void;
   activeSessionId: string | null;
   setActiveSessionId: (id: string | null) => void;
+  agentMode: AgentMode;
+  setAgentMode: (mode: AgentMode) => void;
 
   bySession: Record<string, SessionRuntime>;
   permissionQueue: Api.PermissionRequest[];
@@ -51,6 +66,8 @@ export const useAgentStore = create<AgentState>()(
       // 切换项目时清空会话,避免把上一个项目的会话带到新项目
       ...(id !== st.activeWorkspaceId ? { activeSessionId: null } : {}),
     })),
+  agentMode: 'yolo' as AgentMode,
+  setAgentMode: (mode) => set({ agentMode: mode }),
   activeSessionId: null,
   setActiveSessionId: (id) => set({ activeSessionId: id }),
 
@@ -147,6 +164,7 @@ export const useAgentStore = create<AgentState>()(
       partialize: (s) => ({
         activeWorkspaceId: s.activeWorkspaceId,
         activeSessionId: s.activeSessionId,
+        agentMode: s.agentMode,
       }),
     }
   )
