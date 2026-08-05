@@ -80,18 +80,24 @@ export const useAgentStore = create<AgentState>()(
     set((st) => {
       const rt = st.bySession[sessionId] ?? emptyRuntime();
       const idx = rt.messages.findIndex((x) => x.id === m.id);
+      // 收到 finish part 的消息视为该条流式结束,
+      // 不再依赖 run_complete 事件(可能延迟或丢失)
+      const hasFinish = m.parts.some((p) => p.type === 'finish');
       const vm: MessageVM = {
         id: m.id,
         role: m.role,
         parts: m.parts,
         createdAt: m.created_at,
         updatedAt: m.updated_at,
-        streaming: true,
+        streaming: hasFinish ? false : true,
       };
+      // 新消息抵达时,更早的消息都已结束流式(同一时刻只有一条在流)
       const messages =
         idx >= 0
-          ? rt.messages.map((x, i) => (i === idx ? vm : x))
-          : [...rt.messages, vm];
+          ? rt.messages.map((x, i) =>
+              i === idx ? vm : { ...x, streaming: false }
+            )
+          : [...rt.messages.map((x) => ({ ...x, streaming: false })), vm];
       return { bySession: { ...st.bySession, [sessionId]: { ...rt, messages } } };
     }),
 

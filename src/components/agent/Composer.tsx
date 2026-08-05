@@ -8,6 +8,7 @@ import {
   Package,
   Plus,
   ShieldAlert,
+  Square,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { useAgentStore, type AgentMode } from '../../stores/agentStore';
@@ -33,6 +34,8 @@ export function Composer({
   onChange,
   onSend,
   disabled,
+  running,
+  onStop,
   onPickWorkspace,
 }: {
   workspaceName?: string;
@@ -41,6 +44,8 @@ export function Composer({
   onChange: (v: string) => void;
   onSend: () => void;
   disabled?: boolean;
+  running?: boolean;
+  onStop?: () => void;
   onPickWorkspace?: () => void;
 }) {
   const areaRef = useRef<HTMLTextAreaElement>(null);
@@ -66,7 +71,7 @@ export function Composer({
   }, [value]);
 
   function submit() {
-    if (!value.trim() || disabled) return;
+    if (running || !value.trim() || disabled) return;
     onSend();
   }
 
@@ -236,18 +241,32 @@ export function Composer({
                     <span className="whitespace-nowrap">{thought.label}</span>
                     <ChevronDown className="pointer-events-none size-3.5 text-foreground-subtlest" />
                   </span>
-                  {/* 发送 */}
-                  <Button
-                    type="submit"
-                    size="icon-sm"
-                    disabled={!value.trim() || disabled}
-                    className="shrink-0 gap-1 rounded-lg bg-brand text-foreground-inverse hover:bg-brand/80"
-                    aria-label="发送"
-                    title="发送"
-                  >
-                    <ArrowUp className="size-4" />
-                    <span className="sr-only">发送</span>
-                  </Button>
+                  {/* 发送 / 停止 */}
+                  {running ? (
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      onClick={onStop}
+                      className="shrink-0 gap-1 rounded-lg bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                      aria-label="停止"
+                      title="停止"
+                    >
+                      <Square className="size-3.5 fill-current" />
+                      <span className="sr-only">停止</span>
+                    </Button>
+                  ) : (
+                    <Button
+                      type="submit"
+                      size="icon-sm"
+                      disabled={!value.trim() || disabled}
+                      className="shrink-0 gap-1 rounded-lg bg-brand text-foreground-inverse hover:bg-brand/80"
+                      aria-label="发送"
+                      title="发送"
+                    >
+                      <ArrowUp className="size-4" />
+                      <span className="sr-only">发送</span>
+                    </Button>
+                  )}
                 </div>
               </div>
             </div>

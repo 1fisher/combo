@@ -9,7 +9,6 @@ import { useWorkspaceEvents } from '../../hooks/useWorkspaceEvents';
 import { useAgentMode } from '../../hooks/useAgentMode';
 import { useWorkspaces } from '../../hooks/useWorkspaces';
 import { useSessions } from '../../hooks/useSessions';
-import { Button } from '../ui/button';
 import { MessageList } from './MessageList';
 import { Composer } from './Composer';
 import { ChatEmptyState } from './ChatEmptyState';
@@ -53,8 +52,8 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, history]);
 
-  const running = rt?.run?.status === 'running';
   const messages = rt?.messages ?? [];
+  const running = rt?.run?.status === 'running' && messages.some((m) => m.streaming);
   const historyFetching = !!sessionId && messages.length === 0 && historyLoading;
   const ws = workspaces?.find((w) => w.id === workspaceId) ?? null;
   const wsName = ws ? (ws.name?.trim() ? ws.name : basename(ws.path)) : undefined;
@@ -165,14 +164,6 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
 
   return (
     <div className="relative flex h-full min-h-0 w-full flex-1 flex-col">
-      {running && (
-        <div className="flex shrink-0 items-center justify-between border-b px-4 py-1.5">
-          <span className="text-xs text-foreground-subtle">agent 正在执行…</span>
-          <Button size="sm" variant="outline" className="h-6 px-2 text-xs" onClick={cancel}>
-            取消
-          </Button>
-        </div>
-      )}
       {postError && (
         <div className="shrink-0 border-t border-destructive/30 bg-destructive/10 px-4 py-2 text-xs text-destructive">
           发送失败:{postError}
@@ -242,7 +233,8 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
           value={draft}
           onChange={setDraft}
           onSend={() => void doSend(draft)}
-          disabled={running}
+          running={running}
+          onStop={cancel}
           onPickWorkspace={() => setWsMenuOpen((o) => !o)}
         />
       </div>
