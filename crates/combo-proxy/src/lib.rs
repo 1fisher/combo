@@ -10,6 +10,7 @@ pub mod registry;
 pub mod router;
 pub mod session;
 pub mod skills;
+pub mod terminal;
 pub mod upstream;
 pub mod workspace;
 

@@ -4,6 +4,7 @@ import { ArrowLeft, ArrowRight, CircleHelp, PanelLeftClose, SquareTerminal } fro
 import { connectLoop } from '../../lib/connection';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
 import { AgentPanel } from '../agent/AgentPanel';
+import { TerminalPanel } from './TerminalPanel';
 import { EditorPane } from '../editor/EditorPane';
 import { ModalQueue } from '../agent/ModalQueue';
 import { useAgentStore } from '../../stores/agentStore';
@@ -31,6 +32,7 @@ export function AppShell() {
 
   const [width, setWidth] = useState(SIDEBAR_DEFAULT);
   const [collapsed, setCollapsed] = useState(false);
+  const [view, setView] = useState<'agent' | 'terminal'>('agent');
   const dragRef = useRef<{ startX: number; startW: number } | null>(null);
 
   function onHandleDown(e: PointerEvent<HTMLDivElement>) {
@@ -108,12 +110,19 @@ export function AppShell() {
                 <Button variant="ghost" size="icon-sm" aria-label="帮助" title="帮助">
                   <CircleHelp className="size-4" />
                 </Button>
-                <Button variant="ghost" size="icon-sm" aria-label="切换终端" title="切换终端">
+                <Button variant="ghost" size="icon-sm" aria-label="切换终端" title="切换终端"
+                  onClick={() => setView((v) => (v === 'terminal' ? 'agent' : 'terminal'))}
+                  className={cn(view === 'terminal' && 'bg-surface-hover text-brand')}
+                >
                   <SquareTerminal className="size-4" />
                 </Button>
               </header>
               <div className="flex min-h-0 flex-1">
-                <AgentPanel workspaceId={workspaceId} />
+                {view === 'terminal' ? (
+                  <TerminalPanel workspaceId={workspaceId} onClose={() => setView('agent')} />
+                ) : (
+                  <AgentPanel workspaceId={workspaceId} />
+                )}
               </div>
             </section>
           </div>
