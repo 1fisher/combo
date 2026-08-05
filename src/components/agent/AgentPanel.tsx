@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
-import { Folder } from 'lucide-react';
+import { Folder, Loader2 } from 'lucide-react';
 import { randomUUID } from '../../lib/clientId';
 import { useAgentStore } from '../../stores/agentStore';
 import { cancelAgent, sendAgentMessage } from '../../lib/api';
@@ -45,7 +45,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
   const [wsMenuOpen, setWsMenuOpen] = useState(false);
 
   // 切换到某会话时,若 store 里没有该会话的消息,从后端拉取历史灌入
-  const { data: history } = useSessionHistory(workspaceId, sessionId);
+  const { data: history, isLoading: historyLoading, error: historyError } = useSessionHistory(workspaceId, sessionId);
   useEffect(() => {
     if (sessionId && history && history.length > 0) {
       hydrateMessages(sessionId, history);
@@ -55,6 +55,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
 
   const running = rt?.run?.status === 'running';
   const messages = rt?.messages ?? [];
+  const historyFetching = !!sessionId && messages.length === 0 && historyLoading;
   const ws = workspaces?.find((w) => w.id === workspaceId) ?? null;
   const wsName = ws ? (ws.name?.trim() ? ws.name : basename(ws.path)) : undefined;
   const backend = ws ? (BACKEND_LABEL[ws.backend ?? 'crush'] ?? ws.backend) : 'Crush';
@@ -179,7 +180,20 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
       )}
       {/* 时间线 */}
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {messages.length === 0 ? (
+        {historyFetching ? (
+          <div className="flex h-full items-center justify-center">
+            <div className="flex items-center gap-2 text-[13px] text-foreground-subtle">
+              <Loader2 className="size-4 animate-spin" />
+              加载会话…
+            </div>
+          </div>
+        ) : historyError && messages.length === 0 ? (
+          <div className="flex h-full items-center justify-center px-6 text-center">
+            <div className="text-[13px] text-destructive">
+              加载会话失败:{historyError instanceof Error ? historyError.message : String(historyError)}
+            </div>
+          </div>
+        ) : messages.length === 0 ? (
           <ChatEmptyState
             onPickTemplate={(p) => {
               setDraft(p);

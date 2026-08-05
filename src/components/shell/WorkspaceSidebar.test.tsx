@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
 import { isTauri } from '../../lib/connection';
 import { open } from '@tauri-apps/plugin-dialog';
+import { changeWorkspacePath } from '../../lib/api';
 
 const workspaces: { id: string; path: string; name?: string }[] = [];
 
@@ -18,6 +19,11 @@ vi.mock('../../lib/api', () => ({
   renameWorkspace: vi.fn(async (id: string, name: string) => {
     const w = workspaces.find((x) => x.id === id);
     if (w) w.name = name;
+    return w;
+  }),
+  changeWorkspacePath: vi.fn(async (id: string, path: string) => {
+    const w = workspaces.find((x) => x.id === id);
+    if (w) w.path = path;
     return w;
   }),
   listSkills: vi.fn(async () => []),
@@ -103,5 +109,26 @@ describe('WorkspaceSidebar', () => {
     wrap();
     await userEvent.click(await screen.findByRole('button', { name: '添加项目' }));
     expect(screen.queryByText('/proj/c')).toBeNull();
+  });
+
+  it('changes workspace path via context menu', async () => {
+    vi.mocked(isTauri).mockReturnValue(false);
+    wrap();
+    // 右键项目A 打开上下文菜单
+    const row = (await screen.findByText('项目A')).closest('div')!;
+    await userEvent.pointer({
+      keys: '[MouseRight]',
+      target: row,
+    });
+    await screen.findByText('更换目录');
+    await userEvent.click(screen.getByText('更换目录'));
+    // 弹窗里输入新路径
+    const input = await screen.findByPlaceholderText('/path/to/new/project');
+    await userEvent.clear(input);
+    await userEvent.type(input, '/proj/new-a');
+    await userEvent.click(screen.getByRole('button', { name: '更换' }));
+    // 等 mutation 完成(workspaces 刷新)
+    await screen.findByText('项目A');
+    expect(changeWorkspacePath).toHaveBeenCalledWith('w1', '/proj/new-a');
   });
 });

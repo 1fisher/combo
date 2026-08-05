@@ -32,8 +32,12 @@ export function useSessions(workspaceId: string | null) {
   async function activate(sessionId: string) {
     setActiveSessionId(sessionId);
     if (workspaceId) {
-      await setCurrentSession(workspaceId, sessionId);
       qc.invalidateQueries({ queryKey: ['history', workspaceId, sessionId] });
+      try {
+        await setCurrentSession(workspaceId, sessionId);
+      } catch {
+        /* rune 离线时不阻塞前端切换 */
+      }
     }
   }
   const remove = useMutation({

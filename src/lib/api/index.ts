@@ -30,6 +30,14 @@ export function renameWorkspace(id: string, name: string): Promise<Api.Workspace
   });
 }
 
+/** 更换 workspace 绑定目录:更新 sqlite 元数据并重新注册到 crush。 */
+export function changeWorkspacePath(id: string, path: string): Promise<Api.Workspace> {
+  return apiRequest(`/v1/workspaces/${id}`, {
+    method: 'PATCH',
+    body: { path },
+  });
+}
+
 export function deleteWorkspace(id: string): Promise<void> {
   return apiRequest(`/v1/workspaces/${id}`, { method: 'DELETE' });
 }

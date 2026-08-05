@@ -101,26 +101,82 @@ pub async fn get(State(state): State<AppState>, Path(id): Path<String>) -> Respo
     }
 }
 
-/// PATCH /v1/workspaces/{id} — 重命名项目。
+/// PATCH /v1/workspaces/{id} — 重命名项目 和/或 更换绑定目录。
+///
+/// 请求体:`{ name?: string, path?: string }`,至少传一个。
+/// - `name`:更新项目显示名。
+/// - `path`:更换绑定目录。更新 sqlite 元数据后,立即调 `ensure_ws`
+///   用新 path 重新注册到 crush(crush 内存态,重建后 id 可能变化,
+///   `ensure_ws` 会自动迁移会话镜像并返回新 id)。
 pub async fn rename(
     State(state): State<AppState>,
     Path(id): Path<String>,
     axum::extract::Json(body): axum::extract::Json<Value>,
 ) -> Response {
-    let name = body.get("name").and_then(|v| v.as_str()).unwrap_or("").trim();
-    if name.is_empty() {
-        return json_err(StatusCode::BAD_REQUEST, "name 不能为空");
+    let name = body.get("name").and_then(|v| v.as_str()).map(|s| s.trim());
+    let path = body.get("path").and_then(|v| v.as_str()).map(|s| s.trim());
+
+    match (name, path) {
+        (Some(n), _) if n.is_empty() && path.is_none() => {
+            return json_err(StatusCode::BAD_REQUEST, "name 不能为空");
+        }
+        (_, Some(p)) if p.is_empty() && name.is_none() => {
+            return json_err(StatusCode::BAD_REQUEST, "path 不能为空");
+        }
+        (None, None) => return json_err(StatusCode::BAD_REQUEST, "需提供 name 或 path"),
+        _ => {}
     }
-    match state.meta.rename(&id, name) {
-        Ok(true) => match state.meta.get(&id) {
-            Some(w) => json_ok(&workspace_json(&w)),
-            None => json_err(StatusCode::NOT_FOUND, "workspace 不存在"),
-        },
-        Ok(false) => json_err(StatusCode::NOT_FOUND, "workspace 不存在"),
-        Err(e) => json_err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            &format!("重命名失败: {e}"),
-        ),
+
+    // 先更新 name(若有)
+    if let Some(n) = name.filter(|s| !s.is_empty()) {
+        match state.meta.rename(&id, n) {
+            Ok(true) => {}
+            Ok(false) => return json_err(StatusCode::NOT_FOUND, "workspace 不存在"),
+            Err(e) => {
+                return json_err(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    &format!("重命名失败: {e}"),
+                );
+            }
+        }
+    } else if state.meta.get(&id).is_none() && path.is_some() {
+        return json_err(StatusCode::NOT_FOUND, "workspace 不存在");
+    }
+
+    // 再处理 path(若有):更新元数据 + 重新注册到 crush
+    if let Some(p) = path.filter(|s| !s.is_empty()) {
+        // 先校验目录存在,避免把无效 path 写进 sqlite
+        if !FsPath::new(p).is_dir() {
+            return json_err(
+                StatusCode::BAD_REQUEST,
+                &format!("目录不存在或不是一个目录: {p}"),
+            );
+        }
+        if let Err(e) = state.meta.update_path(&id, p) {
+            return json_err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("更新绑定目录失败: {e}"),
+            );
+        }
+        // 用新 path 重新注册到 crush。crush 重建 workspace 会返回新 id,
+        // ensure_ws 内部会把会话镜像迁移到新 id 并更新 sqlite 中的 id。
+        // 这里拿到的 effective_id 可能为 None(crush 不可用):此时仍以
+        // sqlite 元数据为准,在 crush 下次启动时由 reconcile_all 补齐。
+        let effective_id = crate::workspace::ensure_ws(&state, &id).await;
+        if let Some(new_id) = effective_id {
+            if new_id != id {
+                // id 变了,返回新 id 对应的 workspace
+                return match state.meta.get(&new_id) {
+                    Some(w) => json_ok(&workspace_json(&w)),
+                    None => json_err(StatusCode::NOT_FOUND, "workspace 不存在"),
+                };
+            }
+        }
+    }
+
+    match state.meta.get(&id) {
+        Some(w) => json_ok(&workspace_json(&w)),
+        None => json_err(StatusCode::NOT_FOUND, "workspace 不存在"),
     }
 }
 

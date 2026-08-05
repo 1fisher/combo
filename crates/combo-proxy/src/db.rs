@@ -164,6 +164,18 @@ impl ComboDb {
         Ok(())
     }
 
+    /// 更新 workspace 的绑定目录(更换目录时使用)。
+    pub fn update_workspace_path(&self, id: &str, path: &str) -> anyhow::Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE workspaces SET path=?1 WHERE id=?2",
+                params![path, id],
+            )?;
+        Ok(())
+    }
+
     // ---------- conversations ----------
 
     pub fn upsert_conversation(&self, c: &ConversationMeta) -> anyhow::Result<()> {
@@ -277,6 +289,23 @@ mod tests {
         db.upsert_workspace(&ws("w1", "旧名")).unwrap();
         db.rename_workspace("w1", "新名").unwrap();
         assert_eq!(db.get_workspace("w1").unwrap().unwrap().name, "新名");
+    }
+
+    #[test]
+    fn update_workspace_path_changes_path() {
+        let db = ComboDb::in_memory();
+        db.upsert_workspace(&ws("w1", "项目一")).unwrap();
+        assert_eq!(
+            db.get_workspace("w1").unwrap().unwrap().path,
+            PathBuf::from("/tmp/w1")
+        );
+        db.update_workspace_path("w1", "/new/path").unwrap();
+        assert_eq!(
+            db.get_workspace("w1").unwrap().unwrap().path,
+            PathBuf::from("/new/path")
+        );
+        // name 不受影响
+        assert_eq!(db.get_workspace("w1").unwrap().unwrap().name, "项目一");
     }
 
     #[test]

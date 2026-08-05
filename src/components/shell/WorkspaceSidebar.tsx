@@ -5,6 +5,7 @@ import {
   ChevronDown,
   ChevronRight,
   Folder,
+  FolderInput,
   GripVertical,
   Hash,
   ListFilter,
@@ -191,7 +192,7 @@ function WorkspaceGroup({
 }
 
 export function WorkspaceSidebar() {
-  const { workspaces, isLoading, create, rename, remove } = useWorkspaces();
+  const { workspaces, isLoading, create, rename, changePath, remove } = useWorkspaces();
   const active = useAgentStore((s) => s.activeWorkspaceId);
   const setActive = useAgentStore((s) => s.setActiveWorkspace);
   const connStatus = useConnectionStore((s) => s.status);
@@ -226,6 +227,14 @@ export function WorkspaceSidebar() {
   const [deleting, setDeleting] = useState(false);
   // 手动重启 crush
   const [restarting, setRestarting] = useState(false);
+  // 更换目录对话框
+  const [pathTarget, setPathTarget] = useState<{
+    id: string;
+    name: string;
+    path: string;
+  } | null>(null);
+  const [pathDraft2, setPathDraft2] = useState('');
+  const [changingPath, setChangingPath] = useState(false);
   // 供 ⌘/Ctrl+N 快捷键调用的最新 onNewTask(避免闭包过期)
   const onNewTaskRef = useRef<() => void>(() => {});
 
@@ -359,6 +368,32 @@ export function WorkspaceSidebar() {
       setSidebarError(e instanceof Error ? e.message : String(e));
     } finally {
       setRestarting(false);
+    }
+  }
+
+  async function pickDirectory(): Promise<string | null> {
+    if (isTauri()) {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const dir = await open({ directory: true, multiple: false });
+      return typeof dir === 'string' ? dir : null;
+    }
+    return null;
+  }
+
+  async function commitChangePath() {
+    if (!pathTarget) return;
+    const p = pathDraft2.trim();
+    if (!p) return;
+    setChangingPath(true);
+    setSidebarError(null);
+    try {
+      await changePath({ id: pathTarget.id, path: p });
+      setPathTarget(null);
+      setPathDraft2('');
+    } catch (e) {
+      setSidebarError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setChangingPath(false);
     }
   }
 
@@ -747,6 +782,22 @@ export function WorkspaceSidebar() {
           </button>
           <button
             type="button"
+            className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors hover:bg-surface-hover"
+            onClick={() => {
+              setPathTarget({
+                id: ctxMenu.ws.id,
+                name: projectName(ctxMenu.ws),
+                path: ctxMenu.ws.path,
+              });
+              setPathDraft2(ctxMenu.ws.path);
+              setCtxMenu(null);
+            }}
+          >
+            <FolderInput className="size-3.5 shrink-0 text-foreground-subtle" />
+            <span>更换目录</span>
+          </button>
+          <button
+            type="button"
             className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-left text-destructive transition-colors hover:bg-destructive/10"
             onClick={() => {
               setDeleteTarget({
@@ -789,6 +840,74 @@ export function WorkspaceSidebar() {
               disabled={deleting}
             >
               {deleting ? '删除中…' : '删除'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* 更换目录对话框 */}
+      <Dialog
+        open={pathTarget !== null}
+        onOpenChange={(open) => {
+          if (!open && !changingPath) {
+            setPathTarget(null);
+            setPathDraft2('');
+          }
+        }}
+      >
+        <DialogContent showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>更换目录</DialogTitle>
+            <DialogDescription>
+              为「{pathTarget?.name}」指定新的绑定目录。更换后,将重新注册到 crush;
+              会话记录会保留并迁移到新 workspace。
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2">
+            <div className="text-[13px] text-foreground-subtle">
+              当前:{pathTarget?.path}
+            </div>
+            <div className="flex items-center gap-1.5">
+              <input
+                autoFocus
+                value={pathDraft2}
+                onChange={(e) => setPathDraft2(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void commitChangePath();
+                }}
+                placeholder="/path/to/new/project"
+                className="h-9 min-w-0 flex-1 rounded-lg border border-input-border bg-background px-2.5 text-[13px] outline-none focus-visible:border-input-border-focused"
+              />
+              {isTauri() && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 shrink-0 px-2.5 text-[13px]"
+                  onClick={async () => {
+                    const dir = await pickDirectory();
+                    if (dir) setPathDraft2(dir);
+                  }}
+                >
+                  选择…
+                </Button>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setPathTarget(null);
+                setPathDraft2('');
+              }}
+              disabled={changingPath}
+            >
+              取消
+            </Button>
+            <Button
+              onClick={() => void commitChangePath()}
+              disabled={changingPath || !pathDraft2.trim()}
+            >
+              {changingPath ? '更换中…' : '更换'}
             </Button>
           </DialogFooter>
         </DialogContent>
