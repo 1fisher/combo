@@ -1,6 +1,29 @@
 name: Release
 
 on:
+  # 手动触发:选择版本类型,自动 bump + 生成 changelog + 打 tag
+  workflow_dispatch:
+    inputs:
+      version_type:
+        description: 版本类型
+        required: true
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+      prerelease:
+        description: 标记为预发布
+        required: false
+        type: boolean
+        default: false
+      draft:
+        description: 创建为草稿 Release
+        required: false
+        type: boolean
+        default: false
+  # tag 推送触发:构建各平台产物并发布
   push:
     tags:
       - 'v*'
@@ -9,8 +32,94 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # ─── 版本管理:bump + changelog + tag + push ──────────────────────────
+  bump-version:
+    name: Bump Version & Tag
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      tag_name: ${{ steps.create_tag.outputs.tag_name }}
+      version: ${{ steps.create_tag.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取完整历史,用于生成 changelog
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump version
+        id: bump
+        run: |
+          bash scripts/version.sh ${{ inputs.version_type }}
+
+          NEW_VERSION=$(node -e "console.log(require('./package.json').version)")
+          TAG="v${NEW_VERSION}"
+
+          echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "::notice::版本已升级到 ${NEW_VERSION} (tag: ${TAG})"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # 查找上一个 tag
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || echo "")
+
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="${PREV_TAG}..HEAD"
+            echo "## 变更内容" > /tmp/changelog.md
+            echo "" >> /tmp/changelog.md
+            git log "${RANGE}" --pretty=format:"- %s (%h)" --no-merges >> /tmp/changelog.md
+          else
+            RANGE=""
+            echo "## 变更内容" > /tmp/changelog.md
+            echo "" >> /tmp/changelog.md
+            git log --pretty=format:"- %s (%h)" --no-merges >> /tmp/changelog.md
+          fi
+
+          echo "" >> /tmp/changelog.md
+          echo "" >> /tmp/changelog.md
+          echo "**完整变更**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${{ steps.bump.outputs.tag }}" >> /tmp/changelog.md
+
+          # 存到多行输出(GITHUB_OUTPUT 不支持多行,用文件传递)
+          {
+            echo "content<<CHANGELOG_EOF"
+            cat /tmp/changelog.md
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Commit version bump
+        run: |
+          git add -A
+          git commit -m "chore: bump version to ${{ steps.bump.outputs.version }}" \
+                     -m "🤖 自动生成 by GitHub Actions"
+
+      - name: Create and push tag
+        id: create_tag
+        run: |
+          TAG="${{ steps.bump.outputs.tag }}"
+          # 创建带 changelog 的 annotated tag
+          git tag -a "$TAG" -m "Release $TAG" -m "$(cat /tmp/changelog.md)"
+          git push origin main
+          git push origin "$TAG"
+
+          echo "tag_name=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "version=${{ steps.bump.outputs.version }}" >> "$GITHUB_OUTPUT"
+
+  # ─── 构建各平台产物 ───────────────────────────────────────────────────
   publish-tauri:
     name: Build ${{ matrix.settings.platform }}
+    needs: bump-version
+    if: always() && (needs.bump-version.result == 'success' || github.event_name == 'push')
     permissions:
       contents: write
     strategy:
@@ -33,6 +142,18 @@ jobs:
     runs-on: ${{ matrix.settings.runner }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取完整历史和 tag(用于读取 changelog)
+
+      - name: Determine tag name
+        id: tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "tag_name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag_name=${{ needs.bump-version.outputs.tag_name }}" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -67,13 +188,29 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
+      - name: Read changelog (workflow_dispatch only)
+        id: changelog
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 从刚创建的 annotated tag 中提取 changelog
+          TAG="${{ steps.tag.outputs.tag_name }}"
+          BODY=$(git tag -l --format='%(contents)' "$TAG" 2>/dev/null || echo "")
+          {
+            echo "body<<CHANGELOG_EOF"
+            echo "$BODY"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'Combo ${{ github.ref_name }}'
-          releaseBody: ''
-          releaseDraft: true
-          prerelease: false
+          tagName: ${{ steps.tag.outputs.tag_name }}
+          releaseName: 'Combo ${{ steps.tag.outputs.tag_name }}'
+          releaseBody: ${{ steps.changelog.outputs.body || 'See assets below.' }}
+          releaseDraft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft }}
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease }}
           args: --target ${{ matrix.settings.target }}
