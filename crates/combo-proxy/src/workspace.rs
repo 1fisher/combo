@@ -201,6 +201,16 @@ const PROXY_CLIENT_ID: &str = "00000000-0000-4000-8000-000000000001";
 /// 此时同步更新元数据库并把旧 id 下的会话镜像迁移到新 id。
 /// 返回当前有效的 workspace id(None 表示注册失败)。
 pub async fn ensure_ws(state: &AppState, ws_id: &str) -> Option<String> {
+    // 先确保 crush 进程在运行(可能在两次后台健康检查之间崩溃了)。
+    // ensure_running 在 crush 已健康时仅做一次 GET /v1/health,开销极小;
+    // 若 crush 已死则自动拉起并等待就绪(最多 15s)。
+    if let Some(sup) = &state.crush_supervisor {
+        if let Err(e) = sup.ensure_running().await {
+            eprintln!("ensure_ws: crush 进程不可用且重启失败: {e}");
+            return None;
+        }
+    }
+
     let crush = state.registry.by_type(BackendType::Crush)?;
     // 快速路径:crush 已认识该 workspace
     let check = crush
@@ -236,7 +246,18 @@ pub async fn ensure_ws(state: &AppState, ws_id: &str) -> Option<String> {
         .await
     {
         Ok(r) if r.status().is_success() => r,
-        _ => return None,
+        Ok(r) => {
+            eprintln!(
+                "ensure_ws: crush 注册 workspace 失败(HTTP {}),path={}",
+                r.status(),
+                meta.path.display()
+            );
+            return None;
+        }
+        Err(e) => {
+            eprintln!("ensure_ws: 转发注册请求到 crush 失败: {e}");
+            return None;
+        }
     };
     let bytes = match http_body_util::BodyExt::collect(resp.into_body()).await {
         Ok(c) => c.to_bytes().to_vec(),
@@ -245,6 +266,7 @@ pub async fn ensure_ws(state: &AppState, ws_id: &str) -> Option<String> {
     let v: Value = serde_json::from_slice(&bytes).unwrap_or_default();
     let new_id = v.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
     if new_id.is_empty() {
+        eprintln!("ensure_ws: crush 注册响应缺少 id 字段,path={}", meta.path.display());
         return None;
     }
     if new_id != ws_id {

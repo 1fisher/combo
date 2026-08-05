@@ -80,6 +80,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
       return;
     }
     setPostError(null);
+    setDraft('');
     let sid = sessionId;
     let reused = !!sid;
     // 本次发送新建的会话:发送失败时需删除,避免侧边栏残留空会话

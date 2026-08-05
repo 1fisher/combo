@@ -43,6 +43,7 @@ interface AgentState {
   questionQueue: Api.QuestionRequest[];
 
   upsertMessage: (sessionId: string, m: Api.Message) => void;
+  removeOptimisticMessages: (sessionId: string) => void;
   hydrateMessages: (sessionId: string, msgs: Api.Message[]) => void;
   deleteMessage: (sessionId: string, messageId: string) => void;
   markRun: (sessionId: string, runId: string, status: 'running' | 'done') => void;
@@ -92,6 +93,21 @@ export const useAgentStore = create<AgentState>()(
           ? rt.messages.map((x, i) => (i === idx ? vm : x))
           : [...rt.messages, vm];
       return { bySession: { ...st.bySession, [sessionId]: { ...rt, messages } } };
+    }),
+
+  removeOptimisticMessages: (sessionId) =>
+    set((st) => {
+      const rt = st.bySession[sessionId];
+      if (!rt) return st;
+      return {
+        bySession: {
+          ...st.bySession,
+          [sessionId]: {
+            ...rt,
+            messages: rt.messages.filter((x) => !x.id.startsWith('local-')),
+          },
+        },
+      };
     }),
 
   hydrateMessages: (sessionId, msgs) =>

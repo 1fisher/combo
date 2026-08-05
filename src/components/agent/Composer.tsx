@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ArrowUp,
   Brain,
@@ -56,6 +56,14 @@ export function Composer({
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }
+
+  // 外部清空 value(如发送后)时重置高度
+  useEffect(() => {
+    if (!value) {
+      const el = areaRef.current;
+      if (el) el.style.height = 'auto';
+    }
+  }, [value]);
 
   function submit() {
     if (!value.trim() || disabled) return;
