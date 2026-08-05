@@ -32,7 +32,8 @@ export function ConversationList() {
 
   async function onNew() {
     const base = `会话 ${(sessions?.length ?? 0) + 1}`;
-    await create(base);
+    const s = await create(base);
+    void activate(s.id);
   }
 
   return (

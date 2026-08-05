@@ -200,6 +200,7 @@ export function WorkspaceSidebar() {
   const {
     sessions: activeSessions,
     create: createSessionIn,
+    activate: activateSession,
   } = useSessions(active);
 
   const [tab, setTab] = useState<'grouped' | 'project'>('project');
@@ -293,7 +294,8 @@ export function WorkspaceSidebar() {
     }
     const base = `会话 ${(activeSessions?.length ?? 0) + 1}`;
     try {
-      await createSessionIn(base);
+      const s = await createSessionIn(base);
+      void activateSession(s.id);
     } catch (e) {
       setSidebarError(e instanceof Error ? e.message : String(e));
     }

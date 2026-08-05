@@ -19,6 +19,11 @@ export function applyEvent(s: Store, env: EventEnvelope): void {
         s.removeOptimisticMessages(p.session_id);
       }
       s.upsertMessage(p.session_id, p);
+      // assistant 消息带 finish part → 视为本次 run 完成
+      // (不依赖 run_complete 事件,crush 后端可能不发送该事件)
+      if (p.role === 'assistant' && p.parts.some((part) => part.type === 'finish')) {
+        s.markRun(p.session_id, p.id, 'done');
+      }
       break;
     }
     case 'run_complete': {

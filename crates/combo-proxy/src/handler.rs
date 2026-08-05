@@ -16,6 +16,13 @@ fn extract_workspace_id(path: &str) -> Option<&str> {
     }
 }
 
+/// 判断路径是否为会话只读端点(history/messages 等)。
+/// crush 离线时对这些端点返回空数组,避免前端报错。
+fn is_session_read_path(path: &str) -> bool {
+    let p = path.split('?').next().unwrap_or(path);
+    p.contains("/sessions/") && (p.ends_with("/history") || p.ends_with("/messages"))
+}
+
 /// 反向代理 handler:按 workspace 的后端类型路由。
 pub async fn proxy(State(state): State<AppState>, req: axum::extract::Request) -> Response {
     let (parts, body) = req.into_parts();
@@ -43,6 +50,15 @@ pub async fn proxy(State(state): State<AppState>, req: axum::extract::Request) -
             Some(eid) if eid != ws_id => path_query.replacen(ws_id, &eid, 1),
             Some(_) => path_query.to_string(),
             None => {
+                // crush 不可用/workspace 元数据丢失时,对会话历史等只读端点
+                // 返回空数据而非 404,避免前端报"workspace 不存在或已被删除"
+                if is_session_read_path(path_query) {
+                    return Response::builder()
+                        .status(StatusCode::OK)
+                        .header(axum::http::header::CONTENT_TYPE, "application/json")
+                        .body(Body::from("[]"))
+                        .unwrap();
+                }
                 return Response::builder()
                     .status(StatusCode::NOT_FOUND)
                     .header(axum::http::header::CONTENT_TYPE, "application/json")

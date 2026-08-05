@@ -34,7 +34,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
   const sessionId = useAgentStore((s) => s.activeSessionId);
   const setActiveWorkspace = useAgentStore((s) => s.setActiveWorkspace);
   const { workspaces } = useWorkspaces();
-  const { create: createSessionIn, remove: removeSession } = useSessions(workspaceId);
+  const { create: createSessionIn, activate: activateSession, remove: removeSession } = useSessions(workspaceId);
 
   const rt = useAgentStore((s) => (sessionId ? s.bySession[sessionId] : undefined));
   const hydrateMessages = useAgentStore((s) => s.hydrateMessages);
@@ -44,7 +44,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
   const [wsMenuOpen, setWsMenuOpen] = useState(false);
 
   // 切换到某会话时,若 store 里没有该会话的消息,从后端拉取历史灌入
-  const { data: history, isLoading: historyLoading, error: historyError } = useSessionHistory(workspaceId, sessionId);
+  const { data: history, isLoading: historyLoading } = useSessionHistory(workspaceId, sessionId);
   useEffect(() => {
     if (sessionId && history && history.length > 0) {
       hydrateMessages(sessionId, history);
@@ -98,6 +98,8 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
     }
     const runId = randomUUID();
     const st = useAgentStore.getState();
+    // 先插入用户消息,再激活会话 — 确保 React 渲染时消息已就绪,
+    // 避免空会话视图(加载中/欢迎页)闪烁
     st.upsertMessage(sid!, {
       id: `local-${runId}`,
       session_id: sid!,
@@ -108,6 +110,9 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
       created_at: Date.now(),
       updated_at: Date.now(),
     } as never);
+    if (!reused) {
+      void activateSession(sid!);
+    }
     setQueued(sid!, true);
     try {
       await sendAgentMessage(workspaceId, { sessionId: sid!, runId, prompt });
@@ -132,6 +137,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
             created_at: Date.now(),
             updated_at: Date.now(),
           } as never);
+          void activateSession(sid);
           setQueued(sid, true);
           await sendAgentMessage(workspaceId, { sessionId: sid, runId: retryRunId, prompt });
           st.markRun(sid, retryRunId, 'running');
@@ -176,12 +182,6 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
             <div className="flex items-center gap-2 text-[13px] text-foreground-subtle">
               <Loader2 className="size-4 animate-spin" />
               加载会话…
-            </div>
-          </div>
-        ) : historyError && messages.length === 0 ? (
-          <div className="flex h-full items-center justify-center px-6 text-center">
-            <div className="text-[13px] text-destructive">
-              加载会话失败:{historyError instanceof Error ? historyError.message : String(historyError)}
             </div>
           </div>
         ) : messages.length === 0 ? (

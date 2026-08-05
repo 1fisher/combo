@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createSession,
@@ -9,6 +9,19 @@ import {
 } from '../lib/api';
 import { useAgentStore } from '../stores/agentStore';
 
+/**
+ * 模块级集合:记录最近创建的会话 ID。
+ * useSessions 被多个组件同时调用(AgentPanel / ConversationList / WorkspaceSidebar),
+ * 每个实例有自己的 lastCreated ref,无法互相感知。
+ * 用共享集合确保任一实例创建的会话都不会被其他实例的 stale-guard 清除。
+ */
+const recentlyCreated = new Set<string>();
+/** 标记后 5 秒内不被 stale-guard 清除(足够 sessions 列表 refetch 完成) */
+function markCreated(id: string) {
+  recentlyCreated.add(id);
+  setTimeout(() => recentlyCreated.delete(id), 5000);
+}
+
 export function useSessions(workspaceId: string | null) {
   const qc = useQueryClient();
   const setActiveSessionId = useAgentStore((s) => s.setActiveSessionId);
@@ -18,15 +31,11 @@ export function useSessions(workspaceId: string | null) {
     queryFn: () => listSessions(workspaceId!),
     enabled: !!workspaceId,
   });
-  // 记录刚创建的会话 id:列表失效后重新拉取前,q.data 还是旧数据,
-  // 不能让"会话不在列表"的校验把它清掉
-  const lastCreated = useRef<string | null>(null);
   const create = useMutation({
     mutationFn: (title: string) => createSession(workspaceId!, title),
     onSuccess: (s) => {
-      lastCreated.current = s.id;
+      markCreated(s.id);
       qc.invalidateQueries({ queryKey: ['sessions', workspaceId] });
-      void activate(s.id);
     },
   });
   async function activate(sessionId: string) {
@@ -49,10 +58,11 @@ export function useSessions(workspaceId: string | null) {
       }
     },
   });
-  // 持久化恢复的会话不属于当前项目(或已被删除)时清除,不主动选第一个
+  // 持久化恢复的会话不属于当前项目(或已被删除)时清除,不主动选第一个。
+  // 跳过最近创建的会话(列表 refetch 可能尚未完成)。
   useEffect(() => {
     if (!workspaceId || !q.data || activeSessionId == null) return;
-    if (activeSessionId === lastCreated.current) return;
+    if (recentlyCreated.has(activeSessionId)) return;
     if (!q.data.some((s) => s.id === activeSessionId)) {
       setActiveSessionId(null);
     }
