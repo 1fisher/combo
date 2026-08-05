@@ -1,9 +1,10 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Folder } from 'lucide-react';
 import { randomUUID } from '../../lib/clientId';
 import { useAgentStore } from '../../stores/agentStore';
 import { cancelAgent, sendAgentMessage } from '../../lib/api';
+import { useSessionHistory } from '../../hooks/useSessions';
 import { useWorkspaceEvents } from '../../hooks/useWorkspaceEvents';
 import { useWorkspaces } from '../../hooks/useWorkspaces';
 import { useSessions } from '../../hooks/useSessions';
@@ -35,10 +36,20 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
   const { create: createSessionIn } = useSessions(workspaceId);
 
   const rt = useAgentStore((s) => (sessionId ? s.bySession[sessionId] : undefined));
+  const hydrateMessages = useAgentStore((s) => s.hydrateMessages);
   const setQueued = useAgentStore((s) => s.setQueued);
   const [postError, setPostError] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [wsMenuOpen, setWsMenuOpen] = useState(false);
+
+  // 切换到某会话时,若 store 里没有该会话的消息,从后端拉取历史灌入
+  const { data: history } = useSessionHistory(workspaceId, sessionId);
+  useEffect(() => {
+    if (sessionId && history && history.length > 0) {
+      hydrateMessages(sessionId, history);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, history]);
 
   const running = rt?.run?.status === 'running';
   const messages = rt?.messages ?? [];

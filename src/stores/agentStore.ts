@@ -28,6 +28,7 @@ interface AgentState {
   questionQueue: Api.QuestionRequest[];
 
   upsertMessage: (sessionId: string, m: Api.Message) => void;
+  hydrateMessages: (sessionId: string, msgs: Api.Message[]) => void;
   deleteMessage: (sessionId: string, messageId: string) => void;
   markRun: (sessionId: string, runId: string, status: 'running' | 'done') => void;
   setQueued: (sessionId: string, queued: boolean) => void;
@@ -74,6 +75,27 @@ export const useAgentStore = create<AgentState>()(
           ? rt.messages.map((x, i) => (i === idx ? vm : x))
           : [...rt.messages, vm];
       return { bySession: { ...st.bySession, [sessionId]: { ...rt, messages } } };
+    }),
+
+  hydrateMessages: (sessionId, msgs) =>
+    set((st) => {
+      const rt = st.bySession[sessionId];
+      // 已有消息(来自 SSE 实时流)时不覆盖
+      if (rt && rt.messages.length > 0) return st;
+      const messages: MessageVM[] = msgs.map((m) => ({
+        id: m.id,
+        role: m.role,
+        parts: m.parts,
+        createdAt: m.created_at,
+        updatedAt: m.updated_at,
+        streaming: false,
+      }));
+      return {
+        bySession: {
+          ...st.bySession,
+          [sessionId]: { ...(rt ?? emptyRuntime()), messages },
+        },
+      };
     }),
 
   deleteMessage: (sessionId, messageId) =>
