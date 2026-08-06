@@ -10,24 +10,39 @@ function unwrap<T>(env: EventEnvelope): T {
   return (env.payload as { type: string; payload: T }).payload;
 }
 
+function ts() {
+  return new Date().toISOString().slice(11, 23);
+}
+
 export function applyEvent(s: Store, env: EventEnvelope): void {
   switch (env.type) {
     case 'message': {
       const p = unwrap<Api.Message>(env);
+      const partTypes = p.parts.map((pt) => pt.type).join(',');
+      const hasFinish = p.parts.some((pt) => pt.type === 'finish');
+      console.debug(
+        `[${ts()}][dispatch] message id="${p.id}" role="${p.role}" inner="${(env.payload as { type: string }).type}" parts=[${partTypes}] hasFinish=${hasFinish} session="${p.session_id}"`
+      );
       // rune 会回传用户文本消息,与乐观插入的 local- 消息重复,先清除
       if (p.role === 'user' && p.parts.some((part) => part.type === 'text')) {
         s.removeOptimisticMessages(p.session_id);
       }
       s.upsertMessage(p.session_id, p);
       // assistant 消息带 finish part → 视为本次 run 完成
-      // (不依赖 run_complete 事件,crush 后端可能不发送该事件)
-      if (p.role === 'assistant' && p.parts.some((part) => part.type === 'finish')) {
+      if (p.role === 'assistant' && hasFinish) {
+        const finishData = p.parts.find((pt) => pt.type === 'finish')?.data as { reason?: string };
+        console.debug(
+          `[${ts()}][dispatch] ✓ finish detected reason="${finishData?.reason ?? ''}" → markRun done`
+        );
         s.markRun(p.session_id, p.id, 'done');
       }
       break;
     }
     case 'run_complete': {
       const p = unwrap<{ session_id: string; run_id?: string; error?: string }>(env);
+      console.debug(
+        `[${ts()}][dispatch] ✓ run_complete session="${p.session_id}" run="${p.run_id}" error="${p.error ?? ''}"`
+      );
       s.markRun(p.session_id, p.run_id || p.session_id, 'done');
       break;
     }
@@ -48,6 +63,9 @@ export function applyEvent(s: Store, env: EventEnvelope): void {
       break;
     }
     default:
-      break; // M1 忽略其余事件
+      console.debug(
+        `[${ts()}][dispatch] 未处理事件 type="${env.type}"`
+      );
+      break;
   }
 }

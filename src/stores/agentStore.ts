@@ -155,6 +155,10 @@ export const useAgentStore = create<AgentState>()(
   markRun: (sessionId, runId, status) =>
     set((st) => {
       const rt = st.bySession[sessionId] ?? emptyRuntime();
+      const ts = new Date().toISOString().slice(11, 23);
+      console.debug(
+        `[${ts}][store] markRun status="${status}" prev="${rt.run?.status ?? 'none'}" session="${sessionId}" msgCount=${rt.messages.length}`
+      );
       const messages =
         status === 'done'
           ? rt.messages.map((m) => ({ ...m, streaming: false }))

@@ -54,6 +54,12 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
 
   const messages = rt?.messages ?? [];
   const running = rt?.run?.status === 'running' && messages.some((m) => m.streaming);
+  // [stream-debug] 每次 render 的运行状态(仅在有会话时打日志)
+  if (sessionId) {
+    console.debug(
+      `[${new Date().toISOString().slice(11, 23)}][agent] render run="${rt?.run?.status ?? 'none'}" running=${running} msgs=${messages.length} streaming=${messages.filter((m) => m.streaming).length}`
+    );
+  }
   const historyFetching = !!sessionId && messages.length === 0 && historyLoading;
   const ws = workspaces?.find((w) => w.id === workspaceId) ?? null;
   const wsName = ws ? (ws.name?.trim() ? ws.name : basename(ws.path)) : undefined;
@@ -116,6 +122,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
     setQueued(sid!, true);
     try {
       await sendAgentMessage(workspaceId, { sessionId: sid!, runId, prompt });
+      console.debug(`[agent] 发送成功 markRun running sid="${sid}" runId="${runId}"`);
       st.markRun(sid!, runId, 'running');
     } catch (e) {
       const err = e as { status?: number; message?: string };

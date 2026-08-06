@@ -12,16 +12,43 @@ use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
 use std::path::PathBuf;
 
+/// 长生命周期的 HTTP 客户端,持有连接池。
+/// 每次 forward 调用 clone 它(仅 Arc 引用计数递增,开销极低),
+/// 确保连接池在 SSE 响应体完整消费前不被 drop。
+enum ProxyClient {
+    Unix(Client<hyperlocal::UnixConnector, Full<bytes::Bytes>>),
+    Tcp(Client<HttpConnector, Full<bytes::Bytes>>),
+}
+
 /// Crush (rune) 后端:对运行中的 crush server 做透明转发。
-/// 持有 `Upstream`(Unix socket 或 TCP 地址),所有 trait 方法
-/// 直接代理 HTTP 请求。
+/// 持有 `Upstream`(Unix socket 或 TCP 地址)和长生命周期的 HTTP 客户端,
+/// 所有 trait 方法直接代理 HTTP 请求。
 pub struct CrushBackend {
     upstream: Upstream,
+    client: ProxyClient,
 }
 
 impl CrushBackend {
     pub fn new(upstream: Upstream) -> Self {
-        Self { upstream }
+        let client = match &upstream {
+            Upstream::Unix(_) => {
+                let connector = hyperlocal::UnixConnector;
+                let c = Client::builder(TokioExecutor::new())
+                    .pool_idle_timeout(Some(std::time::Duration::from_secs(120)))
+                    .build(connector);
+                ProxyClient::Unix(c)
+            }
+            Upstream::Tcp(_) => {
+                let mut connector = HttpConnector::new();
+                connector.set_keepalive(Some(std::time::Duration::from_secs(60)));
+                connector.set_nodelay(true);
+                let c = Client::builder(TokioExecutor::new())
+                    .pool_idle_timeout(Some(std::time::Duration::from_secs(120)))
+                    .build(connector);
+                ProxyClient::Tcp(c)
+            }
+        };
+        Self { upstream, client }
     }
 
     /// 底层 upstream 地址(供健康状态报告用)。
@@ -43,7 +70,7 @@ impl Backend for CrushBackend {
         headers: &HeaderMap,
         body: Vec<u8>,
     ) -> Result<Response> {
-        forward_to_upstream(&self.upstream, method, path_query, headers, body).await
+        forward_to_upstream(&self.upstream, &self.client, method, path_query, headers, body).await
     }
 
     async fn workspace_root(&self, id: &str) -> Result<PathBuf> {
@@ -67,14 +94,15 @@ impl Backend for CrushBackend {
     }
 
     async fn health(&self) -> bool {
-        check_health(&self.upstream).await
+        check_health(&self.upstream, &self.client).await
     }
 }
 
 /// 向 upstream 发送请求并原样透传响应(SSE 流式不缓冲)。
-/// (从 handler.rs 的 upstream_call 迁移而来。)
-pub(crate) async fn forward_to_upstream(
+/// 使用长生命周期的 Client 保持连接池存活,防止 SSE 流提前断开。
+async fn forward_to_upstream(
     upstream: &Upstream,
+    client: &ProxyClient,
     method: Method,
     path_query: &str,
     headers: &HeaderMap,
@@ -99,19 +127,11 @@ pub(crate) async fn forward_to_upstream(
     builder = builder.header("X-Forwarded-Proto", "http");
     let up_req = builder.body(Full::from(body_bytes))?;
 
-    let resp: hyper::Response<hyper::body::Incoming> = match upstream {
-        Upstream::Unix(_) => {
-            let connector = hyperlocal::UnixConnector;
-            let client: Client<_, Full<bytes::Bytes>> =
-                Client::builder(TokioExecutor::new()).build(connector);
-            client.request(up_req).await?
-        }
-        Upstream::Tcp(_) => {
-            let connector = HttpConnector::new();
-            let client: Client<_, Full<bytes::Bytes>> =
-                Client::builder(TokioExecutor::new()).build(connector);
-            client.request(up_req).await?
-        }
+    // 使用长生命周期的 Client(clone 仅 Arc 引用计数递增),
+    // 确保连接池在响应体流式消费期间不被回收。
+    let resp: hyper::Response<hyper::body::Incoming> = match client {
+        ProxyClient::Unix(c) => c.request(up_req).await?,
+        ProxyClient::Tcp(c) => c.request(up_req).await?,
     };
 
     let (rparts, rbody) = resp.into_parts();
@@ -126,8 +146,8 @@ pub(crate) async fn forward_to_upstream(
     Ok(rb.body(Body::from_stream(stream))?)
 }
 
-/// GET /v1/health 健康探测(从 rune.rs 的 RuneManager::health_check 迁移)。
-pub(crate) async fn check_health(upstream: &Upstream) -> bool {
+/// GET /v1/health 健康探测。
+async fn check_health(upstream: &Upstream, client: &ProxyClient) -> bool {
     let uri = match upstream {
         Upstream::Unix(path) => {
             let hex_host = hex::encode(path.to_string_lossy().as_bytes());
@@ -146,19 +166,9 @@ pub(crate) async fn check_health(upstream: &Upstream) -> bool {
         Ok(r) => r,
         Err(_) => return false,
     };
-    let resp = match upstream {
-        Upstream::Unix(_) => {
-            let connector = hyperlocal::UnixConnector;
-            let client: Client<_, Full<bytes::Bytes>> =
-                Client::builder(TokioExecutor::new()).build(connector);
-            client.request(req).await
-        }
-        Upstream::Tcp(_) => {
-            let connector = HttpConnector::new();
-            let client: Client<_, Full<bytes::Bytes>> =
-                Client::builder(TokioExecutor::new()).build(connector);
-            client.request(req).await
-        }
+    let resp = match client {
+        ProxyClient::Unix(c) => c.request(req).await,
+        ProxyClient::Tcp(c) => c.request(req).await,
     };
     match resp {
         Ok(r) => r.status().is_success(),
@@ -197,7 +207,6 @@ mod tests {
         let addr = stub_upstream("/tmp".into()).await;
         let backend = CrushBackend::new(Upstream::Tcp(addr));
         assert!(backend.health().await);
-
         let resp = backend
             .forward(Method::GET, "/v1/health", &HeaderMap::new(), Vec::new())
             .await

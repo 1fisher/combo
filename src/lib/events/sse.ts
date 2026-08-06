@@ -84,12 +84,20 @@ export class WorkspaceEventSource {
         if (!dataLine) continue;
         try {
           const env = JSON.parse(dataLine.slice(5).trim()) as EventEnvelope;
+          const inner = env.payload as { type?: string };
+          const ts = new Date().toISOString().slice(11, 23);
+          // [stream-debug] 完整 SSE 事件(含原始 JSON)
+          console.debug(
+            `[${ts}][sse] type="${env.type}" inner="${inner?.type}" data=${dataLine.slice(5).trim().slice(0, 500)}`
+          );
           this.onPayload(env);
-        } catch {
-          /* ignore malformed frame */
+        } catch (e) {
+          console.warn('[sse] 事件解析失败', e);
         }
       }
     }
     this.connected = false;
+    const ts = new Date().toISOString().slice(11, 23);
+    console.debug(`[${ts}][sse] 连接断开 stopped=${this.stopped} workspace="${this.workspaceId}"`);
   }
 }

@@ -15,6 +15,21 @@ export function useWorkspaceEvents(workspaceId: string | null) {
         const st = useAgentStore.getState();
         if (env.type === 'session') {
           void qc.invalidateQueries({ queryKey: ['sessions', workspaceId] });
+          // crush 某些场景不发 finish part / run_complete 事件,
+          // 而是通过 session.is_busy=false 表示运行结束。
+          // 检测该信号并标记 run 完成。
+          const inner = env.payload as { type: string; payload: { id?: string; is_busy?: boolean } };
+          const sess = inner?.payload;
+          if (sess?.id && sess.is_busy === false) {
+            const rt = st.bySession[sess.id];
+            if (rt?.run?.status === 'running') {
+              const ts = new Date().toISOString().slice(11, 23);
+              console.debug(
+                `[${ts}][events] session.is_busy=false → markRun done session="${sess.id}"`
+              );
+              st.markRun(sess.id, rt.run.runId, 'done');
+            }
+          }
           return;
         }
         applyEvent(st, env);
