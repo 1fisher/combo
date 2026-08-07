@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Check, ChevronRight, FileText, Folder, FolderOpen, Paperclip, X } from 'lucide-react';
 import { Button } from '../ui/button';
 import { listFiles } from '../../lib/api';
@@ -21,6 +21,21 @@ export function AttachmentPicker({ workspaceId, selected = [], onPick, onClose }
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [picked, setPicked] = useState<Record<string, { path: string; name: string }>>({});
   const [loading, setLoading] = useState(false);
+
+  // 保持最新 onClose,避免因调用方每次渲染重建函数而反复重挂监听
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
+
+  // 按 Esc 关闭文件选择弹窗
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') onCloseRef.current();
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   useEffect(() => {
     setByDir({});
