@@ -12,12 +12,14 @@ import {
   PencilLine,
   Plus,
   RefreshCw,
+  RotateCcw,
 } from 'lucide-react';
 import {
   getGitStatus,
   getGitBranchInfo,
   gitStage,
   gitUnstage,
+  gitDiscard,
   gitCommit,
   gitPush,
   gitPull,
@@ -26,6 +28,14 @@ import {
 import type { Api } from '../../lib/api/types';
 import { useGitStore, type GitFileEntry } from '../../stores/gitStore';
 import { cn } from '../../lib/utils';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '../ui/dialog';
 
 function statusColor(status: string | null): string {
   switch (status) {
@@ -112,6 +122,7 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
   const [branchInfo, setBranchInfo] = useState<Api.GitBranchInfo | null>(null);
   const [remoteBusy, setRemoteBusy] = useState<null | 'push' | 'pull' | 'fetch'>(null);
   const [remoteError, setRemoteError] = useState<string | null>(null);
+  const [discardTarget, setDiscardTarget] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -173,6 +184,18 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
     setStaging(true);
     try {
       await gitStage(workspaceId, []);
+      await refresh();
+    } catch {
+      /* ignore */
+    } finally {
+      setStaging(false);
+    }
+  }
+
+  async function handleDiscard(filePath: string) {
+    setStaging(true);
+    try {
+      await gitDiscard(workspaceId, [filePath]);
       await refresh();
     } catch {
       /* ignore */
@@ -334,6 +357,15 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
               >
                 <FileText className="h-3 w-3" />
               </button>
+              {/* 撤销变更 */}
+              <button
+                onClick={() => setDiscardTarget(f.path)}
+                disabled={staging}
+                className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-60 disabled:opacity-50"
+                title="撤销变更"
+              >
+                <RotateCcw className="h-3 w-3" />
+              </button>
               {/* 暂存 / 取消暂存 */}
               <button
                 onClick={() => void (staged ? handleUnstage(f.path) : handleStage(f.path))}
@@ -449,6 +481,36 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
           </button>
         </div>
       )}
+
+      {/* 撤销变更确认弹窗 */}
+      <Dialog open={discardTarget !== null} onOpenChange={(v) => !v && setDiscardTarget(null)}>
+        <DialogContent showCloseButton={false} className="max-w-xs">
+          <DialogHeader>
+            <DialogTitle>撤销变更</DialogTitle>
+            <DialogDescription>
+              确定要撤销 <span className="font-mono text-foreground">{discardTarget}</span> 的所有变更吗?此操作不可恢复。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <button
+              onClick={() => setDiscardTarget(null)}
+              className="rounded border border-border px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              取消
+            </button>
+            <button
+              onClick={() => {
+                if (discardTarget) void handleDiscard(discardTarget);
+                setDiscardTarget(null);
+              }}
+              disabled={staging}
+              className="rounded bg-red-500 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-red-600 disabled:opacity-50"
+            >
+              {staging ? '撤销中...' : '确认撤销'}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

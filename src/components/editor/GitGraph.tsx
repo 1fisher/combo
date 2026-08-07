@@ -9,7 +9,7 @@ interface Props {
   onShowCommitDiff: (hash: string, path: string) => void;
 }
 
-interface GraphCommit extends Api.GitCommitInfo {
+export interface GraphCommit extends Api.GitCommitInfo {
   lane: number;
   parentLanes: number[];
 }
@@ -32,7 +32,7 @@ function branchColor(lane: number): string {
   return LANE_COLORS[lane % LANE_COLORS.length];
 }
 
-function computeLanes(commits: Api.GitCommitInfo[]): Map<string, GraphCommit> {
+export function computeLanes(commits: Api.GitCommitInfo[]): Map<string, GraphCommit> {
   const result = new Map<string, GraphCommit>();
   if (!commits || commits.length === 0) return result;
 
@@ -59,8 +59,19 @@ function computeLanes(commits: Api.GitCommitInfo[]): Map<string, GraphCommit> {
     for (let i = 0; i < parents.length; i++) {
       const parentHash = parents[i];
       if (i === 0) {
-        if (!hashToLane.has(parentHash)) hashToLane.set(parentHash, lane);
-        parentLanes.push(lane);
+        // 第一个父提交:如果尚未分配 lane 则继承当前 lane,
+        // 若已被其他提交分配到不同 lane,则使用已有 lane(分支合回主线)
+        let pLane = hashToLane.get(parentHash);
+        if (pLane === undefined) {
+          pLane = lane;
+          hashToLane.set(parentHash, pLane);
+          activeLanes[pLane] = parentHash;
+        }
+        if (pLane !== lane) {
+          // 父提交在其他 lane,当前 lane 不再需要,释放
+          activeLanes[lane] = null;
+        }
+        parentLanes.push(pLane);
       } else {
         let pLane = hashToLane.get(parentHash);
         if (pLane === undefined) {
@@ -101,10 +112,11 @@ interface LineSegment {
  * 每条边(child→parent)拆成两段:
  *   - child 段:在 child 行,从圆点向下到行底
  *   - parent 段:在 parent 行,从行顶进入圆点
- * 如果 child 和 parent 不同 lane(parent 是 merge 的额外父),
- * 则在 parent 段做贝塞尔弯曲。整条边颜色取 child lane 的颜色。
+ * 同 lane 边:两段都是直线,在行边界处视觉衔接。
+ * 不同 lane 边(merge 分支汇入/汇出):child 段是从圆点到目标 lane 行底的贝塞尔曲线,
+ * parent 段是目标 lane 上的直线。整条边在 branch 点后使用目标 lane 的颜色。
  */
-function buildRowLines(
+export function buildRowLines(
   commit: Api.GitCommitInfo,
   gc: GraphCommit,
   row: number,
@@ -115,34 +127,33 @@ function buildRowLines(
   const lines: LineSegment[] = [];
   const cy = ROW_H / 2;
   const cx = laneX(gc.lane);
-  const color = branchColor(gc.lane);
 
-  // === 1. 本行作为 child:圆点向下到行底(所有 parent 共用一条直线) ===
-  // 只要至少有一个 parent 在列表内,就画一条向下直线
-  const hasParentInList = gc.parents.some(
-    (ph) => commits.findIndex((c) => c.hash === ph) !== -1,
-  );
-  if (hasParentInList) {
-    lines.push({ key: 'down', x1: cx, y1: cy, x2: cx, y2: rowHeight, color });
-  }
+  // === 1. 本行作为 child:圆点向下到行底(每个 parent 一条线) ===
+  gc.parents.forEach((ph, pi) => {
+    const parentRow = commits.findIndex((c) => c.hash === ph);
+    if (parentRow === -1) return; // 父提交不在列表中
+    const parentLane = gc.parentLanes[pi];
+    if (parentLane === gc.lane) {
+      // 同 lane:圆点正下方向下直线
+      lines.push({ key: `down-${pi}`, x1: cx, y1: cy, x2: cx, y2: rowHeight, color: branchColor(gc.lane) });
+    } else {
+      // 不同 lane(merge 分出/分支汇回):从圆点曲线到目标 lane 行底
+      const px = laneX(parentLane);
+      lines.push({ key: `down-${pi}`, x1: cx, y1: cy, x2: px, y2: rowHeight, color: branchColor(gc.lane), curve: true });
+    }
+  });
 
-  // === 2. 本行作为 parent:从上方 child 进入圆点 ===
+  // === 2. 本行作为 parent:从行顶进入圆点 ===
   for (let r = 0; r < row; r++) {
     const childGc = graphCommits.get(commits[r].hash);
     if (!childGc) continue;
     childGc.parents.forEach((ph, ppi) => {
       if (ph !== commit.hash) return;
-      // child 在 lane childLane,本 commit 在 lane gc.lane
-      const childLane = childGc.lane;
-      const childCx = laneX(childLane);
-      // 边的颜色取 child lane 的颜色(与 child 的圆点一致)
-      const edgeColor = branchColor(childLane);
-      if (childLane === gc.lane) {
-        // 同 lane:行顶到圆点,直线
-        lines.push({ key: `in-${r}-${ppi}`, x1: childCx, y1: 0, x2: cx, y2: cy, color: edgeColor });
-      } else {
-        // 不同 lane(merge 的分支汇入):贝塞尔曲线弯曲进入圆点
-        lines.push({ key: `in-${r}-${ppi}`, x1: childCx, y1: 0, x2: cx, y2: cy, color: edgeColor, curve: true });
+      // 边到达本 commit,在本 commit 的 lane 上画行顶到圆点的直线
+      const lx = cx;
+      // 去重:同一 x 位置已有一条从行顶出发的线则跳过
+      if (!lines.some((l) => Math.abs(l.x1 - lx) < 1 && l.y1 === 0)) {
+        lines.push({ key: `in-${r}-${ppi}`, x1: lx, y1: 0, x2: cx, y2: cy, color: branchColor(gc.lane) });
       }
     });
   }
@@ -155,19 +166,17 @@ function buildRowLines(
     aboveGc.parents.forEach((ph, ppi) => {
       const parentRow = commits.findIndex((c) => c.hash === ph);
       if (parentRow === -1 || parentRow <= row) return;
-      // child 在 aboveGc.lane,parent 在 parentRow
-      // 但如果 parent 的 lane 就是 aboveGc.lane(同 lane),那是步骤 1 的延伸,不在这里画
-      const childLane = aboveGc.lane;
-      // 这条线穿过本行:从行顶到行底,在 childLane
-      // 但如果本行 commit 就在 childLane(=gc.lane),步骤 1 已处理,跳过
-      if (childLane === gc.lane) return;
-      const lx = laneX(childLane);
+      // 边运行的 lane 取 parentLanes(merge 边分支后运行在目标 lane 上)
+      const edgeLane = aboveGc.parentLanes[ppi];
+      // 本行 commit 就在该 lane 上时,步骤 1/2 已处理
+      if (edgeLane === gc.lane) return;
+      const lx = laneX(edgeLane);
       // 去重
       if (!lines.some((l) => Math.abs(l.x1 - lx) < 1 && Math.abs(l.x2 - lx) < 1)) {
         lines.push({
           key: `pass-${r}-${ppi}`,
           x1: lx, y1: 0, x2: lx, y2: rowHeight,
-          color: branchColor(childLane),
+          color: branchColor(edgeLane),
         });
       }
     });
