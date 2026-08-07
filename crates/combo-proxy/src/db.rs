@@ -296,18 +296,20 @@ impl ComboDb {
     }
 
     /// 列出某个会话下的全部消息,按 created_at 升序。
+    /// 仅按 session_id 过滤:session ID 是全局唯一的 UUID,
+    /// crush 重启后 workspace ID 会变,按 workspace_id 过滤会导致历史丢失。
     pub fn list_messages(
         &self,
-        workspace_id: &str,
+        _workspace_id: &str,
         session_id: &str,
     ) -> anyhow::Result<Vec<StoredMessage>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, role, parts, created_at, updated_at
-             FROM messages WHERE workspace_id=?1 AND session_id=?2
+             FROM messages WHERE session_id=?1
              ORDER BY created_at ASC",
         )?;
-        let rows = stmt.query_map(params![workspace_id, session_id], |r| {
+        let rows = stmt.query_map(params![session_id], |r| {
             Ok(StoredMessage {
                 id: r.get(0)?,
                 role: r.get(1)?,
@@ -323,15 +325,15 @@ impl ComboDb {
         Ok(out)
     }
 
-    /// 删除某个会话下的所有消息。
+    /// 删除某个会话下的所有消息。仅按 session_id 过滤(同 list_messages 理由)。
     pub fn delete_messages_by_session(
         &self,
-        workspace_id: &str,
+        _workspace_id: &str,
         session_id: &str,
     ) -> anyhow::Result<()> {
         self.conn.lock().unwrap().execute(
-            "DELETE FROM messages WHERE workspace_id=?1 AND session_id=?2",
-            params![workspace_id, session_id],
+            "DELETE FROM messages WHERE session_id=?1",
+            params![session_id],
         )?;
         Ok(())
     }
@@ -461,5 +463,22 @@ mod tests {
 
         db.delete_messages_by_workspace("w1").unwrap();
         assert_eq!(db.list_messages("w1", "s2").unwrap().len(), 0);
+    }
+
+    #[test]
+    fn list_messages_ignores_workspace_id_mismatch() {
+        // crush 重启后 workspace ID 会变,但 session ID 不变。
+        // list_messages 按 session_id 查询,忽略 workspace_id 差异。
+        let db = ComboDb::in_memory();
+        db.upsert_message("old-ws", "s1", "m1", "user", r#"[{"type":"text"}]"#, 100, 100)
+            .unwrap();
+        // 用新 workspace_id 查询,仍应找到消息
+        let msgs = db.list_messages("new-ws", "s1").unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].id, "m1");
+
+        // 按 session_id 删除,不依赖 workspace_id
+        db.delete_messages_by_session("new-ws", "s1").unwrap();
+        assert_eq!(db.list_messages("old-ws", "s1").unwrap().len(), 0);
     }
 }
