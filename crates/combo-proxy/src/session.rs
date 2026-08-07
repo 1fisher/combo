@@ -84,8 +84,9 @@ pub async fn delete(
     State(state): State<AppState>,
     Path((id, sid)): Path<(String, String)>,
 ) -> Response {
-    // 先删除本地 sqlite 镜像(会话列表的真正数据源)
+    // 先删除本地 sqlite 镜像(会话列表的真正数据源)+ 该会话的消息
     let _ = state.meta.db().delete_conversation(&sid);
+    let _ = state.meta.db().delete_messages_by_session(&id, &sid);
 
     // 尽力转发给 rune(rune 可能已不持有该会话,忽略其返回)
     if let Some(backend) = state.registry.by_type(BackendType::Crush) {
@@ -139,6 +140,73 @@ fn now_secs() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// GET /v1/workspaces/{id}/sessions/{sid}/history — 从 sqlite 读消息历史。
+/// 不再依赖 crush 在线,消息持久化在 combo 本地。
+pub async fn history(
+    State(state): State<AppState>,
+    Path((id, sid)): Path<(String, String)>,
+) -> Response {
+    match state.meta.db().list_messages(&id, &sid) {
+        Ok(msgs) => {
+            let arr: Vec<Value> = msgs
+                .iter()
+                .map(|m| {
+                    let parts: Value =
+                        serde_json::from_str(&m.parts).unwrap_or(Value::Array(vec![]));
+                    json!({
+                        "id": m.id,
+                        "session_id": sid,
+                        "role": m.role,
+                        "parts": parts,
+                        "model": "",
+                        "provider": "",
+                        "created_at": m.created_at,
+                        "updated_at": m.updated_at,
+                    })
+                })
+                .collect();
+            json_ok(&json!(arr))
+        }
+        Err(e) => json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("读取消息历史失败: {e}"),
+        ),
+    }
+}
+
+/// POST /v1/workspaces/{id}/sessions/{sid}/messages — 写入/更新单条消息到 sqlite。
+/// 前端在收到 SSE message 事件后 fire-and-forget 调用此端点做持久化。
+pub async fn upsert_msg(
+    State(state): State<AppState>,
+    Path((id, sid)): Path<(String, String)>,
+    axum::extract::Json(msg): axum::extract::Json<Value>,
+) -> Response {
+    let mid = msg.get("id").and_then(|x| x.as_str()).unwrap_or_default().to_string();
+    if mid.is_empty() {
+        return json_err(StatusCode::BAD_REQUEST, "消息缺少 id");
+    }
+    let role = msg
+        .get("role")
+        .and_then(|x| x.as_str())
+        .unwrap_or("assistant")
+        .to_string();
+    let parts = msg.get("parts").unwrap_or(&Value::Array(vec![])).to_string();
+    let created_at = msg.get("created_at").and_then(|x| x.as_i64()).unwrap_or_else(now_secs);
+    let updated_at = msg.get("updated_at").and_then(|x| x.as_i64()).unwrap_or_else(now_secs);
+
+    match state
+        .meta
+        .db()
+        .upsert_message(&id, &sid, &mid, &role, &parts, created_at, updated_at)
+    {
+        Ok(_) => json_ok(&json!({ "ok": true })),
+        Err(e) => json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("保存消息失败: {e}"),
+        ),
+    }
 }
 
 fn json_ok(v: &Value) -> Response {

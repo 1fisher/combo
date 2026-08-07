@@ -44,6 +44,14 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
             "/v1/workspaces/:id/sessions/:sid",
             delete(session::delete),
         )
+        .route(
+            "/v1/workspaces/:id/sessions/:sid/history",
+            get(session::history),
+        )
+        .route(
+            "/v1/workspaces/:id/sessions/:sid/messages",
+            post(session::upsert_msg),
+        )
         .route("/v1/workspaces/:id/files/list", get(fs::list))
         .route(
             "/v1/workspaces/:id/files/content",

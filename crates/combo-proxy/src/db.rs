@@ -34,6 +34,16 @@ pub struct ConversationMeta {
     pub updated_at: i64,
 }
 
+/// 单条消息的持久化记录(parts 为 JSON 字符串)。
+#[derive(Clone, Debug)]
+pub struct StoredMessage {
+    pub id: String,
+    pub role: String,
+    pub parts: String,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 /// 线程安全的 sqlite 连接。所有方法都是短事务,持锁时间可忽略。
 pub struct ComboDb {
     conn: Mutex<Connection>,
@@ -72,7 +82,17 @@ impl ComboDb {
                 created_at    INTEGER NOT NULL,
                 updated_at    INTEGER NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_conv_ws ON conversations(workspace_id);",
+            CREATE INDEX IF NOT EXISTS idx_conv_ws ON conversations(workspace_id);
+            CREATE TABLE IF NOT EXISTS messages (
+                id            TEXT PRIMARY KEY,
+                workspace_id  TEXT NOT NULL,
+                session_id    TEXT NOT NULL,
+                role          TEXT NOT NULL,
+                parts         TEXT NOT NULL DEFAULT '[]',
+                created_at    INTEGER NOT NULL,
+                updated_at    INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_msg_session ON messages(workspace_id, session_id);",
         )?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -232,12 +252,96 @@ impl ComboDb {
         Ok(())
     }
 
+    /// 重命名会话标题(仅更新 sqlite 镜像,不影响 rune 端)。
+    pub fn rename_conversation(&self, id: &str, title: &str) -> anyhow::Result<()> {
+        self.conn.lock().unwrap().execute(
+            "UPDATE conversations SET title=?1, updated_at=?2 WHERE id=?3",
+            params![title, unix_secs(), id],
+        )?;
+        Ok(())
+    }
+
     /// workspace 重建后 id 变化时,把旧 id 下的会话镜像迁移到新 id。
     pub fn move_conversations(&self, from_ws: &str, to_ws: &str) -> anyhow::Result<()> {
         self.conn.lock().unwrap().execute(
             "UPDATE conversations SET workspace_id=?1 WHERE workspace_id=?2",
             params![to_ws, from_ws],
         )?;
+        Ok(())
+    }
+
+    // ---------- messages ----------
+
+    /// 写入或更新单条消息(INSERT OR REPLACE)。
+    pub fn upsert_message(
+        &self,
+        workspace_id: &str,
+        session_id: &str,
+        id: &str,
+        role: &str,
+        parts_json: &str,
+        created_at: i64,
+        updated_at: i64,
+    ) -> anyhow::Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO messages (id, workspace_id, session_id, role, parts, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+             ON CONFLICT(id) DO UPDATE SET
+                 role=excluded.role,
+                 parts=excluded.parts,
+                 updated_at=excluded.updated_at",
+            params![id, workspace_id, session_id, role, parts_json, created_at, updated_at],
+        )?;
+        Ok(())
+    }
+
+    /// 列出某个会话下的全部消息,按 created_at 升序。
+    pub fn list_messages(
+        &self,
+        workspace_id: &str,
+        session_id: &str,
+    ) -> anyhow::Result<Vec<StoredMessage>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, role, parts, created_at, updated_at
+             FROM messages WHERE workspace_id=?1 AND session_id=?2
+             ORDER BY created_at ASC",
+        )?;
+        let rows = stmt.query_map(params![workspace_id, session_id], |r| {
+            Ok(StoredMessage {
+                id: r.get(0)?,
+                role: r.get(1)?,
+                parts: r.get(2)?,
+                created_at: r.get(3)?,
+                updated_at: r.get(4)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// 删除某个会话下的所有消息。
+    pub fn delete_messages_by_session(
+        &self,
+        workspace_id: &str,
+        session_id: &str,
+    ) -> anyhow::Result<()> {
+        self.conn.lock().unwrap().execute(
+            "DELETE FROM messages WHERE workspace_id=?1 AND session_id=?2",
+            params![workspace_id, session_id],
+        )?;
+        Ok(())
+    }
+
+    /// 删除某个 workspace 下的所有消息(删除项目时级联清理)。
+    pub fn delete_messages_by_workspace(&self, workspace_id: &str) -> anyhow::Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM messages WHERE workspace_id=?1", params![workspace_id])?;
         Ok(())
     }
 }
@@ -318,5 +422,35 @@ mod tests {
         db.delete_conversation("c1").unwrap();
         assert_eq!(db.list_conversations("w1").unwrap().len(), 1);
         assert_eq!(db.list_conversations("w2").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn message_upsert_list_delete() {
+        let db = ComboDb::in_memory();
+        db.upsert_message("w1", "s1", "m1", "user", r#"[{"type":"text"}]"#, 100, 100)
+            .unwrap();
+        db.upsert_message("w1", "s1", "m2", "assistant", r#"[{"type":"text"}]"#, 200, 200)
+            .unwrap();
+        db.upsert_message("w1", "s2", "m3", "user", r#"[]"#, 300, 300)
+            .unwrap();
+
+        let msgs = db.list_messages("w1", "s1").unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].id, "m1");
+        assert_eq!(msgs[1].id, "m2");
+
+        // upsert 同 id → 更新
+        db.upsert_message("w1", "s1", "m1", "user", r#"[{"type":"text","updated":true}]"#, 100, 150)
+            .unwrap();
+        let msgs = db.list_messages("w1", "s1").unwrap();
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].updated_at, 150);
+
+        db.delete_messages_by_session("w1", "s1").unwrap();
+        assert_eq!(db.list_messages("w1", "s1").unwrap().len(), 0);
+        assert_eq!(db.list_messages("w1", "s2").unwrap().len(), 1);
+
+        db.delete_messages_by_workspace("w1").unwrap();
+        assert_eq!(db.list_messages("w1", "s2").unwrap().len(), 0);
     }
 }

@@ -39,6 +39,7 @@ import { useAgentStore } from '../../stores/agentStore';
 import { useConnectionStore } from '../../stores/connectionStore';
 import { ensureCrush } from '../../lib/api';
 import { isTauri } from '../../lib/connection';
+import { confirmDialog } from '../../lib/confirm';
 import { ConversationList } from './ConversationList';
 import { SkillsPanel } from './SkillsPanel';
 
@@ -174,7 +175,9 @@ function WorkspaceGroup({
                 title="删除会话"
                 onClick={(e) => {
                   e.stopPropagation();
-                  if (window.confirm('确定删除此会话?')) void remove(s.id);
+                  void confirmDialog('确定删除此会话?').then((ok) => {
+                    if (ok) void remove(s.id);
+                  });
                 }}
               >
                 <Trash2 className="size-3.5" />

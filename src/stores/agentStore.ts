@@ -2,6 +2,11 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Api } from '../lib/api/types';
 
+/** crush 返回秒级时间戳,前端用毫秒;统一归一化为毫秒。 */
+function toMs(ts: number): number {
+  return ts > 1e12 ? ts : ts * 1000;
+}
+
 export interface MessageVM {
   id: string;
   role: 'user' | 'assistant' | 'tool' | 'system';
@@ -87,13 +92,15 @@ export const useAgentStore = create<AgentState>()(
       const idx = rt.messages.findIndex((x) => x.id === m.id);
       // 收到 finish part 的消息视为该条流式结束,
       // 不再依赖 run_complete 事件(可能延迟或丢失)
-      const hasFinish = m.parts.some((p) => p.type === 'finish');
+      // rune 返回的消息可能缺少 parts 字段(生成类型为 parts?: unknown[]),需兜底
+      const parts = m.parts ?? [];
+      const hasFinish = parts.some((p) => p.type === 'finish');
       const vm: MessageVM = {
         id: m.id,
         role: m.role,
-        parts: m.parts,
-        createdAt: m.created_at,
-        updatedAt: m.updated_at,
+        parts,
+        createdAt: toMs(m.created_at),
+        updatedAt: toMs(m.updated_at),
         streaming: hasFinish ? false : true,
       };
       // 新消息抵达时,更早的消息都已结束流式(同一时刻只有一条在流)
@@ -129,9 +136,9 @@ export const useAgentStore = create<AgentState>()(
       const messages: MessageVM[] = msgs.map((m) => ({
         id: m.id,
         role: m.role,
-        parts: m.parts,
-        createdAt: m.created_at,
-        updatedAt: m.updated_at,
+        parts: m.parts ?? [],
+        createdAt: toMs(m.created_at),
+        updatedAt: toMs(m.updated_at),
         streaming: false,
       }));
       return {

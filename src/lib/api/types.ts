@@ -1929,7 +1929,8 @@ export namespace Api {
     id: string;
     role: MessageRole;
     session_id: string;
-    parts: ContentPart[];
+    /** rune 返回的消息可能缺少 parts 字段(见生成类型 parts?: unknown[]) */
+    parts?: ContentPart[];
     model: string;
     provider: string;
     created_at: number;

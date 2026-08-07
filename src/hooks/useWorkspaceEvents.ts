@@ -2,6 +2,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { applyEvent } from '../lib/events/dispatch';
 import { WorkspaceEventSource } from '../lib/events/sse';
+import { persistMessage } from '../lib/api';
+import type { Api } from '../lib/api/types';
 import { useAgentStore } from '../stores/agentStore';
 
 export function useWorkspaceEvents(workspaceId: string | null) {
@@ -33,6 +35,14 @@ export function useWorkspaceEvents(workspaceId: string | null) {
           return;
         }
         applyEvent(st, env);
+        // 收到 message 事件时 fire-and-forget 持久化到后端 sqlite
+        if (env.type === 'message') {
+          const inner = env.payload as { type: string; payload: Api.Message };
+          const msg = inner?.payload;
+          if (msg?.id && !msg.id.startsWith('local-')) {
+            void persistMessage(workspaceId, msg).catch(() => {});
+          }
+        }
       },
       {
         onGone: () => setActiveWorkspace(null),

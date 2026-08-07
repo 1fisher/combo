@@ -3,6 +3,7 @@ import { Button } from '../ui/button';
 import { useSessions } from '../../hooks/useSessions';
 import { useActiveWorkspaceId } from '../../hooks/useActiveWorkspaceId';
 import { useAgentStore } from '../../stores/agentStore';
+import { confirmDialog } from '../../lib/confirm';
 import { cn } from '../../lib/utils';
 
 function formatTime(secs: number | undefined): string {
@@ -69,7 +70,9 @@ export function ConversationList() {
             title="删除会话"
             onClick={(e) => {
               e.stopPropagation();
-              if (window.confirm('确定删除此会话?')) void remove(s.id);
+              void confirmDialog('确定删除此会话?').then((ok) => {
+                if (ok) void remove(s.id);
+              });
             }}
           >
             <Trash2 className="size-3.5" />

@@ -60,6 +60,17 @@ export function getSessionHistory(
   return apiRequest(`/v1/workspaces/${workspaceId}/sessions/${sessionId}/history`);
 }
 
+/** 将单条消息持久化到 combo 后端 sqlite(fire-and-forget)。 */
+export function persistMessage(
+  workspaceId: string,
+  message: Api.Message
+): Promise<void> {
+  return apiRequest(
+    `/v1/workspaces/${workspaceId}/sessions/${message.session_id}/messages`,
+    { method: 'POST', body: message }
+  );
+}
+
 export function setCurrentSession(workspaceId: string, sessionId: string): Promise<void> {
   return apiRequest(`/v1/workspaces/${workspaceId}/current-session`, {
     method: 'POST',

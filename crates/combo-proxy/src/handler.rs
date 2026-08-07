@@ -16,11 +16,12 @@ fn extract_workspace_id(path: &str) -> Option<&str> {
     }
 }
 
-/// 判断路径是否为会话只读端点(history/messages 等)。
+/// 判断路径是否为会话只读端点(messages 等)。
+/// history 已由 session::history 显式路由接管,不经过此 fallback。
 /// crush 离线时对这些端点返回空数组,避免前端报错。
 fn is_session_read_path(path: &str) -> bool {
     let p = path.split('?').next().unwrap_or(path);
-    p.contains("/sessions/") && (p.ends_with("/history") || p.ends_with("/messages"))
+    p.contains("/sessions/") && p.ends_with("/messages")
 }
 
 /// 反向代理 handler:按 workspace 的后端类型路由。

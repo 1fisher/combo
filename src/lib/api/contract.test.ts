@@ -36,7 +36,7 @@ describe('rune api contract', () => {
       action: 'allow',
     };
     expect(ws.id).toBe('w1');
-    expect(msg.parts[0]).toEqual({ type: 'text', data: { text: 'hi' } });
+    expect(msg.parts?.[0]).toEqual({ type: 'text', data: { text: 'hi' } });
     expect(qa.responses[0].yes).toBe(true);
     expect(pg.action).toBe('allow');
   });

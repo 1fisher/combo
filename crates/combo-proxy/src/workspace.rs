@@ -223,6 +223,7 @@ pub async fn delete(State(state): State<AppState>, Path(id): Path<String>) -> Re
                 .await;
         }
         let _ = state.meta.db().delete_conversations_by_workspace(alias_id);
+        let _ = state.meta.db().delete_messages_by_workspace(alias_id);
         state.meta.remove(alias_id);
     }
     json_ok(&json!({ "ok": true }))

@@ -82,7 +82,7 @@ function parseToolCall(tc: Api.ToolCall): FileToolCall | null {
 export function extractFileToolCalls(messages: MessageVM[]): FileToolCall[] {
   const calls: FileToolCall[] = [];
   for (const msg of messages) {
-    for (const part of msg.parts) {
+    for (const part of msg.parts ?? []) {
       if (part.type !== 'tool_call') continue;
       const parsed = parseToolCall(part.data as Api.ToolCall);
       if (parsed) calls.push(parsed);

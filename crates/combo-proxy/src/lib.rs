@@ -19,7 +19,7 @@ pub use backend::codex::CodexBackend;
 pub use backend::crush::CrushBackend;
 pub use backend::opencode::OpenCodeBackend;
 pub use backend::{Backend, BackendType};
-pub use db::{ComboDb, ConversationMeta, default_db_path};
+pub use db::{ComboDb, ConversationMeta, StoredMessage, default_db_path};
 pub use manager::opencode::OpenCodeManager;
 pub use meta::{MetaStore, WorkspaceMeta};
 pub use registry::BackendRegistry;
