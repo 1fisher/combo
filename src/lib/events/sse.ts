@@ -1,5 +1,5 @@
 import { getClientId } from '../clientId';
-import { getProxyBaseUrl } from '../connection';
+import { ensureProxyBaseUrl } from '../connection';
 import type { EventEnvelope } from './payloadTypes';
 
 export type OnPayload = (env: EventEnvelope) => void;
@@ -55,7 +55,8 @@ export class WorkspaceEventSource {
   private async consume(): Promise<void> {
     const controller = new AbortController();
     this.controller = controller;
-    const base = getProxyBaseUrl();
+    // 等待代理地址就绪(未解析时异步解析),避免相对 URL 连到页面源
+    const base = await ensureProxyBaseUrl();
     const url = `${base}/v1/workspaces/${this.workspaceId}/events?client_id=${encodeURIComponent(getClientId())}`;
     const res = await fetch(url, {
       headers: { Accept: 'text/event-stream' },

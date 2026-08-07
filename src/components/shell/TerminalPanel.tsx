@@ -3,7 +3,7 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal as TerminalIcon, X } from 'lucide-react';
-import { getProxyBaseUrl } from '../../lib/connection';
+import { ensureProxyBaseUrl } from '../../lib/connection';
 import { useWorkspaces } from '../../hooks/useWorkspaces';
 import '@xterm/xterm/css/xterm.css';
 
@@ -48,50 +48,25 @@ export function TerminalPanel({
     fit.fit();
     termRef.current = term;
 
-    // 构建 WebSocket URL:有 workspace 用项目目录,否则用默认终端(主目录)
-    const httpBase = getProxyBaseUrl();
-    const wsBase = httpBase.replace(/^http/, 'ws');
-    const wsUrl = workspaceId
-      ? `${wsBase}/v1/workspaces/${workspaceId}/terminal`
-      : `${wsBase}/v1/terminal`;
-
+    // 构建 WebSocket URL:有 workspace 用项目目录,否则用默认终端(主目录)。
+    // 代理地址可能尚未由 connectLoop 解析完成:等待就绪后再建连(见下方)。
     term.writeln(`\x1b[36m连接终端: ${wsName}\x1b[0m`);
 
-    const socket = new WebSocket(wsUrl);
-    socket.binaryType = 'arraybuffer';
-    wsRef.current = socket;
-
-    socket.onopen = () => {
-      // 发送初始尺寸
-      sendResize(socket, term.cols, term.rows);
-    };
-
-    socket.onmessage = (ev) => {
-      if (ev.data instanceof ArrayBuffer) {
-        term.write(new Uint8Array(ev.data));
-      } else if (typeof ev.data === 'string') {
-        term.write(ev.data);
-      }
-    };
-
-    socket.onerror = () => {
-      term.writeln('\r\n\x1b[31m连接错误\x1b[0m');
-    };
-
-    socket.onclose = () => {
-      term.writeln('\r\n\x1b[33m终端已断开\x1b[0m');
-    };
+    let socket: WebSocket | null = null;
+    let cancelled = false;
 
     // 用户输入 → WS
     const dataDisposable = term.onData((data) => {
-      if (socket.readyState === WebSocket.OPEN) {
+      if (socket && socket.readyState === WebSocket.OPEN) {
         socket.send(new TextEncoder().encode(data));
       }
     });
 
     // 尺寸变化 → WS
     const resizeDisposable = term.onResize(({ cols, rows }) => {
-      sendResize(socket, cols, rows);
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        sendResize(socket, cols, rows);
+      }
     });
 
     // 窗口 resize 时重新 fit
@@ -106,15 +81,50 @@ export function TerminalPanel({
     });
     resizeObserver.observe(containerRef.current);
 
+    // 代理地址可能尚未由 connectLoop 解析完成:等待就绪后再建连
+    void ensureProxyBaseUrl().then((httpBase) => {
+      if (cancelled) return;
+      const wsBase = httpBase.replace(/^http/, 'ws');
+      const wsUrl = workspaceId
+        ? `${wsBase}/v1/workspaces/${workspaceId}/terminal`
+        : `${wsBase}/v1/terminal`;
+
+      socket = new WebSocket(wsUrl);
+      socket.binaryType = 'arraybuffer';
+      wsRef.current = socket;
+
+      socket.onopen = () => {
+        // 发送初始尺寸
+        sendResize(socket!, term.cols, term.rows);
+      };
+
+      socket.onmessage = (ev) => {
+        if (ev.data instanceof ArrayBuffer) {
+          term.write(new Uint8Array(ev.data));
+        } else if (typeof ev.data === 'string') {
+          term.write(ev.data);
+        }
+      };
+
+      socket.onerror = () => {
+        term.writeln('\r\n\x1b[31m连接错误\x1b[0m');
+      };
+
+      socket.onclose = () => {
+        term.writeln('\r\n\x1b[33m终端已断开\x1b[0m');
+      };
+    });
+
     // 聚焦终端
     term.focus();
 
     return () => {
+      cancelled = true;
       dataDisposable.dispose();
       resizeDisposable.dispose();
       window.removeEventListener('resize', onWindowResize);
       resizeObserver.disconnect();
-      socket.close();
+      socket?.close();
       term.dispose();
       termRef.current = null;
       wsRef.current = null;

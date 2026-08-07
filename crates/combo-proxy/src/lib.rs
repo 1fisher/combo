@@ -3,6 +3,7 @@ pub mod control;
 pub mod db;
 pub mod fs;
 pub mod handler;
+pub mod host;
 pub mod manager;
 pub mod meta;
 pub mod rune;
@@ -27,6 +28,7 @@ pub use router::build_router;
 pub use rune::RuneManager;
 pub use upstream::Upstream;
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// 所有 axum handler 共享的应用状态。
@@ -37,6 +39,8 @@ pub struct AppState {
     /// crush 进程守护器(仅当 combo 托管 crush 生命周期时存在)。
     /// 后台监控和 HTTP control 端点通过它重启 crush。
     pub crush_supervisor: Option<Arc<RuneManager>>,
+    /// 服务器目录浏览的根限制(`/v1/host/*`);None 表示允许浏览整个文件系统。
+    pub browse_root: Option<PathBuf>,
 }
 
 /// Parses a `--upstream` argument into an [`Upstream`].

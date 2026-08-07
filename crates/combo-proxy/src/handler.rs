@@ -104,6 +104,7 @@ mod tests {
                 Upstream::Tcp("127.0.0.1:1".parse().unwrap()),
             )))),
             crush_supervisor: None,
+            browse_root: None,
         };
         let req = Request::builder()
             .uri("/v1/health")

@@ -3,12 +3,68 @@ import { ensureCrush } from './api';
 
 let proxyBaseUrl = '';
 
+/** 运行时代理地址覆盖(localStorage),用于前后端分离部署时指向远端 proxy。 */
+const PROXY_OVERRIDE_KEY = 'combo.proxyUrl';
+
 export function getProxyBaseUrl(): string {
   return proxyBaseUrl;
 }
 
 export function setProxyBaseUrl(url: string): void {
   proxyBaseUrl = url.replace(/\/$/, '');
+}
+
+let resolvingBase: Promise<string> | null = null;
+
+/**
+ * 确保代理地址已解析:已设置则直接返回;否则异步解析并设置。
+ * 供挂载期就需要 base 的组件(终端 WebSocket、SSE)使用,
+ * 避免拿到空字符串导致相对 URL 连到页面源(localhost:5173)。
+ */
+export function ensureProxyBaseUrl(): Promise<string> {
+  const current = getProxyBaseUrl();
+  if (current) return Promise.resolve(current);
+  if (!resolvingBase) {
+    resolvingBase = resolveProxyBaseUrl()
+      .then((url) => {
+        setProxyBaseUrl(url);
+        return url;
+      })
+      .finally(() => {
+        resolvingBase = null;
+      });
+  }
+  return resolvingBase;
+}
+
+export function getProxyUrlOverride(): string | null {
+  try {
+    return localStorage.getItem(PROXY_OVERRIDE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** 保存代理地址覆盖并立即生效。 */
+export function setProxyUrlOverride(url: string): void {
+  const clean = url.trim().replace(/\/$/, '');
+  if (!clean) return;
+  try {
+    localStorage.setItem(PROXY_OVERRIDE_KEY, clean);
+  } catch {
+    /* 忽略存储不可用 */
+  }
+  setProxyBaseUrl(clean);
+}
+
+/** 清除覆盖,回到环境变量/本地默认值。 */
+export function clearProxyUrlOverride(): void {
+  try {
+    localStorage.removeItem(PROXY_OVERRIDE_KEY);
+  } catch {
+    /* 忽略存储不可用 */
+  }
+  setProxyBaseUrl('');
 }
 
 export function isTauri(): boolean {
@@ -25,6 +81,9 @@ export async function checkHealth(baseUrl: string): Promise<boolean> {
 }
 
 export async function resolveProxyBaseUrl(): Promise<string> {
+  // 运行时覆盖优先:前后端分离部署时用户可手动指向远端 proxy
+  const override = getProxyUrlOverride();
+  if (override) return override;
   const fromEnv = import.meta.env.VITE_PROXY_URL as string | undefined;
   if (fromEnv) return fromEnv.replace(/\/$/, '');
   if (isTauri()) {
@@ -78,14 +137,25 @@ export async function resolveProxyBaseUrl(): Promise<string> {
 
 export async function connectLoop(opts: { intervalMs?: number } = {}): Promise<void> {
   const intervalMs = opts.intervalMs ?? 2000;
-  if (!getProxyBaseUrl()) {
-    setProxyBaseUrl(await resolveProxyBaseUrl());
-  }
   let base = getProxyBaseUrl();
+  if (!base) {
+    base = await resolveProxyBaseUrl();
+    setProxyBaseUrl(base);
+  }
   let staleCount = 0;
   let ensureInFlight = false;
   // eslint-disable-next-line no-constant-condition
   while (true) {
+    // 运行时覆盖/清除代理地址后立即切换
+    const current = getProxyBaseUrl();
+    if (current && current !== base) {
+      base = current;
+      staleCount = 0;
+    } else if (!current) {
+      base = await resolveProxyBaseUrl();
+      setProxyBaseUrl(base);
+      staleCount = 0;
+    }
     const ok = await checkHealth(base);
     useConnectionStore.getState().setStatus(ok ? 'connected' : 'disconnected');
     if (!ok) {

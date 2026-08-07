@@ -179,6 +179,28 @@ export function ensureCrush(): Promise<{ healthy: boolean }> {
   return apiRequest('/v1/control/ensure-crush', { method: 'POST' });
 }
 
+// 服务器目录浏览:combo-proxy 本地端点,供浏览器/移动端在远端打开服务器上的项目目录
+export interface HostDirEntry {
+  name: string;
+  path: string;
+}
+
+export interface HostDirListing {
+  path: string;
+  parent: string | null;
+  entries: HostDirEntry[];
+}
+
+/** 返回服务器上可浏览的默认起点(家目录或受限浏览根)。 */
+export function getHostHome(): Promise<{ path: string }> {
+  return apiRequest('/v1/host/home');
+}
+
+/** 列出服务器上某目录的直接子目录(仅目录)。 */
+export function listHostDirs(path?: string): Promise<HostDirListing> {
+  return apiRequest('/v1/host/dirs', { query: path ? { path } : {} });
+}
+
 // 配置:rune 透传
 export function getWorkspaceConfig(workspaceId: string): Promise<Api.WorkspaceConfig> {
   return apiRequest(`/v1/workspaces/${workspaceId}/config`);

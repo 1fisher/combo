@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
 import { isTauri } from '../../lib/connection';
 import { open } from '@tauri-apps/plugin-dialog';
-import { changeWorkspacePath } from '../../lib/api';
+import { changeWorkspacePath, createWorkspace } from '../../lib/api';
 
 const workspaces: { id: string; path: string; name?: string }[] = [];
 
@@ -29,11 +29,17 @@ vi.mock('../../lib/api', () => ({
   listSkills: vi.fn(async () => []),
   getWorkspaceConfig: vi.fn(async () => ({ options: {} })),
   setConfigKey: vi.fn(async () => undefined),
+  listHostDirs: vi.fn(async (path?: string) => ({
+    path: path ?? '/proj',
+    parent: path ? '/proj' : null,
+    entries: [{ name: 'c', path: '/proj/c' }],
+  })),
 }));
 
-vi.mock('../../lib/connection', () => ({
-  isTauri: vi.fn(),
-}));
+vi.mock('../../lib/connection', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../lib/connection')>();
+  return { ...actual, isTauri: vi.fn() };
+});
 
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: vi.fn(),
@@ -92,14 +98,15 @@ describe('WorkspaceSidebar', () => {
     expect(open).toHaveBeenCalledWith({ directory: true, multiple: false });
   });
 
-  it('adds a project via inline path input in browser mode', async () => {
+  it('adds a project via the server directory picker in browser mode', async () => {
     vi.mocked(isTauri).mockReturnValue(false);
     wrap();
     await userEvent.click(await screen.findByRole('button', { name: '添加项目' }));
-    const input = screen.getByPlaceholderText('/path/to/project');
-    await userEvent.type(input, '/proj/c');
-    await userEvent.click(screen.getByRole('button', { name: '添加' }));
-    expect(await screen.findByText('c')).toBeTruthy();
+    // 目录选择器默认进入服务器浏览起点,点选子目录后确认
+    await userEvent.click(await screen.findByText('c'));
+    await userEvent.click(screen.getByRole('button', { name: '选择此目录' }));
+    expect(createWorkspace).toHaveBeenCalledWith('/proj/c', 'crush');
+    expect((await screen.findAllByText('c')).length).toBeGreaterThan(0);
     expect(open).not.toHaveBeenCalled();
   });
 

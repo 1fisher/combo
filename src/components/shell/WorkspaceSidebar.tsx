@@ -11,6 +11,7 @@ import {
   ListFilter,
   Maximize2,
   MessageCirclePlus,
+  MoreHorizontal,
   Pencil,
   Plus,
   RefreshCw,
@@ -19,7 +20,6 @@ import {
   Smartphone,
   Trash2,
   WandSparkles,
-  X,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import {
@@ -42,6 +42,8 @@ import { confirmDialog } from '../../lib/confirm';
 import { ConversationList } from './ConversationList';
 import { SessionRow } from './SessionRow';
 import { SkillsPanel } from './SkillsPanel';
+import { DirectoryPicker } from './DirectoryPicker';
+import { SettingsDialog } from './SettingsDialog';
 
 function basename(p: string): string {
   const clean = p.replace(/[\\/]+$/, '');
@@ -131,9 +133,13 @@ function Section({
 function WorkspaceGroup({
   ws,
   onContextMenu,
+  onContextMenuAt,
+  onNavigate,
 }: {
   ws: { id: string; name?: string; path: string };
   onContextMenu: (e: React.MouseEvent, ws: { id: string; name?: string; path: string }) => void;
+  onContextMenuAt: (x: number, y: number, ws: { id: string; name?: string; path: string }) => void;
+  onNavigate?: () => void;
 }) {
   const [open, setOpen] = useState(true);
   const { sessions, activate, remove, rename } = useSessions(ws.id);
@@ -153,6 +159,23 @@ function WorkspaceGroup({
           <Folder className="size-3.5 shrink-0 text-foreground-subtlest" />
           <span className="min-w-0 truncate">{projectName(ws)}</span>
         </button>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            onContextMenuAt(
+              Math.min(r.right - 140, window.innerWidth - 150),
+              r.bottom + 4,
+              ws
+            );
+          }}
+          aria-label="更多操作"
+          title="更多操作"
+          className="shrink-0 rounded-md p-1 text-foreground-subtle md:hidden hover:bg-surface-hover hover:text-foreground"
+        >
+          <MoreHorizontal className="size-3.5" />
+        </button>
       </div>
       {open && (
         <div className="pb-1">
@@ -167,6 +190,7 @@ function WorkspaceGroup({
               onActivate={() => {
                 setActive(ws.id);
                 void activate(s.id);
+                onNavigate?.();
               }}
               onRename={(title) => rename({ id: s.id, title })}
               onDelete={() =>
@@ -185,7 +209,7 @@ function WorkspaceGroup({
   );
 }
 
-export function WorkspaceSidebar() {
+export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
   const { workspaces, isLoading, create, rename, changePath, remove } = useWorkspaces();
   const active = useActiveWorkspaceId();
   const setActive = useAgentStore((s) => s.setActiveWorkspace);
@@ -200,13 +224,15 @@ export function WorkspaceSidebar() {
   const [projOpen, setProjOpen] = useState(true);
   const [taskOpen, setTaskOpen] = useState(true);
 
-  const [adding, setAdding] = useState(false);
-  const [pathDraft, setPathDraft] = useState('');
   const [backend, setBackend] = useState<'crush' | 'opencode' | 'claude_code' | 'codex'>('crush');
+  // 服务器目录选择器(浏览器/移动端):add=添加项目,change=更换目录
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerMode, setPickerMode] = useState<'add' | 'change'>('add');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('');
   const [sidebarError, setSidebarError] = useState<string | null>(null);
   const [skillsOpen, setSkillsOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   // 右键上下文菜单位置 + 目标 workspace
   const [ctxMenu, setCtxMenu] = useState<{
     x: number;
@@ -258,22 +284,9 @@ export function WorkspaceSidebar() {
       }
       return;
     }
-    // 浏览器模式:内联输入路径
-    setAdding(true);
-  }
-
-  async function commitAdd() {
-    const p = pathDraft.trim();
-    if (!p) return;
-    setSidebarError(null);
-    try {
-      const w = await create({ path: p, backend });
-      setActive(w.id);
-      setAdding(false);
-      setPathDraft('');
-    } catch (e) {
-      setSidebarError(e instanceof Error ? e.message : String(e));
-    }
+    // 浏览器/移动端:打开服务器目录选择器(内含手动输入兑底)
+    setPickerMode('add');
+    setPickerOpen(true);
   }
 
   async function onNewTask() {
@@ -286,6 +299,7 @@ export function WorkspaceSidebar() {
     try {
       const s = await createSessionIn(base);
       void activateSession(s.id);
+      onNavigate?.();
     } catch (e) {
       setSidebarError(e instanceof Error ? e.message : String(e));
     }
@@ -314,7 +328,15 @@ export function WorkspaceSidebar() {
   ) {
     e.preventDefault();
     e.stopPropagation();
-    setCtxMenu({ x: e.clientX, y: e.clientY, ws });
+    openContextMenuAt(e.clientX, e.clientY, ws);
+  }
+
+  function openContextMenuAt(
+    x: number,
+    y: number,
+    ws: { id: string; name?: string; path: string }
+  ) {
+    setCtxMenu({ x, y, ws });
   }
 
   async function confirmDelete() {
@@ -528,7 +550,10 @@ export function WorkspaceSidebar() {
                       'group flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-hover',
                       active === w.id && 'bg-surface-hover'
                     )}
-                    onClick={() => setActive(w.id)}
+                    onClick={() => {
+                      setActive(w.id);
+                      onNavigate?.();
+                    }}
                     onContextMenu={(e) => openContextMenu(e, w)}
                   >
                     <Folder
@@ -564,9 +589,26 @@ export function WorkspaceSidebar() {
                             startRename(w);
                           }}
                           title="重命名项目"
-                          className="shrink-0 rounded-md p-1 text-foreground-subtle opacity-0 transition-opacity hover:bg-surface-hover hover:text-foreground group-hover:opacity-100"
+                          className="shrink-0 rounded-md p-1 text-foreground-subtle opacity-100 transition-opacity hover:bg-surface-hover hover:text-foreground md:opacity-0 md:group-hover:opacity-100"
                         >
                           <Pencil className="size-3" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                            openContextMenuAt(
+                              Math.min(r.right - 140, window.innerWidth - 150),
+                              r.bottom + 4,
+                              w
+                            );
+                          }}
+                          aria-label="更多操作"
+                          title="更多操作"
+                          className="shrink-0 rounded-md p-1 text-foreground-subtle md:hidden hover:bg-surface-hover hover:text-foreground"
+                        >
+                          <MoreHorizontal className="size-3.5" />
                         </button>
                       </>
                     )}
@@ -575,49 +617,6 @@ export function WorkspaceSidebar() {
                 {!isLoading && workspaces?.length === 0 && (
                   <div className="px-2.5 py-1.5 text-[13px] leading-relaxed text-foreground-subtle">
                     还没有项目,点击右上角「+」添加。
-                  </div>
-                )}
-                {adding && (
-                  <div className="flex flex-col gap-1.5 px-2.5 py-1.5">
-                    <input
-                      autoFocus
-                      value={pathDraft}
-                      onChange={(e) => setPathDraft(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') void commitAdd();
-                        if (e.key === 'Escape') setAdding(false);
-                      }}
-                      placeholder="/path/to/project"
-                      className="w-full rounded-lg border border-input-border bg-background px-2.5 py-1.5 text-[13px] outline-none placeholder:text-foreground-subtlest focus-visible:border-input-border-focused"
-                    />
-                    <div className="flex items-center gap-1.5">
-                      <select
-                        value={backend}
-                        onChange={(e) =>
-                          setBackend(
-                            e.target.value as 'crush' | 'opencode' | 'claude_code' | 'codex'
-                          )
-                        }
-                        className="h-7 min-w-0 flex-1 rounded-lg border border-input-border bg-background px-1.5 text-[13px] outline-none"
-                      >
-                        <option value="crush">Crush</option>
-                        <option value="opencode">OpenCode</option>
-                        <option value="claude_code">Claude Code</option>
-                        <option value="codex">Codex</option>
-                      </select>
-                      <Button size="sm" className="h-7 px-2 text-[13px]" onClick={() => void commitAdd()}>
-                        添加
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-7 px-2 text-[13px]"
-                        onClick={() => setAdding(false)}
-                        aria-label="取消添加项目"
-                      >
-                        <X className="size-3.5" />
-                      </Button>
-                    </div>
                   </div>
                 )}
               </Section>
@@ -630,11 +629,19 @@ export function WorkspaceSidebar() {
                 }}
                 addLabel="新建任务"
               >
-                <ConversationList />
+                <ConversationList onNavigate={onNavigate} />
               </Section>
             </>
           ) : (
-            workspaces?.map((w) => <WorkspaceGroup key={w.id} ws={w} onContextMenu={openContextMenu} />)
+            workspaces?.map((w) => (
+              <WorkspaceGroup
+                key={w.id}
+                ws={w}
+                onContextMenu={openContextMenu}
+                onContextMenuAt={openContextMenuAt}
+                onNavigate={onNavigate}
+              />
+            ))
           )}
           {!isLoading && tab === 'grouped' && workspaces?.length === 0 && (
             <div className="px-3 py-2 text-[13px] leading-relaxed text-foreground-subtle">
@@ -715,12 +722,14 @@ export function WorkspaceSidebar() {
             className="shrink-0 text-foreground-subtle hover:bg-surface-hover hover:text-foreground"
             aria-label="设置"
             title="设置"
+            onClick={() => setSettingsOpen(true)}
           >
             <Settings className="size-4" />
           </Button>
         </div>
       </div>
       <SkillsPanel open={skillsOpen} onOpenChange={setSkillsOpen} />
+      <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
       {/* 右键上下文菜单 */}
       {ctxMenu && (
         <div
@@ -837,7 +846,7 @@ export function WorkspaceSidebar() {
                 placeholder="/path/to/new/project"
                 className="h-9 min-w-0 flex-1 rounded-lg border border-input-border bg-background px-2.5 text-[13px] outline-none focus-visible:border-input-border-focused"
               />
-              {isTauri() && (
+              {isTauri() ? (
                 <Button
                   variant="outline"
                   size="sm"
@@ -848,6 +857,18 @@ export function WorkspaceSidebar() {
                   }}
                 >
                   选择…
+                </Button>
+              ) : (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-9 shrink-0 px-2.5 text-[13px]"
+                  onClick={() => {
+                    setPickerMode('change');
+                    setPickerOpen(true);
+                  }}
+                >
+                  浏览…
                 </Button>
               )}
             </div>
@@ -872,6 +893,36 @@ export function WorkspaceSidebar() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {/* 服务器目录选择器(浏览器/移动端) */}
+      <DirectoryPicker
+        open={pickerOpen}
+        title={pickerMode === 'add' ? '添加项目' : '更换目录'}
+        confirmLabel={pickerMode === 'add' ? '选择此目录' : '选择'}
+        description={
+          pickerMode === 'add'
+            ? '在服务器上选择项目目录(服务器上的绝对路径)。'
+            : '在服务器上选择新的绑定目录。'
+        }
+        backend={pickerMode === 'add' ? backend : undefined}
+        onBackendChange={(b) =>
+          setBackend(b as 'crush' | 'opencode' | 'claude_code' | 'codex')
+        }
+        onOpenChange={setPickerOpen}
+        onSelect={(path) => {
+          setPickerOpen(false);
+          if (pickerMode === 'add') {
+            setSidebarError(null);
+            void create({ path, backend })
+              .then((w) => {
+                setActive(w.id);
+                onNavigate?.();
+              })
+              .catch((e) => setSidebarError(e instanceof Error ? e.message : String(e)));
+          } else {
+            setPathDraft2(path);
+          }
+        }}
+      />
     </aside>
   );
 }

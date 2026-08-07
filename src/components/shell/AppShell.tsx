@@ -1,7 +1,8 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type PointerEvent } from 'react';
-import { ArrowLeft, ArrowRight, CircleHelp, PanelLeftClose, PanelRight, SquareTerminal } from 'lucide-react';
+import { ArrowLeft, ArrowRight, CircleHelp, PanelLeftClose, PanelRight, SquareTerminal, X } from 'lucide-react';
 import { connectLoop } from '../../lib/connection';
+import { useIsMobile } from '../../hooks/useIsMobile';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
 import { AgentPanel } from '../agent/AgentPanel';
 import { TerminalPanel } from './TerminalPanel';
@@ -39,9 +40,18 @@ function AppShellInner() {
   }, [workspaceId, resetOpenFiles]);
 
   const [width, setWidth] = useState(SIDEBAR_DEFAULT);
-  const [collapsed, setCollapsed] = useState(false);
+  // 移动端默认收起侧边栏(抽屉);桌面保持展开
+  const [collapsed, setCollapsed] = useState(
+    () => typeof window === 'undefined' || window.innerWidth < 768
+  );
   const [view, setView] = useState<'agent' | 'terminal' | 'editor'>('agent');
   const dragRef = useRef<{ startX: number; startW: number } | null>(null);
+  const isMobile = useIsMobile();
+
+  // 进入移动端时自动收起,避免抽屉默认盖住内容
+  useEffect(() => {
+    if (isMobile) setCollapsed(true);
+  }, [isMobile]);
 
   function onHandleDown(e: PointerEvent<HTMLDivElement>) {
     dragRef.current = { startX: e.clientX, startW: width };
@@ -63,17 +73,58 @@ function AppShellInner() {
   return (
     <div className="relative flex h-dvh flex-col overflow-hidden bg-background-alt text-foreground">
       <div className="relative flex min-h-0 flex-1">
-        {/* 侧边栏 */}
-        <div
-          data-panel="sidebar"
-          className={cn(
-            'flex-none overflow-hidden transition-[width,opacity] duration-200 ease-out',
-            collapsed && 'w-0 opacity-0'
-          )}
-          style={{ width: collapsed ? undefined : width }}
-        >
-          <WorkspaceSidebar />
-        </div>
+        {/* 侧边栏:桌面为可拖拽宽度,移动端为全屏抽屉 */}
+        {isMobile ? (
+          !collapsed && (
+            <>
+              <div
+                className="fixed inset-0 z-30 bg-black/50"
+                onClick={() => setCollapsed(true)}
+                aria-hidden
+              />
+              <div className="fixed inset-y-0 left-0 z-40 flex w-[86vw] max-w-[380px] flex-col border-r border-border bg-background-alt shadow-2xl">
+                <div className="flex h-12 shrink-0 items-center justify-end pr-2">
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="收起侧边栏"
+                    title="收起侧边栏"
+                    onClick={() => setCollapsed(true)}
+                  >
+                    <X className="size-4" />
+                  </Button>
+                </div>
+                <div className="min-h-0 flex-1">
+                  <WorkspaceSidebar onNavigate={() => setCollapsed(true)} />
+                </div>
+              </div>
+            </>
+          )
+        ) : (
+          <>
+            <div
+              data-panel="sidebar"
+              className={cn(
+                'flex-none overflow-hidden transition-[width,opacity] duration-200 ease-out',
+                collapsed && 'w-0 opacity-0'
+              )}
+              style={{ width: collapsed ? undefined : width }}
+            >
+              <WorkspaceSidebar />
+            </div>
+            {/* 调整侧边栏宽度 */}
+            {!collapsed && (
+              <div
+                role="separator"
+                tabIndex={0}
+                aria-orientation="vertical"
+                aria-label="调整侧边栏宽度"
+                onPointerDown={onHandleDown}
+                className="group/handle relative z-10 my-6 flex w-px shrink-0 cursor-ew-resize touch-none items-center justify-center bg-transparent outline-none transition-colors hover:bg-border-hover/60 focus-visible:bg-border-hover/60"
+              />
+            )}
+          </>
+        )}
         {/* 顶栏悬浮层:侧边栏开关 + 后退/前进 */}
         <div className="pointer-events-none absolute left-0 top-0 z-20 flex h-14 items-center pl-2 pt-1">
           <div className="pointer-events-auto flex items-center gap-1">
@@ -86,7 +137,7 @@ function AppShellInner() {
             >
               <PanelLeftClose className="size-4" />
             </Button>
-            {!collapsed && (
+            {!isMobile && !collapsed && (
               <>
                 <Button variant="ghost" size="icon-sm" disabled aria-label="后退" title="后退">
                   <ArrowLeft className="size-4" />
@@ -98,17 +149,6 @@ function AppShellInner() {
             )}
           </div>
         </div>
-        {/* 调整侧边栏宽度 */}
-        {!collapsed && (
-          <div
-            role="separator"
-            tabIndex={0}
-            aria-orientation="vertical"
-            aria-label="调整侧边栏宽度"
-            onPointerDown={onHandleDown}
-            className="group/handle relative z-10 my-6 flex w-px shrink-0 cursor-ew-resize touch-none items-center justify-center bg-transparent outline-none transition-colors hover:bg-border-hover/60 focus-visible:bg-border-hover/60"
-          />
-        )}
         {/* 主内容区 */}
         <div data-panel="content" className="flex min-w-0 flex-1 flex-col p-1 pl-0 pt-0">
           <div className="h-1 w-full" />

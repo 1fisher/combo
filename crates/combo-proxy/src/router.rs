@@ -1,5 +1,6 @@
 use crate::fs;
 use crate::handler::proxy;
+use crate::host;
 use crate::session;
 use crate::skills;
 use crate::terminal;
@@ -31,6 +32,8 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/v1/skills", get(skills::list))
         .route("/v1/terminal", get(terminal::terminal_default))
         .route("/v1/control/ensure-crush", post(control::ensure_crush))
+        .route("/v1/host/home", get(host::home))
+        .route("/v1/host/dirs", get(host::dirs))
         .route("/v1/workspaces", get(workspace::list).post(workspace::create))
         .route(
             "/v1/workspaces/:id",

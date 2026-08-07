@@ -218,3 +218,26 @@ provided.
     需要删库或等首次空列表回源补齐(仅当该 workspace 无任何记录时)。
 12. **sqlite 用 `std::sync::Mutex<Connection>`**,`rusqlite` 连接不是 `Sync`;
     `list_*` 方法里 lock 的临时值要绑定到 `let`,否则借用检查报 E0716。
+
+## 远端 Web / 移动端支持
+
+combo 支持前后端分离部署:proxy 只当 API 服务,前端(dist/)部署到任意静态托管
+(nginx/Vercel 等),浏览器/手机通过 `VITE_PROXY_URL`(构建期)或「设置」里的
+**运行时代理地址覆盖**(`localStorage["combo.proxyUrl"]`,见 `connection.ts`
+`get/set/clearProxyUrlOverride`)指向远端 proxy。`resolveProxyBaseUrl` 优先级:
+运行时覆盖 → `VITE_PROXY_URL` → Tauri 内置端口 → `127.0.0.1:18234`。SSE 与
+health 都走同一 base,跨域由 CORS 放开。
+
+- **CORS**:proxy `--origin` 白名单;未传时读 `COMBO_CORS_ORIGINS`(逗号分隔)
+  环境变量,两者都缺省则全开放(见 `main.rs`)。
+- **服务器目录浏览**(`host.rs`,`/v1/host/*`):`GET /v1/host/home` 返回缺省起点
+  (HOME 或浏览根),`GET /v1/host/dirs?path=<绝对路径>` 列出单层子目录
+  (过滤隐藏项,dir 在前)。只读;`--browse-root` / `COMBO_BROWSE_ROOT` 可限制
+  浏览范围,越界 403。前端 `listHostDirs` + `DirectoryPicker`(目录点选 +
+  手动路径兜底)接管浏览器/移动端「添加项目」「更换目录」流程;桌面端仍走
+  Tauri 原生目录对话框。
+- **移动端适配**:`useIsMobile`(<768px)驱动 AppShell 侧边栏变为全屏抽屉
+  (遮罩 + 顶栏按钮开关,进入移动端自动收起,选中项目/会话后自动关闭);
+  分隔条与后退/前进在移动端隐藏;终端/编辑器已是全内容区切换。触屏下
+  悬停才显示的操作(重命名笔、右键菜单)改为 `md:` 前缀常驻 + 行内
+  `⋯`(MoreHorizontal)按钮打开同一上下文菜单(桌面右键行为不变)。

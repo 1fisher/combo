@@ -124,12 +124,12 @@ export function SessionRow({
                 startEdit();
               }}
               title="重命名会话"
-              className="shrink-0 rounded-md p-0.5 text-foreground-subtle opacity-0 transition-opacity hover:bg-surface-hover hover:text-foreground group-hover:opacity-100"
+              className="shrink-0 rounded-md p-0.5 text-foreground-subtle opacity-100 transition-opacity hover:bg-surface-hover hover:text-foreground md:opacity-0 md:group-hover:opacity-100"
             >
               <Pencil className="size-3" />
             </button>
             <button
-              className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100 hover:text-destructive"
+              className="shrink-0 opacity-100 transition-opacity hover:text-destructive md:opacity-0 md:group-hover:opacity-100"
               title="删除会话"
               onClick={(e) => {
                 e.stopPropagation();

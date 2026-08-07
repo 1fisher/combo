@@ -2,6 +2,7 @@ use anyhow::Result;
 use combo_proxy::rune::RuneManager;
 use combo_proxy::{parse_upstream, serve, AppState, BackendRegistry, ClaudeCodeBackend, CodexBackend, CrushBackend, MetaStore, OpenCodeBackend, OpenCodeManager};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 
@@ -12,14 +13,37 @@ async fn main() -> Result<()> {
     let mut port: u16 = 0;
     let mut host: std::net::IpAddr = [127, 0, 0, 1].into();
     let mut origins = Vec::new();
+    let mut browse_root: Option<PathBuf> = None;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--upstream" => upstream_arg = Some(args.next().unwrap()),
             "--port" => port = args.next().unwrap().parse()?,
             "--host" => host = args.next().unwrap().parse()?,
             "--origin" => origins.push(args.next().unwrap()),
+            "--browse-root" => browse_root = Some(args.next().unwrap().into()),
             _ => {}
         }
+    }
+    // 未显式传 --origin 时,允许用 COMBO_CORS_ORIGINS(逗号分隔)配置 CORS 白名单;
+    // 两者都缺省时保持全开放(开发模式)。
+    let origins = if origins.is_empty() {
+        std::env::var("COMBO_CORS_ORIGINS")
+            .map(|v| {
+                v.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default()
+    } else {
+        origins
+    };
+    // --browse-root 未显式传入时,读环境变量 COMBO_BROWSE_ROOT。
+    if browse_root.is_none() {
+        browse_root = std::env::var("COMBO_BROWSE_ROOT")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from);
     }
     let (upstream, supervisor) = match upstream_arg {
         Some(s) => (parse_upstream(&s)?, None),
@@ -67,6 +91,7 @@ async fn main() -> Result<()> {
         meta: Arc::new(MetaStore::open_default()?),
         registry: Arc::new(registry),
         crush_supervisor: supervisor,
+        browse_root,
     };
 
     // crush 为内存态,重启后 workspace 会被遗忘:启动时把元数据库里的

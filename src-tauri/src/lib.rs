@@ -1,4 +1,5 @@
 use serde::Serialize;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 
@@ -94,6 +95,10 @@ async fn init_backend(app: &tauri::AppHandle) {
         meta: Arc::new(MetaStore::open_default().unwrap_or_else(|_| MetaStore::new())),
         registry: Arc::new(registry),
         crush_supervisor: Some(Arc::clone(&supervisor)),
+        browse_root: std::env::var("COMBO_BROWSE_ROOT")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from),
     };
 
     // crush 为内存态,重启后 workspace 会被遗忘:启动时把元数据库里的

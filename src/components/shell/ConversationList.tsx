@@ -7,7 +7,7 @@ import { confirmDialog } from '../../lib/confirm';
 import { SessionRow } from './SessionRow';
 
 /** 侧边栏「任务」分区内容:当前项目下的会话列表 */
-export function ConversationList() {
+export function ConversationList({ onNavigate }: { onNavigate?: () => void } = {}) {
   const workspaceId = useActiveWorkspaceId();
   const activeSessionId = useAgentStore((s) => s.activeSessionId);
   const { sessions, isLoading, create, activate, remove, rename } = useSessions(workspaceId);
@@ -24,6 +24,7 @@ export function ConversationList() {
     const base = `会话 ${(sessions?.length ?? 0) + 1}`;
     const s = await create(base);
     void activate(s.id);
+    onNavigate?.();
   }
 
   return (
@@ -36,7 +37,10 @@ export function ConversationList() {
           key={s.id}
           session={s}
           isActive={activeSessionId === s.id}
-          onActivate={() => void activate(s.id)}
+          onActivate={() => {
+            void activate(s.id);
+            onNavigate?.();
+          }}
           onRename={(title) => rename({ id: s.id, title })}
           onDelete={() =>
             void confirmDialog('确定删除此会话?').then((ok) => {

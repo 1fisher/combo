@@ -65,6 +65,7 @@ async fn start_proxy(upstream_addr: SocketAddr, origins: Vec<String>) -> SocketA
                 Upstream::Tcp(upstream_addr),
             )))),
             crush_supervisor: None,
+            browse_root: None,
         };
         serve(listener, state, origins).await.unwrap();
     });
