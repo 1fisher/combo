@@ -188,22 +188,23 @@ async fn file_service_lists_reads_writes_and_blocks_traversal() {
     std::fs::write(ws.join("hello.txt"), "hi there").unwrap();
     std::fs::write(ws.join("sub").join("nested.txt"), "nested").unwrap();
 
-    // stub upstream:只回 workspace 元信息
-    let ws_path = ws.to_string_lossy().to_string();
-    let app = Router::new().route(
-        "/v1/workspaces/:id",
-        get(move || async move {
-            axum::Json(serde_json::json!({ "id": "w1", "path": ws_path }))
-        }),
-    );
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let handle = tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
-    let proxy = start_proxy(addr, vec![]).await;
+    // stub upstream:fs 服务与 workspace 元数据分离,不再需要回 workspace 元信息
+    let (upstream, handle) = stub_upstream().await;
+    let proxy = start_proxy(upstream, vec![]).await;
     let client = reqwest::Client::new();
-    let base = format!("http://{proxy}/v1/workspaces/w1/files");
+
+    // 通过 combo 元数据接口注册 workspace 路径(fs 服务依赖 MetaStore 解析目录)
+    let ws_path = ws.to_string_lossy().to_string();
+    let resp = client
+        .post(format!("http://{proxy}/v1/workspaces"))
+        .json(&serde_json::json!({ "path": ws_path }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let ws_json: serde_json::Value = resp.json().await.unwrap();
+    let wid = ws_json["id"].as_str().unwrap().to_string();
+    let base = format!("http://{proxy}/v1/workspaces/{wid}/files");
 
     // 列目录:文件与目录都在,目录排前
     let resp = client.get(format!("{base}/list")).send().await.unwrap();
