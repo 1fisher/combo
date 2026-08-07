@@ -6,8 +6,21 @@ import { useAgentStore } from '../../stores/agentStore';
 import { confirmDialog } from '../../lib/confirm';
 import { SessionRow } from './SessionRow';
 
-/** 侧边栏「任务」分区内容:当前项目下的会话列表 */
-export function ConversationList({ onNavigate }: { onNavigate?: () => void } = {}) {
+export type SortMode = 'recent' | 'name';
+
+interface ConversationListProps {
+  onNavigate?: () => void;
+  sortMode?: SortMode;
+  archiveOpen?: boolean;
+}
+
+const ARCHIVE_THRESHOLD_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function ConversationList({
+  onNavigate,
+  sortMode = 'recent',
+  archiveOpen = false,
+}: ConversationListProps = {}) {
   const workspaceId = useActiveWorkspaceId();
   const activeSessionId = useAgentStore((s) => s.activeSessionId);
   const { sessions, isLoading, create, activate, remove, rename } = useSessions(workspaceId);
@@ -27,12 +40,33 @@ export function ConversationList({ onNavigate }: { onNavigate?: () => void } = {
     onNavigate?.();
   }
 
+  // 拆分:活跃会话 vs 归档会话(超过7天)
+  const now = Date.now();
+  const allSorted = [...(sessions ?? [])].sort((a, b) => {
+    if (sortMode === 'name') return a.title.localeCompare(b.title, 'zh');
+    return (b.created_at ?? 0) - (a.created_at ?? 0);
+  });
+  const activeSessions = archiveOpen
+    ? allSorted.filter((s) => {
+        const ts = s.created_at ?? 0;
+        const ms = ts > 1e12 ? ts : ts * 1000;
+        return now - ms < ARCHIVE_THRESHOLD_MS;
+      })
+    : allSorted;
+  const archivedSessions = allSorted.filter((s) => {
+    const ts = s.created_at ?? 0;
+    const ms = ts > 1e12 ? ts : ts * 1000;
+    return now - ms >= ARCHIVE_THRESHOLD_MS;
+  });
+
+  const showList = archiveOpen ? archivedSessions : activeSessions;
+
   return (
     <div className="flex flex-col gap-0.5">
       {isLoading && (
         <div className="px-3 py-2 text-[13px] text-foreground-subtle">加载中…</div>
       )}
-      {sessions?.map((s) => (
+      {showList.map((s) => (
         <SessionRow
           key={s.id}
           session={s}
@@ -49,10 +83,12 @@ export function ConversationList({ onNavigate }: { onNavigate?: () => void } = {
           }
         />
       ))}
-      {!isLoading && sessions?.length === 0 && (
-        <div className="px-3 py-2 text-[13px] text-foreground-subtle">还没有任务</div>
+      {!isLoading && showList.length === 0 && (
+        <div className="px-3 py-2 text-[13px] text-foreground-subtle">
+          {archiveOpen ? '没有归档的任务' : '还没有任务'}
+        </div>
       )}
-      {!isLoading && sessions && (
+      {!isLoading && !archiveOpen && sessions && (
         <Button
           variant="ghost"
           size="sm"

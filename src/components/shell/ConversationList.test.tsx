@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConversationList } from './ConversationList';
@@ -57,8 +57,10 @@ describe('ConversationList', () => {
       </QueryClientProvider>
     );
     await screen.findByText('会话一');
-    const renameBtns = screen.getAllByTitle('重命名会话');
-    await userEvent.click(renameBtns[0]);
+    // 找到包含「会话一」的行,再点击其中的重命名按钮(排序后顺序不确定)
+    const sessionOneRow = screen.getByText('会话一').closest('div')!;
+    const renameBtn = within(sessionOneRow).getByTitle('重命名会话');
+    await userEvent.click(renameBtn);
     const input = screen.getByDisplayValue('会话一');
     await userEvent.clear(input);
     await userEvent.type(input, '新名称{Enter}');

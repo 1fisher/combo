@@ -44,6 +44,9 @@ import { SessionRow } from './SessionRow';
 import { SkillsPanel } from './SkillsPanel';
 import { DirectoryPicker } from './DirectoryPicker';
 import { SettingsDialog } from './SettingsDialog';
+import { SearchDialog } from './SearchDialog';
+import { AutomationPanel } from './AutomationPanel';
+import { MobileConnectDialog } from './MobileConnectDialog';
 
 function basename(p: string): string {
   const clean = p.replace(/[\\/]+$/, '');
@@ -233,6 +236,14 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
   const [sidebarError, setSidebarError] = useState<string | null>(null);
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [autoOpen, setAutoOpen] = useState(false);
+  const [mobileConnectOpen, setMobileConnectOpen] = useState(false);
+  // 会话列表排序 & 筛选
+  const [sortMode, setSortMode] = useState<'recent' | 'name'>('recent');
+  const [sortMenuOpen, setSortMenuOpen] = useState(false);
+  // 会话归档筛选
+  const [archiveOpen, setArchiveOpen] = useState(false);
   // 右键上下文菜单位置 + 目标 workspace
   const [ctxMenu, setCtxMenu] = useState<{
     x: number;
@@ -258,17 +269,36 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
   // 供 ⌘/Ctrl+N 快捷键调用的最新 onNewTask(避免闭包过期)
   const onNewTaskRef = useRef<() => void>(() => {});
 
-  // ⌘/Ctrl+N 新建任务
+  // ⌘/Ctrl+N 新建任务, ⌘/Ctrl+K 搜索
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') {
         e.preventDefault();
         onNewTaskRef.current();
       }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setSearchOpen(true);
+      }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  // 排序菜单外部点击关闭
+  useEffect(() => {
+    if (!sortMenuOpen) return;
+    const close = () => setSortMenuOpen(false);
+    window.addEventListener('click', close);
+    return () => window.removeEventListener('click', close);
+  }, [sortMenuOpen]);
+
+  // 展开/全部收起:同步两个折叠分区
+  function toggleExpandAll() {
+    const bothOpen = projOpen && taskOpen;
+    setProjOpen(!bothOpen);
+    setTaskOpen(!bothOpen);
+  }
 
   async function onAddProjectClick() {
     setSidebarError(null);
@@ -433,6 +463,7 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
           </button>
           <button
             type="button"
+            onClick={() => setSearchOpen(true)}
             className="flex h-8 w-full shrink-0 cursor-pointer items-center gap-2 overflow-hidden rounded-lg pl-2.5 pr-2.5 text-left transition-colors hover:bg-surface-hover hover:text-foreground"
             title="搜索 (⌘ K)"
           >
@@ -442,6 +473,7 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
           </button>
           <button
             type="button"
+            onClick={() => setAutoOpen(true)}
             className="flex h-8 w-full shrink-0 cursor-pointer items-center gap-2 overflow-hidden rounded-lg pl-2.5 pr-2.5 text-left transition-colors hover:bg-surface-hover hover:text-foreground"
             title="自动化"
           >
@@ -504,26 +536,66 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
               variant="ghost"
               size="icon-xs"
               className="shrink-0 text-foreground-subtle hover:text-foreground"
-              aria-label="展开全部"
-              title="展开全部"
+              aria-label={projOpen && taskOpen ? '全部收起' : '展开全部'}
+              title={projOpen && taskOpen ? '全部收起' : '展开全部'}
+              onClick={toggleExpandAll}
             >
-              <Maximize2 className="size-3.5" />
+              <Maximize2 className={cn('size-3.5 transition-transform', projOpen && taskOpen && 'rotate-180')} />
             </Button>
+            <div className="relative">
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="shrink-0 text-foreground-subtle hover:text-foreground"
+                aria-label="筛选和排序"
+                title="筛选和排序"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSortMenuOpen((o) => !o);
+                }}
+              >
+                <ListFilter className="size-3.5" />
+              </Button>
+              {sortMenuOpen && (
+                <div
+                  className="fixed bottom-full left-0 z-50 mb-2 min-w-[160px] rounded-lg border border-border bg-popover p-1 text-[13px] text-popover-foreground shadow-lg"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="px-2 py-1 text-xs font-medium text-foreground-subtlest">排序方式</div>
+                  {([
+                    ['recent', '最近优先'],
+                    ['name', '按名称'],
+                  ] as const).map(([mode, label]) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      className={cn(
+                        'flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left transition-colors hover:bg-surface-hover',
+                        sortMode === mode && 'text-brand'
+                      )}
+                      onClick={() => {
+                        setSortMode(mode);
+                        setSortMenuOpen(false);
+                      }}
+                    >
+                      {label}
+                      {sortMode === mode && <ChevronDown className="size-3.5 -rotate-90" />}
+                    </button>
+                  ))
+                  }
+                </div>
+              )}
+            </div>
             <Button
               variant="ghost"
               size="icon-xs"
-              className="shrink-0 text-foreground-subtle hover:text-foreground"
-              aria-label="筛选和排序"
-              title="筛选和排序"
-            >
-              <ListFilter className="size-3.5" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              className="shrink-0 text-foreground-subtle hover:text-foreground"
+              className={cn(
+                'shrink-0 text-foreground-subtle hover:text-foreground',
+                archiveOpen && 'text-brand'
+              )}
               aria-label="归档"
               title="归档"
+              onClick={() => setArchiveOpen((o) => !o)}
             >
               <Archive className="size-3.5" />
             </Button>
@@ -629,7 +701,7 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
                 }}
                 addLabel="新建任务"
               >
-                <ConversationList onNavigate={onNavigate} />
+                <ConversationList onNavigate={onNavigate} sortMode={sortMode} archiveOpen={archiveOpen} />
               </Section>
             </>
           ) : (
@@ -713,6 +785,7 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
             className="shrink-0 text-foreground-subtle hover:bg-surface-hover hover:text-foreground"
             aria-label="移动端远程控制"
             title="移动端远程控制"
+            onClick={() => setMobileConnectOpen(true)}
           >
             <Smartphone className="size-4" />
           </Button>
@@ -730,6 +803,9 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
       </div>
       <SkillsPanel open={skillsOpen} onOpenChange={setSkillsOpen} />
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} onNavigate={onNavigate} />
+      <AutomationPanel open={autoOpen} onOpenChange={setAutoOpen} />
+      <MobileConnectDialog open={mobileConnectOpen} onOpenChange={setMobileConnectOpen} />
       {/* 右键上下文菜单 */}
       {ctxMenu && (
         <div

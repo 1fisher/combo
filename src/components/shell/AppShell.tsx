@@ -12,6 +12,7 @@ import { useEditorStore } from '../../stores/editorStore';
 import { useActiveWorkspaceId } from '../../hooks/useActiveWorkspaceId';
 import { Button } from '../ui/button';
 import { cn } from '../../lib/utils';
+import { HelpDialog } from './HelpDialog';
 
 const qc = new QueryClient();
 
@@ -45,6 +46,7 @@ function AppShellInner() {
     () => typeof window === 'undefined' || window.innerWidth < 768
   );
   const [view, setView] = useState<'agent' | 'terminal' | 'editor'>('agent');
+  const [helpOpen, setHelpOpen] = useState(false);
   const dragRef = useRef<{ startX: number; startW: number } | null>(null);
   const isMobile = useIsMobile();
 
@@ -154,7 +156,9 @@ function AppShellInner() {
           <div className="h-1 w-full" />
           <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-background">
             <header className="relative flex h-10 shrink-0 items-center justify-end gap-0.5 pr-2.5">
-              <Button variant="ghost" size="icon-sm" aria-label="帮助" title="帮助">
+              <Button variant="ghost" size="icon-sm" aria-label="帮助" title="帮助"
+                onClick={() => setHelpOpen(true)}
+              >
                 <CircleHelp className="size-4" />
               </Button>
               <Button variant="ghost" size="icon-sm" aria-label="切换终端" title="切换终端"
@@ -185,6 +189,7 @@ function AppShellInner() {
         </div>
       </div>
       {workspaceId && <ModalQueue workspaceId={workspaceId} />}
+      <HelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
     </div>
   );
 }

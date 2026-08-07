@@ -280,7 +280,6 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
           onSend={(attachments) => void doSend(draft, attachments)}
           running={running}
           onStop={cancel}
-          onPickWorkspace={() => setWsMenuOpen((o) => !o)}
         />
       </div>
     </div>

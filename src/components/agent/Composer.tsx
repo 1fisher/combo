@@ -4,7 +4,6 @@ import {
   Brain,
   Check,
   ChevronDown,
-  Folder,
   Package,
   Paperclip,
   Plus,
@@ -32,7 +31,6 @@ const THOUGHT_LEVELS = [
 ] as const;
 
 export function Composer({
-  workspaceName,
   workspaceId,
   backend,
   value,
@@ -41,7 +39,6 @@ export function Composer({
   disabled,
   running,
   onStop,
-  onPickWorkspace,
 }: {
   workspaceName?: string;
   workspaceId?: string;
@@ -52,7 +49,6 @@ export function Composer({
   disabled?: boolean;
   running?: boolean;
   onStop?: () => void;
-  onPickWorkspace?: () => void;
 }) {
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
@@ -98,24 +94,6 @@ export function Composer({
     <div className="w-full shrink-0 px-4 pb-4 pt-2">
       <div className="mx-auto w-full max-w-2xl">
         <div className="w-full shrink-0 rounded-2xl bg-surface shadow-xl/5">
-          {/* 当前项目 chip */}
-          {workspaceName && (
-            <div className="flex min-w-0 flex-wrap items-center gap-0 p-1.5">
-              <div className="group/chip relative flex min-w-0 items-center rounded-full hover:bg-surface-hover focus-within:bg-surface-hover">
-                <button
-                  type="button"
-                  onClick={onPickWorkspace}
-                  className="flex h-7 min-w-0 items-center gap-1 rounded-full py-1 pl-3 pr-2 text-[13px] text-foreground transition-colors hover:text-foreground"
-                  aria-label="选择项目"
-                  title="选择项目"
-                >
-                  <Folder className="size-4 shrink-0 text-foreground-subtle" />
-                  <span className="block min-w-0 max-w-[15rem] truncate">{workspaceName}</span>
-                  <ChevronDown className="size-3.5 shrink-0 text-foreground-subtle" />
-                </button>
-              </div>
-            </div>
-          )}
           <form
             className="relative p-0"
             onSubmit={(e) => {
