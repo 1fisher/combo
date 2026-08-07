@@ -183,3 +183,61 @@ export function countChanges(lines: DiffLine[]): { additions: number; deletions:
   }
   return { additions, deletions };
 }
+
+/**
+ * 从工具调用原始输入 JSON 计算 diff 行。
+ * - edit: 比较 old_string → new_string
+ * - multiedit: 依次对每对 old/new 做 diff,段间插入分隔行
+ * - write: 无 before,全部内容标记为新增
+ */
+export function diffFromToolInput(
+  toolName: string,
+  inputJson: string,
+): DiffLine[] | null {
+  let input: Record<string, unknown>;
+  try {
+    input = JSON.parse(inputJson) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  if (toolName === 'edit') {
+    const oldStr = typeof input.old_string === 'string' ? input.old_string : '';
+    const newStr = typeof input.new_string === 'string' ? input.new_string : '';
+    return computeDiffLines(oldStr, newStr);
+  }
+  if (toolName === 'multiedit' && Array.isArray(input.edits)) {
+    const result: DiffLine[] = [];
+    let oldLine = 1;
+    let newLine = 1;
+    for (const e of input.edits) {
+      if (typeof e !== 'object' || e === null) continue;
+      const oldStr = typeof e.old_string === 'string' ? e.old_string : '';
+      const newStr = typeof e.new_string === 'string' ? e.new_string : '';
+      const partDiff = computeDiffLines(oldStr, newStr);
+      // 重新编号
+      for (const dl of partDiff) {
+        if (dl.type === 'add') {
+          result.push({ ...dl, oldLineNumber: null, newLineNumber: newLine++ });
+        } else if (dl.type === 'remove') {
+          result.push({ ...dl, oldLineNumber: oldLine++, newLineNumber: null });
+        } else {
+          result.push({ ...dl, oldLineNumber: oldLine++, newLineNumber: newLine++ });
+        }
+      }
+      // 段间分隔
+      result.push({ type: 'context', content: '⋯', oldLineNumber: null, newLineNumber: null });
+    }
+    return result;
+  }
+  if (toolName === 'write') {
+    const content = typeof input.content === 'string' ? input.content : '';
+    const partLines = content.endsWith('\n') ? content.slice(0, -1).split('\n') : content.split('\n');
+    return partLines.map((line, i) => ({
+      type: 'add' as const,
+      content: line,
+      oldLineNumber: null,
+      newLineNumber: i + 1,
+    }));
+  }
+  return null;
+}

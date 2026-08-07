@@ -6,6 +6,7 @@ import {
   reconstructAfter,
   computeDiffLines,
   countChanges,
+  diffFromToolInput,
 } from './fileChanges';
 import type { MessageVM } from '../stores/agentStore';
 import type { Api } from './api/types';
@@ -195,5 +196,53 @@ describe('countChanges', () => {
     const { additions, deletions } = countChanges(lines);
     expect(additions).toBe(3);
     expect(deletions).toBe(2);
+  });
+});
+
+describe('diffFromToolInput', () => {
+  it('computes diff for edit tool', () => {
+    const input = JSON.stringify({ file_path: 'f.ts', old_string: 'hello\nworld', new_string: 'hello\nWORLD' });
+    const lines = diffFromToolInput('edit', input);
+    expect(lines).not.toBeNull();
+    const removed = lines!.filter((l) => l.type === 'remove');
+    const added = lines!.filter((l) => l.type === 'add');
+    expect(removed).toHaveLength(1);
+    expect(removed[0].content).toBe('world');
+    expect(added).toHaveLength(1);
+    expect(added[0].content).toBe('WORLD');
+  });
+
+  it('computes diff for multiedit tool with separator lines', () => {
+    const input = JSON.stringify({
+      file_path: 'f.ts',
+      edits: [
+        { old_string: 'a', new_string: 'A' },
+        { old_string: 'b', new_string: 'B' },
+      ],
+    });
+    const lines = diffFromToolInput('multiedit', input);
+    expect(lines).not.toBeNull();
+    // 每段各产生 remove+add,段间有分隔行
+    const separators = lines!.filter((l) => l.content === '⋯');
+    expect(separators.length).toBeGreaterThanOrEqual(1);
+    const added = lines!.filter((l) => l.type === 'add').map((l) => l.content);
+    expect(added).toEqual(expect.arrayContaining(['A', 'B']));
+  });
+
+  it('marks all content as additions for write tool', () => {
+    const input = JSON.stringify({ file_path: 'f.ts', content: 'line1\nline2\nline3' });
+    const lines = diffFromToolInput('write', input);
+    expect(lines).not.toBeNull();
+    expect(lines!.every((l) => l.type === 'add')).toBe(true);
+    expect(lines).toHaveLength(3);
+    expect(lines![1].newLineNumber).toBe(2);
+  });
+
+  it('returns null for unknown tool names', () => {
+    expect(diffFromToolInput('bash', '{"command":"ls"}')).toBeNull();
+  });
+
+  it('returns null for invalid JSON', () => {
+    expect(diffFromToolInput('edit', '{bad')).toBeNull();
   });
 });

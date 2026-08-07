@@ -1,17 +1,14 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, CheckCircle, XCircle, Terminal } from 'lucide-react';
 import type { Api } from '../../lib/api/types';
+import { useAgentStore } from '../../stores/agentStore';
+import { countChanges, diffFromToolInput, type DiffLine } from '../../lib/fileChanges';
+import { DiffView } from './DiffView';
+import { TerminalOutput } from './TerminalOutput';
 
-const COLLAPSE_THRESHOLD = 800;
-
-function detectKind(name: string, content: string): 'bash' | 'json' | 'text' {
-  if (name === 'bash' || name === 'run_shell_command') return 'bash';
-  const trimmed = content.trim();
-  if ((trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
-    return 'json';
-  }
-  return 'text';
-}
+const FILE_DIFF_TOOLS = new Set(['write', 'edit', 'multiedit']);
+const BASH_TOOLS = new Set(['bash', 'run_shell_command']);
+const COLLAPSE_THRESHOLD = 600;
 
 function tryFormatJson(content: string): string {
   try {
@@ -21,16 +18,55 @@ function tryFormatJson(content: string): string {
   }
 }
 
+/** 从 store 中查找 tool_call_id 对应的工具输入 */
+function useToolCallInput(toolCallId: string): { name: string; input: string } | null {
+  const sessionId = useAgentStore((s) => s.activeSessionId);
+  const messages = useAgentStore((s) =>
+    sessionId ? s.bySession[sessionId]?.messages : undefined,
+  );
+  return useMemo(() => {
+    if (!messages) return null;
+    for (const msg of messages) {
+      for (const part of msg.parts) {
+        if (part.type !== 'tool_call') continue;
+        const tc = part.data as Api.ToolCall;
+        if (tc.id === toolCallId) return { name: tc.name, input: tc.input };
+      }
+    }
+    return null;
+  }, [messages, toolCallId]);
+}
+
 export function ToolResultCard({ result }: { result: Api.ToolResult }) {
   const [expanded, setExpanded] = useState(false);
   const isError = result.is_error ?? false;
   const content = result.content ?? '';
-  const kind = detectKind(result.name, content);
-  const displayContent = kind === 'json' ? tryFormatJson(content) : content;
-  const isLong = displayContent.length > COLLAPSE_THRESHOLD;
+  const toolCall = useToolCallInput(result.tool_call_id);
+
+  const isFileTool = FILE_DIFF_TOOLS.has(result.name);
+  const isBash = BASH_TOOLS.has(result.name) || result.name === 'bash';
+
+  // 对文件修改工具计算 diff
+  const diffLines = useMemo<DiffLine[] | null>(() => {
+    if (!isFileTool || !toolCall) return null;
+    return diffFromToolInput(toolCall.name, toolCall.input);
+  }, [isFileTool, toolCall]);
+
+  const changeStats = useMemo(
+    () => (diffLines ? countChanges(diffLines) : null),
+    [diffLines],
+  );
+
+  // 非 diff 内容的格式化与折叠
+  const isJson = !isFileTool && !isBash && (() => {
+    const t = content.trim();
+    return (t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'));
+  })();
+  const displayContent = isJson ? tryFormatJson(content) : content;
+  const isLong = !diffLines && displayContent.length > COLLAPSE_THRESHOLD;
   const visibleContent = expanded || !isLong ? displayContent : displayContent.slice(0, COLLAPSE_THRESHOLD);
 
-  // 提取 metadata 中的行数/状态信息
+  // 提取 metadata 信息
   let metaInfo = '';
   if (result.metadata) {
     try {
@@ -45,8 +81,15 @@ export function ToolResultCard({ result }: { result: Api.ToolResult }) {
     }
   }
 
+  // 摘要标题
+  const titleLabel = isFileTool
+    ? `${result.name} 变更`
+    : isBash
+      ? '终端输出'
+      : `${result.name} 返回`;
+
   return (
-    <details className="rounded-md border bg-muted/20" open={isError}>
+    <details className="rounded-md border bg-muted/20" open={isError || !!diffLines}>
       <summary className="flex cursor-pointer items-center gap-2 px-3 py-1.5">
         {expanded ? (
           <ChevronDown className="size-3 text-muted-foreground" />
@@ -58,9 +101,15 @@ export function ToolResultCard({ result }: { result: Api.ToolResult }) {
         ) : (
           <CheckCircle className="size-3.5 text-green-500" />
         )}
-        <span className="font-mono text-[11px] text-muted-foreground">
-          {kind === 'bash' ? '终端输出' : `${result.name} 返回`}
-        </span>
+        {isBash && <Terminal className="size-3 text-muted-foreground" />}
+        <span className="font-mono text-[11px] text-muted-foreground">{titleLabel}</span>
+        {/* 增删统计 */}
+        {changeStats && (changeStats.additions > 0 || changeStats.deletions > 0) && (
+          <span className="flex items-center gap-1 font-mono text-[10px]">
+            {changeStats.additions > 0 && <span className="text-green-500">+{changeStats.additions}</span>}
+            {changeStats.deletions > 0 && <span className="text-red-500">-{changeStats.deletions}</span>}
+          </span>
+        )}
         {metaInfo && <span className="text-[10px] text-muted-foreground/60">{metaInfo}</span>}
         {isLong && !expanded && (
           <span className="ml-auto text-[10px] text-brand">
@@ -69,18 +118,28 @@ export function ToolResultCard({ result }: { result: Api.ToolResult }) {
         )}
       </summary>
       <div className="border-t border-border">
-        {kind === 'bash' && (
-          <div className="flex items-center gap-1 bg-muted/30 px-3 py-1 text-[10px] text-muted-foreground">
-            <Terminal className="size-3" />
-            <span className="font-mono">{result.name}</span>
-          </div>
+        {/* 文件修改 → DiffView */}
+        {diffLines && (
+          <DiffView
+            lines={diffLines}
+            className="max-h-[60vh] overflow-auto border-0"
+          />
         )}
-        <pre className="max-h-[60vh] overflow-auto bg-background px-3 py-2 font-mono text-[11px] leading-relaxed text-foreground/80">
-          {visibleContent}
-          {isLong && !expanded && (
-            <span className="text-muted-foreground/50"> {'\n'}… ({displayContent.length - COLLAPSE_THRESHOLD} 字符已折叠)</span>
-          )}
-        </pre>
+        {/* bash 输出 → TerminalOutput(diff 着色) */}
+        {!diffLines && isBash && (
+          <TerminalOutput content={displayContent} className="border-0" />
+        )}
+        {/* 其他 → 普通 pre */}
+        {!diffLines && !isBash && (
+          <pre className="max-h-[60vh] overflow-auto bg-background px-3 py-2 font-mono text-[11px] leading-relaxed text-foreground/80">
+            {visibleContent}
+            {isLong && !expanded && (
+              <span className="text-muted-foreground/50">
+                {'\n'}… ({displayContent.length - COLLAPSE_THRESHOLD} 字符已折叠)
+              </span>
+            )}
+          </pre>
+        )}
         {isLong && (
           <button
             onClick={(e) => {
