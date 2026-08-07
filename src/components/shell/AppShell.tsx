@@ -173,7 +173,16 @@ function AppShellInner() {
             className="group/ehandle relative z-10 my-6 flex w-px shrink-0 cursor-ew-resize touch-none items-center justify-center bg-transparent outline-none transition-colors hover:bg-border-hover/60 focus-visible:bg-border-hover/60"
           />
         )}
-        {workspaceId && editorOpen && <EditorPane workspaceId={workspaceId} width={editorWidth} />}
+        {/* 文件编辑器面板 */}
+        <div
+          className={cn(
+            'flex-none overflow-hidden transition-[width,opacity] duration-200 ease-out',
+            !(workspaceId && editorOpen) && 'w-0 opacity-0'
+          )}
+          style={{ width: workspaceId && editorOpen ? editorWidth : undefined }}
+        >
+          {workspaceId && <EditorPane workspaceId={workspaceId} width={editorWidth} />}
+        </div>
       </div>
       {workspaceId && <ModalQueue workspaceId={workspaceId} />}
     </div>

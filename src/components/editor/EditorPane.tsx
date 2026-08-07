@@ -1,8 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Save, X } from 'lucide-react';
+import { X } from 'lucide-react';
 import { getFileContent, putFileContent } from '../../lib/api';
 import { useEditorStore } from '../../stores/editorStore';
-import { Button } from '../ui/button';
 import { cn } from '../../lib/utils';
 import { CodeEditor } from './CodeEditor';
 import { FileExplorer } from './FileExplorer';
@@ -117,16 +116,6 @@ export function EditorPane({ workspaceId, width }: { workspaceId: string; width:
                     </button>
                   ))}
                 </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="m-1.5 h-7 shrink-0"
-                  onClick={save}
-                  disabled={!active?.dirty || saving}
-                >
-                  <Save className="h-3.5 w-3.5" />
-                  保存
-                </Button>
               </div>
               {active ? (
                 <div className="min-h-0 flex-1 overflow-hidden">
