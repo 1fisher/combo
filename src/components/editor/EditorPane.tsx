@@ -9,7 +9,7 @@ import { FileExplorer } from './FileExplorer';
 /**
  * 右侧编辑器面板:文件目录树 + 打开文件 tabs + 行号 + textarea + 保存。
  */
-export function EditorPane({ workspaceId, width }: { workspaceId: string; width: number }) {
+export function EditorPane({ workspaceId }: { workspaceId: string }) {
   const openFiles = useEditorStore((s) => s.openFiles);
   const activePath = useEditorStore((s) => s.activePath);
   const setActive = useEditorStore((s) => s.setActive);
@@ -61,7 +61,7 @@ export function EditorPane({ workspaceId, width }: { workspaceId: string; width:
   });
 
   return (
-    <aside className="flex shrink-0 flex-col border-l bg-card" style={{ width }}>
+    <aside className="flex h-full w-full min-h-0 flex-col bg-card">
       {(saveError || loadError) && (
         <div className="border-b border-destructive/30 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
           {saveError || loadError}

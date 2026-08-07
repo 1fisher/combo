@@ -16,8 +16,6 @@ const qc = new QueryClient();
 
 const SIDEBAR_MIN = 264;
 const SIDEBAR_DEFAULT = 372;
-const EDITOR_MIN = 360;
-const EDITOR_DEFAULT = 680;
 
 export function AppShell() {
   useEffect(() => {
@@ -42,11 +40,8 @@ function AppShellInner() {
 
   const [width, setWidth] = useState(SIDEBAR_DEFAULT);
   const [collapsed, setCollapsed] = useState(false);
-  const [view, setView] = useState<'agent' | 'terminal'>('agent');
-  const [editorOpen, setEditorOpen] = useState(false);
-  const [editorWidth, setEditorWidth] = useState(EDITOR_DEFAULT);
+  const [view, setView] = useState<'agent' | 'terminal' | 'editor'>('agent');
   const dragRef = useRef<{ startX: number; startW: number } | null>(null);
-  const editorDragRef = useRef<{ startX: number; startW: number } | null>(null);
 
   function onHandleDown(e: PointerEvent<HTMLDivElement>) {
     dragRef.current = { startX: e.clientX, startW: width };
@@ -58,24 +53,6 @@ function AppShellInner() {
     };
     const onUp = () => {
       dragRef.current = null;
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-  }
-
-  function onEditorHandleDown(e: PointerEvent<HTMLDivElement>) {
-    editorDragRef.current = { startX: e.clientX, startW: editorWidth };
-    const onMove = (ev: globalThis.PointerEvent) => {
-      if (!editorDragRef.current) return;
-      // 向左拖 → 增大编辑器宽度
-      const d = editorDragRef.current.startX - ev.clientX;
-      const max = Math.round(window.innerWidth * 0.6);
-      setEditorWidth(Math.min(max, Math.max(EDITOR_MIN, editorDragRef.current.startW + d)));
-    };
-    const onUp = () => {
-      editorDragRef.current = null;
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
@@ -147,8 +124,8 @@ function AppShellInner() {
                 <SquareTerminal className="size-4" />
               </Button>
               <Button variant="ghost" size="icon-sm" aria-label="切换文件编辑器" title="切换文件编辑器"
-                onClick={() => setEditorOpen((o) => !o)}
-                className={cn(editorOpen && 'bg-surface-hover text-brand')}
+                onClick={() => setView((v) => (v === 'editor' ? 'agent' : 'editor'))}
+                className={cn(view === 'editor' && 'bg-surface-hover text-brand')}
               >
                 <PanelRight className="size-4" />
               </Button>
@@ -156,32 +133,13 @@ function AppShellInner() {
             <div className="flex min-h-0 flex-1">
               {view === 'terminal' ? (
                 <TerminalPanel workspaceId={workspaceId} onClose={() => setView('agent')} />
+              ) : view === 'editor' ? (
+                workspaceId ? <EditorPane workspaceId={workspaceId} /> : <AgentPanel workspaceId={workspaceId} />
               ) : (
                 <AgentPanel workspaceId={workspaceId} />
               )}
             </div>
           </section>
-        </div>
-        {/* 调整编辑器宽度 */}
-        {workspaceId && editorOpen && (
-          <div
-            role="separator"
-            tabIndex={0}
-            aria-orientation="vertical"
-            aria-label="调整文件编辑器宽度"
-            onPointerDown={onEditorHandleDown}
-            className="group/ehandle relative z-10 my-6 flex w-px shrink-0 cursor-ew-resize touch-none items-center justify-center bg-transparent outline-none transition-colors hover:bg-border-hover/60 focus-visible:bg-border-hover/60"
-          />
-        )}
-        {/* 文件编辑器面板 */}
-        <div
-          className={cn(
-            'flex-none overflow-hidden transition-[width,opacity] duration-200 ease-out',
-            !(workspaceId && editorOpen) && 'w-0 opacity-0'
-          )}
-          style={{ width: workspaceId && editorOpen ? editorWidth : undefined }}
-        >
-          {workspaceId && <EditorPane workspaceId={workspaceId} width={editorWidth} />}
         </div>
       </div>
       {workspaceId && <ModalQueue workspaceId={workspaceId} />}
