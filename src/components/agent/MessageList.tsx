@@ -17,7 +17,7 @@ export function MessageList({
   workspaceId?: string;
 }) {
   return (
-    <MessageScrollerProvider autoScroll>
+    <MessageScrollerProvider autoScroll scrollEdgeThreshold={80}>
       <MessageScroller>
         <MessageScrollerViewport>
           <MessageScrollerContent>
@@ -25,7 +25,7 @@ export function MessageList({
               <MessageScrollerItem
                 key={m.id}
                 messageId={m.id}
-                scrollAnchor={m.role === 'user'}
+                scrollAnchor
               >
                 <MessageItem vm={m} workspaceId={workspaceId} />
               </MessageScrollerItem>
