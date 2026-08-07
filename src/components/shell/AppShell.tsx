@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { useEffect, useRef, useState, type PointerEvent } from 'react';
-import { ArrowLeft, ArrowRight, CircleHelp, PanelLeftClose, SquareTerminal } from 'lucide-react';
+import { ArrowLeft, ArrowRight, CircleHelp, PanelLeftClose, PanelRight, SquareTerminal } from 'lucide-react';
 import { connectLoop } from '../../lib/connection';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
 import { AgentPanel } from '../agent/AgentPanel';
@@ -16,6 +16,8 @@ const qc = new QueryClient();
 
 const SIDEBAR_MIN = 264;
 const SIDEBAR_DEFAULT = 372;
+const EDITOR_MIN = 360;
+const EDITOR_DEFAULT = 680;
 
 export function AppShell() {
   useEffect(() => {
@@ -41,7 +43,10 @@ function AppShellInner() {
   const [width, setWidth] = useState(SIDEBAR_DEFAULT);
   const [collapsed, setCollapsed] = useState(false);
   const [view, setView] = useState<'agent' | 'terminal'>('agent');
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editorWidth, setEditorWidth] = useState(EDITOR_DEFAULT);
   const dragRef = useRef<{ startX: number; startW: number } | null>(null);
+  const editorDragRef = useRef<{ startX: number; startW: number } | null>(null);
 
   function onHandleDown(e: PointerEvent<HTMLDivElement>) {
     dragRef.current = { startX: e.clientX, startW: width };
@@ -53,6 +58,24 @@ function AppShellInner() {
     };
     const onUp = () => {
       dragRef.current = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }
+
+  function onEditorHandleDown(e: PointerEvent<HTMLDivElement>) {
+    editorDragRef.current = { startX: e.clientX, startW: editorWidth };
+    const onMove = (ev: globalThis.PointerEvent) => {
+      if (!editorDragRef.current) return;
+      // 向左拖 → 增大编辑器宽度
+      const d = editorDragRef.current.startX - ev.clientX;
+      const max = Math.round(window.innerWidth * 0.6);
+      setEditorWidth(Math.min(max, Math.max(EDITOR_MIN, editorDragRef.current.startW + d)));
+    };
+    const onUp = () => {
+      editorDragRef.current = null;
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
     };
@@ -123,6 +146,12 @@ function AppShellInner() {
               >
                 <SquareTerminal className="size-4" />
               </Button>
+              <Button variant="ghost" size="icon-sm" aria-label="切换文件编辑器" title="切换文件编辑器"
+                onClick={() => setEditorOpen((o) => !o)}
+                className={cn(editorOpen && 'bg-surface-hover text-brand')}
+              >
+                <PanelRight className="size-4" />
+              </Button>
             </header>
             <div className="flex min-h-0 flex-1">
               {view === 'terminal' ? (
@@ -133,7 +162,18 @@ function AppShellInner() {
             </div>
           </section>
         </div>
-        {workspaceId && <EditorPane workspaceId={workspaceId} />}
+        {/* 调整编辑器宽度 */}
+        {workspaceId && editorOpen && (
+          <div
+            role="separator"
+            tabIndex={0}
+            aria-orientation="vertical"
+            aria-label="调整文件编辑器宽度"
+            onPointerDown={onEditorHandleDown}
+            className="group/ehandle relative z-10 my-6 flex w-px shrink-0 cursor-ew-resize touch-none items-center justify-center bg-transparent outline-none transition-colors hover:bg-border-hover/60 focus-visible:bg-border-hover/60"
+          />
+        )}
+        {workspaceId && editorOpen && <EditorPane workspaceId={workspaceId} width={editorWidth} />}
       </div>
       {workspaceId && <ModalQueue workspaceId={workspaceId} />}
     </div>

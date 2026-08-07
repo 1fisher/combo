@@ -32,7 +32,10 @@ export const WRITE_TOOL_NAMES = new Set([
 
 interface AgentState {
   activeWorkspaceId: string | null;
+  /** 上次选中项目的路径(crush 重启后 ID 会变,用路径做恢复) */
+  lastWorkspacePath: string | null;
   setActiveWorkspace: (id: string | null) => void;
+  setLastWorkspacePath: (path: string | null) => void;
   activeSessionId: string | null;
   setActiveSessionId: (id: string | null) => void;
   agentMode: AgentMode;
@@ -61,12 +64,14 @@ export const useAgentStore = create<AgentState>()(
   persist(
     (set) => ({
   activeWorkspaceId: null,
+  lastWorkspacePath: null,
   setActiveWorkspace: (id) =>
     set((st) => ({
       activeWorkspaceId: id,
       // 切换项目时清空会话,避免把上一个项目的会话带到新项目
       ...(id !== st.activeWorkspaceId ? { activeSessionId: null } : {}),
     })),
+  setLastWorkspacePath: (path) => set({ lastWorkspacePath: path }),
   agentMode: 'yolo' as AgentMode,
   setAgentMode: (mode) => set({ agentMode: mode }),
   activeSessionId: null,
@@ -196,6 +201,7 @@ export const useAgentStore = create<AgentState>()(
       // 只持久化选中态,SSE 实时状态(消息/队列)不入库
       partialize: (s) => ({
         activeWorkspaceId: s.activeWorkspaceId,
+        lastWorkspacePath: s.lastWorkspacePath,
         activeSessionId: s.activeSessionId,
         agentMode: s.agentMode,
       }),

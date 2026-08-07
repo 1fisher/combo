@@ -1,5 +1,5 @@
 //! 本地文件服务:仅接管 `/v1/workspaces/{id}/files/*` 的读写。
-//! 代理本身不持有业务状态,workspace 的真实路径通过向 rune 查询获得,
+//! workspace 的真实路径从 sqlite 元数据(`MetaStore`)直接获取,不依赖 crush 在线,
 //! 之后所有相对路径都在该根目录内做 canonicalize 前缀校验,防止目录穿越
 //! 与 symlink 逃逸。
 
@@ -11,11 +11,18 @@ use serde::Deserialize;
 use serde_json::json;
 use std::path::{Component, Path as FsPath, PathBuf};
 
-use crate::workspace::ensure_ws;
 use crate::AppState;
 
 /// 单文件读取上限(1MB),超过视为过大。
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
+
+/// 从 sqlite 元数据解析 workspace 根目录,不依赖 crush 在线。
+fn resolve_root(state: &AppState, id: &str) -> Result<PathBuf, Response> {
+    match state.meta.get(id) {
+        Some(m) => Ok(m.path),
+        None => Err(error(StatusCode::NOT_FOUND, "workspace 不存在")),
+    }
+}
 
 #[derive(Deserialize)]
 pub struct PathQuery {
@@ -100,13 +107,9 @@ pub async fn list(
     Path(id): Path<String>,
     Query(q): Query<PathQuery>,
 ) -> Response {
-    let Some(effective_id) = ensure_ws(&state, &id).await else {
-        return error(StatusCode::BAD_GATEWAY, "workspace 在 crush 中不存在且注册失败");
-    };
-    let backend = state.registry.for_workspace(&effective_id, &state.meta);
-    let root = match backend.workspace_root(&effective_id).await {
+    let root = match resolve_root(&state, &id) {
         Ok(r) => r,
-        Err(e) => return error(StatusCode::BAD_GATEWAY, &format!("{e:#}")),
+        Err(resp) => return resp,
     };
     let rel = q.path.unwrap_or_default();
     let dir = match safe_join(&root, &rel) {
@@ -161,13 +164,9 @@ pub async fn read(
     Path(id): Path<String>,
     Query(q): Query<PathQuery>,
 ) -> Response {
-    let Some(effective_id) = ensure_ws(&state, &id).await else {
-        return error(StatusCode::BAD_GATEWAY, "workspace 在 crush 中不存在且注册失败");
-    };
-    let backend = state.registry.for_workspace(&effective_id, &state.meta);
-    let root = match backend.workspace_root(&effective_id).await {
+    let root = match resolve_root(&state, &id) {
         Ok(r) => r,
-        Err(e) => return error(StatusCode::BAD_GATEWAY, &format!("{e:#}")),
+        Err(resp) => return resp,
     };
     let rel = match q.path {
         Some(p) if !p.is_empty() => p,
@@ -205,13 +204,9 @@ pub async fn write(
     Query(q): Query<PathQuery>,
     axum::extract::Json(body): axum::extract::Json<WriteBody>,
 ) -> Response {
-    let Some(effective_id) = ensure_ws(&state, &id).await else {
-        return error(StatusCode::BAD_GATEWAY, "workspace 在 crush 中不存在且注册失败");
-    };
-    let backend = state.registry.for_workspace(&effective_id, &state.meta);
-    let root = match backend.workspace_root(&effective_id).await {
+    let root = match resolve_root(&state, &id) {
         Ok(r) => r,
-        Err(e) => return error(StatusCode::BAD_GATEWAY, &format!("{e:#}")),
+        Err(resp) => return resp,
     };
     let rel = match q.path {
         Some(p) if !p.is_empty() => p,

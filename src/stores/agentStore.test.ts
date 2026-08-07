@@ -6,6 +6,7 @@ describe('agentStore 选中持久化', () => {
     localStorage.clear();
     useAgentStore.setState({
       activeWorkspaceId: null,
+      lastWorkspacePath: null,
       activeSessionId: null,
       bySession: {},
       permissionQueue: [],

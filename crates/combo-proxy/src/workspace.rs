@@ -10,10 +10,20 @@ use axum::response::Response;
 use serde_json::{json, Value};
 use std::path::Path as FsPath;
 
-/// GET /v1/workspaces — 列出 combo 的所有 workspace。
+/// GET /v1/workspaces — 列出 combo 的所有 workspace(按 path 去重)。
 pub async fn list(State(state): State<AppState>) -> Response {
     let workspaces = state.meta.list();
-    let arr: Vec<Value> = workspaces.iter().map(workspace_json).collect();
+    // crush 重启后可能产生同一 path 的多个 ID(旧 ID + 新 ID)。
+    // 按 path 去重,保留最后一个(即 crush 最新分配的 ID)。
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let deduped: Vec<&crate::WorkspaceMeta> = workspaces
+        .iter()
+        .rev()
+        .filter(|w| seen.insert(w.path.to_string_lossy().to_string()))
+        .collect();
+    let mut deduped: Vec<_> = deduped.into_iter().rev().collect();
+    deduped.sort_by_key(|w| w.path.to_string_lossy().to_string());
+    let arr: Vec<Value> = deduped.iter().map(|w| workspace_json(w)).collect();
     json_ok(&json!(arr))
 }
 
@@ -182,21 +192,39 @@ pub async fn rename(
 
 /// DELETE /v1/workspaces/{id} — 删除项目。
 /// 清理 combo sqlite 元数据 + 会话镜像,并 best-effort 转发 DELETE 给 crush。
+/// 同时清理同 path 的别名 ID(crush 重启后可能产生多个 ID 指向同一目录)。
 pub async fn delete(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    // best-effort:通知 crush 删除其内存中的 workspace(失败不阻断)
-    if let Some(crush) = state.registry.by_type(BackendType::Crush) {
-        let _ = crush
-            .forward(
-                axum::http::Method::DELETE,
-                &format!("/v1/workspaces/{id}"),
-                &Default::default(),
-                Vec::new(),
-            )
-            .await;
+    // 收集同 path 的所有别名 ID(crush 重启后可能产生多个 ID 指向同一目录)
+    let target_path = state.meta.get(&id).map(|m| m.path.clone());
+    let all = state.meta.list();
+    let aliases: Vec<String> = all
+        .iter()
+        .filter(|w| {
+            if w.id == id {
+                return true;
+            }
+            target_path
+                .as_ref()
+                .map(|p| *p == w.path)
+                .unwrap_or(false)
+        })
+        .map(|w| w.id.clone())
+        .collect();
+
+    for alias_id in &aliases {
+        if let Some(crush) = state.registry.by_type(BackendType::Crush) {
+            let _ = crush
+                .forward(
+                    axum::http::Method::DELETE,
+                    &format!("/v1/workspaces/{alias_id}"),
+                    &Default::default(),
+                    Vec::new(),
+                )
+                .await;
+        }
+        let _ = state.meta.db().delete_conversations_by_workspace(alias_id);
+        state.meta.remove(alias_id);
     }
-    // 级联清理会话镜像 + workspace 元数据
-    let _ = state.meta.db().delete_conversations_by_workspace(&id);
-    state.meta.remove(&id);
     json_ok(&json!({ "ok": true }))
 }
 
@@ -334,13 +362,13 @@ pub async fn ensure_ws(state: &AppState, ws_id: &str) -> Option<String> {
         return None;
     }
     if new_id != ws_id {
-        // crush 重建了 workspace,id 变了:先插入新 ID,确认成功后再删旧 ID,
-        // 避免插入失败导致元数据丢失(之前的 bug:先删后插,insert 静默吞错)
+        // crush 重建了 workspace,id 变了。保留旧 ID 在 sqlite 中(作为别名),
+        // 这样前端持有旧 ID 时文件操作仍能正常解析路径。
+        // 列表展示时按 path 去重,用户不会看到重复项目。
         let mut m = meta.clone();
         m.id = new_id.clone();
         state.meta.insert(m);
         if state.meta.get(&new_id).is_some() {
-            state.meta.remove(ws_id);
             let _ = state.meta.db().move_conversations(ws_id, &new_id);
         } else {
             eprintln!(

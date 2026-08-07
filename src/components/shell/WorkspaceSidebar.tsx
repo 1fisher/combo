@@ -36,11 +36,9 @@ import { useWorkspaces } from '../../hooks/useWorkspaces';
 import { useSessions } from '../../hooks/useSessions';
 import { useActiveWorkspaceId } from '../../hooks/useActiveWorkspaceId';
 import { useAgentStore } from '../../stores/agentStore';
-import { useEditorStore } from '../../stores/editorStore';
 import { useConnectionStore } from '../../stores/connectionStore';
-import { getFileContent, ensureCrush } from '../../lib/api';
+import { ensureCrush } from '../../lib/api';
 import { isTauri } from '../../lib/connection';
-import { FileExplorer } from '../editor/FileExplorer';
 import { ConversationList } from './ConversationList';
 import { SkillsPanel } from './SkillsPanel';
 
@@ -206,7 +204,6 @@ export function WorkspaceSidebar() {
   const [tab, setTab] = useState<'grouped' | 'project'>('project');
   const [projOpen, setProjOpen] = useState(true);
   const [taskOpen, setTaskOpen] = useState(true);
-  const [fileOpen, setFileOpen] = useState(true);
 
   const [adding, setAdding] = useState(false);
   const [pathDraft, setPathDraft] = useState('');
@@ -239,8 +236,6 @@ export function WorkspaceSidebar() {
   const [changingPath, setChangingPath] = useState(false);
   // 供 ⌘/Ctrl+N 快捷键调用的最新 onNewTask(避免闭包过期)
   const onNewTaskRef = useRef<() => void>(() => {});
-
-  const activeWs = workspaces?.find((w) => w.id === active) ?? null;
 
   // ⌘/Ctrl+N 新建任务
   useEffect(() => {
@@ -301,17 +296,6 @@ export function WorkspaceSidebar() {
     }
   }
   onNewTaskRef.current = () => void onNewTask();
-
-  async function onOpenFile(filePath: string, name: string) {
-    if (!active) return;
-    setSidebarError(null);
-    try {
-      const { content } = await getFileContent(active, filePath);
-      useEditorStore.getState().openFile(filePath, name, content);
-    } catch (e) {
-      setSidebarError(e instanceof Error ? e.message : String(e));
-    }
-  }
 
   function startRename(w: { id: string; name?: string; path: string }) {
     setEditingId(w.id);
@@ -653,21 +637,6 @@ export function WorkspaceSidebar() {
               >
                 <ConversationList />
               </Section>
-              {activeWs && (
-                <Section
-                  title="文件"
-                  open={fileOpen}
-                  onToggle={() => setFileOpen((o) => !o)}
-                >
-                  <div className="px-2">
-                    <FileExplorer
-                      workspaceId={activeWs.id}
-                      onOpenFile={onOpenFile}
-                      onError={setSidebarError}
-                    />
-                  </div>
-                </Section>
-              )}
             </>
           ) : (
             workspaces?.map((w) => <WorkspaceGroup key={w.id} ws={w} onContextMenu={openContextMenu} />)
