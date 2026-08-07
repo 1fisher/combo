@@ -70,6 +70,7 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/v1/workspaces/:id/git/log", get(git::git_log))
         .route("/v1/workspaces/:id/git/stage", post(git::stage))
         .route("/v1/workspaces/:id/git/unstage", post(git::unstage))
+        .route("/v1/workspaces/:id/git/discard", post(git::discard))
         .route("/v1/workspaces/:id/git/commit", post(git::commit))
         .route("/v1/workspaces/:id/git/push", post(git::push))
         .route("/v1/workspaces/:id/git/pull", post(git::pull))

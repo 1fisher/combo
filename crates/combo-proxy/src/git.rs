@@ -278,6 +278,59 @@ pub async fn unstage(
     }
 }
 
+/// POST /v1/workspaces/{id}/git/discard  body: { "paths": [...] }
+/// 撤销变更:已跟踪文件 `git checkout HEAD --`(恢复到 HEAD 并取消暂存),
+/// 未跟踪文件 `git clean -f`(直接删除)。
+pub async fn discard(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    axum::extract::Json(body): axum::extract::Json<StageBody>,
+) -> Response {
+    let root = match resolve_root(&state, &id) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+    for p in &body.paths {
+        if let Err(e) = safe_join(&root, p) {
+            return error(StatusCode::BAD_REQUEST, &e.to_string());
+        }
+    }
+
+    // 区分已跟踪 / 未跟踪文件
+    let mut ls_args: Vec<String> = vec!["ls-files".into(), "--".into()];
+    ls_args.extend(body.paths.iter().cloned());
+    let tracked_set: std::collections::HashSet<String> = git_output(&root, &ls_args)
+        .unwrap_or_default()
+        .lines()
+        .map(|s| s.trim().to_string())
+        .collect();
+
+    let (tracked, untracked): (Vec<&String>, Vec<&String>) = body
+        .paths
+        .iter()
+        .partition(|p| tracked_set.contains(*p));
+
+    // 已跟踪:恢复到 HEAD(同时取消暂存)
+    if !tracked.is_empty() {
+        let mut args: Vec<String> = vec!["checkout".into(), "HEAD".into(), "--".into()];
+        args.extend(tracked.iter().map(|s| s.as_str().into()));
+        if let Err(msg) = git_output(&root, &args) {
+            return error(StatusCode::INTERNAL_SERVER_ERROR, &msg);
+        }
+    }
+
+    // 未跟踪:直接删除
+    if !untracked.is_empty() {
+        let mut args: Vec<String> = vec!["clean".into(), "-f".into(), "--".into()];
+        args.extend(untracked.iter().map(|s| s.as_str().into()));
+        if let Err(msg) = git_output(&root, &args) {
+            return error(StatusCode::INTERNAL_SERVER_ERROR, &msg);
+        }
+    }
+
+    ok_json(json!({ "ok": true }))
+}
+
 /// POST /v1/workspaces/{id}/git/commit  body: { "message": "..." }
 pub async fn commit(
     State(state): State<AppState>,

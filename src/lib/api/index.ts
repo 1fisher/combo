@@ -228,6 +228,16 @@ export function gitUnstage(
   });
 }
 
+export function gitDiscard(
+  workspaceId: string,
+  paths: string[]
+): Promise<{ ok: boolean }> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/discard`, {
+    method: 'POST',
+    body: { paths },
+  });
+}
+
 export function gitCommit(
   workspaceId: string,
   message: string
