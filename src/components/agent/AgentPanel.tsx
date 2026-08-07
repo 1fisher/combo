@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useState } from 'react';
-import { Folder, Loader2 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { FileEdit, Folder, Loader2 } from 'lucide-react';
 import { randomUUID } from '../../lib/clientId';
 import { useAgentStore } from '../../stores/agentStore';
 import { cancelAgent, sendAgentMessage } from '../../lib/api';
@@ -12,6 +12,8 @@ import { useSessions } from '../../hooks/useSessions';
 import { MessageList } from './MessageList';
 import { Composer } from './Composer';
 import { ChatEmptyState } from './ChatEmptyState';
+import { FileChangesPanel } from './FileChangesPanel';
+import { extractFileToolCalls } from '../../lib/fileChanges';
 import { cn } from '../../lib/utils';
 
 const BACKEND_LABEL: Record<string, string> = {
@@ -42,6 +44,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
   const [postError, setPostError] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [wsMenuOpen, setWsMenuOpen] = useState(false);
+  const [showChanges, setShowChanges] = useState(false);
 
   // 切换到某会话时,若 store 里没有该会话的消息,从后端拉取历史灌入
   const { data: history, isLoading: historyLoading } = useSessionHistory(workspaceId, sessionId);
@@ -61,6 +64,16 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
     );
   }
   const historyFetching = !!sessionId && messages.length === 0 && historyLoading;
+
+  const changedFileCount = useMemo(() => {
+    const calls = extractFileToolCalls(messages);
+    return new Set(calls.map((c) => c.path)).size;
+  }, [messages]);
+
+  // 切换会话时关闭变更面板
+  useEffect(() => {
+    setShowChanges(false);
+  }, [sessionId]);
   const ws = workspaces?.find((w) => w.id === workspaceId) ?? null;
   const wsName = ws ? (ws.name?.trim() ? ws.name : basename(ws.path)) : undefined;
   const backend = ws ? (BACKEND_LABEL[ws.backend ?? 'crush'] ?? ws.backend) : 'Crush';
@@ -182,9 +195,26 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
           发送失败:{postError}
         </div>
       )}
-      {/* 时间线 */}
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {historyFetching ? (
+      {/* 变更栏 */}
+      {changedFileCount > 0 && !showChanges && (
+        <button
+          onClick={() => setShowChanges(true)}
+          className="flex shrink-0 items-center gap-2 border-b border-border bg-surface/40 px-4 py-1.5 text-xs transition-colors hover:bg-surface-hover"
+        >
+          <FileEdit className="size-3.5 text-brand" />
+          <span className="text-muted-foreground">{changedFileCount} 个文件已变更</span>
+          <span className="ml-auto text-brand">审查变更</span>
+        </button>
+      )}
+      {/* 时间线 / 变更面板 */}
+      <div className={cn('min-h-0 flex-1', showChanges ? 'overflow-hidden' : 'overflow-y-auto')}>
+        {showChanges && workspaceId ? (
+          <FileChangesPanel
+            messages={messages}
+            workspaceId={workspaceId}
+            onClose={() => setShowChanges(false)}
+          />
+        ) : historyFetching ? (
           <div className="flex h-full items-center justify-center">
             <div className="flex items-center gap-2 text-[13px] text-foreground-subtle">
               <Loader2 className="size-4 animate-spin" />

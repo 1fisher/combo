@@ -79,4 +79,26 @@ describe('WorkspaceEventSource', () => {
     const [url] = vi.mocked(fetch).mock.calls[0];
     expect(String(url)).toContain('/v1/workspaces/w1/events?client_id=');
   });
+
+  it('concatenates multiple data: lines per SSE spec', async () => {
+    const seen: EventEnvelope[] = [];
+    // 模拟后端将大负载拆成多行 data: 发送
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        streamOf([
+          'data: {"type":"message","payload":{"type":"created","payload":\n',
+          'data: {"id":"m2","parts":[{"type":"text","data":{"text":"hello world"}}]}}}\n\n',
+        ]),
+        { status: 200, headers: { 'Content-Type': 'text/event-stream' } }
+      )
+    );
+    const src = new WorkspaceEventSource('w1', (env) => seen.push(env), { backoffMs: 5 });
+    src.start();
+    await vi.waitFor(() => expect(seen.length).toBe(1), { timeout: 2000 });
+    src.stop();
+    expect(seen[0].type).toBe('message');
+    const payload = seen[0].payload.payload as { id: string; parts: Array<{ data: { text: string } }> };
+    expect(payload.id).toBe('m2');
+    expect(payload.parts[0].data.text).toBe('hello world');
+  });
 });

@@ -80,15 +80,20 @@ export class WorkspaceEventSource {
       while ((idx = buf.indexOf('\n\n')) >= 0) {
         const chunk = buf.slice(0, idx);
         buf = buf.slice(idx + 2);
-        const dataLine = chunk.split('\n').find((l) => l.startsWith('data:'));
-        if (!dataLine) continue;
+        // SSE 规范:同一事件可有多行 data:,需用 \n 拼接为完整负载
+        const dataLines = chunk
+          .split('\n')
+          .filter((l) => l.startsWith('data:'))
+          .map((l) => l.slice(5));
+        if (dataLines.length === 0) continue;
+        const raw = dataLines.join('\n');
         try {
-          const env = JSON.parse(dataLine.slice(5).trim()) as EventEnvelope;
+          const env = JSON.parse(raw.trim()) as EventEnvelope;
           const inner = env.payload as { type?: string };
           const ts = new Date().toISOString().slice(11, 23);
           // [stream-debug] 完整 SSE 事件(含原始 JSON)
           console.debug(
-            `[${ts}][sse] type="${env.type}" inner="${inner?.type}" data=${dataLine.slice(5).trim().slice(0, 500)}`
+            `[${ts}][sse] type="${env.type}" inner="${inner?.type}" data=${raw.trim().slice(0, 500)}`
           );
           this.onPayload(env);
         } catch (e) {

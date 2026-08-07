@@ -8,6 +8,7 @@ import { Bubble, BubbleContent } from '../ui/bubble';
 import type { MessageVM } from '../../stores/agentStore';
 import { Markdown } from './markdown';
 import { ToolCallCard } from './ToolCallCard';
+import { ToolResultCard } from './ToolResultCard';
 import { cn } from '../../lib/utils';
 
 const ROLE_LABEL: Record<MessageVM['role'], string> = {
@@ -79,6 +80,38 @@ export function MessageItem({
                   return (
                     <div key={i}>
                       <ToolCallCard call={tc as never} workspaceId={workspaceId} />
+                    </div>
+                  );
+                }
+                case 'tool_result': {
+                  const tr = d as {
+                    tool_call_id: string;
+                    name: string;
+                    content: string;
+                    metadata?: string;
+                    is_error?: boolean;
+                  };
+                  // 空内容的 tool_result 不渲染
+                  if (!tr.content || tr.content.trim() === '') return null;
+                  return (
+                    <div key={i}>
+                      <ToolResultCard result={tr as never} />
+                    </div>
+                  );
+                }
+                case 'shell_command': {
+                  const sc = d as { command: string; output: string; exit_code: number };
+                  return (
+                    <div key={i}>
+                      <ToolResultCard
+                        result={{
+                          tool_call_id: `shell-${i}`,
+                          name: 'bash',
+                          content: sc.output,
+                          metadata: JSON.stringify({ exit_code: sc.exit_code }),
+                          is_error: sc.exit_code !== 0,
+                        } as never}
+                      />
                     </div>
                   );
                 }
