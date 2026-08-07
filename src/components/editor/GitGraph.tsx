@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { FilePlus, FileText, MinusCircle, PencilLine } from 'lucide-react';
+import { FilePlus, FileText, GitMerge, MinusCircle, PencilLine } from 'lucide-react';
 import { getGitLog, getGitCommitFiles } from '../../lib/api';
 import type { Api } from '../../lib/api/types';
 import { cn } from '../../lib/utils';
@@ -11,48 +11,37 @@ interface Props {
 }
 
 interface GraphCommit extends Api.GitCommitInfo {
-  /** 在 graph 中的 lane 索引(0=最左) */
   lane: number;
-  /** 父提交在 graph 中的 lane */
   parentLanes: number[];
 }
 
-/** 颜色调色板:不同 lane 用不同颜色 */
 const LANE_COLORS = [
-  '#e06c75', // 红
-  '#61afef', // 蓝
-  '#98c379', // 绿
-  '#e5c07b', // 黄
-  '#c678dd', // 紫
-  '#56b6c2', // 青
-  '#d19a66', // 橙
-  '#ff6b9d', // 粉
+  '#e06c75',
+  '#61afef',
+  '#98c379',
+  '#e5c07b',
+  '#c678dd',
+  '#56b6c2',
+  '#d19a66',
+  '#ff6b9d',
 ];
 
-const DOT_SIZE = 12;
-const DOT_R = DOT_SIZE / 2;
-const ROW_H = 36;
-const LANE_W = 22;
-const GRAPH_PAD = 4;
+const ROW_H = 32;
+const DOT_R = 5;
+const LANE_W = 18;
+const GRAPH_W = 60;
 
-/**
- * 为提交列表分配 lane 索引,计算图布局。
- * 每个 commit 占一个 lane;其父提交继承当前 lane(若父提交有多个子则分配新 lane)。
- */
 function computeLanes(commits: Api.GitCommitInfo[]): Map<string, GraphCommit> {
   const result = new Map<string, GraphCommit>();
   if (!commits || commits.length === 0) return result;
 
-  // lane -> 当前持有该 lane 的 commit hash
   const activeLanes: (string | null)[] = [];
   const hashToLane = new Map<string, number>();
 
   for (const commit of commits) {
     const parents = commit.parents ?? [];
-    // 找到该 commit 应进入的 lane:如果已被某 lane 预分配(作为父提交),用那个
     let lane = hashToLane.get(commit.hash);
     if (lane === undefined) {
-      // 找一个空 lane
       lane = activeLanes.findIndex((l) => l === null);
       if (lane === -1) {
         lane = activeLanes.length;
@@ -65,18 +54,15 @@ function computeLanes(commits: Api.GitCommitInfo[]): Map<string, GraphCommit> {
       activeLanes[lane] = commit.hash;
     }
 
-    // 为父提交分配 lane
     const parentLanes: number[] = [];
     for (let i = 0; i < parents.length; i++) {
       const parentHash = parents[i];
       if (i === 0) {
-        // 第一个父提交继承当前 lane
         if (!hashToLane.has(parentHash)) {
           hashToLane.set(parentHash, lane);
         }
         parentLanes.push(lane);
       } else {
-        // 第二个及以上父提交(merge):分配新 lane
         let pLane = hashToLane.get(parentHash);
         if (pLane === undefined) {
           pLane = activeLanes.findIndex((l) => l === null);
@@ -100,16 +86,139 @@ function computeLanes(commits: Api.GitCommitInfo[]): Map<string, GraphCommit> {
   return result;
 }
 
+function laneX(lane: number): number {
+  return 10 + lane * LANE_W;
+}
+
 function branchColor(lane: number): string {
   return LANE_COLORS[lane % LANE_COLORS.length];
 }
 
-function laneX(lane: number): number {
-  return GRAPH_PAD + lane * LANE_W + DOT_R;
-}
+/**
+ * 渲染单行的 SVG 图形:从当前行顶部画连到父提交的线 + 圆点。
+ * 父提交一定在下方(更老的提交),所以线总是向下延伸。
+ */
+function RowGraph({
+  commit,
+  row,
+  graphCommits,
+  commits,
+}: {
+  commit: Api.GitCommitInfo;
+  row: number;
+  graphCommits: Map<string, GraphCommit>;
+  commits: Api.GitCommitInfo[];
+}) {
+  const gc = graphCommits.get(commit.hash);
+  if (!gc) return null;
 
-function rowY(rowIndex: number): number {
-  return rowIndex * ROW_H + ROW_H / 2;
+  const cx = laneX(gc.lane);
+  const cy = ROW_H / 2;
+  const color = branchColor(gc.lane);
+  const isMerge = gc.parents.length > 1;
+
+  // 画到父提交的线:父提交可能在下一行(正常),也可能更远
+  const lines: React.ReactNode[] = [];
+  gc.parents.forEach((parentHash, pi) => {
+    const parentRow = commits.findIndex((c) => c.hash === parentHash);
+    if (parentRow === -1) return; // 父提交不在列表中(超出 limit)
+
+    const pgc = graphCommits.get(parentHash);
+    if (!pgc) return;
+
+    const parentLane = gc.parentLanes[pi] ?? gc.lane;
+    const px = laneX(parentLane);
+    const rowDiff = parentRow - row;
+
+    if (rowDiff === 1) {
+      // 父提交就是下一行
+      if (parentLane === gc.lane) {
+        // 同 lane:直线
+        lines.push(
+          <line key={`l-${pi}`} x1={cx} y1={cy} x2={cx} y2={ROW_H} stroke={color} strokeWidth={1.5} opacity={0.6} />,
+        );
+      } else {
+        // 不同 lane:贝塞尔曲线
+        lines.push(
+          <path
+            key={`l-${pi}`}
+            d={`M ${cx} ${cy} C ${cx} ${ROW_H}, ${px} ${ROW_H}, ${px} ${ROW_H}`}
+            fill="none"
+            stroke={branchColor(parentLane)}
+            strokeWidth={1.5}
+            opacity={0.6}
+          />,
+        );
+      }
+    } else {
+      // 父提交在更远的地方:线需要穿过中间行,画一段向下的线
+      // 对于第一个父提交(同 lane):线穿到底部
+      // 对于 merge 的额外父提交:从圆点弯曲到目标 lane 再向下
+      if (pi === 0) {
+        lines.push(
+          <line key={`l-${pi}`} x1={cx} y1={cy} x2={cx} y2={ROW_H} stroke={color} strokeWidth={1.5} opacity={0.6} />,
+        );
+      } else {
+        // 弯到 parentLane 再向下出本行底部
+        const midY = ROW_H;
+        lines.push(
+          <path
+            key={`l-${pi}`}
+            d={`M ${cx} ${cy} C ${cx} ${midY}, ${px} ${midY}, ${px} ${ROW_H}`}
+            fill="none"
+            stroke={branchColor(parentLane)}
+            strokeWidth={1.5}
+            opacity={0.6}
+          />,
+        );
+      }
+    }
+  });
+
+  // 画穿过本行(非本行提交)的 lane 线
+  // 检查是否有其他 lane 需要穿过本行
+  const passingLanes = new Set<number>();
+  // 向上看:子提交的 parentLane 如果指向非本 commit,线穿过本行
+  if (row > 0) {
+    for (let r = row - 1; r >= 0; r--) {
+      const aboveCommit = commits[r];
+      const aboveGc = graphCommits.get(aboveCommit.hash);
+      if (!aboveGc) continue;
+      aboveGc.parents.forEach((ph, ppi) => {
+        const parentRow = commits.findIndex((c) => c.hash === ph);
+        if (parentRow !== -1 && parentRow <= row && aboveGc.parentLanes[ppi] !== undefined) {
+          const aboveParentLane = aboveGc.parentLanes[ppi];
+          // 线从 row r 向下到 parentRow,穿过本行
+          if (parentRow < row && aboveParentLane !== gc.lane) {
+            passingLanes.add(aboveParentLane);
+          }
+        }
+      });
+    }
+  }
+  // 检查从上方来到下方父提交的线
+  for (const lane of passingLanes) {
+    if (lane === gc.lane) continue;
+    const lx = laneX(lane);
+    lines.push(
+      <line key={`pass-${lane}`} x1={lx} y1={0} x2={lx} y2={ROW_H} stroke={branchColor(lane)} strokeWidth={1.5} opacity={0.4} />,
+    );
+  }
+
+  return (
+    <svg
+      className="pointer-events-none absolute left-0 top-0"
+      width={GRAPH_W}
+      height={ROW_H}
+    >
+      {lines}
+      {/* 圆点 */}
+      {isMerge && (
+        <circle cx={cx} cy={cy} r={DOT_R + 3} fill="none" stroke={color} strokeWidth={1} opacity={0.5} />
+      )}
+      <circle cx={cx} cy={cy} r={DOT_R} fill={color} stroke={gc.isHead ? '#fff' : 'transparent'} strokeWidth={gc.isHead ? 1.5 : 0} />
+    </svg>
+  );
 }
 
 export function GitGraph({ workspaceId, onShowCommitDiff }: Props) {
@@ -118,25 +227,6 @@ export function GitGraph({ workspaceId, onShowCommitDiff }: Props) {
   const [expandedHash, setExpandedHash] = useState<string | null>(null);
   const [commitFiles, setCommitFiles] = useState<Api.GitCommitFile[]>([]);
   const [filesLoading, setFilesLoading] = useState(false);
-
-  async function toggleExpand(hash: string) {
-    if (expandedHash === hash) {
-      setExpandedHash(null);
-      setCommitFiles([]);
-      return;
-    }
-    setExpandedHash(hash);
-    setCommitFiles([]);
-    setFilesLoading(true);
-    try {
-      const { files } = await getGitCommitFiles(workspaceId, hash);
-      setCommitFiles(files);
-    } catch {
-      setCommitFiles([]);
-    } finally {
-      setFilesLoading(false);
-    }
-  }
 
   useEffect(() => {
     let cancelled = false;
@@ -158,19 +248,24 @@ export function GitGraph({ workspaceId, onShowCommitDiff }: Props) {
 
   const graphCommits = useMemo(() => computeLanes(commits), [commits]);
 
-  const maxLane = useMemo(() => {
-    let max = 0;
-    for (const c of graphCommits.values()) {
-      if (c.lane > max) max = c.lane;
-      for (const p of c.parentLanes) {
-        if (p > max) max = p;
-      }
+  async function toggleExpand(hash: string) {
+    if (expandedHash === hash) {
+      setExpandedHash(null);
+      setCommitFiles([]);
+      return;
     }
-    return max;
-  }, [graphCommits]);
-
-  const graphWidth = GRAPH_PAD * 2 + (maxLane + 1) * LANE_W;
-  const svgHeight = commits.length * ROW_H;
+    setExpandedHash(hash);
+    setCommitFiles([]);
+    setFilesLoading(true);
+    try {
+      const { files } = await getGitCommitFiles(workspaceId, hash);
+      setCommitFiles(files);
+    } catch {
+      setCommitFiles([]);
+    } finally {
+      setFilesLoading(false);
+    }
+  }
 
   return (
     <div className="flex h-full flex-col">
@@ -180,166 +275,110 @@ export function GitGraph({ workspaceId, onShowCommitDiff }: Props) {
         ) : commits.length === 0 ? (
           <div className="px-3 py-4 text-center text-xs text-muted-foreground">无提交历史</div>
         ) : (
-          <div className="relative">
-            {/* SVG 图形层 */}
-            <svg
-              className="absolute left-0 top-0 pointer-events-none"
-              width={graphWidth}
-              height={svgHeight}
-            >
-              {/* 先画连线 */}
-              {commits.map((commit, row) => {
-                const gc = graphCommits.get(commit.hash);
-                if (!gc) return null;
-                const x1 = laneX(gc.lane);
-                const y1 = rowY(row);
-                return gc.parents.map((parentHash, pi) => {
-                  const pgc = graphCommits.get(parentHash);
-                  if (!pgc) return null;
-                  const parentRow = commits.findIndex((c) => c.hash === parentHash);
-                  if (parentRow === -1) return null;
-                  const x2 = laneX(pgc.parentLanes[pi] ?? gc.lane);
-                  const y2 = rowY(parentRow);
-                  const color = branchColor(gc.lane);
-                  const midY = (y1 + y2) / 2;
-                  return (
-                    <path
-                      key={`${commit.hash}-${pi}`}
-                      d={`M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`}
-                      fill="none"
-                      stroke={color}
-                      strokeWidth={1.5}
-                      opacity={0.7}
-                    />
-                  );
-                });
-              })}
-              {/* 再画圆点 */}
-              {commits.map((commit, row) => {
-                const gc = graphCommits.get(commit.hash);
-                if (!gc) return null;
-                const cx = laneX(gc.lane);
-                const cy = rowY(row);
-                const color = branchColor(gc.lane);
-                return (
-                  <circle
-                    key={commit.hash}
-                    cx={cx}
-                    cy={cy}
-                    r={gc.isHead ? DOT_R + 1 : DOT_R - 1}
-                    fill={color}
-                    stroke={gc.isHead ? '#ffffff' : 'none'}
-                    strokeWidth={gc.isHead ? 1.5 : 0}
-                  />
-                );
-              })}
-            </svg>
-            {/* 提交列表 */}
-            <div>
-              {commits.map((commit) => {
-                const gc = graphCommits.get(commit.hash);
-                const paddingLeft = graphWidth + 8;
-                const isExpanded = expandedHash === commit.hash;
-                return (
-                  <div key={commit.hash}>
-                    <div
-                      onClick={() => void toggleExpand(commit.hash)}
-                      className={cn(
-                        'flex cursor-pointer items-center gap-2 border-b border-border/20 py-1.5 pr-2 transition-colors hover:bg-accent/40',
-                        isExpanded && 'bg-accent/30',
-                      )}
-                      style={{ paddingLeft }}
-                    >
-                      {/* 分支标签 */}
-                      <div className="flex shrink-0 items-center gap-1">
-                        {gc?.branches.map((br, bi) => (
-                          <span
-                            key={bi}
-                            className={cn(
-                              'rounded-full px-1.5 py-0.5 text-[9px] font-medium',
-                              br.isRemote
-                                ? 'bg-muted text-muted-foreground'
-                                : 'bg-primary/15 text-primary',
-                            )}
-                          >
-                            {br.name}
-                          </span>
-                        ))}
-                      </div>
-                      {/* 提交信息 */}
-                      <span className="min-w-0 flex-1 truncate text-xs text-foreground">
-                        {commit.message}
-                      </span>
-                      {/* hash */}
-                      <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
-                        {commit.shortHash}
-                      </span>
-                    </div>
-                    {isExpanded && (
-                      <div
-                        className="border-b border-border/20 bg-muted/20 py-1.5"
-                        style={{ paddingLeft }}
-                      >
-                        <div className="mb-1 flex items-center gap-3 text-xs text-muted-foreground">
-                          <span>作者: {commit.author}</span>
-                          <span>日期: {commit.date}</span>
-                          <span className="font-mono">{commit.hash.slice(0, 12)}</span>
-                        </div>
-                        {gc && gc.parents.length > 1 && (
-                          <div className="mb-1 text-[10px] text-amber-400">
-                            ↳ 合并提交({gc.parents.length} 个父提交)
-                          </div>
+          commits.map((commit, row) => {
+            const gc = graphCommits.get(commit.hash);
+            const isExpanded = expandedHash === commit.hash;
+            const isMerge = (gc?.parents.length ?? 0) > 1;
+            return (
+              <div key={commit.hash}>
+                {/* commit 行:固定高度,内部包含 SVG 图 + commit 信息 */}
+                <div
+                  onClick={() => void toggleExpand(commit.hash)}
+                  className={cn(
+                    'relative flex cursor-pointer items-center border-b border-border/20 pr-2 transition-colors hover:bg-accent/40',
+                    isExpanded && 'bg-accent/30',
+                  )}
+                  style={{ height: ROW_H, paddingLeft: GRAPH_W + 4 }}
+                >
+                  {/* SVG 图形 */}
+                  <RowGraph commit={commit} row={row} graphCommits={graphCommits} commits={commits} />
+                  {/* merge 标记 */}
+                  {isMerge && (
+                    <GitMerge className="mr-1 h-3 w-3 shrink-0 text-purple-400" />
+                  )}
+                  {/* 分支标签 */}
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    {gc?.branches.map((br, bi) => (
+                      <span
+                        key={bi}
+                        className={cn(
+                          'rounded-full px-1.5 py-0.5 text-[9px] font-medium',
+                          br.isRemote
+                            ? 'bg-muted text-muted-foreground'
+                            : 'bg-primary/15 text-primary',
                         )}
-                        {/* 变更文件列表 */}
-                        <div className="space-y-0.5">
-                          {filesLoading ? (
-                            <div className="py-1 text-[10px] text-muted-foreground">加载中...</div>
-                          ) : commitFiles.length === 0 ? (
-                            <div className="py-1 text-[10px] text-muted-foreground">无变更文件</div>
-                          ) : (
-                            commitFiles.map((f) => {
-                              const fileName = f.path.split('/').pop() ?? f.path;
-                              return (
-                                <button
-                                  key={f.path}
-                                  onClick={() => onShowCommitDiff(commit.hash, f.path)}
-                                  className="flex w-full items-center gap-1.5 rounded px-1.5 py-0.5 text-left transition-colors hover:bg-accent"
-                                  title={f.path}
-                                >
-                                  <span
-                                    className={cn(
-                                      'shrink-0',
-                                      f.status === 'added' && 'text-emerald-400',
-                                      f.status === 'deleted' && 'text-red-400',
-                                      f.status === 'modified' && 'text-amber-400',
-                                      (f.status === 'renamed' || f.status === 'copied') && 'text-blue-400',
-                                    )}
-                                  >
-                                    {f.status === 'added' && <FilePlus className="h-3 w-3" />}
-                                    {f.status === 'deleted' && <MinusCircle className="h-3 w-3" />}
-                                    {f.status === 'modified' && <PencilLine className="h-3 w-3" />}
-                                    {(f.status === 'renamed' || f.status === 'copied') && <FileText className="h-3 w-3" />}
-                                  </span>
-                                  <span className="truncate font-mono text-[11px] text-foreground">
-                                    {fileName}
-                                  </span>
-                                  {f.path.includes('/') && (
-                                    <span className="truncate text-[9px] text-muted-foreground/60">
-                                      {f.path.slice(0, f.path.lastIndexOf('/'))}
-                                    </span>
-                                  )}
-                                </button>
-                              );
-                            })
-                          )}
-                        </div>
-                      </div>
-                    )}
+                      >
+                        {br.name}
+                      </span>
+                    ))}
                   </div>
-                );
-              })}
-            </div>
-          </div>
+                  {/* 提交信息 */}
+                  <span className="min-w-0 flex-1 truncate px-1.5 text-xs text-foreground">
+                    {commit.message}
+                  </span>
+                  {/* hash */}
+                  <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                    {commit.shortHash}
+                  </span>
+                </div>
+                {/* 展开的详情区:不影响后续行对齐 */}
+                {isExpanded && (
+                  <div className="border-b border-border/20 bg-muted/20 py-1.5" style={{ paddingLeft: GRAPH_W + 8 }}>
+                    <div className="mb-1 flex items-center gap-3 text-xs text-muted-foreground">
+                      <span>{commit.author}</span>
+                      <span>{commit.date}</span>
+                      <span className="font-mono">{commit.hash.slice(0, 12)}</span>
+                      {isMerge && (
+                        <span className="text-purple-400">合并提交</span>
+                      )}
+                    </div>
+                    <div className="space-y-0.5">
+                      {filesLoading ? (
+                        <div className="py-1 text-[10px] text-muted-foreground">加载中...</div>
+                      ) : commitFiles.length === 0 ? (
+                        <div className="py-1 text-[10px] text-muted-foreground">无变更文件</div>
+                      ) : (
+                        commitFiles.map((f) => {
+                          const fileName = f.path.split('/').pop() ?? f.path;
+                          return (
+                            <button
+                              key={f.path}
+                              onClick={() => onShowCommitDiff(commit.hash, f.path)}
+                              className="flex w-full items-center gap-1.5 rounded px-1.5 py-0.5 text-left transition-colors hover:bg-accent"
+                              title={f.path}
+                            >
+                              <span
+                                className={cn(
+                                  'shrink-0',
+                                  f.status === 'added' && 'text-emerald-400',
+                                  f.status === 'deleted' && 'text-red-400',
+                                  f.status === 'modified' && 'text-amber-400',
+                                  (f.status === 'renamed' || f.status === 'copied') && 'text-blue-400',
+                                )}
+                              >
+                                {f.status === 'added' && <FilePlus className="h-3 w-3" />}
+                                {f.status === 'deleted' && <MinusCircle className="h-3 w-3" />}
+                                {f.status === 'modified' && <PencilLine className="h-3 w-3" />}
+                                {(f.status === 'renamed' || f.status === 'copied') && <FileText className="h-3 w-3" />}
+                              </span>
+                              <span className="truncate font-mono text-[11px] text-foreground">
+                                {fileName}
+                              </span>
+                              {f.path.includes('/') && (
+                                <span className="truncate text-[9px] text-muted-foreground/60">
+                                  {f.path.slice(0, f.path.lastIndexOf('/'))}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })
         )}
       </div>
     </div>
