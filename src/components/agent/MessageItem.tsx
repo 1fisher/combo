@@ -1,3 +1,4 @@
+import { Check, CircleAlert } from 'lucide-react';
 import {
   Message,
   MessageContent,
@@ -18,6 +19,17 @@ const ROLE_LABEL: Record<MessageVM['role'], string> = {
   system: '系统',
 };
 
+/** finish reason → 中文操作标签 */
+const REASON_LABELS: Record<string, string> = {
+  end_turn: '文本回复',
+  stop: '已完成',
+  tool_use: '工具调用',
+  tool_use_end: '工具调用',
+  max_tokens: '长度限制',
+  length: '长度限制',
+  content_filter: '内容过滤',
+};
+
 export function MessageItem({
   vm,
   workspaceId,
@@ -26,6 +38,15 @@ export function MessageItem({
   workspaceId?: string;
 }) {
   const isUser = vm.role === 'user';
+
+  // 提取 finish part,不参与 inline 渲染,合并进 header
+  const finishPart = vm.parts.find((p) => p.type === 'finish');
+  const finishReason = (finishPart?.data as { reason?: string } | undefined)?.reason ?? '';
+  const isAbnormal = !['end_turn', 'stop', 'tool_use', 'tool_use_end', ''].includes(finishReason);
+  const reasonLabel = REASON_LABELS[finishReason] ?? finishReason ?? '回复完成';
+  // assistant 且已有 finish part 时,用 reason 标签替换固定的 "Agent"
+  const showFinishBadge = vm.role === 'assistant' && finishPart;
+
   const time = new Date(vm.createdAt).toLocaleTimeString('zh-CN', {
     hour: '2-digit',
     minute: '2-digit',
@@ -34,7 +55,23 @@ export function MessageItem({
     <Message align={isUser ? 'end' : 'start'}>
       <MessageContent>
         <MessageHeader>
-          {ROLE_LABEL[vm.role]}
+          {showFinishBadge ? (
+            <span
+              className={cn(
+                'inline-flex items-center gap-1 text-[11px] font-medium',
+                isAbnormal ? 'text-warning' : 'text-success',
+              )}
+            >
+              {isAbnormal ? (
+                <CircleAlert className="size-3" />
+              ) : (
+                <Check className="size-3" />
+              )}
+              {reasonLabel}
+            </span>
+          ) : (
+            <span>{ROLE_LABEL[vm.role]}</span>
+          )}
           {!vm.streaming && (
             <span className="ml-2 font-mono text-[10px] text-muted-foreground/60">{time}</span>
           )}
@@ -115,17 +152,6 @@ export function MessageItem({
                     </div>
                   );
                 }
-                case 'finish':
-                  return (
-                    <div
-                      key={i}
-                      className="flex items-center gap-2 py-0.5 text-xs text-muted-foreground"
-                    >
-                      <span className="h-px flex-1 bg-border" />
-                      <span className="font-mono">完成 · {d.reason ?? ''}</span>
-                      <span className="h-px flex-1 bg-border" />
-                    </div>
-                  );
                 default:
                   return null;
               }

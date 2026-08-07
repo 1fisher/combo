@@ -49,6 +49,7 @@ export function Composer({
   onPickWorkspace?: () => void;
 }) {
   const areaRef = useRef<HTMLTextAreaElement>(null);
+  const composingRef = useRef(false);
   const agentMode = useAgentStore((s) => s.agentMode);
   const setAgentMode = useAgentStore((s) => s.setAgentMode);
   const mode = MODES.find((m) => m.id === agentMode) ?? MODES[0];
@@ -115,8 +116,15 @@ export function Composer({
                     onChange(e.target.value);
                     autosize();
                   }}
+                  onCompositionStart={() => {
+                    composingRef.current = true;
+                  }}
+                  onCompositionEnd={() => {
+                    composingRef.current = false;
+                  }}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    // keyCode 229 表示输入法正在组合中,此时回车用于确认候选词而非发送
+                    if (e.key === 'Enter' && !e.shiftKey && !composingRef.current && e.keyCode !== 229) {
                       e.preventDefault();
                       submit();
                     }
