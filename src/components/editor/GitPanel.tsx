@@ -364,7 +364,7 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
                 <ChevronDown className="h-2.5 w-2.5 text-muted-foreground" />
               </button>
               {showPrefixMenu && (
-                <div className="absolute bottom-full left-0 z-50 mb-1 w-32 rounded-md border bg-popover p-1 shadow-md">
+                <div className="absolute top-full left-0 z-50 mt-1 max-h-48 overflow-y-auto rounded-md border bg-popover p-1 shadow-md">
                   {COMMIT_PREFIXES.map((p) => (
                     <button
                       key={p.label}

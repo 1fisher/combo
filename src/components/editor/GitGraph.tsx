@@ -38,13 +38,14 @@ const GRAPH_PAD = 4;
  */
 function computeLanes(commits: Api.GitCommitInfo[]): Map<string, GraphCommit> {
   const result = new Map<string, GraphCommit>();
-  if (commits.length === 0) return result;
+  if (!commits || commits.length === 0) return result;
 
   // lane -> 当前持有该 lane 的 commit hash
   const activeLanes: (string | null)[] = [];
   const hashToLane = new Map<string, number>();
 
   for (const commit of commits) {
+    const parents = commit.parents ?? [];
     // 找到该 commit 应进入的 lane:如果已被某 lane 预分配(作为父提交),用那个
     let lane = hashToLane.get(commit.hash);
     if (lane === undefined) {
@@ -63,8 +64,8 @@ function computeLanes(commits: Api.GitCommitInfo[]): Map<string, GraphCommit> {
 
     // 为父提交分配 lane
     const parentLanes: number[] = [];
-    for (let i = 0; i < commit.parents.length; i++) {
-      const parentHash = commit.parents[i];
+    for (let i = 0; i < parents.length; i++) {
+      const parentHash = parents[i];
       if (i === 0) {
         // 第一个父提交继承当前 lane
         if (!hashToLane.has(parentHash)) {

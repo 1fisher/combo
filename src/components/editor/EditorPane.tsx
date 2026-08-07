@@ -154,13 +154,15 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
               Git
             </button>
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className="flex min-h-0 flex-1 flex-col">
             {sidebarMode === 'files' ? (
-              <FileExplorer
-                workspaceId={workspaceId}
-                onOpenFile={handleOpenFile}
-                onError={setLoadError}
-              />
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <FileExplorer
+                  workspaceId={workspaceId}
+                  onOpenFile={handleOpenFile}
+                  onError={setLoadError}
+                />
+              </div>
             ) : (
               <>
                 {/* Git 子标签:变更 / 历史 */}
@@ -190,7 +192,7 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
                     历史
                   </button>
                 </div>
-                <div className="min-h-0 flex-1 overflow-y-auto">
+                <div className="min-h-0 flex-1 overflow-hidden">
                   {gitSubView === 'changes' ? (
                     <GitPanel
                       workspaceId={workspaceId}
