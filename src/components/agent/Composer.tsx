@@ -6,13 +6,17 @@ import {
   ChevronDown,
   Folder,
   Package,
+  Paperclip,
   Plus,
   ShieldAlert,
   Square,
+  X,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { useAgentStore, type AgentMode } from '../../stores/agentStore';
+import type { Api } from '../../lib/api/types';
 import { cn } from '../../lib/utils';
+import { AttachmentPicker } from './AttachmentPicker';
 
 const MODES: { id: AgentMode; label: string; desc: string }[] = [
   { id: 'yolo', label: '完全访问', desc: '自动放行全部权限,不弹窗' },
@@ -29,6 +33,7 @@ const THOUGHT_LEVELS = [
 
 export function Composer({
   workspaceName,
+  workspaceId,
   backend,
   value,
   onChange,
@@ -39,10 +44,11 @@ export function Composer({
   onPickWorkspace,
 }: {
   workspaceName?: string;
+  workspaceId?: string;
   backend: string;
   value: string;
   onChange: (v: string) => void;
-  onSend: () => void;
+  onSend: (attachments: Api.Attachment[]) => void;
   disabled?: boolean;
   running?: boolean;
   onStop?: () => void;
@@ -54,6 +60,8 @@ export function Composer({
   const setAgentMode = useAgentStore((s) => s.setAgentMode);
   const mode = MODES.find((m) => m.id === agentMode) ?? MODES[0];
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [attachments, setAttachments] = useState<Api.Attachment[]>([]);
   const thought = THOUGHT_LEVELS[1];
 
   function autosize() {
@@ -72,8 +80,18 @@ export function Composer({
   }, [value]);
 
   function submit() {
-    if (running || !value.trim() || disabled) return;
-    onSend();
+    if (running || disabled || (!value.trim() && attachments.length === 0)) return;
+    onSend(attachments);
+    setAttachments([]);
+  }
+
+  function handlePick(files: Api.Attachment[]) {
+    setAttachments((prev) => {
+      const existing = new Set(prev.map((a) => a.file_path));
+      const added = files.filter((f) => !existing.has(f.file_path));
+      return [...prev, ...added];
+    });
+    setPickerOpen(false);
   }
 
   return (
@@ -106,6 +124,31 @@ export function Composer({
             }}
           >
             <div className="relative flex flex-col gap-3 overflow-hidden rounded-2xl border border-input-border bg-input p-3 transition-colors hover:border-input-border-hover focus-within:!border-input-border-focused focus-within:bg-input-focused">
+              {/* 附件 chips */}
+              {attachments.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {attachments.map((a) => (
+                    <span
+                      key={a.file_path}
+                      className="group/att flex max-w-full min-w-0 items-center gap-1.5 rounded-lg border border-border bg-surface px-2 py-1 text-xs text-foreground"
+                      title={a.file_path}
+                    >
+                      <Paperclip className="size-3 shrink-0 text-foreground-subtle" />
+                      <span className="min-w-0 max-w-[14rem] truncate font-mono">{a.file_name}</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setAttachments((prev) => prev.filter((x) => x.file_path !== a.file_path))
+                        }
+                        className="rounded p-0.5 text-foreground-subtlest transition-colors hover:bg-surface-hover hover:text-foreground"
+                        aria-label={`移除附件 ${a.file_name}`}
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
               {/* 输入区 */}
               <div className="relative flex-1">
                 <textarea
@@ -141,12 +184,13 @@ export function Composer({
                   <Button
                     variant="ghost"
                     size="icon-sm"
+                    onClick={() => setPickerOpen(true)}
                     className="shrink-0 gap-1 rounded-lg text-foreground hover:text-foreground"
-                    aria-label="添加上下文"
-                    title="添加上下文"
+                    aria-label="添加附件"
+                    title="添加附件"
                   >
                     <Plus className="size-4" />
-                    <span className="sr-only">添加上下文</span>
+                    <span className="sr-only">添加附件</span>
                   </Button>
                   <button
                     type="button"
@@ -266,7 +310,7 @@ export function Composer({
                     <Button
                       type="submit"
                       size="icon-sm"
-                      disabled={!value.trim() || disabled}
+                      disabled={(!value.trim() && attachments.length === 0) || disabled}
                       className="shrink-0 gap-1 rounded-lg bg-brand text-foreground-inverse hover:bg-brand/80"
                       aria-label="发送"
                       title="发送"
@@ -281,6 +325,14 @@ export function Composer({
           </form>
         </div>
       </div>
+      {pickerOpen && workspaceId && (
+        <AttachmentPicker
+          workspaceId={workspaceId}
+          selected={attachments}
+          onPick={handlePick}
+          onClose={() => setPickerOpen(false)}
+        />
+      )}
     </div>
   );
 }

@@ -97,7 +97,7 @@ export function renameSession(
 
 export function sendAgentMessage(
   workspaceId: string,
-  req: { sessionId: string; runId: string; prompt: string }
+  req: { sessionId: string; runId: string; prompt: string; attachments?: Api.Attachment[] }
 ): Promise<void> {
   return apiRequest(`/v1/workspaces/${workspaceId}/agent`, {
     method: 'POST',
@@ -105,6 +105,7 @@ export function sendAgentMessage(
       session_id: req.sessionId,
       run_id: req.runId,
       prompt: req.prompt,
+      attachments: req.attachments,
     } satisfies Api.AgentMessage,
   });
 }

@@ -4,6 +4,7 @@ import { FileEdit, Folder, Loader2 } from 'lucide-react';
 import { randomUUID } from '../../lib/clientId';
 import { useAgentStore } from '../../stores/agentStore';
 import { cancelAgent, sendAgentMessage } from '../../lib/api';
+import type { Api } from '../../lib/api/types';
 import { useSessionHistory } from '../../hooks/useSessions';
 import { useWorkspaceEvents } from '../../hooks/useWorkspaceEvents';
 import { useAgentMode } from '../../hooks/useAgentMode';
@@ -99,7 +100,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
     }
   }
 
-  async function doSend(prompt: string) {
+  async function doSend(prompt: string, attachments: Api.Attachment[] = []) {
     if (!workspaceId) {
       setPostError('请先在侧边栏添加/选择一个项目');
       return;
@@ -140,7 +141,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
     }
     setQueued(sid!, true);
     try {
-      await sendAgentMessage(workspaceId, { sessionId: sid!, runId, prompt });
+      await sendAgentMessage(workspaceId, { sessionId: sid!, runId, prompt, attachments });
       console.debug(`[agent] 发送成功 markRun running sid="${sid}" runId="${runId}"`);
       st.markRun(sid!, runId, 'running');
     } catch (e) {
@@ -165,7 +166,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
           } as never);
           void activateSession(sid);
           setQueued(sid, true);
-          await sendAgentMessage(workspaceId, { sessionId: sid, runId: retryRunId, prompt });
+          await sendAgentMessage(workspaceId, { sessionId: sid, runId: retryRunId, prompt, attachments });
           st.markRun(sid, retryRunId, 'running');
           return;
         } catch (e2) {
@@ -272,10 +273,11 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
         )}
         <Composer
           workspaceName={wsName}
+          workspaceId={workspaceId ?? undefined}
           backend={backend}
           value={draft}
           onChange={setDraft}
-          onSend={() => void doSend(draft)}
+          onSend={(attachments) => void doSend(draft, attachments)}
           running={running}
           onStop={cancel}
           onPickWorkspace={() => setWsMenuOpen((o) => !o)}

@@ -1941,7 +1941,14 @@ export namespace Api {
     session_id: string;
     run_id?: string;
     prompt: string;
-    attachments?: unknown[];
+    attachments?: Attachment[];
+  };
+
+  // 附件(随消息一起发送给 agent;工作区附件走 file_path,不作额外上传)
+  export type Attachment = {
+    file_path: string;
+    file_name: string;
+    mime_type?: string;
   };
 
   export type PermissionRequest = {
