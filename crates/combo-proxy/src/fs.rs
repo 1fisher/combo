@@ -69,17 +69,56 @@ fn error(status: StatusCode, message: &str) -> Response {
     json_response(status, json!({ "message": message }))
 }
 
+/// 绝对路径若在 workspace 根目录内,转为相对路径;否则原样返回(由后续 component 检查拒绝)。
+/// 对于已存在的文件/目录:canonicalize 后做前缀校验。
+/// 对于尚不存在的路径:canonicalize 父目录后做前缀校验。
+fn normalize_abs_path(root: &FsPath, rel: &str) -> anyhow::Result<String> {
+    let p = FsPath::new(rel);
+    if !p.is_absolute() {
+        return Ok(rel.to_string());
+    }
+    // 文件已存在:canonicalize 整条路径后做前缀校验
+    if let Ok(canon) = std::fs::canonicalize(p) {
+        if !canon.starts_with(root) {
+            anyhow::bail!("路径越出 workspace 根目录");
+        }
+        return Ok(canon.strip_prefix(root).unwrap().to_string_lossy().to_string());
+    }
+    // 文件不存在:canonicalize 父目录后做前缀校验
+    let parent = match p.parent() {
+        Some(par) if !par.as_os_str().is_empty() => par,
+        _ => anyhow::bail!("路径越出 workspace 根目录"),
+    };
+    let canon_parent = std::fs::canonicalize(parent)
+        .map_err(|_| anyhow::anyhow!("路径越出 workspace 根目录"))?;
+    if !canon_parent.starts_with(root) {
+        anyhow::bail!("路径越出 workspace 根目录");
+    }
+    let filename = p
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("无效路径"))?;
+    Ok(canon_parent
+        .strip_prefix(root)
+        .unwrap()
+        .join(filename)
+        .to_string_lossy()
+        .to_string())
+}
+
 /// 在 workspace 根内安全拼接相对路径。
 /// 逐段拒绝绝对路径与 `..`;canonicalize 最深已存在祖先后做前缀校验,
 /// 若目标本身是符号链接再做一次最终校验,阻止逃逸到根目录之外。
+/// 绝对路径若在 workspace 根目录内则自动转为相对路径。
 fn safe_join(root: &FsPath, rel: &str) -> anyhow::Result<PathBuf> {
     let root = std::fs::canonicalize(root)
         .map_err(|e| anyhow::anyhow!("无法访问 workspace 根目录: {e}"))?;
     if !root.is_dir() {
         anyhow::bail!("workspace 根目录不是文件夹");
     }
+    // 绝对路径:在 workspace 根目录内则转为相对路径,否则拒绝
+    let rel = normalize_abs_path(&root, rel)?;
     let mut clean = PathBuf::new();
-    for comp in FsPath::new(rel).components() {
+    for comp in FsPath::new(&rel).components() {
         match comp {
             Component::Normal(p) => clean.push(p),
             Component::CurDir => {}

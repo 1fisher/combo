@@ -63,7 +63,13 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
       `[${new Date().toISOString().slice(11, 23)}][agent] render run="${rt?.run?.status ?? 'none'}" running=${running} msgs=${messages.length} streaming=${messages.filter((m) => m.streaming).length}`
     );
   }
-  const historyFetching = !!sessionId && messages.length === 0 && historyLoading;
+  // 有会话但无消息时:
+  // - 历史正在加载(historyLoading) → 显示 loading
+  // - 历史已返回但 store 尚未 hydrate(useEffect 在渲染后才执行) → 也显示 loading
+  // - 历史为空 → 显示空态
+  const noMessages = !!sessionId && messages.length === 0;
+  const waitingForHydrate = noMessages && !!history && history.length > 0;
+  const historyFetching = noMessages && (historyLoading || waitingForHydrate);
 
   const changedFileCount = useMemo(() => {
     const calls = extractFileToolCalls(messages);

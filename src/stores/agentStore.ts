@@ -131,16 +131,29 @@ export const useAgentStore = create<AgentState>()(
   hydrateMessages: (sessionId, msgs) =>
     set((st) => {
       const rt = st.bySession[sessionId];
-      // 已有消息(来自 SSE 实时流)时不覆盖
-      if (rt && rt.messages.length > 0) return st;
-      const messages: MessageVM[] = msgs.map((m) => ({
-        id: m.id,
-        role: m.role,
-        parts: m.parts ?? [],
-        createdAt: toMs(m.created_at),
-        updatedAt: toMs(m.updated_at),
-        streaming: false,
-      }));
+      const historyIds = new Set(msgs.map((m) => m.id));
+      // 保留 store 中不在历史里的消息(SSE 实时推送的新消息),
+      // 避免因 SSE 部分灌入导致完整历史被跳过
+      const liveMessages = rt?.messages.filter((m) => !historyIds.has(m.id)) ?? [];
+      const messages: MessageVM[] = [
+        ...msgs.map((m) => ({
+          id: m.id,
+          role: m.role,
+          parts: m.parts ?? [],
+          createdAt: toMs(m.created_at),
+          updatedAt: toMs(m.updated_at),
+          streaming: false,
+        })),
+        ...liveMessages,
+      ];
+      // 消息 id 列表未变化时跳过更新,避免不必要的渲染
+      if (
+        rt &&
+        rt.messages.length === messages.length &&
+        rt.messages.every((m, i) => m.id === messages[i].id)
+      ) {
+        return st;
+      }
       return {
         bySession: {
           ...st.bySession,
