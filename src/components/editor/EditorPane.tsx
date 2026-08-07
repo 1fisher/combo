@@ -6,6 +6,7 @@ import { getProxyBaseUrl } from '../../lib/connection';
 import { getClientId } from '../../lib/clientId';
 import { cn } from '../../lib/utils';
 import { CodeEditor } from './CodeEditor';
+import { DiffView } from './DiffView';
 import { FileExplorer } from './FileExplorer';
 import { GitPanel } from './GitPanel';
 import { ImageViewer } from './ImageViewer';
@@ -41,6 +42,7 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
   const setHeadContent = useEditorStore((s) => s.setHeadContent);
 
   const [sidebarMode, setSidebarMode] = useState<'files' | 'git'>('files');
+  const [diffPath, setDiffPath] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -50,6 +52,7 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
   const handleOpenFile = useCallback(
     async (filePath: string, name: string) => {
       setLoadError(null);
+      setDiffPath(null);
       const kind = fileKindOf(name);
       try {
         if (kind === 'text') {
@@ -71,6 +74,10 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
     },
     [workspaceId, openFileInStore, setHeadContent],
   );
+
+  function handleShowDiff(filePath: string) {
+    setDiffPath(filePath);
+  }
 
   async function save() {
     if (!active || !active.dirty || saving) return;
@@ -104,6 +111,9 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   });
+
+  // git 模式下右侧显示 diff;否则显示编辑器
+  const showDiff = sidebarMode === 'git' && diffPath !== null;
 
   return (
     <aside className="flex h-full w-full min-h-0 flex-col bg-card">
@@ -149,13 +159,21 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
                 onError={setLoadError}
               />
             ) : (
-              <GitPanel workspaceId={workspaceId} onOpenFile={handleOpenFile} />
+              <GitPanel
+                workspaceId={workspaceId}
+                selectedDiffPath={diffPath}
+                onShowDiff={handleShowDiff}
+                onOpenFile={handleOpenFile}
+              />
             )}
           </div>
         </div>
-        {/* 编辑器区 */}
+        {/* 编辑器 / Diff 区 */}
         <div className="flex min-w-0 flex-1 flex-col">
-          {openFiles.length > 0 ? (
+          {showDiff ? (
+            /* git 模式:右侧显示 diff */
+            <DiffView workspaceId={workspaceId} filePath={diffPath!} />
+          ) : openFiles.length > 0 ? (
             <>
               <div className="flex items-center border-b bg-muted/30">
                 <div className="flex min-w-0 flex-1 overflow-x-auto">
@@ -219,7 +237,9 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
             </>
           ) : (
             <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-              从左侧文件树打开文件
+              {sidebarMode === 'git'
+                ? '从左侧选择变更文件查看 diff'
+                : '从左侧文件树打开文件'}
             </div>
           )}
         </div>

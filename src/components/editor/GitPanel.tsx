@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  ChevronDown,
-  ChevronRight,
   CircleDot,
   FilePlus,
   FileText,
@@ -13,13 +11,11 @@ import {
 } from 'lucide-react';
 import {
   getGitStatus,
-  getGitDiffHead,
   gitStage,
   gitUnstage,
   gitCommit,
 } from '../../lib/api';
 import { useGitStore, type GitFileEntry } from '../../stores/gitStore';
-import { parseUnifiedDiff, type UnifiedDiffHunk } from '../../lib/gitDiff';
 import { cn } from '../../lib/utils';
 
 function statusColor(status: string | null): string {
@@ -60,60 +56,23 @@ function effectiveStatus(f: GitFileEntry): string | null {
   return f.workTreeStatus ?? f.indexStatus;
 }
 
-function DiffViewer({ hunks }: { hunks: UnifiedDiffHunk[] }) {
-  if (hunks.length === 0) {
-    return <div className="px-3 py-2 text-xs text-muted-foreground">无差异</div>;
-  }
-  return (
-    <div className="overflow-x-auto font-mono text-xs">
-      {hunks.map((hunk, hi) => (
-        <div key={hi}>
-          <div className="border-b border-border/40 bg-muted/30 px-2 py-1 text-[10px] text-muted-foreground">
-            @@ -{hunk.oldStart},{hunk.oldLines} +{hunk.newStart},{hunk.newLines}
-          </div>
-          {hunk.lines.map((line, li) => (
-            <div
-              key={li}
-              className={cn(
-                'flex',
-                line.type === 'add' && 'bg-emerald-500/10',
-                line.type === 'remove' && 'bg-red-500/10',
-              )}
-            >
-              <span
-                className={cn(
-                  'w-5 shrink-0 select-none px-1 text-right',
-                  line.type === 'add' && 'text-emerald-400',
-                  line.type === 'remove' && 'text-red-400',
-                  line.type === 'context' && 'text-muted-foreground/50',
-                )}
-              >
-                {line.type === 'add' ? '+' : line.type === 'remove' ? '-' : ' '}
-              </span>
-              <pre className="flex-1 whitespace-pre-wrap break-all px-1">{line.content}</pre>
-            </div>
-          ))}
-        </div>
-      ))}
-    </div>
-  );
-}
-
 interface Props {
   workspaceId: string;
+  /** 当前选中显示 diff 的文件路径 */
+  selectedDiffPath: string | null;
+  /** 点击文件行,在右侧显示 diff */
+  onShowDiff: (path: string) => void;
+  /** 打开文件进行编辑 */
   onOpenFile: (path: string, name: string) => void;
 }
 
-export function GitPanel({ workspaceId, onOpenFile }: Props) {
+export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile }: Props) {
   const branch = useGitStore((s) => s.branch);
   const files = useGitStore((s) => s.files);
   const loading = useGitStore((s) => s.loading);
-  const error = useGitStore((s) => s.error);
   const setGitData = useGitStore((s) => s.setGitData);
   const setLoading = useGitStore((s) => s.setLoading);
 
-  const [expandedFile, setExpandedFile] = useState<string | null>(null);
-  const [diffHunks, setDiffHunks] = useState<UnifiedDiffHunk[]>([]);
   const [staging, setStaging] = useState(false);
   const [commitMsg, setCommitMsg] = useState('');
   const [committing, setCommitting] = useState(false);
@@ -135,21 +94,6 @@ export function GitPanel({ workspaceId, onOpenFile }: Props) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
-
-  async function toggleDiff(filePath: string) {
-    if (expandedFile === filePath) {
-      setExpandedFile(null);
-      return;
-    }
-    setExpandedFile(filePath);
-    setDiffHunks([]);
-    try {
-      const { diff } = await getGitDiffHead(workspaceId, filePath);
-      setDiffHunks(parseUnifiedDiff(diff));
-    } catch {
-      setDiffHunks([]);
-    }
-  }
 
   async function handleStage(filePath: string) {
     setStaging(true);
@@ -221,12 +165,6 @@ export function GitPanel({ workspaceId, onOpenFile }: Props) {
         </button>
       </div>
 
-      {error && (
-        <div className="border-b border-destructive/30 bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
-          {error}
-        </div>
-      )}
-
       {/* 变更文件列表 */}
       <div className="min-h-0 flex-1 overflow-y-auto">
         {files.length === 0 && !loading && (
@@ -236,60 +174,53 @@ export function GitPanel({ workspaceId, onOpenFile }: Props) {
         )}
         {files.map((f) => {
           const st = effectiveStatus(f);
-          const isExpanded = expandedFile === f.path;
           const fileName = f.path.split('/').pop() ?? f.path;
           const dir = f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/')) : '';
           const staged = f.indexStatus !== null;
+          const isSelected = selectedDiffPath === f.path;
           return (
-            <div key={f.path} className="border-b border-border/30">
-              <div
-                className={cn(
-                  'group flex items-center gap-1 px-1.5 py-1 transition-colors hover:bg-accent/50',
-                )}
-              >
-                <button
-                  onClick={() => void toggleDiff(f.path)}
-                  className="shrink-0 text-muted-foreground"
-                >
-                  {isExpanded ? (
-                    <ChevronDown className="h-3 w-3" />
-                  ) : (
-                    <ChevronRight className="h-3 w-3" />
-                  )}
-                </button>
-                <span className={cn('shrink-0', statusColor(st))}>
-                  {statusIcon(st)}
-                </span>
-                <button
-                  onClick={() => onOpenFile(f.path, fileName)}
-                  className="flex min-w-0 flex-1 items-center gap-1 text-left"
-                  title={f.path}
-                >
-                  <span className="truncate font-mono text-xs">{fileName}</span>
-                  {dir && (
-                    <span className="truncate text-[10px] text-muted-foreground/60">{dir}</span>
-                  )}
-                </button>
-                {/* 暂存 / 取消暂存 */}
-                <button
-                  onClick={() => void (staged ? handleUnstage(f.path) : handleStage(f.path))}
-                  disabled={staging}
-                  className={cn(
-                    'shrink-0 rounded p-0.5 transition-colors disabled:opacity-50',
-                    staged
-                      ? 'text-emerald-400 hover:text-emerald-300'
-                      : 'text-muted-foreground hover:text-foreground',
-                  )}
-                  title={staged ? '取消暂存' : '暂存'}
-                >
-                  <Plus className="h-3 w-3" />
-                </button>
-              </div>
-              {isExpanded && (
-                <div className="border-t border-border/20 bg-background/50">
-                  <DiffViewer hunks={diffHunks} />
-                </div>
+            <div
+              key={f.path}
+              className={cn(
+                'group flex items-center gap-1 px-1.5 py-1 transition-colors',
+                isSelected ? 'bg-accent' : 'hover:bg-accent/50',
               )}
+            >
+              <span className={cn('shrink-0', statusColor(st))}>
+                {statusIcon(st)}
+              </span>
+              <button
+                onClick={() => onShowDiff(f.path)}
+                className="flex min-w-0 flex-1 items-center gap-1 text-left"
+                title={f.path}
+              >
+                <span className="truncate font-mono text-xs">{fileName}</span>
+                {dir && (
+                  <span className="truncate text-[10px] text-muted-foreground/60">{dir}</span>
+                )}
+              </button>
+              {/* 打开文件编辑 */}
+              <button
+                onClick={() => onOpenFile(f.path, fileName)}
+                className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-60"
+                title="打开文件"
+              >
+                <FileText className="h-3 w-3" />
+              </button>
+              {/* 暂存 / 取消暂存 */}
+              <button
+                onClick={() => void (staged ? handleUnstage(f.path) : handleStage(f.path))}
+                disabled={staging}
+                className={cn(
+                  'shrink-0 rounded p-0.5 transition-colors disabled:opacity-50',
+                  staged
+                    ? 'text-emerald-400 hover:text-emerald-300'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+                title={staged ? '取消暂存' : '暂存'}
+              >
+                <Plus className="h-3 w-3" />
+              </button>
             </div>
           );
         })}
