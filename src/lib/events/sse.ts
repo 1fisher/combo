@@ -1,4 +1,5 @@
 import { getClientId } from '../clientId';
+import { getAccessToken } from '../authToken';
 import { ensureProxyBaseUrl } from '../connection';
 import type { EventEnvelope } from './payloadTypes';
 
@@ -58,8 +59,11 @@ export class WorkspaceEventSource {
     // 等待代理地址就绪(未解析时异步解析),避免相对 URL 连到页面源
     const base = await ensureProxyBaseUrl();
     const url = `${base}/v1/workspaces/${this.workspaceId}/events?client_id=${encodeURIComponent(getClientId())}`;
+    const headers: Record<string, string> = { Accept: 'text/event-stream' };
+    const token = getAccessToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
     const res = await fetch(url, {
-      headers: { Accept: 'text/event-stream' },
+      headers,
       signal: controller.signal,
     });
     if (!res.ok || !res.body) {

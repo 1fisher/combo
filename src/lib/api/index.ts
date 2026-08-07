@@ -340,3 +340,47 @@ export function setConfigKey(
     body: { key, value, scope } satisfies Api.ConfigSetRequest,
   });
 }
+
+// ---------- 访问令牌(移动端扫码远程连接) ----------
+
+export interface AccessToken {
+  token: string;
+  label: string;
+  created_at: number;
+  expires_at: number | null;
+  last_used_at: number | null;
+  revoked: boolean;
+}
+
+export interface CreatedToken {
+  token: string;
+  label: string;
+  created_at: number;
+  expires_at: number | null;
+}
+
+/** 生成新的访问令牌(桌面端调用,嵌入二维码供移动端扫码)。 */
+export function createAccessToken(label = '', ttlSecs?: number): Promise<CreatedToken> {
+  const body: { label: string; ttl_secs?: number } = { label };
+  if (ttlSecs !== undefined) body.ttl_secs = ttlSecs;
+  return apiRequest('/v1/auth/token', { method: 'POST', body });
+}
+
+/** 列出全部令牌。 */
+export function listAccessTokens(): Promise<AccessToken[]> {
+  return apiRequest('/v1/auth/tokens');
+}
+
+/** 校验令牌是否有效。 */
+export function verifyAccessToken(token: string): Promise<{ valid: boolean }> {
+  return apiRequest('/v1/auth/verify', { query: { token } });
+}
+
+/** 撤销令牌(按 token 或全部)。 */
+export function revokeAccessToken(token?: string, all = false): Promise<{ revoked: string }> {
+  const query: Record<string, string> = {};
+  if (all) query.all = 'true';
+  else if (token) query.token = token;
+  return apiRequest('/v1/auth/token/revoke', { method: 'DELETE', query });
+}
+

@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal as TerminalIcon, X } from 'lucide-react';
 import { ensureProxyBaseUrl } from '../../lib/connection';
+import { getAccessToken } from '../../lib/authToken';
 import { useWorkspaces } from '../../hooks/useWorkspaces';
 import '@xterm/xterm/css/xterm.css';
 
@@ -85,9 +86,12 @@ export function TerminalPanel({
     void ensureProxyBaseUrl().then((httpBase) => {
       if (cancelled) return;
       const wsBase = httpBase.replace(/^http/, 'ws');
+      // WebSocket 无法设置 Authorization header,通过 query 参数传递令牌
+      const token = getAccessToken();
+      const tokenQs = token ? `?token=${encodeURIComponent(token)}` : '';
       const wsUrl = workspaceId
-        ? `${wsBase}/v1/workspaces/${workspaceId}/terminal`
-        : `${wsBase}/v1/terminal`;
+        ? `${wsBase}/v1/workspaces/${workspaceId}/terminal${tokenQs}`
+        : `${wsBase}/v1/terminal${tokenQs}`;
 
       socket = new WebSocket(wsUrl);
       socket.binaryType = 'arraybuffer';

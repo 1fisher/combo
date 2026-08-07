@@ -44,6 +44,18 @@ pub struct StoredMessage {
     pub updated_at: i64,
 }
 
+/// 远程访问令牌(移动端扫码连接用)。
+#[derive(Clone, Debug)]
+pub struct AccessToken {
+    pub token: String,
+    pub label: String,
+    pub created_at: i64,
+    /// 过期时间(unix 秒);None 表示永不过期。
+    pub expires_at: Option<i64>,
+    pub last_used_at: Option<i64>,
+    pub revoked: bool,
+}
+
 /// 线程安全的 sqlite 连接。所有方法都是短事务,持锁时间可忽略。
 pub struct ComboDb {
     conn: Mutex<Connection>,
@@ -92,7 +104,15 @@ impl ComboDb {
                 created_at    INTEGER NOT NULL,
                 updated_at    INTEGER NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_msg_session ON messages(workspace_id, session_id);",
+            CREATE INDEX IF NOT EXISTS idx_msg_session ON messages(workspace_id, session_id);
+            CREATE TABLE IF NOT EXISTS access_tokens (
+                token        TEXT PRIMARY KEY,
+                label        TEXT NOT NULL DEFAULT '',
+                created_at   INTEGER NOT NULL,
+                expires_at   INTEGER,
+                last_used_at INTEGER,
+                revoked      INTEGER NOT NULL DEFAULT 0
+            );",
         )?;
         Ok(Self {
             conn: Mutex::new(conn),
@@ -384,6 +404,91 @@ impl ComboDb {
             .execute("DELETE FROM messages WHERE workspace_id=?1", params![workspace_id])?;
         Ok(())
     }
+
+    // ---------- access_tokens ----------
+
+    /// 写入一个新令牌。
+    pub fn insert_token(
+        &self,
+        token: &str,
+        label: &str,
+        expires_at: Option<i64>,
+    ) -> anyhow::Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO access_tokens (token, label, created_at, expires_at, last_used_at, revoked)
+             VALUES (?1, ?2, ?3, ?4, NULL, 0)",
+            params![token, label, unix_secs(), expires_at],
+        )?;
+        Ok(())
+    }
+
+    /// 按 token 明文查询单条令牌(不论是否已撤销)。
+    pub fn get_token(&self, token: &str) -> anyhow::Result<Option<AccessToken>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT token, label, created_at, expires_at, last_used_at, revoked
+             FROM access_tokens WHERE token=?1",
+        )?;
+        let mut rows = stmt.query(params![token])?;
+        let row = match rows.next()? {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+        Ok(Some(row_to_token(row)?))
+    }
+
+    /// 列出全部令牌(按创建时间倒序)。
+    pub fn list_tokens(&self) -> anyhow::Result<Vec<AccessToken>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT token, label, created_at, expires_at, last_used_at, revoked
+             FROM access_tokens ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map([], row_to_token)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// 更新令牌的最后使用时间。
+    pub fn touch_token(&self, token: &str) -> anyhow::Result<()> {
+        self.conn.lock().unwrap().execute(
+            "UPDATE access_tokens SET last_used_at=?1 WHERE token=?2",
+            params![unix_secs(), token],
+        )?;
+        Ok(())
+    }
+
+    /// 撤销指定令牌(软删除,保留记录)。
+    pub fn revoke_token(&self, token: &str) -> anyhow::Result<bool> {
+        let n = self.conn.lock().unwrap().execute(
+            "UPDATE access_tokens SET revoked=1 WHERE token=?1",
+            params![token],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// 撤销所有令牌。
+    pub fn revoke_all_tokens(&self) -> anyhow::Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute("UPDATE access_tokens SET revoked=1", [])?;
+        Ok(())
+    }
+}
+
+fn row_to_token(r: &rusqlite::Row<'_>) -> rusqlite::Result<AccessToken> {
+    Ok(AccessToken {
+        token: r.get(0)?,
+        label: r.get(1)?,
+        created_at: r.get(2)?,
+        expires_at: r.get(3)?,
+        last_used_at: r.get(4)?,
+        revoked: r.get::<_, i64>(5)? != 0,
+    })
 }
 
 fn unix_secs() -> i64 {
@@ -532,5 +637,37 @@ mod tests {
         let ids = vec!["ws-new".to_string(), "ws-old".to_string()];
         let convs = db.list_conversations_multi(&ids).unwrap();
         assert_eq!(convs.len(), 3);
+    }
+
+    #[test]
+    fn token_insert_get_list_revoke() {
+        let db = ComboDb::in_memory();
+        db.insert_token("tok-1", "手机A", Some(999)).unwrap();
+        db.insert_token("tok-2", "手机B", None).unwrap();
+
+        let got = db.get_token("tok-1").unwrap().unwrap();
+        assert_eq!(got.label, "手机A");
+        assert_eq!(got.expires_at, Some(999));
+        assert!(!got.revoked);
+
+        let all = db.list_tokens().unwrap();
+        assert_eq!(all.len(), 2);
+
+        // 撤销单个
+        assert!(db.revoke_token("tok-1").unwrap());
+        let got = db.get_token("tok-1").unwrap().unwrap();
+        assert!(got.revoked);
+        assert!(!db.revoke_token("missing").unwrap());
+
+        // touch 更新最后使用时间
+        db.touch_token("tok-2").unwrap();
+        let got = db.get_token("tok-2").unwrap().unwrap();
+        assert!(got.last_used_at.is_some());
+
+        // 撤销全部
+        db.revoke_all_tokens().unwrap();
+        for t in db.list_tokens().unwrap() {
+            assert!(t.revoked);
+        }
     }
 }

@@ -241,3 +241,18 @@ health 都走同一 base,跨域由 CORS 放开。
   分隔条与后退/前进在移动端隐藏;终端/编辑器已是全内容区切换。触屏下
   悬停才显示的操作(重命名笔、右键菜单)改为 `md:` 前缀常驻 + 行内
   `⋯`(MoreHorizontal)按钮打开同一上下文菜单(桌面右键行为不变)。
+- **访问令牌(远程连接鉴权)**:移动端扫码远程访问时由 proxy 强制校验令牌。
+  桌面端打开「移动端远程控制」(`MobileConnectDialog`)时调
+  `POST /v1/auth/token` 生成新令牌(默认 7 天有效),令牌嵌入二维码 URL
+  (`?token=<xxx>`)。手机扫码打开前端页面后,`main.tsx` 调
+  `extractTokenFromUrl` 从 URL 提取令牌存入 localStorage(`combo.token`)并
+  从地址栏移除。此后每个请求自动携带:`apiRequest`/SSE 走
+  `Authorization: Bearer <token>` header,终端 WebSocket 走 `?token=` query
+  (浏览器 WebSocket 不能设 header)。后端鉴权中间件
+  (`auth::require_token`,axum `from_fn_with_state`,在 router CORS 之内、
+  `with_state` 之前)对**非回环、非公开端点**的请求强制校验:本地回环
+  (127.0.0.1/::1,通过 `into_make_service_with_connect_info` 注入的
+  `ConnectInfo<SocketAddr>` 判定)和公开端点(`/v1/health`、`/v1/auth/*`)放行,
+  其余无有效令牌返回 401。令牌落盘 sqlite `access_tokens` 表(`db.rs`,
+  支持撤销/过期/记录最后使用时间),刷新令牌时撤销旧令牌。令牌明文由
+  `/dev/urandom` 生成 32 字节 hex(64 字符),不可用时回退到时间+pid 哈希。

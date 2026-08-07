@@ -1,4 +1,5 @@
 pub mod backend;
+pub mod auth;
 pub mod control;
 pub mod db;
 pub mod fs;
@@ -54,14 +55,19 @@ pub fn parse_upstream(s: &str) -> anyhow::Result<Upstream> {
     }
 }
 
-/// Runs the proxy on `listener`.
+/// Runs the proxy on `listener`。
 pub async fn serve(
     listener: tokio::net::TcpListener,
     state: AppState,
     allowed_origins: Vec<String>,
 ) -> anyhow::Result<()> {
     let app = build_router(state, allowed_origins);
-    axum::serve(listener, app).await?;
+    // 注入 ConnectInfo<SocketAddr> 供鉴权中间件判断请求来源是否回环。
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 

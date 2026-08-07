@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
-import { Check, Copy, Smartphone, Wifi } from 'lucide-react';
+import { Check, Copy, KeyRound, RefreshCw, Smartphone, Wifi } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -10,7 +10,9 @@ import {
   DialogDescription,
 } from '../ui/dialog';
 import { Button } from '../ui/button';
+import { cn } from '../../lib/utils';
 import { getProxyBaseUrl } from '../../lib/connection';
+import { createAccessToken, revokeAccessToken, type CreatedToken } from '../../lib/api';
 
 interface MobileConnectDialogProps {
   open: boolean;
@@ -20,12 +22,15 @@ interface MobileConnectDialogProps {
 export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogProps) {
   const [qrDataUrl, setQrDataUrl] = useState('');
   const [copied, setCopied] = useState(false);
+  const [tokenInfo, setTokenInfo] = useState<CreatedToken | null>(null);
+  const [loading, setLoading] = useState(false);
+  // ref 持有当前令牌,供 generateToken 撤销旧令牌时读取,
+  // 避免 useCallback 依赖 tokenInfo 导致与 useEffect 形成无限循环。
+  const tokenRef = useRef<CreatedToken | null>(null);
 
-  // 构建移动端访问地址:把 localhost 替换为局域网 IP
-  const mobileUrl = (() => {
+  const pageUrl = (() => {
     if (typeof window === 'undefined') return '';
     const { protocol, hostname, port, pathname } = window.location;
-    // 如果是 localhost / 127.0.0.1,给出提示(需要用 IP)
     return `${protocol}//${hostname}:${port}${pathname}`;
   })();
 
@@ -36,8 +41,42 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
 
   const proxyUrl = typeof window !== 'undefined' ? getProxyBaseUrl() : '';
 
+  // 扫码后移动端打开的地址:页面 URL + token 参数
+  const mobileUrl = tokenInfo ? `${pageUrl}?token=${encodeURIComponent(tokenInfo.token)}` : '';
+
+  const generateToken = useCallback(async () => {
+    setLoading(true);
+    try {
+      // 刷新时先撤销上一枚令牌,避免令牌堆积
+      if (tokenRef.current) {
+        void revokeAccessToken(tokenRef.current.token).catch(() => {});
+      }
+      const t = await createAccessToken('移动端扫码');
+      tokenRef.current = t;
+      setTokenInfo(t);
+    } catch {
+      tokenRef.current = null;
+      setTokenInfo(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    if (!open || !mobileUrl) return;
+    if (!open) {
+      tokenRef.current = null;
+      setTokenInfo(null);
+      setQrDataUrl('');
+      return;
+    }
+    void generateToken();
+  }, [open, generateToken]);
+
+  useEffect(() => {
+    if (!open || !mobileUrl) {
+      setQrDataUrl('');
+      return;
+    }
     QRCode.toDataURL(mobileUrl, {
       width: 240,
       margin: 1,
@@ -49,10 +88,17 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
   }, [open, mobileUrl]);
 
   function copyUrl() {
+    if (!mobileUrl) return;
     navigator.clipboard?.writeText(mobileUrl).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
+  }
+
+  function fmtExpiry(expiresAt: number | null): string {
+    if (!expiresAt) return '永久';
+    const days = Math.max(0, Math.round((expiresAt * 1000 - Date.now()) / 86_400_000));
+    return days > 0 ? `${days} 天后过期` : '已过期';
   }
 
   return (
@@ -64,7 +110,7 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
             移动端远程控制
           </DialogTitle>
           <DialogDescription className="text-[13px]">
-            扫描二维码,在手机上打开 combo 进行远程操作。
+            扫描二维码,在手机上打开 combo 进行远程操作。每次生成独立访问令牌,校验通过后方可连接。
           </DialogDescription>
         </DialogHeader>
 
@@ -81,10 +127,31 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
               />
             ) : (
               <div className="flex size-52 items-center justify-center text-[13px] text-foreground-subtle">
-                生成中…
+                {loading ? '生成中…' : '等待令牌'}
               </div>
             )}
           </div>
+
+          {/* 令牌信息 */}
+          {tokenInfo && (
+            <div className="flex w-full items-center justify-between rounded-lg border border-border bg-surface-hover px-3 py-2 text-[12px]">
+              <span className="flex items-center gap-1.5 text-foreground-subtle">
+                <KeyRound className="size-3.5 text-brand" />
+                访问令牌 · {fmtExpiry(tokenInfo.expires_at)}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 gap-1 px-1.5 text-[12px] text-foreground-subtle"
+                onClick={() => void generateToken()}
+                disabled={loading}
+                title="重新生成令牌"
+              >
+                <RefreshCw className={cn('size-3', loading && 'animate-spin')} />
+                刷新
+              </Button>
+            </div>
+          )}
 
           {/* 访问地址 */}
           <div className="w-full">
@@ -94,7 +161,7 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
             </div>
             <div className="flex items-center gap-1.5">
               <code className="min-w-0 flex-1 truncate rounded-lg bg-surface-hover px-2.5 py-1.5 text-[12px] text-foreground">
-                {mobileUrl}
+                {mobileUrl || '生成中…'}
               </code>
               <Button
                 variant="outline"
@@ -103,6 +170,7 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
                 aria-label="复制地址"
                 title="复制地址"
                 className="shrink-0"
+                disabled={!mobileUrl}
               >
                 {copied ? (
                   <Check className="size-3.5 text-success" />

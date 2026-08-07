@@ -1,5 +1,6 @@
 import { getProxyBaseUrl } from '../connection';
 import { getClientId } from '../clientId';
+import { getAccessToken } from '../authToken';
 
 export class ApiError extends Error {
   constructor(
@@ -18,12 +19,16 @@ export async function apiRequest<T>(
   const base = getProxyBaseUrl();
   const q = new URLSearchParams(opts.query ?? {});
   if (!q.has('client_id')) q.set('client_id', getClientId());
+  // 远程访问令牌:通过 Authorization header 传递(proxy 中间件校验)
+  const token = getAccessToken();
+  const headers: Record<string, string> = {};
+  if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
+  if (token) headers.Authorization = `Bearer ${token}`;
   let res: Response;
   try {
     res = await fetch(`${base}${path}?${q.toString()}`, {
       method: opts.method ?? 'GET',
-      headers:
-        opts.body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
+      headers,
       body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
     });
   } catch {

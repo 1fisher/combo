@@ -1,3 +1,4 @@
+use crate::auth;
 use crate::fs;
 use crate::git;
 use crate::handler::proxy;
@@ -8,6 +9,7 @@ use crate::terminal;
 use crate::workspace;
 use crate::control;
 use crate::AppState;
+use axum::middleware::from_fn_with_state;
 use axum::routing::{delete, get, post};
 use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
@@ -30,6 +32,9 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
             .allow_headers(Any)
     };
     Router::new()
+        .route("/v1/auth/token", post(auth::create_token).get(auth::list_tokens))
+        .route("/v1/auth/verify", get(auth::verify_token))
+        .route("/v1/auth/token/revoke", delete(auth::revoke_token))
         .route("/v1/skills", get(skills::list))
         .route("/v1/terminal", get(terminal::terminal_default))
         .route("/v1/control/ensure-crush", post(control::ensure_crush))
@@ -80,6 +85,7 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/v1/workspaces/:id/git/commit/diff", get(git::commit_diff))
         .route("/v1/workspaces/:id/terminal", get(terminal::terminal))
         .fallback(proxy)
+        .layer(from_fn_with_state(state.clone(), auth::require_token))
         .with_state(state)
         .layer(cors)
 }
