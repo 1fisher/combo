@@ -244,6 +244,44 @@ impl ComboDb {
         Ok(out)
     }
 
+    /// 跨多个 workspace ID 查询会话(crush 重启后同一 path 有多个别名 ID,
+    /// 会话可能挂在任一别名下)。
+    pub fn list_conversations_multi(
+        &self,
+        workspace_ids: &[String],
+    ) -> anyhow::Result<Vec<ConversationMeta>> {
+        if workspace_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let conn = self.conn.lock().unwrap();
+        let placeholders = workspace_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT id, workspace_id, title, message_count, created_at, updated_at
+             FROM conversations WHERE workspace_id IN ({placeholders})
+             ORDER BY updated_at DESC"
+        );
+        let params: Vec<&dyn rusqlite::ToSql> = workspace_ids
+            .iter()
+            .map(|s| s as &dyn rusqlite::ToSql)
+            .collect();
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params.as_slice(), |r| {
+            Ok(ConversationMeta {
+                id: r.get(0)?,
+                workspace_id: r.get(1)?,
+                title: r.get(2)?,
+                message_count: r.get(3)?,
+                created_at: r.get(4)?,
+                updated_at: r.get(5)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     pub fn delete_conversation(&self, id: &str) -> anyhow::Result<()> {
         self.conn
             .lock()
@@ -480,5 +518,19 @@ mod tests {
         // 按 session_id 删除,不依赖 workspace_id
         db.delete_messages_by_session("new-ws", "s1").unwrap();
         assert_eq!(db.list_messages("old-ws", "s1").unwrap().len(), 0);
+    }
+
+    #[test]
+    fn list_conversations_multi_finds_across_alias_ids() {
+        // crush 重启后同一 path 产生多个 workspace ID,
+        // 会话可能挂在任一别名下,list_conversations_multi 应全部找到。
+        let db = ComboDb::in_memory();
+        db.upsert_conversation(&conv("c1", "ws-old")).unwrap();
+        db.upsert_conversation(&conv("c2", "ws-old")).unwrap();
+        db.upsert_conversation(&conv("c3", "ws-new")).unwrap();
+
+        let ids = vec!["ws-new".to_string(), "ws-old".to_string()];
+        let convs = db.list_conversations_multi(&ids).unwrap();
+        assert_eq!(convs.len(), 3);
     }
 }

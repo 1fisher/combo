@@ -13,8 +13,24 @@ use axum::response::Response;
 use serde_json::{json, Value};
 
 /// GET /v1/workspaces/{id}/sessions — 从 sqlite 读镜像列表。
+/// 同一 path 可能有多个别名 ID(crush 重启),会话可能挂在任一别名下,
+/// 因此按 path 解析全部别名 ID 后合并查询。
 pub async fn list(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    match state.meta.db().list_conversations(&id) {
+    // 解析该 workspace 的 path,再找出同 path 的所有别名 ID
+    let ws_ids: Vec<String> = match state.meta.get(&id) {
+        Some(meta) => {
+            let target_path = meta.path.to_string_lossy().to_string();
+            state
+                .meta
+                .list()
+                .into_iter()
+                .filter(|w| w.path.to_string_lossy() == target_path)
+                .map(|w| w.id)
+                .collect()
+        }
+        None => vec![id.clone()],
+    };
+    match state.meta.db().list_conversations_multi(&ws_ids) {
         Ok(convs) => {
             let arr: Vec<Value> = convs.iter().map(session_json).collect();
             json_ok(&json!(arr))
