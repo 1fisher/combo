@@ -197,6 +197,14 @@ export namespace Api {
 
   export type GitLog = { commits: GitCommitInfo[] };
 
+  export type GitBranchInfo = {
+    branch: string;
+    upstream: string | null;
+    hasRemote: boolean;
+    ahead: number;
+    behind: number;
+  };
+
   // 技能(combo-proxy 本地端点,扫描 ~/.config/crush/skills/)
   export type Skill = {
     name: string;

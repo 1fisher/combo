@@ -336,6 +336,111 @@ pub async fn git_log(
     }
 }
 
+/// 获取本地与远程分支的领先/落后计数。
+fn ahead_behind(root: &std::path::Path, branch: &str) -> (u32, u32) {
+    let upstream = match git_output(root, ["rev-parse", "--abbrev-ref", &format!("{branch}@{{upstream}}")]) {
+        Ok(s) => s.trim().to_string(),
+        Err(_) => return (0, 0),
+    };
+    let count_fmt = "--pretty=format:%D\t";
+    let range = format!("{upstream}..HEAD");
+    let ahead = git_output(root, ["rev-list", "--count", &range])
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .unwrap_or(0);
+    let range_behind = format!("HEAD..{upstream}");
+    let behind = git_output(root, ["rev-list", "--count", &range_behind])
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .unwrap_or(0);
+    let _ = count_fmt; // suppress unused warning
+    (ahead, behind)
+}
+
+/// POST /v1/workspaces/{id}/git/push
+/// 推送当前分支到远程。带 `--set-upstream` 以便首次推送自动关联。
+pub async fn push(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let root = match resolve_root(&state, &id) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+    // 先获取当前分支名
+    let branch = git_output(&root, ["rev-parse", "--abbrev-ref", "HEAD"])
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| "HEAD".to_string());
+
+    // 检查是否已有上游分支
+    let has_upstream = git_output(&root, ["rev-parse", "--abbrev-ref", "@{upstream}"]).is_ok();
+
+    let mut args: Vec<String> = vec!["push".into()];
+    if !has_upstream && branch != "HEAD" {
+        args.push("--set-upstream".into());
+        args.push("origin".into());
+        args.push(branch.clone());
+    } else {
+        args.push("origin".into());
+    }
+
+    match git_output(&root, &args) {
+        Ok(output) => ok_json(json!({ "ok": true, "output": output })),
+        Err(msg) => error(StatusCode::INTERNAL_SERVER_ERROR, &msg),
+    }
+}
+
+/// POST /v1/workspaces/{id}/git/pull
+/// 拉取并合并远程变更。
+pub async fn pull(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let root = match resolve_root(&state, &id) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+    match git_output(&root, ["pull", "--no-edit"]) {
+        Ok(output) => ok_json(json!({ "ok": true, "output": output })),
+        Err(msg) => error(StatusCode::INTERNAL_SERVER_ERROR, &msg),
+    }
+}
+
+/// POST /v1/workspaces/{id}/git/fetch
+/// 获取远程变更(不合并)。
+pub async fn fetch(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let root = match resolve_root(&state, &id) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+    match git_output(&root, ["fetch", "--all", "--prune"]) {
+        Ok(output) => ok_json(json!({ "ok": true, "output": output })),
+        Err(msg) => error(StatusCode::INTERNAL_SERVER_ERROR, &msg),
+    }
+}
+
+/// GET /v1/workspaces/{id}/git/branch-info
+/// 返回当前分支名、上游分支、领先/落后计数。
+pub async fn branch_info(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let root = match resolve_root(&state, &id) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+    let branch = git_output(&root, ["rev-parse", "--abbrev-ref", "HEAD"])
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| "HEAD".to_string());
+    let upstream = git_output(&root, ["rev-parse", "--abbrev-ref", "@{upstream}"])
+        .ok()
+        .map(|s| s.trim().to_string());
+    let has_remote = git_output(&root, ["remote"]).map(|s| s.trim().to_string()).unwrap_or_default();
+    let (ahead, behind) = if upstream.is_some() && !has_remote.is_empty() {
+        ahead_behind(&root, &branch)
+    } else {
+        (0, 0)
+    };
+    ok_json(json!({
+        "branch": branch,
+        "upstream": upstream,
+        "hasRemote": !has_remote.is_empty(),
+        "ahead": ahead,
+        "behind": behind,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

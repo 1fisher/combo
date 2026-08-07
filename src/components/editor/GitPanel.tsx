@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
+  ArrowDown,
+  ArrowUp,
   ChevronDown,
   CircleDot,
+  Download,
   FilePlus,
   FileText,
   GitCommitHorizontal,
@@ -12,10 +15,15 @@ import {
 } from 'lucide-react';
 import {
   getGitStatus,
+  getGitBranchInfo,
   gitStage,
   gitUnstage,
   gitCommit,
+  gitPush,
+  gitPull,
+  gitFetch,
 } from '../../lib/api';
+import type { Api } from '../../lib/api/types';
 import { useGitStore, type GitFileEntry } from '../../stores/gitStore';
 import { cn } from '../../lib/utils';
 
@@ -99,12 +107,19 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
   const [showPrefixMenu, setShowPrefixMenu] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [commitError, setCommitError] = useState<string | null>(null);
+  const [branchInfo, setBranchInfo] = useState<Api.GitBranchInfo | null>(null);
+  const [remoteBusy, setRemoteBusy] = useState<null | 'push' | 'pull' | 'fetch'>(null);
+  const [remoteError, setRemoteError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const status = await getGitStatus(workspaceId);
+      const [status, info] = await Promise.all([
+        getGitStatus(workspaceId),
+        getGitBranchInfo(workspaceId).catch(() => null),
+      ]);
       setGitData(status.branch, status.files);
+      if (info) setBranchInfo(info);
     } catch (e) {
       console.error('[GitPanel] git status failed:', e);
       setGitData('', []);
@@ -169,23 +184,99 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
     }
   }
 
+  async function handleRemote(op: 'push' | 'pull' | 'fetch') {
+    if (remoteBusy) return;
+    setRemoteBusy(op);
+    setRemoteError(null);
+    try {
+      if (op === 'push') await gitPush(workspaceId);
+      else if (op === 'pull') await gitPull(workspaceId);
+      else await gitFetch(workspaceId);
+      await refresh();
+    } catch (e) {
+      setRemoteError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRemoteBusy(null);
+    }
+  }
+
   return (
     <div className="flex h-full flex-col">
-      {/* 头部:分支 + 刷新 */}
-      <div className="flex shrink-0 items-center gap-2 border-b px-3 py-2">
-        <GitCommitHorizontal className="h-3.5 w-3.5 shrink-0 text-primary/60" />
-        <span className="truncate font-mono text-xs text-foreground">{branch || '—'}</span>
-        <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
-          {files.length > 0 && `${files.length} 个变更`}
-        </span>
-        <button
-          onClick={() => void refresh()}
-          disabled={loading}
-          className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
-          title="刷新"
-        >
-          <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin')} />
-        </button>
+      {/* 头部:分支 + ahead/behind + 拉取/推送/获取 + 刷新 */}
+      <div className="flex shrink-0 flex-col gap-1.5 border-b px-3 py-2">
+        <div className="flex items-center gap-2">
+          <GitCommitHorizontal className="h-3.5 w-3.5 shrink-0 text-primary/60" />
+          <span className="truncate font-mono text-xs text-foreground">{branch || '—'}</span>
+          {branchInfo?.upstream && (
+            <span className="truncate text-[10px] text-muted-foreground/60">
+              ← {branchInfo.upstream}
+            </span>
+          )}
+          <span className="ml-auto shrink-0 text-[10px] text-muted-foreground">
+            {files.length > 0 && `${files.length} 个变更`}
+          </span>
+          <button
+            onClick={() => void refresh()}
+            disabled={loading}
+            className="shrink-0 rounded p-0.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+            title="刷新"
+          >
+            <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin')} />
+          </button>
+        </div>
+        {/* ahead/behind 标记 + remote 操作按钮 */}
+        {branchInfo?.hasRemote && (
+          <div className="flex items-center gap-1">
+            {branchInfo.upstream && (branchInfo.ahead > 0 || branchInfo.behind > 0) && (
+              <div className="flex items-center gap-1">
+                {branchInfo.ahead > 0 && (
+                  <span className="flex items-center gap-0.5 rounded bg-emerald-500/15 px-1 py-0.5 text-[9px] font-medium text-emerald-400">
+                    <ArrowUp className="h-2.5 w-2.5" />
+                    {branchInfo.ahead}
+                  </span>
+                )}
+                {branchInfo.behind > 0 && (
+                  <span className="flex items-center gap-0.5 rounded bg-amber-500/15 px-1 py-0.5 text-[9px] font-medium text-amber-400">
+                    <ArrowDown className="h-2.5 w-2.5" />
+                    {branchInfo.behind}
+                  </span>
+                )}
+              </div>
+            )}
+            <div className="ml-auto flex items-center gap-0.5">
+              <button
+                onClick={() => void handleRemote('fetch')}
+                disabled={!!remoteBusy}
+                className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+                title="获取远程变更"
+              >
+                <Download className={cn('h-3 w-3', remoteBusy === 'fetch' && 'animate-spin')} />
+                获取
+              </button>
+              <button
+                onClick={() => void handleRemote('pull')}
+                disabled={!!remoteBusy}
+                className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+                title="拉取并合并"
+              >
+                <ArrowDown className={cn('h-3 w-3', remoteBusy === 'pull' && 'animate-bounce')} />
+                拉取
+              </button>
+              <button
+                onClick={() => void handleRemote('push')}
+                disabled={!!remoteBusy}
+                className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+                title="推送到远程"
+              >
+                <ArrowUp className={cn('h-3 w-3', remoteBusy === 'push' && 'animate-bounce')} />
+                推送
+              </button>
+            </div>
+          </div>
+        )}
+        {remoteError && (
+          <div className="text-[10px] text-destructive">{remoteError}</div>
+        )}
       </div>
 
       {/* 变更文件列表 */}

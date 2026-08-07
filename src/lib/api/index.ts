@@ -238,6 +238,24 @@ export function gitCommit(
   });
 }
 
+export function gitPush(workspaceId: string): Promise<{ ok: boolean; output: string }> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/push`, { method: 'POST' });
+}
+
+export function gitPull(workspaceId: string): Promise<{ ok: boolean; output: string }> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/pull`, { method: 'POST' });
+}
+
+export function gitFetch(workspaceId: string): Promise<{ ok: boolean; output: string }> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/fetch`, { method: 'POST' });
+}
+
+export function getGitBranchInfo(
+  workspaceId: string
+): Promise<Api.GitBranchInfo> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/branch-info`);
+}
+
 export function getGitLog(
   workspaceId: string,
   limit?: number
