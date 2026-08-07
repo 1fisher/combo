@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
+  ChevronDown,
   CircleDot,
   FilePlus,
   FileText,
@@ -56,6 +57,25 @@ function effectiveStatus(f: GitFileEntry): string | null {
   return f.workTreeStatus ?? f.indexStatus;
 }
 
+interface CommitPrefix {
+  label: string;
+  color: string;
+  dot: string;
+}
+
+const COMMIT_PREFIXES: CommitPrefix[] = [
+  { label: 'feat', color: 'text-emerald-400', dot: 'bg-emerald-400' },
+  { label: 'fix', color: 'text-red-400', dot: 'bg-red-400' },
+  { label: 'docs', color: 'text-blue-400', dot: 'bg-blue-400' },
+  { label: 'style', color: 'text-purple-400', dot: 'bg-purple-400' },
+  { label: 'refactor', color: 'text-amber-400', dot: 'bg-amber-400' },
+  { label: 'perf', color: 'text-orange-400', dot: 'bg-orange-400' },
+  { label: 'test', color: 'text-cyan-400', dot: 'bg-cyan-400' },
+  { label: 'chore', color: 'text-slate-400', dot: 'bg-slate-400' },
+  { label: 'ci', color: 'text-indigo-400', dot: 'bg-indigo-400' },
+  { label: 'build', color: 'text-teal-400', dot: 'bg-teal-400' },
+];
+
 interface Props {
   workspaceId: string;
   /** 当前选中显示 diff 的文件路径 */
@@ -75,6 +95,8 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
 
   const [staging, setStaging] = useState(false);
   const [commitMsg, setCommitMsg] = useState('');
+  const [commitPrefix, setCommitPrefix] = useState<string>('feat');
+  const [showPrefixMenu, setShowPrefixMenu] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [commitError, setCommitError] = useState<string | null>(null);
 
@@ -135,8 +157,9 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
     if (!commitMsg.trim() || committing) return;
     setCommitting(true);
     setCommitError(null);
+    const prefix = commitPrefix ? `${commitPrefix}: ` : '';
     try {
-      await gitCommit(workspaceId, commitMsg.trim());
+      await gitCommit(workspaceId, `${prefix}${commitMsg.trim()}`);
       setCommitMsg('');
       await refresh();
     } catch (e) {
@@ -230,7 +253,59 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
       {files.length > 0 && (
         <div className="shrink-0 border-t p-2">
           <div className="mb-1.5 flex items-center justify-between">
-            <span className="text-[10px] font-medium text-muted-foreground">提交变更</span>
+            <div className="relative">
+              <button
+                onClick={() => setShowPrefixMenu((v) => !v)}
+                className="flex items-center gap-1 rounded border border-border bg-background px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:bg-accent"
+              >
+                {commitPrefix ? (
+                  <>
+                    <span
+                      className={cn('h-1.5 w-1.5 rounded-full', COMMIT_PREFIXES.find((p) => p.label === commitPrefix)?.dot)}
+                    />
+                    <span className={COMMIT_PREFIXES.find((p) => p.label === commitPrefix)?.color}>
+                      {commitPrefix}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-muted-foreground">无前缀</span>
+                )}
+                <ChevronDown className="h-2.5 w-2.5 text-muted-foreground" />
+              </button>
+              {showPrefixMenu && (
+                <div className="absolute bottom-full left-0 z-50 mb-1 w-32 rounded-md border bg-popover p-1 shadow-md">
+                  {COMMIT_PREFIXES.map((p) => (
+                    <button
+                      key={p.label}
+                      onClick={() => {
+                        setCommitPrefix(p.label);
+                        setShowPrefixMenu(false);
+                      }}
+                      className={cn(
+                        'flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-[10px] font-medium transition-colors hover:bg-accent',
+                        commitPrefix === p.label && 'bg-accent/50',
+                      )}
+                    >
+                      <span className={cn('h-1.5 w-1.5 rounded-full', p.dot)} />
+                      <span className={p.color}>{p.label}</span>
+                    </button>
+                  ))}
+                  <div className="my-0.5 border-t border-border/50" />
+                  <button
+                    onClick={() => {
+                      setCommitPrefix('');
+                      setShowPrefixMenu(false);
+                    }}
+                    className={cn(
+                      'flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-accent',
+                      commitPrefix === '' && 'bg-accent/50',
+                    )}
+                  >
+                    无前缀
+                  </button>
+                </div>
+              )}
+            </div>
             <button
               onClick={() => void handleStageAll()}
               disabled={staging}
