@@ -1,5 +1,10 @@
 # AGENTS.md
 
+> **查询优先级**:本仓库已接入 codebase-memory MCP。定位符号、查调用关系、
+> 找定义/引用、了解架构等,**优先使用 `mcp_codebase-memory_*` 工具**
+> (`search_graph` / `get_code_snippet` / `trace_path` / `get_architecture` /
+> `query_graph` / `search_code`),而非直接 grep/读大文件。项目名传 `combo`。
+
 ## What this is
 
 **combo** is a multi-agent IDE desktop app: a Tauri v2 shell + React 19/TypeScript
