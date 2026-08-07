@@ -149,5 +149,76 @@ export namespace Api {
     batch_request_id: string;
     responses: QuestionResponse[];
   };
+
+  // 文件服务(combo-proxy 本地端点,swagger 无此定义)
+  export type FileEntryType = 'dir' | 'file';
+  export type FileEntry = {
+    name: string;
+    path: string;
+    type: FileEntryType;
+    size: number;
+  };
+  export type FileContent = { content: string };
+  export type WriteFileResult = { ok: boolean };
+
+  // Git 服务(combo-proxy 本地端点,在 workspace 根目录执行 git 子命令)
+  export type GitFileStatus =
+    | 'modified'
+    | 'added'
+    | 'deleted'
+    | 'renamed'
+    | 'copied'
+    | 'unmerged'
+    | 'untracked'
+    | 'ignored';
+
+  export type GitStatusFile = {
+    path: string;
+    oldPath?: string;
+    indexStatus: GitFileStatus | null;
+    workTreeStatus: GitFileStatus | null;
+  };
+
+  export type GitStatus = {
+    branch: string;
+    files: GitStatusFile[];
+  };
+
+  export type GitDiff = { diff: string };
+
+  export type GitFileAtHead = { content: string };
+
+  export type GitCommitInfo = {
+    hash: string;
+    author: string;
+    date: string;
+    message: string;
+  };
+
+  export type GitLog = { commits: GitCommitInfo[] };
+
+  // 技能(combo-proxy 本地端点,扫描 ~/.config/crush/skills/)
+  export type Skill = {
+    name: string;
+    dir_name: string;
+    description: string;
+    path: string;
+  };
+
+  // 配置(rune 透传)
+  export type ConfigScope = 0 | 1; // 0=global, 1=workspace
+  export type ConfigSetRequest = {
+    key: string;
+    value: unknown;
+    scope?: ConfigScope;
+  };
+  export type WorkspaceConfig = {
+    options?: {
+      disabled_skills?: string[];
+      skills_paths?: string[];
+      [key: string]: unknown;
+    };
+    [key: string]: unknown;
+  };
 }
 EOF

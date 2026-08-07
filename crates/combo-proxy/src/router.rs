@@ -1,4 +1,5 @@
 use crate::fs;
+use crate::git;
 use crate::handler::proxy;
 use crate::host;
 use crate::session;
@@ -61,6 +62,15 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
             get(fs::read).put(fs::write),
         )
         .route("/v1/workspaces/:id/files/raw", get(fs::raw))
+        .route("/v1/workspaces/:id/git/status", get(git::status))
+        .route("/v1/workspaces/:id/git/diff", get(git::diff))
+        .route("/v1/workspaces/:id/git/diff/staged", get(git::diff_staged))
+        .route("/v1/workspaces/:id/git/diff/head", get(git::diff_head))
+        .route("/v1/workspaces/:id/git/file", get(git::file_at_head))
+        .route("/v1/workspaces/:id/git/log", get(git::git_log))
+        .route("/v1/workspaces/:id/git/stage", post(git::stage))
+        .route("/v1/workspaces/:id/git/unstage", post(git::unstage))
+        .route("/v1/workspaces/:id/git/commit", post(git::commit))
         .route("/v1/workspaces/:id/terminal", get(terminal::terminal))
         .fallback(proxy)
         .with_state(state)

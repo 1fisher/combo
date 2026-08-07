@@ -169,6 +169,84 @@ export function putFileContent(
   });
 }
 
+// Git 服务:combo-proxy 本地端点,在 workspace 根目录执行 git 子命令
+export function getGitStatus(workspaceId: string): Promise<Api.GitStatus> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/status`);
+}
+
+export function getGitDiff(
+  workspaceId: string,
+  path?: string
+): Promise<Api.GitDiff> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/diff`, {
+    query: path ? { path } : undefined,
+  });
+}
+
+export function getGitDiffStaged(
+  workspaceId: string,
+  path?: string
+): Promise<Api.GitDiff> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/diff/staged`, {
+    query: path ? { path } : undefined,
+  });
+}
+
+export function getGitDiffHead(
+  workspaceId: string,
+  path?: string
+): Promise<Api.GitDiff> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/diff/head`, {
+    query: path ? { path } : undefined,
+  });
+}
+
+export function getGitFileAtHead(
+  workspaceId: string,
+  path: string
+): Promise<Api.GitFileAtHead> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/file`, { query: { path } });
+}
+
+export function gitStage(
+  workspaceId: string,
+  paths: string[]
+): Promise<{ ok: boolean }> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/stage`, {
+    method: 'POST',
+    body: { paths },
+  });
+}
+
+export function gitUnstage(
+  workspaceId: string,
+  paths: string[]
+): Promise<{ ok: boolean }> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/unstage`, {
+    method: 'POST',
+    body: { paths },
+  });
+}
+
+export function gitCommit(
+  workspaceId: string,
+  message: string
+): Promise<{ ok: boolean; output: string }> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/commit`, {
+    method: 'POST',
+    body: { message },
+  });
+}
+
+export function getGitLog(
+  workspaceId: string,
+  limit?: number
+): Promise<Api.GitLog> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/log`, {
+    query: limit !== undefined ? { limit: String(limit) } : undefined,
+  });
+}
+
 // 技能:combo-proxy 本地端点,扫描 ~/.config/crush/skills/
 export function listSkills(): Promise<Api.Skill[]> {
   return apiRequest('/v1/skills');

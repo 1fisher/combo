@@ -9,6 +9,8 @@ export interface OpenFile {
   original: string;
   dirty: boolean;
   kind: FileKind;
+  /** 文件在 git HEAD 的内容(用于 git gutter 对比);null 表示尚未获取 */
+  headContent?: string | null;
 }
 
 interface EditorState {
@@ -20,6 +22,8 @@ interface EditorState {
   closeFile: (path: string) => void;
   /** 保存成功后落盘内容,清掉脏标记 */
   markSaved: (path: string, content: string) => void;
+  /** 更新文件的 HEAD 内容(git gutter 基准) */
+  setHeadContent: (path: string, headContent: string | null) => void;
   /** 切换项目时清空所有打开的文件 */
   resetOpenFiles: () => void;
 }
@@ -63,6 +67,13 @@ export const useEditorStore = create<EditorState>((set) => ({
     set((st) => ({
       openFiles: st.openFiles.map((f) =>
         f.path === path ? { ...f, content, original: content, dirty: false } : f
+      ),
+    })),
+
+  setHeadContent: (path, headContent) =>
+    set((st) => ({
+      openFiles: st.openFiles.map((f) =>
+        f.path === path ? { ...f, headContent } : f
       ),
     })),
 

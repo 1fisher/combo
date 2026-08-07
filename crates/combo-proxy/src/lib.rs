@@ -2,6 +2,7 @@ pub mod backend;
 pub mod control;
 pub mod db;
 pub mod fs;
+pub mod git;
 pub mod handler;
 pub mod host;
 pub mod manager;

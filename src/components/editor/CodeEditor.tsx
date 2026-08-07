@@ -10,6 +10,7 @@ import { css } from '@codemirror/lang-css';
 import { html } from '@codemirror/lang-html';
 import { markdown } from '@codemirror/lang-markdown';
 import { rust } from '@codemirror/lang-rust';
+import { createGitGutter } from './gitGutter';
 
 function extOf(filename: string): string {
   const lower = filename.toLowerCase();
@@ -58,15 +59,22 @@ export function CodeEditor({
   value,
   filename,
   onChange,
+  headContent,
 }: {
   value: string;
   filename: string;
   onChange: (value: string) => void;
+  /** 文件在 HEAD 的内容;提供后启用 git gutter 行标记 */
+  headContent?: string;
 }) {
   const extensions = useMemo(() => {
     const lang = langForFile(filename);
-    return lang ? [lang, EditorView.lineWrapping] : [EditorView.lineWrapping];
-  }, [filename]);
+    const exts = lang ? [lang, EditorView.lineWrapping] : [EditorView.lineWrapping];
+    if (headContent !== undefined) {
+      exts.push(...createGitGutter(headContent));
+    }
+    return exts;
+  }, [filename, headContent]);
 
   return (
     <CodeMirror

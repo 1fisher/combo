@@ -1,12 +1,13 @@
-import { useEffect, useState } from 'react';
-import { X } from 'lucide-react';
-import { getFileContent, putFileContent } from '../../lib/api';
+import { useCallback, useEffect, useState } from 'react';
+import { Folder, GitBranch, X } from 'lucide-react';
+import { getFileContent, getGitFileAtHead, putFileContent } from '../../lib/api';
 import { useEditorStore, type FileKind } from '../../stores/editorStore';
 import { getProxyBaseUrl } from '../../lib/connection';
 import { getClientId } from '../../lib/clientId';
 import { cn } from '../../lib/utils';
 import { CodeEditor } from './CodeEditor';
 import { FileExplorer } from './FileExplorer';
+import { GitPanel } from './GitPanel';
 import { ImageViewer } from './ImageViewer';
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.ico']);
@@ -27,7 +28,7 @@ function fileUrl(workspaceId: string, path: string): string {
 }
 
 /**
- * 右侧编辑器面板:文件目录树 + 打开文件 tabs + 行号 + textarea + 保存。
+ * 右侧编辑器面板:文件目录树 / Git 面板 + 打开文件 tabs + 行号 + 编辑器 + 保存。
  */
 export function EditorPane({ workspaceId }: { workspaceId: string }) {
   const openFiles = useEditorStore((s) => s.openFiles);
@@ -37,28 +38,39 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
   const closeFile = useEditorStore((s) => s.closeFile);
   const markSaved = useEditorStore((s) => s.markSaved);
   const openFileInStore = useEditorStore((s) => s.openFile);
+  const setHeadContent = useEditorStore((s) => s.setHeadContent);
 
+  const [sidebarMode, setSidebarMode] = useState<'files' | 'git'>('files');
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const active = openFiles.find((f) => f.path === activePath) ?? null;
 
-  async function handleOpenFile(filePath: string, name: string) {
-    setLoadError(null);
-    const kind = fileKindOf(name);
-    try {
-      if (kind === 'text') {
-        const { content } = await getFileContent(workspaceId, filePath);
-        openFileInStore(filePath, name, content, kind);
-      } else {
-        // 图片 / PDF 不读文本内容,直接用 URL 预览
-        openFileInStore(filePath, name, '', kind);
+  const handleOpenFile = useCallback(
+    async (filePath: string, name: string) => {
+      setLoadError(null);
+      const kind = fileKindOf(name);
+      try {
+        if (kind === 'text') {
+          const { content } = await getFileContent(workspaceId, filePath);
+          openFileInStore(filePath, name, content, kind);
+          // 异步获取 HEAD 内容用于 git gutter(失败时静默忽略)
+          try {
+            const { content: headContent } = await getGitFileAtHead(workspaceId, filePath);
+            setHeadContent(filePath, headContent);
+          } catch {
+            setHeadContent(filePath, null);
+          }
+        } else {
+          openFileInStore(filePath, name, '', kind);
+        }
+      } catch (e) {
+        setLoadError(e instanceof Error ? e.message : String(e));
       }
-    } catch (e) {
-      setLoadError(e instanceof Error ? e.message : String(e));
-    }
-  }
+    },
+    [workspaceId, openFileInStore, setHeadContent],
+  );
 
   async function save() {
     if (!active || !active.dirty || saving) return;
@@ -67,6 +79,13 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
     try {
       await putFileContent(workspaceId, active.path, active.content);
       markSaved(active.path, active.content);
+      // 保存后刷新 HEAD 内容(gutter 基准更新)
+      try {
+        const { content: headContent } = await getGitFileAtHead(workspaceId, active.path);
+        setHeadContent(active.path, headContent);
+      } catch {
+        /* ignore */
+      }
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -94,17 +113,44 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
         </div>
       )}
       <div className="flex min-h-0 flex-1">
-        {/* 文件目录树 */}
-        <div className="flex w-[220px] shrink-0 flex-col border-r">
-          <div className="shrink-0 border-b px-3 py-2 text-xs font-medium text-muted-foreground">
-            文件
+        {/* 左侧面板:文件 / Git */}
+        <div className="flex w-[240px] shrink-0 flex-col border-r">
+          <div className="flex shrink-0 items-center border-b">
+            <button
+              onClick={() => setSidebarMode('files')}
+              className={cn(
+                'flex flex-1 items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors',
+                sidebarMode === 'files'
+                  ? 'border-b-2 border-primary text-foreground'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <Folder className="h-3.5 w-3.5" />
+              文件
+            </button>
+            <button
+              onClick={() => setSidebarMode('git')}
+              className={cn(
+                'flex flex-1 items-center justify-center gap-1.5 py-2 text-xs font-medium transition-colors',
+                sidebarMode === 'git'
+                  ? 'border-b-2 border-primary text-foreground'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <GitBranch className="h-3.5 w-3.5" />
+              Git
+            </button>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <FileExplorer
-              workspaceId={workspaceId}
-              onOpenFile={handleOpenFile}
-              onError={setLoadError}
-            />
+            {sidebarMode === 'files' ? (
+              <FileExplorer
+                workspaceId={workspaceId}
+                onOpenFile={handleOpenFile}
+                onError={setLoadError}
+              />
+            ) : (
+              <GitPanel workspaceId={workspaceId} onOpenFile={handleOpenFile} />
+            )}
           </div>
         </div>
         {/* 编辑器区 */}
@@ -122,7 +168,7 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
                         'group flex shrink-0 items-center gap-1.5 border-r px-3 py-2 font-mono text-xs transition-colors',
                         f.path === activePath
                           ? 'bg-background text-foreground'
-                          : 'text-muted-foreground hover:bg-muted/60'
+                          : 'text-muted-foreground hover:bg-muted/60',
                       )}
                     >
                       {f.dirty && (
@@ -161,6 +207,7 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
                       value={active.content}
                       filename={active.name}
                       onChange={(val) => setContent(active.path, val)}
+                      headContent={active.headContent ?? undefined}
                     />
                   )}
                 </div>

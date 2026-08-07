@@ -36,7 +36,7 @@ fn mime_for(name: &str) -> &'static str {
 }
 
 /// 从 sqlite 元数据解析 workspace 根目录,不依赖 crush 在线。
-fn resolve_root(state: &AppState, id: &str) -> Result<PathBuf, Response> {
+pub fn resolve_root(state: &AppState, id: &str) -> Result<PathBuf, Response> {
     match state.meta.get(id) {
         Some(m) => Ok(m.path),
         None => Err(error(StatusCode::NOT_FOUND, "workspace 不存在")),
@@ -61,11 +61,11 @@ fn json_response(status: StatusCode, value: serde_json::Value) -> Response {
         .unwrap()
 }
 
-fn ok_json(value: serde_json::Value) -> Response {
+pub fn ok_json(value: serde_json::Value) -> Response {
     json_response(StatusCode::OK, value)
 }
 
-fn error(status: StatusCode, message: &str) -> Response {
+pub fn error(status: StatusCode, message: &str) -> Response {
     json_response(status, json!({ "message": message }))
 }
 
@@ -109,7 +109,7 @@ fn normalize_abs_path(root: &FsPath, rel: &str) -> anyhow::Result<String> {
 /// 逐段拒绝绝对路径与 `..`;canonicalize 最深已存在祖先后做前缀校验,
 /// 若目标本身是符号链接再做一次最终校验,阻止逃逸到根目录之外。
 /// 绝对路径若在 workspace 根目录内则自动转为相对路径。
-fn safe_join(root: &FsPath, rel: &str) -> anyhow::Result<PathBuf> {
+pub fn safe_join(root: &FsPath, rel: &str) -> anyhow::Result<PathBuf> {
     let root = std::fs::canonicalize(root)
         .map_err(|e| anyhow::anyhow!("无法访问 workspace 根目录: {e}"))?;
     if !root.is_dir() {

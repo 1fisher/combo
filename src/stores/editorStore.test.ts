@@ -38,4 +38,19 @@ describe('editorStore', () => {
     expect(useEditorStore.getState().openFiles).toHaveLength(0);
     expect(useEditorStore.getState().activePath).toBeNull();
   });
+
+  it('stores and updates headContent for git gutter', () => {
+    useEditorStore.getState().resetOpenFiles();
+    useEditorStore.getState().openFile('src/c.ts', 'c.ts', 'const c = 3;');
+    const file = useEditorStore.getState().openFiles[0];
+    expect(file.headContent).toBeUndefined();
+
+    useEditorStore.getState().setHeadContent('src/c.ts', 'const c = 1;');
+    const updated = useEditorStore.getState().openFiles[0];
+    expect(updated.headContent).toBe('const c = 1;');
+
+    useEditorStore.getState().setHeadContent('src/c.ts', null);
+    const cleared = useEditorStore.getState().openFiles[0];
+    expect(cleared.headContent).toBeNull();
+  });
 });

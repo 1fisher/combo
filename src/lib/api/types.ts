@@ -2007,6 +2007,42 @@ export namespace Api {
   export type FileContent = { content: string };
   export type WriteFileResult = { ok: boolean };
 
+  // Git 服务(combo-proxy 本地端点,在 workspace 根目录执行 git 子命令)
+  export type GitFileStatus =
+    | 'modified'
+    | 'added'
+    | 'deleted'
+    | 'renamed'
+    | 'copied'
+    | 'unmerged'
+    | 'untracked'
+    | 'ignored';
+
+  export type GitStatusFile = {
+    path: string;
+    oldPath?: string;
+    indexStatus: GitFileStatus | null;
+    workTreeStatus: GitFileStatus | null;
+  };
+
+  export type GitStatus = {
+    branch: string;
+    files: GitStatusFile[];
+  };
+
+  export type GitDiff = { diff: string };
+
+  export type GitFileAtHead = { content: string };
+
+  export type GitCommitInfo = {
+    hash: string;
+    author: string;
+    date: string;
+    message: string;
+  };
+
+  export type GitLog = { commits: GitCommitInfo[] };
+
   // 技能(combo-proxy 本地端点,扫描 ~/.config/crush/skills/)
   export type Skill = {
     name: string;
