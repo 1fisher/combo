@@ -1,15 +1,17 @@
 import { useEffect, useState } from 'react';
 import { FileText } from 'lucide-react';
-import { getGitDiffHead } from '../../lib/api';
+import { getGitDiffHead, getGitCommitDiff } from '../../lib/api';
 import { parseUnifiedDiff, type UnifiedDiffHunk } from '../../lib/gitDiff';
 import { cn } from '../../lib/utils';
 
 interface Props {
   workspaceId: string;
   filePath: string;
+  /** 传入则显示某个提交的 diff,否则显示工作区未提交的 diff */
+  commitHash?: string;
 }
 
-export function DiffView({ workspaceId, filePath }: Props) {
+export function DiffView({ workspaceId, filePath, commitHash }: Props) {
   const [hunks, setHunks] = useState<UnifiedDiffHunk[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -17,7 +19,10 @@ export function DiffView({ workspaceId, filePath }: Props) {
     let cancelled = false;
     setLoading(true);
     setHunks([]);
-    getGitDiffHead(workspaceId, filePath)
+    const fetchDiff = commitHash
+      ? getGitCommitDiff(workspaceId, commitHash, filePath)
+      : getGitDiffHead(workspaceId, filePath);
+    fetchDiff
       .then(({ diff }) => {
         if (!cancelled) setHunks(parseUnifiedDiff(diff));
       })
@@ -30,7 +35,7 @@ export function DiffView({ workspaceId, filePath }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [workspaceId, filePath]);
+  }, [workspaceId, filePath, commitHash]);
 
   const fileName = filePath.split('/').pop() ?? filePath;
 
@@ -42,7 +47,7 @@ export function DiffView({ workspaceId, filePath }: Props) {
         <span className="truncate font-mono text-xs text-foreground">{fileName}</span>
         <span className="truncate text-[10px] text-muted-foreground/60">{filePath}</span>
         <span className="ml-auto shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-400">
-          Diff
+          {commitHash ? `Diff · ${commitHash.slice(0, 7)}` : 'Diff'}
         </span>
       </div>
       {/* diff 内容 */}

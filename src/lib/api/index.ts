@@ -265,6 +265,23 @@ export function getGitLog(
   });
 }
 
+export function getGitCommitFiles(
+  workspaceId: string,
+  hash: string
+): Promise<{ files: Api.GitCommitFile[] }> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/commit/files`, { query: { hash } });
+}
+
+export function getGitCommitDiff(
+  workspaceId: string,
+  hash: string,
+  path?: string
+): Promise<{ diff: string }> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/commit/diff`, {
+    query: path ? { hash, path } : { hash },
+  });
+}
+
 // 技能:combo-proxy 本地端点,扫描 ~/.config/crush/skills/
 export function listSkills(): Promise<Api.Skill[]> {
   return apiRequest('/v1/skills');

@@ -45,6 +45,7 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
   const [sidebarMode, setSidebarMode] = useState<'files' | 'git'>('files');
   const [gitSubView, setGitSubView] = useState<'changes' | 'history'>('changes');
   const [diffPath, setDiffPath] = useState<string | null>(null);
+  const [commitDiff, setCommitDiff] = useState<{ hash: string; path: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -79,6 +80,12 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
 
   function handleShowDiff(filePath: string) {
     setDiffPath(filePath);
+    setCommitDiff(null);
+  }
+
+  function handleShowCommitDiff(hash: string, path: string) {
+    setCommitDiff({ hash, path });
+    setDiffPath(null);
   }
 
   async function save() {
@@ -116,7 +123,8 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
 
   // git 模式下右侧显示 diff 或 graph;否则显示编辑器
   const showDiff = sidebarMode === 'git' && gitSubView === 'changes' && diffPath !== null;
-  const showGraph = sidebarMode === 'git' && gitSubView === 'history';
+  const showCommitDiff = sidebarMode === 'git' && gitSubView === 'history' && commitDiff !== null;
+  const showGraphPlaceholder = sidebarMode === 'git' && gitSubView === 'history' && commitDiff === null;
 
   return (
     <aside className="flex h-full w-full min-h-0 flex-col bg-card">
@@ -201,7 +209,10 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
                       onOpenFile={handleOpenFile}
                     />
                   ) : (
-                    <GitGraph workspaceId={workspaceId} />
+                    <GitGraph
+                      workspaceId={workspaceId}
+                      onShowCommitDiff={handleShowCommitDiff}
+                    />
                   )}
                 </div>
               </>
@@ -213,10 +224,17 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
           {showDiff ? (
             /* git 变更模式:右侧显示 diff */
             <DiffView workspaceId={workspaceId} filePath={diffPath!} />
-          ) : showGraph ? (
-            /* git 历史模式:右侧显示 graph 占位 */
+          ) : showCommitDiff ? (
+            /* git 历史模式:右侧显示提交的文件 diff */
+            <DiffView
+              workspaceId={workspaceId}
+              filePath={commitDiff!.path}
+              commitHash={commitDiff!.hash}
+            />
+          ) : showGraphPlaceholder ? (
+            /* git 历史模式:未选择文件时显示占位 */
             <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
-              提交历史显示在左侧面板
+              点击提交节点展开变更文件,点击文件查看 diff
             </div>
           ) : openFiles.length > 0 ? (
             <>
@@ -285,7 +303,7 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
               {sidebarMode === 'git' && gitSubView === 'changes'
                 ? '从左侧选择变更文件查看 diff'
                 : sidebarMode === 'git' && gitSubView === 'history'
-                ? '从左侧查看提交历史'
+                ? '点击提交节点查看变更'
                 : '从左侧文件树打开文件'}
             </div>
           )}

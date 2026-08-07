@@ -75,6 +75,8 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/v1/workspaces/:id/git/pull", post(git::pull))
         .route("/v1/workspaces/:id/git/fetch", post(git::fetch))
         .route("/v1/workspaces/:id/git/branch-info", get(git::branch_info))
+        .route("/v1/workspaces/:id/git/commit/files", get(git::commit_files))
+        .route("/v1/workspaces/:id/git/commit/diff", get(git::commit_diff))
         .route("/v1/workspaces/:id/terminal", get(terminal::terminal))
         .fallback(proxy)
         .with_state(state)

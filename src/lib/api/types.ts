@@ -2055,6 +2055,12 @@ export namespace Api {
     behind: number;
   };
 
+  export type GitCommitFile = {
+    path: string;
+    oldPath?: string;
+    status: string;
+  };
+
   // 技能(combo-proxy 本地端点,扫描 ~/.config/crush/skills/)
   export type Skill = {
     name: string;

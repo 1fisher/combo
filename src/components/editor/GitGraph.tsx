@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getGitLog } from '../../lib/api';
+import { FilePlus, FileText, MinusCircle, PencilLine } from 'lucide-react';
+import { getGitLog, getGitCommitFiles } from '../../lib/api';
 import type { Api } from '../../lib/api/types';
 import { cn } from '../../lib/utils';
 
 interface Props {
   workspaceId: string;
+  /** 选中提交的文件 diff 在右侧显示 */
+  onShowCommitDiff: (hash: string, path: string) => void;
 }
 
 interface GraphCommit extends Api.GitCommitInfo {
@@ -109,10 +112,31 @@ function rowY(rowIndex: number): number {
   return rowIndex * ROW_H + ROW_H / 2;
 }
 
-export function GitGraph({ workspaceId }: Props) {
+export function GitGraph({ workspaceId, onShowCommitDiff }: Props) {
   const [commits, setCommits] = useState<Api.GitCommitInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedHash, setExpandedHash] = useState<string | null>(null);
+  const [commitFiles, setCommitFiles] = useState<Api.GitCommitFile[]>([]);
+  const [filesLoading, setFilesLoading] = useState(false);
+
+  async function toggleExpand(hash: string) {
+    if (expandedHash === hash) {
+      setExpandedHash(null);
+      setCommitFiles([]);
+      return;
+    }
+    setExpandedHash(hash);
+    setCommitFiles([]);
+    setFilesLoading(true);
+    try {
+      const { files } = await getGitCommitFiles(workspaceId, hash);
+      setCommitFiles(files);
+    } catch {
+      setCommitFiles([]);
+    } finally {
+      setFilesLoading(false);
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -219,7 +243,7 @@ export function GitGraph({ workspaceId }: Props) {
                 return (
                   <div key={commit.hash}>
                     <div
-                      onClick={() => setExpandedHash(isExpanded ? null : commit.hash)}
+                      onClick={() => void toggleExpand(commit.hash)}
                       className={cn(
                         'flex cursor-pointer items-center gap-2 border-b border-border/20 py-1.5 pr-2 transition-colors hover:bg-accent/40',
                         isExpanded && 'bg-accent/30',
@@ -253,19 +277,62 @@ export function GitGraph({ workspaceId }: Props) {
                     </div>
                     {isExpanded && (
                       <div
-                        className="border-b border-border/20 bg-muted/20 py-1.5 text-xs"
+                        className="border-b border-border/20 bg-muted/20 py-1.5"
                         style={{ paddingLeft }}
                       >
-                        <div className="flex items-center gap-3 text-muted-foreground">
+                        <div className="mb-1 flex items-center gap-3 text-xs text-muted-foreground">
                           <span>作者: {commit.author}</span>
                           <span>日期: {commit.date}</span>
                           <span className="font-mono">{commit.hash.slice(0, 12)}</span>
                         </div>
                         {gc && gc.parents.length > 1 && (
-                          <div className="mt-1 text-[10px] text-amber-400">
+                          <div className="mb-1 text-[10px] text-amber-400">
                             ↳ 合并提交({gc.parents.length} 个父提交)
                           </div>
                         )}
+                        {/* 变更文件列表 */}
+                        <div className="space-y-0.5">
+                          {filesLoading ? (
+                            <div className="py-1 text-[10px] text-muted-foreground">加载中...</div>
+                          ) : commitFiles.length === 0 ? (
+                            <div className="py-1 text-[10px] text-muted-foreground">无变更文件</div>
+                          ) : (
+                            commitFiles.map((f) => {
+                              const fileName = f.path.split('/').pop() ?? f.path;
+                              return (
+                                <button
+                                  key={f.path}
+                                  onClick={() => onShowCommitDiff(commit.hash, f.path)}
+                                  className="flex w-full items-center gap-1.5 rounded px-1.5 py-0.5 text-left transition-colors hover:bg-accent"
+                                  title={f.path}
+                                >
+                                  <span
+                                    className={cn(
+                                      'shrink-0',
+                                      f.status === 'added' && 'text-emerald-400',
+                                      f.status === 'deleted' && 'text-red-400',
+                                      f.status === 'modified' && 'text-amber-400',
+                                      (f.status === 'renamed' || f.status === 'copied') && 'text-blue-400',
+                                    )}
+                                  >
+                                    {f.status === 'added' && <FilePlus className="h-3 w-3" />}
+                                    {f.status === 'deleted' && <MinusCircle className="h-3 w-3" />}
+                                    {f.status === 'modified' && <PencilLine className="h-3 w-3" />}
+                                    {(f.status === 'renamed' || f.status === 'copied') && <FileText className="h-3 w-3" />}
+                                  </span>
+                                  <span className="truncate font-mono text-[11px] text-foreground">
+                                    {fileName}
+                                  </span>
+                                  {f.path.includes('/') && (
+                                    <span className="truncate text-[9px] text-muted-foreground/60">
+                                      {f.path.slice(0, f.path.lastIndexOf('/'))}
+                                    </span>
+                                  )}
+                                </button>
+                              );
+                            })
+                          )}
+                        </div>
                       </div>
                     )}
                   </div>

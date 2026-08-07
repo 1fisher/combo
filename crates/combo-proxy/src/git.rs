@@ -480,6 +480,111 @@ pub async fn branch_info(State(state): State<AppState>, Path(id): Path<String>) 
     }))
 }
 
+#[derive(Deserialize)]
+pub struct CommitQuery {
+    pub hash: String,
+    pub path: Option<String>,
+}
+
+/// GET /v1/workspaces/{id}/git/commit/files?hash=<commit>
+/// 返回某个提交中变更的文件列表(使用 name-status 格式)。
+pub async fn commit_files(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<CommitQuery>,
+) -> Response {
+    let root = match resolve_root(&state, &id) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+    let hash = q.hash.trim();
+    if hash.is_empty() {
+        return error(StatusCode::BAD_REQUEST, "缺少 hash 参数");
+    }
+    // 用 git diff-tree --name-status 获取变更文件(兼容性最好)
+    // 对于初始提交(root commit),用 --root 标志
+    let parents = git_output(&root, ["rev-list", "--parents", "-n", "1", hash]).unwrap_or_default();
+    let parent_count = parents.split_whitespace().count().saturating_sub(1);
+    let diff_args: Vec<String> = if parent_count == 0 {
+        vec!["diff-tree".into(), "--no-commit-id".into(), "--name-status".into(), "--root".into(), hash.into()]
+    } else {
+        vec!["diff-tree".into(), "--no-commit-id".into(), "--name-status".into(), "-r".into(), hash.into()]
+    };
+    match git_output(&root, &diff_args) {
+        Ok(raw) => {
+            let files: Vec<serde_json::Value> = raw
+                .lines()
+                .skip_while(|l| l.is_empty())
+                .filter_map(|line| {
+                    let parts: Vec<&str> = line.splitn(3, '\t').collect();
+                    if parts.is_empty() || parts[0].is_empty() {
+                        return None;
+                    }
+                    let status_code = parts[0].chars().next().unwrap_or('M');
+                    let status = match status_code {
+                        'A' => "added",
+                        'D' => "deleted",
+                        'R' => "renamed",
+                        'C' => "copied",
+                        'U' => "unmerged",
+                        _ => "modified",
+                    };
+                    if parts[0].starts_with('R') || parts[0].starts_with('C') {
+                        // rename/copy: old\tnew
+                        Some(json!({
+                            "path": parts.get(2).unwrap_or(&""),
+                            "oldPath": parts.get(1).unwrap_or(&""),
+                            "status": status,
+                        }))
+                    } else {
+                        Some(json!({
+                            "path": parts.get(1).unwrap_or(&""),
+                            "status": status,
+                        }))
+                    }
+                })
+                .collect();
+            ok_json(json!({ "files": files }))
+        }
+        Err(msg) => error(StatusCode::INTERNAL_SERVER_ERROR, &msg),
+    }
+}
+
+/// GET /v1/workspaces/{id}/git/commit/diff?hash=<commit>&path=<可选>
+/// 返回某个提交的 unified diff(可按文件过滤)。
+pub async fn commit_diff(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<CommitQuery>,
+) -> Response {
+    let root = match resolve_root(&state, &id) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+    let hash = q.hash.trim();
+    if hash.is_empty() {
+        return error(StatusCode::BAD_REQUEST, "缺少 hash 参数");
+    }
+    let mut args: Vec<String> = vec!["show".into(), format!("{hash}")];
+    if let Some(p) = &q.path {
+        if !p.is_empty() {
+            match safe_join(&root, p) {
+                Ok(abs) => {
+                    if let Ok(rel) = abs.strip_prefix(&root) {
+                        args.push("--".into());
+                        args.push(rel.to_string_lossy().into_owned());
+                    }
+                }
+                Err(e) => return error(StatusCode::BAD_REQUEST, &e.to_string()),
+            }
+        }
+    }
+    match git_output(&root, &args) {
+        Ok(diff_text) => ok_json(json!({ "diff": diff_text })),
+        Err(msg) => error(StatusCode::INTERNAL_SERVER_ERROR, &msg),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
