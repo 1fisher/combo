@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "combo",
+  "productName": "Combo",
   "version": "0.0.2",
   "identifier": "dev.combo.ide",
   "build": {

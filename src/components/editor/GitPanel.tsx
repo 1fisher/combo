@@ -111,7 +111,6 @@ export function GitPanel({ workspaceId, onOpenFile }: Props) {
   const error = useGitStore((s) => s.error);
   const setGitData = useGitStore((s) => s.setGitData);
   const setLoading = useGitStore((s) => s.setLoading);
-  const setError = useGitStore((s) => s.setError);
 
   const [expandedFile, setExpandedFile] = useState<string | null>(null);
   const [diffHunks, setDiffHunks] = useState<UnifiedDiffHunk[]>([]);
@@ -122,16 +121,16 @@ export function GitPanel({ workspaceId, onOpenFile }: Props) {
 
   const refresh = useCallback(async () => {
     setLoading(true);
-    setError(null);
     try {
       const status = await getGitStatus(workspaceId);
       setGitData(status.branch, status.files);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      console.error('[GitPanel] git status failed:', e);
+      setGitData('', []);
     } finally {
       setLoading(false);
     }
-  }, [workspaceId, setGitData, setLoading, setError]);
+  }, [workspaceId, setGitData, setLoading]);
 
   useEffect(() => {
     void refresh();
