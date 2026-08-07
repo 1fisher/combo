@@ -105,6 +105,37 @@ pub async fn delete(
     json_ok(&json!({ "deleted": true }))
 }
 
+/// PATCH /v1/workspaces/{id}/sessions/{sid} — 重命名会话标题(仅更新 sqlite 镜像)。
+pub async fn rename(
+    State(state): State<AppState>,
+    Path((id, sid)): Path<(String, String)>,
+    axum::extract::Json(body): axum::extract::Json<Value>,
+) -> Response {
+    let title = body.get("title").and_then(|v| v.as_str()).map(|s| s.trim());
+    let Some(title) = title.filter(|s| !s.is_empty()) else {
+        return json_err(StatusCode::BAD_REQUEST, "title 不能为空");
+    };
+    match state.meta.db().rename_conversation(&sid, title) {
+        Ok(()) => match state.meta.db().list_conversations(&id) {
+            Ok(convs) => {
+                if let Some(c) = convs.iter().find(|c| c.id == sid) {
+                    json_ok(&session_json(c))
+                } else {
+                    json_err(StatusCode::NOT_FOUND, "会话不存在")
+                }
+            }
+            Err(e) => json_err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("读取会话失败: {e}"),
+            ),
+        },
+        Err(e) => json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("重命名会话失败: {e}"),
+        ),
+    }
+}
+
 /// 把 rune 返回的 session JSON 镜像进 sqlite。字段缺失时用默认值兜底。
 fn mirror_session(state: &AppState, workspace_id: &str, v: &Value) {
     let meta = ConversationMeta {

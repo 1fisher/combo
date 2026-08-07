@@ -21,6 +21,11 @@ vi.mock('../../lib/api', () => ({
     sessions.push(s);
     return s;
   }),
+  renameSession: vi.fn(async (_w: string, sid: string, title: string) => {
+    const s = sessions.find((x) => x.id === sid);
+    if (s) s.title = title;
+    return { ...s, id: sid, title };
+  }),
   setCurrentSession: vi.fn(async () => {}),
   getSessionHistory: vi.fn(async () => []),
   listWorkspaces: vi.fn(async () => [
@@ -41,5 +46,22 @@ describe('ConversationList', () => {
     await userEvent.click(screen.getByRole('button', { name: /新建会话/ }));
     expect(await screen.findByText('会话 3')).toBeTruthy();
     expect(useAgentStore.getState().activeSessionId).toBe('s3');
+  });
+
+  it('renames a session via inline edit', async () => {
+    useAgentStore.setState({ activeWorkspaceId: 'w1', activeSessionId: 's1' });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <ConversationList />
+      </QueryClientProvider>
+    );
+    await screen.findByText('会话一');
+    const renameBtns = screen.getAllByTitle('重命名会话');
+    await userEvent.click(renameBtns[0]);
+    const input = screen.getByDisplayValue('会话一');
+    await userEvent.clear(input);
+    await userEvent.type(input, '新名称{Enter}');
+    expect(sessions[0].title).toBe('新名称');
   });
 });

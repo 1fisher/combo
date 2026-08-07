@@ -84,6 +84,17 @@ export function deleteSession(workspaceId: string, sessionId: string): Promise<v
   });
 }
 
+export function renameSession(
+  workspaceId: string,
+  sessionId: string,
+  title: string
+): Promise<Api.Session> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/sessions/${sessionId}`, {
+    method: 'PATCH',
+    body: { title },
+  });
+}
+
 export function sendAgentMessage(
   workspaceId: string,
   req: { sessionId: string; runId: string; prompt: string }

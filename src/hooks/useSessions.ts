@@ -5,6 +5,7 @@ import {
   deleteSession,
   getSessionHistory,
   listSessions,
+  renameSession,
   setCurrentSession,
 } from '../lib/api';
 import { useAgentStore } from '../stores/agentStore';
@@ -58,6 +59,11 @@ export function useSessions(workspaceId: string | null) {
       }
     },
   });
+  const rename = useMutation({
+    mutationFn: (vars: { id: string; title: string }) =>
+      renameSession(workspaceId!, vars.id, vars.title),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['sessions', workspaceId] }),
+  });
   // 持久化恢复的会话不属于当前项目(或已被删除)时清除,不主动选第一个。
   // 跳过最近创建的会话(列表 refetch 可能尚未完成)。
   useEffect(() => {
@@ -68,7 +74,7 @@ export function useSessions(workspaceId: string | null) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId, q.data, activeSessionId]);
-  return { sessions: q.data, isLoading: q.isLoading, create: create.mutateAsync, activate, remove: remove.mutateAsync };
+  return { sessions: q.data, isLoading: q.isLoading, create: create.mutateAsync, activate, remove: remove.mutateAsync, rename: rename.mutateAsync };
 }
 
 export function useSessionHistory(workspaceId: string | null, sessionId: string | null) {

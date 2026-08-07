@@ -425,6 +425,15 @@ mod tests {
     }
 
     #[test]
+    fn rename_conversation_updates_title() {
+        let db = ComboDb::in_memory();
+        db.upsert_conversation(&conv("c1", "w1")).unwrap();
+        db.rename_conversation("c1", "新标题").unwrap();
+        let convs = db.list_conversations("w1").unwrap();
+        assert_eq!(convs[0].title, "新标题");
+    }
+
+    #[test]
     fn message_upsert_list_delete() {
         let db = ComboDb::in_memory();
         db.upsert_message("w1", "s1", "m1", "user", r#"[{"type":"text"}]"#, 100, 100)

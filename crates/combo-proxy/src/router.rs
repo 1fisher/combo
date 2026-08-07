@@ -42,7 +42,7 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         )
         .route(
             "/v1/workspaces/:id/sessions/:sid",
-            delete(session::delete),
+            delete(session::delete).patch(session::rename),
         )
         .route(
             "/v1/workspaces/:id/sessions/:sid/history",
