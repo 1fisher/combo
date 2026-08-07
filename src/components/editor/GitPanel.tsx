@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowDown,
   ArrowUp,
@@ -105,6 +105,8 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
   const [commitMsg, setCommitMsg] = useState('');
   const [commitPrefix, setCommitPrefix] = useState<string>('feat');
   const [showPrefixMenu, setShowPrefixMenu] = useState(false);
+  const prefixBtnRef = useRef<HTMLButtonElement>(null);
+  const [prefixDropUp, setPrefixDropUp] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [commitError, setCommitError] = useState<string | null>(null);
   const [branchInfo, setBranchInfo] = useState<Api.GitBranchInfo | null>(null);
@@ -131,6 +133,17 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // 打开前缀菜单时根据剩余空间决定向上还是向下弹出
+  useEffect(() => {
+    if (!showPrefixMenu) return;
+    const btn = prefixBtnRef.current;
+    if (!btn) return;
+    const rect = btn.getBoundingClientRect();
+    // 菜单最大高度约 192px(48*4),留 8px 安全间距
+    const spaceBelow = window.innerHeight - rect.bottom;
+    setPrefixDropUp(spaceBelow < 200);
+  }, [showPrefixMenu]);
 
   async function handleStage(filePath: string) {
     setStaging(true);
@@ -346,6 +359,7 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
           <div className="mb-1.5 flex items-center justify-between">
             <div className="relative">
               <button
+                ref={prefixBtnRef}
                 onClick={() => setShowPrefixMenu((v) => !v)}
                 className="flex items-center gap-1 rounded border border-border bg-background px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:bg-accent"
               >
@@ -364,7 +378,12 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
                 <ChevronDown className="h-2.5 w-2.5 text-muted-foreground" />
               </button>
               {showPrefixMenu && (
-                <div className="absolute top-full left-0 z-50 mt-1 max-h-48 overflow-y-auto rounded-md border bg-popover p-1 shadow-md">
+                <div
+                  className={cn(
+                    'absolute left-0 z-50 max-h-48 overflow-y-auto rounded-md border bg-popover p-1 shadow-md',
+                    prefixDropUp ? 'bottom-full mb-1' : 'top-full mt-1',
+                  )}
+                >
                   {COMMIT_PREFIXES.map((p) => (
                     <button
                       key={p.label}
