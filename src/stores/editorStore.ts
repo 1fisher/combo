@@ -1,18 +1,20 @@
 import { create } from 'zustand';
 
+export type FileKind = 'text' | 'image' | 'pdf';
+
 export interface OpenFile {
   path: string;
   name: string;
   content: string;
   original: string;
   dirty: boolean;
+  kind: FileKind;
 }
 
 interface EditorState {
   openFiles: OpenFile[];
   activePath: string | null;
-  /** 打开(或激活)一个文件,首次打开时记录初始内容 */
-  openFile: (path: string, name: string, content: string) => void;
+  openFile: (path: string, name: string, content: string, kind?: FileKind) => void;
   setActive: (path: string | null) => void;
   setContent: (path: string, content: string) => void;
   closeFile: (path: string) => void;
@@ -26,12 +28,12 @@ export const useEditorStore = create<EditorState>((set) => ({
   openFiles: [],
   activePath: null,
 
-  openFile: (path, name, content) =>
+  openFile: (path, name, content, kind = 'text') =>
     set((st) => {
       const existing = st.openFiles.find((f) => f.path === path);
       if (existing) return { activePath: path };
       return {
-        openFiles: [...st.openFiles, { path, name, content, original: content, dirty: false }],
+        openFiles: [...st.openFiles, { path, name, content, original: content, dirty: false, kind }],
         activePath: path,
       };
     }),

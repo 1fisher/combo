@@ -15,6 +15,25 @@ use crate::AppState;
 
 /// 单文件读取上限(1MB),超过视为过大。
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
+/// 二进制文件(图片/PDF)读取上限(20MB)。
+const MAX_RAW_BYTES: u64 = 20 * 1024 * 1024;
+
+/// 根据扩展名推断 content-type。
+fn mime_for(name: &str) -> &'static str {
+    let lower = name.to_lowercase();
+    let ext = lower.rsplit_once('.').map(|(_, e)| e).unwrap_or("");
+    match ext {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        "ico" => "image/x-icon",
+        "pdf" => "application/pdf",
+        _ => "application/octet-stream",
+    }
+}
 
 /// 从 sqlite 元数据解析 workspace 根目录,不依赖 crush 在线。
 fn resolve_root(state: &AppState, id: &str) -> Result<PathBuf, Response> {
@@ -194,6 +213,56 @@ pub async fn read(
         return error(StatusCode::UNSUPPORTED_MEDIA_TYPE, "二进制文件不支持编辑");
     }
     ok_json(json!({ "content": String::from_utf8_lossy(&bytes) }))
+}
+
+/// GET /v1/workspaces/{id}/files/raw?path=<相对文件>
+/// 以原始字节返回文件(图片/PDF 等),根据扩展名设置 content-type。
+pub async fn raw(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<PathQuery>,
+) -> Response {
+    let root = match resolve_root(&state, &id) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+    let rel = match q.path {
+        Some(p) if !p.is_empty() => p,
+        _ => return error(StatusCode::BAD_REQUEST, "缺少 path 参数"),
+    };
+    let file = match safe_join(&root, &rel) {
+        Ok(f) => f,
+        Err(e) => return error(StatusCode::BAD_REQUEST, &e.to_string()),
+    };
+    let meta = match std::fs::metadata(&file) {
+        Ok(m) => m,
+        Err(_) => return error(StatusCode::NOT_FOUND, "文件不存在"),
+    };
+    if !meta.is_file() {
+        return error(StatusCode::BAD_REQUEST, "目标是目录,不是文件");
+    }
+    if meta.len() > MAX_RAW_BYTES {
+        return error(StatusCode::PAYLOAD_TOO_LARGE, "文件超过 20MB");
+    }
+    let bytes = match std::fs::read(&file) {
+        Ok(b) => b,
+        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+    };
+    let mime = mime_for(&rel);
+    let file_name = std::path::Path::new(&rel)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("file");
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, mime)
+        .header(
+            header::CONTENT_DISPOSITION,
+            format!("inline; filename=\"{}\"", file_name),
+        )
+        .header(header::CACHE_CONTROL, "no-cache")
+        .body(Body::from(bytes))
+        .unwrap()
 }
 
 /// PUT /v1/workspaces/{id}/files/content?path=<相对文件>  body: { "content": ... }

@@ -49,6 +49,7 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
             "/v1/workspaces/:id/files/content",
             get(fs::read).put(fs::write),
         )
+        .route("/v1/workspaces/:id/files/raw", get(fs::raw))
         .route("/v1/workspaces/:id/terminal", get(terminal::terminal))
         .fallback(proxy)
         .with_state(state)

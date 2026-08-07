@@ -130,14 +130,16 @@ function AppShellInner() {
                 <PanelRight className="size-4" />
               </Button>
             </header>
-            <div className="flex min-h-0 flex-1">
-              {view === 'terminal' ? (
-                <TerminalPanel workspaceId={workspaceId} onClose={() => setView('agent')} />
-              ) : view === 'editor' ? (
-                workspaceId ? <EditorPane workspaceId={workspaceId} /> : <AgentPanel workspaceId={workspaceId} />
-              ) : (
+            <div className="relative flex min-h-0 flex-1">
+              <div className={cn('flex min-h-0 w-full flex-1', view !== 'agent' && 'hidden')}>
                 <AgentPanel workspaceId={workspaceId} />
-              )}
+              </div>
+              <div className={cn('flex min-h-0 w-full flex-1', view !== 'terminal' && 'hidden')}>
+                <TerminalPanel workspaceId={workspaceId} onClose={() => setView('agent')} />
+              </div>
+              <div className={cn('flex min-h-0 w-full flex-1', view !== 'editor' && 'hidden')}>
+                {workspaceId ? <EditorPane workspaceId={workspaceId} /> : <AgentPanel workspaceId={workspaceId} />}
+              </div>
             </div>
           </section>
         </div>
