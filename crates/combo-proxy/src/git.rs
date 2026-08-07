@@ -299,6 +299,7 @@ pub async fn commit(
 }
 
 /// GET /v1/workspaces/{id}/git/log?limit=<可选>
+/// 返回提交历史(含父提交哈希和分支标签,用于 git graph 可视化)。
 pub async fn git_log(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -309,25 +310,63 @@ pub async fn git_log(
         Err(resp) => return resp,
     };
     let limit = q.limit.unwrap_or(20);
-    let fmt = "%h\t%an\t%ad\t%s";
     let limit_str = format!("-{limit}");
+    // 用 \x1f (Unit Separator) 分隔字段,\x1e (Record Separator) 分隔父提交列表
+    let fmt = "%H\x1f%h\x1f%an\x1f%ad\x1f%s\x1f%P\x1f%D";
     let pretty = format!("--pretty=format:{fmt}");
-    match git_output(&root, ["log", &limit_str, &pretty, "--date=short"]) {
+    match git_output(&root, ["log", &limit_str, &pretty, "--date=short", "--all"]) {
         Ok(raw) => {
             let commits: Vec<serde_json::Value> = raw
                 .lines()
                 .filter_map(|line| {
-                    let parts: Vec<&str> = line.splitn(4, '\t').collect();
-                    if parts.len() == 4 {
-                        Some(json!({
-                            "hash": parts[0],
-                            "author": parts[1],
-                            "date": parts[2],
-                            "message": parts[3],
-                        }))
-                    } else {
-                        None
+                    let parts: Vec<&str> = line.split('\x1f').collect();
+                    if parts.len() < 7 {
+                        return None;
                     }
+                    let full_hash = parts[0];
+                    let short_hash = parts[1];
+                    let author = parts[2];
+                    let date = parts[3];
+                    let message = parts[4];
+                    let parents: Vec<&str> = parts[5].split_whitespace().collect();
+                    let refs_raw = parts[6];
+                    let refs: Vec<&str> = if refs_raw.is_empty() {
+                        Vec::new()
+                    } else {
+                        refs_raw.split(", ").collect()
+                    };
+                    // 标记 HEAD
+                    let is_head = refs.iter().any(|r| r.starts_with("HEAD"));
+                    // 提取分支名(去掉 HEAD -> 前缀和 remote-tracking 前缀)
+                    let branches: Vec<serde_json::Value> = refs
+                        .iter()
+                        .filter_map(|r| {
+                            let r = r.strip_prefix("HEAD -> ").unwrap_or(r);
+                            if r == "HEAD" {
+                                return None;
+                            }
+                            let is_remote = r.starts_with("origin/");
+                            let name = if is_remote {
+                                r.strip_prefix("origin/").unwrap_or(r)
+                            } else {
+                                r
+                            };
+                            Some(json!({
+                                "name": name,
+                                "isRemote": is_remote,
+                            }))
+                        })
+                        .collect();
+                    Some(json!({
+                        "hash": full_hash,
+                        "shortHash": short_hash,
+                        "author": author,
+                        "date": date,
+                        "message": message,
+                        "parents": parents,
+                        "branches": branches,
+                        "isHead": is_head,
+                    }))
                 })
                 .collect();
             ok_json(json!({ "commits": commits }))

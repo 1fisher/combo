@@ -2036,9 +2036,13 @@ export namespace Api {
 
   export type GitCommitInfo = {
     hash: string;
+    shortHash: string;
     author: string;
     date: string;
     message: string;
+    parents: string[];
+    branches: { name: string; isRemote: boolean }[];
+    isHead: boolean;
   };
 
   export type GitLog = { commits: GitCommitInfo[] };
