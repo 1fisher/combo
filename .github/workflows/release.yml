@@ -129,9 +129,10 @@ jobs:
           - platform: macos-x86_64
             runner: macos-13
             target: x86_64-apple-darwin
-          - platform: windows-x86_64
-            runner: windows-latest
-            target: x86_64-pc-windows-msvc
+          # Windows 暂不支持:combo-proxy 使用 Unix domain socket
+          # - platform: windows-x86_64
+          #   runner: windows-latest
+          #   target: x86_64-pc-windows-msvc
           - platform: linux-x86_64
             runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
