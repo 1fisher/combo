@@ -1,14 +1,11 @@
 name: CI / Release
 
 on:
-  # push main: 运行 CI 检查
   push:
     branches: [main]
     tags: ['v*']
-  # PR: 运行 CI 检查
   pull_request:
     branches: [main]
-  # 手动触发:选择版本类型,自动 bump + tag + 构建 + 发布
   workflow_dispatch:
     inputs:
       version_type:
@@ -16,10 +13,7 @@ on:
         required: true
         type: choice
         default: patch
-        options:
-          - patch
-          - minor
-          - major
+        options: [patch, minor, major]
       prerelease:
         description: 标记为预发布
         required: false
@@ -30,19 +24,17 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # ─── CI: 前端 + 后端检查(每次 push main / PR) ────────────────────────
+  # ─── CI: 前端 + 后端检查(push main / PR,跳过 tag) ───────────────────
   ci-frontend:
     name: CI Frontend
-    if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/') || github.event_name == 'pull_request'
+    if: "!startsWith(github.ref, 'refs/tags/')"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-
       - run: npm ci
       - run: npm run tsc
       - run: npm test
@@ -50,172 +42,81 @@ jobs:
 
   ci-backend:
     name: CI Backend
-    if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/') || github.event_name == 'pull_request'
+    if: "!startsWith(github.ref, 'refs/tags/')"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
-
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
             crates/combo-proxy
             src-tauri
-
       - name: Install Linux system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            librsvg2-dev \
-            patchelf \
-            libsoup-3.0-dev \
-            libjavascriptcoregtk-4.1-dev
-
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            patchelf libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
       - run: cargo check --workspace --verbose
       - run: cargo test --workspace --verbose
 
-  # ─── 版本 bump(workflow_dispatch 专用) ────────────────────────────────
+  # ─── 版本 bump + tag(workflow_dispatch 专用) ──────────────────────────
   bump-version:
     name: Bump Version
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    outputs:
-      tag_name: ${{ steps.create_tag.outputs.tag_name }}
-      version: ${{ steps.create_tag.outputs.version }}
-      changelog: ${{ steps.changelog.outputs.content }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-
       - name: Configure git
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
       - name: Bump version
         id: bump
         run: |
           bash scripts/version.sh ${{ inputs.version_type }}
           NEW_VERSION=$(node -e "console.log(require('./package.json').version)")
-          TAG="v${NEW_VERSION}"
           echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-
+          echo "tag=v${NEW_VERSION}" >> "$GITHUB_OUTPUT"
       - name: Generate changelog
         id: changelog
         run: |
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || echo "")
-          if [ -n "$PREV_TAG" ]; then
-            RANGE="${PREV_TAG}..HEAD"
-          else
-            RANGE="HEAD"
-          fi
-          echo "## 变更内容" > /tmp/changelog.md
-          echo "" >> /tmp/changelog.md
-          git log "${RANGE}" --pretty=format:"- %s (%h)" --no-merges >> /tmp/changelog.md
-          echo "" >> /tmp/changelog.md
-          echo "" >> /tmp/changelog.md
-          echo "**完整变更**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${{ steps.bump.outputs.tag }}" >> /tmp/changelog.md
+          RANGE="${PREV_TAG:+$PREV_TAG..HEAD}"
+          RANGE="${RANGE:-HEAD}"
           {
             echo "content<<CHANGELOG_EOF"
-            cat /tmp/changelog.md
+            echo "## 变更内容"
+            echo ""
+            git log "${RANGE}" --pretty=format:"- %s (%h)" --no-merges
+            echo ""
+            echo ""
+            if [ -n "$PREV_TAG" ]; then
+              echo "**完整变更**: https://github.com/${{ github.repository }}/compare/${PREV_TAG}...${{ steps.bump.outputs.tag }}"
+            fi
             echo "CHANGELOG_EOF"
           } >> "$GITHUB_OUTPUT"
-
-      - name: Commit and push tag
-        id: create_tag
+      - name: Commit, tag and push
         run: |
           git add -A
           git commit -m "chore: bump version to ${{ steps.bump.outputs.version }}"
           TAG="${{ steps.bump.outputs.tag }}"
-          git tag -a "$TAG" -m "Release $TAG" -m "$(cat /tmp/changelog.md)"
+          git tag -a "$TAG" -m "Release $TAG" -m "${{ steps.changelog.outputs.content }}"
           git push origin main
           git push origin "$TAG"
-          echo "tag_name=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${{ steps.bump.outputs.version }}" >> "$GITHUB_OUTPUT"
 
-  # ─── 创建 Draft Release(tag push / workflow_dispatch) ─────────────────
-  create-release:
-    name: Create Release
-    needs: bump-version
-    if: always() && (needs.bump-version.result == 'success' || github.event_name == 'push')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    outputs:
-      tag_name: ${{ steps.tag.outputs.tag_name }}
-      release_id: ${{ steps.create.outputs.id }}
-      changelog: ${{ steps.body.outputs.content }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Determine tag name
-        id: tag
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "tag_name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag_name=${{ needs.bump-version.outputs.tag_name }}" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Extract changelog
-        id: body
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${{ steps.tag.outputs.tag_name }}"
-          BODY=$(git tag -l --format='%(contents)' "$TAG" 2>/dev/null || echo "")
-          if [ -z "$BODY" ]; then
-            BODY="See assets below."
-          fi
-          {
-            echo "content<<CHANGELOG_EOF"
-            echo "$BODY"
-            echo "CHANGELOG_EOF"
-          } >> "$GITHUB_OUTPUT"
-
-      - name: Create draft release
-        id: create
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        shell: bash
-        run: |
-          TAG="${{ steps.tag.outputs.tag_name }}"
-          BODY="${{ steps.body.outputs.content }}"
-          # 检查是否已存在 release
-          EXISTING=$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>/dev/null || echo "none")
-          if [ "$EXISTING" = "true" ] || [ "$EXISTING" = "false" ]; then
-            echo "Release $TAG 已存在,跳过创建"
-            ID=$(gh release view "$TAG" --json databaseId --jq '.databaseId')
-            echo "id=${ID}" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # 创建 draft release
-          gh release create "$TAG" \
-            --title "Combo $TAG" \
-            --notes "$BODY" \
-            --draft
-          ID=$(gh release view "$TAG" --json databaseId --jq '.databaseId')
-          echo "id=${ID}" >> "$GITHUB_OUTPUT"
-
-  # ─── 多平台构建 ───────────────────────────────────────────────────────
+  # ─── 多平台构建(tag push 或 workflow_dispatch 后) ─────────────────────
   build:
-    name: Build ${{ matrix.platform }}
-    needs: create-release
+    name: Build (${{ matrix.platform }})
+    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
     strategy:
@@ -234,7 +135,6 @@ jobs:
           - platform: linux-x86_64
             runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -264,18 +164,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            libwebkit2gtk-4.1-dev \
-            libgtk-3-dev \
-            librsvg2-dev \
-            patchelf \
-            libsoup-3.0-dev \
-            libjavascriptcoregtk-4.1-dev
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev \
+            patchelf libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
 
       - name: Install frontend dependencies
         run: npm ci
 
       - name: Import Apple signing certificate (macOS only)
-        if: matrix.platform != 'windows-x86_64' && matrix.platform != 'linux-x86_64'
+        if: startsWith(matrix.platform, 'macos')
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -298,54 +194,51 @@ jobs:
           security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
           rm -f "$CERT_FILE"
 
-      - name: Build and upload assets
+      - name: Build and upload
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # macOS 签名 + 公证
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Updater 签名
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ needs.create-release.outputs.tag_name }}
-          releaseId: ${{ needs.create-release.outputs.release_id }}
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Combo ${{ github.ref_name }}'
+          releaseBody: 'See assets below.'
           releaseDraft: true
           prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease }}
           updaterJsonPreferNsis: true
           args: --target ${{ matrix.target }}
 
       - name: Cleanup keychain (macOS only)
-        if: always() && matrix.platform != 'windows-x86_64' && matrix.platform != 'linux-x86_64'
+        if: always() && startsWith(matrix.platform, 'macos')
         shell: bash
         run: |
           security list-keychains -d user | grep -o '/tmp/build-keychain[^"]*' | while read -r kc; do
             security delete-keychain "$kc" 2>/dev/null || true
           done
 
-  # ─── 发布 Release(所有平台构建完成后) ─────────────────────────────────
+  # ─── 发布 Release(所有构建完成后) ─────────────────────────────────────
   publish-release:
     name: Publish Release
-    needs: [create-release, build]
+    needs: build
     if: always() && needs.build.result != 'skipped'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Publish release
+      - name: Publish draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ needs.create-release.outputs.tag_name }}"
-          # 检查是否有至少一个构建成功
+          TAG="${{ github.ref_name }}"
           if [ "${{ needs.build.result }}" != "success" ]; then
-            echo "⚠️ 部分构建失败,但继续发布已上传的产物"
+            echo "⚠️ 部分构建失败,仍发布已上传的产物"
           fi
-          # 将 draft release 发布为正式版
-          gh release edit "$TAG" --draft=false || echo "Release 可能已发布"
+          gh release edit "$TAG" --draft=false 2>/dev/null || echo "Release $TAG 可能已发布"
           echo "✓ Release $TAG 已发布"
