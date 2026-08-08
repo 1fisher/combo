@@ -332,6 +332,7 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
                     <CodeEditor
                       value={active.content}
                       filename={active.name}
+                      filePath={active.path}
                       onChange={(val) => setContent(active.path, val)}
                       headContent={active.headContent ?? undefined}
                     />

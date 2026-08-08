@@ -4,15 +4,18 @@ import {
   Brain,
   Check,
   ChevronDown,
+  FileText,
   Package,
   Paperclip,
   Plus,
+  Quote,
   ShieldAlert,
   Square,
   X,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { useAgentStore, type AgentMode } from '../../stores/agentStore';
+import { useContextStore, type ContextItem } from '../../stores/contextStore';
 import type { Api } from '../../lib/api/types';
 import { cn } from '../../lib/utils';
 import { AttachmentPicker } from './AttachmentPicker';
@@ -45,7 +48,7 @@ export function Composer({
   backend: string;
   value: string;
   onChange: (v: string) => void;
-  onSend: (attachments: Api.Attachment[]) => void;
+  onSend: (attachments: Api.Attachment[], contextItems: ContextItem[]) => void;
   disabled?: boolean;
   running?: boolean;
   onStop?: () => void;
@@ -58,6 +61,9 @@ export function Composer({
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [attachments, setAttachments] = useState<Api.Attachment[]>([]);
+  const contextItems = useContextStore((s) => s.items);
+  const removeContextItem = useContextStore((s) => s.removeItem);
+  const clearContextItems = useContextStore((s) => s.clear);
   const thought = THOUGHT_LEVELS[1];
 
   function autosize() {
@@ -76,9 +82,10 @@ export function Composer({
   }, [value]);
 
   function submit() {
-    if (running || disabled || (!value.trim() && attachments.length === 0)) return;
-    onSend(attachments);
+    if (running || disabled || (!value.trim() && attachments.length === 0 && contextItems.length === 0)) return;
+    onSend(attachments, contextItems);
     setAttachments([]);
+    clearContextItems();
   }
 
   function handlePick(files: Api.Attachment[]) {
@@ -103,7 +110,7 @@ export function Composer({
           >
             <div className="relative flex flex-col gap-3 overflow-hidden rounded-2xl border border-input-border bg-input p-3 transition-colors hover:border-input-border-hover focus-within:!border-input-border-focused focus-within:bg-input-focused">
               {/* 附件 chips */}
-              {attachments.length > 0 && (
+              {(attachments.length > 0 || contextItems.length > 0) && (
                 <div className="flex flex-wrap items-center gap-1.5">
                   {attachments.map((a) => (
                     <span
@@ -120,6 +127,42 @@ export function Composer({
                         }
                         className="rounded p-0.5 text-foreground-subtlest transition-colors hover:bg-surface-hover hover:text-foreground"
                         aria-label={`移除附件 ${a.file_name}`}
+                      >
+                        <X className="size-3" />
+                      </button>
+                    </span>
+                  ))}
+                  {contextItems.map((item) => (
+                    <span
+                      key={item.id}
+                      className="group/ctx flex max-w-full min-w-0 items-center gap-1.5 rounded-lg border border-brand/30 bg-brand/5 px-2 py-1 text-xs text-foreground"
+                      title={
+                        item.type === 'snippet'
+                          ? `${item.filePath}:${item.startLine ?? ''}${item.endLine && item.endLine !== item.startLine ? `-${item.endLine}` : ''}`
+                          : item.filePath
+                      }
+                    >
+                      {item.type === 'snippet' ? (
+                        <Quote className="size-3 shrink-0 text-brand" />
+                      ) : (
+                        <FileText className="size-3 shrink-0 text-brand" />
+                      )}
+                      <span className="min-w-0 max-w-[12rem] truncate font-mono">
+                        {item.fileName}
+                        {item.startLine != null && (
+                          <span className="text-foreground-subtle">
+                            :{item.startLine}
+                            {item.endLine != null && item.endLine !== item.startLine
+                              ? `-${item.endLine}`
+                              : ''}
+                          </span>
+                        )}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => removeContextItem(item.id)}
+                        className="rounded p-0.5 text-foreground-subtlest transition-colors hover:bg-surface-hover hover:text-foreground"
+                        aria-label={`移除上下文 ${item.fileName}`}
                       >
                         <X className="size-3" />
                       </button>
@@ -288,7 +331,7 @@ export function Composer({
                     <Button
                       type="submit"
                       size="icon-sm"
-                      disabled={(!value.trim() && attachments.length === 0) || disabled}
+                      disabled={(!value.trim() && attachments.length === 0 && contextItems.length === 0) || disabled}
                       className="shrink-0 gap-1 rounded-lg bg-brand text-foreground-inverse hover:bg-brand/80"
                       aria-label="发送"
                       title="发送"

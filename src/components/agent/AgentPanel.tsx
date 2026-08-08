@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { FileEdit, Folder, Loader2 } from 'lucide-react';
 import { randomUUID } from '../../lib/clientId';
 import { useAgentStore } from '../../stores/agentStore';
+import { formatContextPrompt, type ContextItem } from '../../stores/contextStore';
 import { cancelAgent, sendAgentMessage } from '../../lib/api';
 import type { Api } from '../../lib/api/types';
 import { useSessionHistory } from '../../hooks/useSessions';
@@ -100,13 +101,19 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
     }
   }
 
-  async function doSend(prompt: string, attachments: Api.Attachment[] = []) {
+  async function doSend(
+    prompt: string,
+    attachments: Api.Attachment[] = [],
+    contextItems: ContextItem[] = [],
+  ) {
+    const fullPrompt = formatContextPrompt(prompt, contextItems);
     if (!workspaceId) {
       setPostError('请先在侧边栏添加/选择一个项目');
       return;
     }
     setPostError(null);
     setDraft('');
+    const sendPrompt = fullPrompt;
     let sid = sessionId;
     let reused = !!sid;
     // 本次发送新建的会话:发送失败时需删除,避免侧边栏残留空会话
@@ -114,7 +121,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
     if (!sid) {
       // 首个消息:先创建会话,发送成功后才保留(失败时自动删除)
       try {
-        const s = await createSessionIn(prompt.slice(0, 20) || '新任务');
+        const s = await createSessionIn(sendPrompt.slice(0, 20) || '新任务');
         sid = s.id;
         createdSid = s.id;
       } catch (e) {
@@ -130,7 +137,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
       id: `local-${runId}`,
       session_id: sid!,
       role: 'user',
-      parts: [{ type: 'text', data: { text: prompt } }],
+      parts: [{ type: 'text', data: { text: sendPrompt } }],
       model: '',
       provider: '',
       created_at: Date.now(),
@@ -141,7 +148,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
     }
     setQueued(sid!, true);
     try {
-      await sendAgentMessage(workspaceId, { sessionId: sid!, runId, prompt, attachments });
+      await sendAgentMessage(workspaceId, { sessionId: sid!, runId, prompt: sendPrompt, attachments });
       console.debug(`[agent] 发送成功 markRun running sid="${sid}" runId="${runId}"`);
       st.markRun(sid!, runId, 'running');
     } catch (e) {
@@ -150,7 +157,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
       if (reused && err?.status === 404) {
         st.deleteMessage(sid!, `local-${runId}`);
         try {
-          const s = await createSessionIn(prompt.slice(0, 20) || '新任务');
+          const s = await createSessionIn(sendPrompt.slice(0, 20) || '新任务');
           sid = s.id;
           createdSid = s.id;
           const retryRunId = randomUUID();
@@ -158,7 +165,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
             id: `local-${retryRunId}`,
             session_id: sid,
             role: 'user',
-            parts: [{ type: 'text', data: { text: prompt } }],
+            parts: [{ type: 'text', data: { text: sendPrompt } }],
             model: '',
             provider: '',
             created_at: Date.now(),
@@ -166,7 +173,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
           } as never);
           void activateSession(sid);
           setQueued(sid, true);
-          await sendAgentMessage(workspaceId, { sessionId: sid, runId: retryRunId, prompt, attachments });
+          await sendAgentMessage(workspaceId, { sessionId: sid, runId: retryRunId, prompt: sendPrompt, attachments });
           st.markRun(sid, retryRunId, 'running');
           return;
         } catch (e2) {
@@ -277,7 +284,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
           backend={backend}
           value={draft}
           onChange={setDraft}
-          onSend={(attachments) => void doSend(draft, attachments)}
+          onSend={(attachments, contextItems) => void doSend(draft, attachments, contextItems)}
           running={running}
           onStop={cancel}
         />

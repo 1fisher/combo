@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
-import { ChevronRight, FileText, Folder, FolderOpen } from 'lucide-react';
+import { ChevronRight, FileText, Folder, FolderOpen, MessageSquarePlus } from 'lucide-react';
 import { listFiles } from '../../lib/api';
 import type { Api } from '../../lib/api/types';
 import { cn } from '../../lib/utils';
+import { useContextStore } from '../../stores/contextStore';
+import { ContextMenu, type MenuItem } from '../ui/ContextMenu';
 
 interface Props {
   workspaceId: string;
@@ -16,6 +18,8 @@ interface Props {
 export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
   const [byDir, setByDir] = useState<Record<string, Api.FileEntry[]>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [menu, setMenu] = useState<{ x: number; y: number; entry: Api.FileEntry } | null>(null);
+  const addItem = useContextStore((s) => s.addItem);
 
   useEffect(() => {
     setByDir({});
@@ -40,6 +44,19 @@ export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
     if (willOpen && !byDir[dir]) void load(dir);
   }
 
+  function contextMenuItems(entry: Api.FileEntry): MenuItem[] {
+    const items: MenuItem[] = [];
+    if (entry.type !== 'dir') {
+      items.push({
+        label: '添加到对话',
+        icon: <MessageSquarePlus className="size-3.5 text-muted-foreground" />,
+        onClick: () =>
+          addItem({ filePath: entry.path, fileName: entry.name, type: 'file' }),
+      });
+    }
+    return items;
+  }
+
   function renderDir(dir: string, depth: number) {
     const entries = byDir[dir] ?? [];
     return (
@@ -50,6 +67,13 @@ export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
             <div key={e.path}>
               <button
                 onClick={() => (isDir ? toggle(e.path) : onOpenFile(e.path, e.name))}
+                onContextMenu={(ev) => {
+                  const items = contextMenuItems(e);
+                  if (items.length > 0) {
+                    ev.preventDefault();
+                    setMenu({ x: ev.clientX, y: ev.clientY, entry: e });
+                  }
+                }}
                 className={cn(
                   'flex w-full items-center gap-1.5 rounded py-1 pr-2 text-left transition-colors hover:bg-accent',
                   !isDir && 'pl-6'
@@ -95,5 +119,17 @@ export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
     );
   }
 
-  return <div className="p-1.5">{renderDir('', 0)}</div>;
+  return (
+    <>
+      <div className="p-1.5">{renderDir('', 0)}</div>
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={contextMenuItems(menu.entry)}
+          onClose={() => setMenu(null)}
+        />
+      )}
+    </>
+  );
 }
