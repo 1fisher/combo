@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 
-type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'installing' | 'done' | 'error';
+type UpdateStatus = 'idle' | 'checking' | 'available' | 'latest' | 'downloading' | 'installing' | 'done' | 'error';
 
 interface UpdateInfo {
   version: string;
@@ -40,7 +40,7 @@ export function useUpdater(): UseUpdaterReturn {
         setStatus('available');
       } else {
         setUpdateInfo(null);
-        setStatus('idle');
+        setStatus('latest');
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

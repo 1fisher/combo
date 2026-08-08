@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { CheckCircle2 } from 'lucide-react';
 import { Button } from '../ui/button';
 import {
   Dialog,
@@ -37,6 +38,16 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [domainInput, setDomainInput] = useState('');
   const [hasDomain, setHasDomain] = useState(false);
   const updater = useUpdater();
+  const [appVersion, setAppVersion] = useState('');
+
+  useEffect(() => {
+    if (open && isTauri()) {
+      import('@tauri-apps/api/app')
+        .then(({ getVersion }) => getVersion())
+        .then(setAppVersion)
+        .catch(() => setAppVersion(''));
+    }
+  }, [open]);
 
   useEffect(() => {
     if (open) {
@@ -128,7 +139,12 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
           {isTauri() && (
             <div className="flex flex-col gap-2">
               <label className="text-[13px] font-medium text-foreground">应用更新</label>
-              {updater.status === 'idle' && (
+              {appVersion && (
+                <div className="text-[12px] text-foreground-subtle">
+                  当前版本 <span className="font-medium text-foreground">v{appVersion}</span>
+                </div>
+              )}
+              {(updater.status === 'idle' || updater.status === 'latest') && (
                 <Button
                   variant="outline"
                   size="sm"
@@ -137,6 +153,12 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                 >
                   检查更新
                 </Button>
+              )}
+              {updater.status === 'latest' && (
+                <div className="flex items-center gap-1.5 text-[12px] text-green-500">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  已是最新版本
+                </div>
               )}
               {updater.status === 'checking' && (
                 <div className="text-[12px] text-foreground-subtle">正在检查更新…</div>
