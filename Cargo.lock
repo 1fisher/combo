@@ -445,7 +445,7 @@ dependencies = [
 
 [[package]]
 name = "combo"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "anyhow",
  "combo-proxy",
@@ -460,7 +460,7 @@ dependencies = [
 
 [[package]]
 name = "combo-proxy"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "anyhow",
  "async-stream",
