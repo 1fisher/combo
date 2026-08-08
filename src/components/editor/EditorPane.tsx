@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Folder, GitBranch, History, X } from 'lucide-react';
+import { Eye, Folder, GitBranch, History, Pencil, X } from 'lucide-react';
 import { getFileContent, getGitFileAtHead, putFileContent } from '../../lib/api';
 import { useEditorStore, type FileKind } from '../../stores/editorStore';
 import { getProxyBaseUrl } from '../../lib/connection';
@@ -11,8 +11,16 @@ import { FileExplorer } from './FileExplorer';
 import { GitGraph } from './GitGraph';
 import { GitPanel } from './GitPanel';
 import { ImageViewer } from './ImageViewer';
+import { MarkdownPreview } from './MarkdownPreview';
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.ico']);
+const MD_EXTS = new Set(['.md', '.markdown', '.mdx']);
+
+function isMarkdown(name: string): boolean {
+  const lower = name.toLowerCase();
+  const idx = lower.lastIndexOf('.');
+  return idx >= 0 && MD_EXTS.has(lower.slice(idx));
+}
 
 function fileKindOf(name: string): FileKind {
   const lower = name.toLowerCase();
@@ -49,8 +57,15 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  /** markdown 文件是否处于预览模式 */
+  const [mdPreview, setMdPreview] = useState(true);
 
   const active = openFiles.find((f) => f.path === activePath) ?? null;
+
+  // 切换文件时重置为预览模式
+  useEffect(() => {
+    setMdPreview(true);
+  }, [activePath]);
 
   const handleOpenFile = useCallback(
     async (filePath: string, name: string) => {
@@ -269,6 +284,34 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
                     </button>
                   ))}
                 </div>
+                {active && isMarkdown(active.name) && (
+                  <div className="flex shrink-0 items-center gap-0.5 border-l px-1">
+                    <button
+                      onClick={() => setMdPreview(false)}
+                      className={cn(
+                        'flex items-center gap-1 rounded px-2 py-1 text-[10px] font-medium transition-colors',
+                        !mdPreview
+                          ? 'bg-accent text-foreground'
+                          : 'text-muted-foreground hover:text-foreground',
+                      )}
+                    >
+                      <Pencil className="h-3 w-3" />
+                      编辑
+                    </button>
+                    <button
+                      onClick={() => setMdPreview(true)}
+                      className={cn(
+                        'flex items-center gap-1 rounded px-2 py-1 text-[10px] font-medium transition-colors',
+                        mdPreview
+                          ? 'bg-accent text-foreground'
+                          : 'text-muted-foreground hover:text-foreground',
+                      )}
+                    >
+                      <Eye className="h-3 w-3" />
+                      预览
+                    </button>
+                  </div>
+                )}
               </div>
               {active ? (
                 <div className="min-h-0 flex-1 overflow-hidden">
@@ -283,6 +326,8 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
                       title={active.name}
                       className="h-full w-full border-0"
                     />
+                  ) : isMarkdown(active.name) && mdPreview ? (
+                    <MarkdownPreview content={active.content} />
                   ) : (
                     <CodeEditor
                       value={active.content}
