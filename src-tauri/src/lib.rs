@@ -46,7 +46,7 @@ pub fn run() {
 
 async fn init_backend(app: &tauri::AppHandle) {
     use combo_proxy::rune::RuneManager;
-    use combo_proxy::{serve, AppState, BackendRegistry, ClaudeCodeBackend, CodexBackend, CrushBackend, MetaStore, OpenCodeBackend, OpenCodeManager, Upstream};
+    use combo_proxy::{serve, AppState, BackendRegistry, ClaudeCodeBackend, CodexBackend, CrushBackend, MetaStore, OpenCodeBackend, OpenCodeManager, RelayManager, Upstream};
     use std::net::SocketAddr;
     use std::sync::Arc;
     use tokio::net::TcpListener;
@@ -92,6 +92,20 @@ async fn init_backend(app: &tauri::AppHandle) {
         registry.set_codex(Arc::new(CodexBackend::new(cx_bin)));
     }
 
+    // 绑定地址:默认 127.0.0.1(仅本地);域名部署时可设 COMBO_HOST=0.0.0.0 对外开放。
+    let bind_host: std::net::IpAddr = std::env::var("COMBO_HOST")
+        .ok()
+        .and_then(|h| h.trim().parse().ok())
+        .unwrap_or([127, 0, 0, 1].into());
+    let listener = match TcpListener::bind(SocketAddr::from((bind_host, 0))).await {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("proxy bind failed: {e:?}");
+            return;
+        }
+    };
+    let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
+
     let state = AppState {
         meta: Arc::new(MetaStore::open_default().unwrap_or_else(|_| MetaStore::new())),
         registry: Arc::new(registry),
@@ -100,6 +114,8 @@ async fn init_backend(app: &tauri::AppHandle) {
             .ok()
             .filter(|s| !s.trim().is_empty())
             .map(PathBuf::from),
+        relay: RelayManager::new(),
+        local_port: port,
     };
 
     // crush 为内存态,重启后 workspace 会被遗忘:启动时把元数据库里的
@@ -149,19 +165,6 @@ async fn init_backend(app: &tauri::AppHandle) {
         });
     }
 
-    // 绑定地址:默认 127.0.0.1(仅本地);域名部署时可设 COMBO_HOST=0.0.0.0 对外开放。
-    let bind_host: std::net::IpAddr = std::env::var("COMBO_HOST")
-        .ok()
-        .and_then(|h| h.trim().parse().ok())
-        .unwrap_or([127, 0, 0, 1].into());
-    let listener = match TcpListener::bind(SocketAddr::from((bind_host, 0))).await {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("proxy bind failed: {e:?}");
-            return;
-        }
-    };
-    let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
     // 存入 Tauri state,前端可通过 get_proxy_port command 主动查询
     if let Some(state) = app.try_state::<ProxyPort>() {
         *state.0.lock().unwrap() = Some(port);
