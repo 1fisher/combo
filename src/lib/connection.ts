@@ -6,6 +6,39 @@ let proxyBaseUrl = '';
 /** 运行时代理地址覆盖(localStorage),用于前后端分离部署时指向远端 proxy。 */
 const PROXY_OVERRIDE_KEY = 'combo.proxyUrl';
 
+/** 外部访问域名(localStorage),用于域名部署时生成二维码和远程连接。 */
+const EXTERNAL_URL_KEY = 'combo.externalUrl';
+
+// ---------- 外部访问域名 ----------
+
+export function getExternalUrl(): string | null {
+  try {
+    return localStorage.getItem(EXTERNAL_URL_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setExternalUrl(url: string): void {
+  const clean = url.trim().replace(/\/$/, '');
+  try {
+    if (clean) localStorage.setItem(EXTERNAL_URL_KEY, clean);
+    else localStorage.removeItem(EXTERNAL_URL_KEY);
+  } catch {
+    /* 忽略存储不可用 */
+  }
+}
+
+export function clearExternalUrl(): void {
+  try {
+    localStorage.removeItem(EXTERNAL_URL_KEY);
+  } catch {
+    /* 忽略存储不可用 */
+  }
+}
+
+// ---------- 代理地址 ----------
+
 export function getProxyBaseUrl(): string {
   return proxyBaseUrl;
 }

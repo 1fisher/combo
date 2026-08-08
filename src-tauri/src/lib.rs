@@ -148,7 +148,12 @@ async fn init_backend(app: &tauri::AppHandle) {
         });
     }
 
-    let listener = match TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await {
+    // 绑定地址:默认 127.0.0.1(仅本地);域名部署时可设 COMBO_HOST=0.0.0.0 对外开放。
+    let bind_host: std::net::IpAddr = std::env::var("COMBO_HOST")
+        .ok()
+        .and_then(|h| h.trim().parse().ok())
+        .unwrap_or([127, 0, 0, 1].into());
+    let listener = match TcpListener::bind(SocketAddr::from((bind_host, 0))).await {
         Ok(l) => l,
         Err(e) => {
             eprintln!("proxy bind failed: {e:?}");

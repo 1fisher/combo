@@ -75,6 +75,7 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
 | `COMBO_IT_DIR` | E2E workspace directory (default `/tmp/combo-e2e`). |
 | `COMBO_DATA_DIR` | combo sqlite 数据目录(默认 `$XDG_DATA_HOME/combo`,macOS 无 XDG 时 `~/.local/share/combo`)。 |
 | `VITE_PROXY_URL` | Proxy base URL for browser mode (e.g. `http://127.0.0.1:18234`). In Tauri mode the port comes from the `proxy-ready` event with a 2s fallback to `:18234`. |
+| `COMBO_HOST` | Proxy 监听地址(默认 `127.0.0.1`)。域名部署时设 `0.0.0.0` 对外开放;命令行 `--host` 优先级更高。 |
 
 `crush` is **not** installed in this environment — anything requiring it
 (integration/E2E tests, desktop mode) self-skips or fails unless the binary is
@@ -256,3 +257,10 @@ health 都走同一 base,跨域由 CORS 放开。
   其余无有效令牌返回 401。令牌落盘 sqlite `access_tokens` 表(`db.rs`,
   支持撤销/过期/记录最后使用时间),刷新令牌时撤销旧令牌。令牌明文由
   `/dev/urandom` 生成 32 字节 hex(64 字符),不可用时回退到时间+pid 哈希。
+- **域名远程访问**:`connection.ts` 的 `getExternalUrl`/`setExternalUrl`/
+  `clearExternalUrl`(localStorage `combo.externalUrl`)管理外部访问域名。
+  在「设置」对话框中配置(如 `https://combo.example.com`),`MobileConnectDialog`
+  二维码优先使用该域名作为基础地址;未配置时回退到 `window.location`(仅限
+  局域网)。配置域名后手机扫码即可通过公网/域名访问,无需额外设置代理地址。
+  Proxy 监听地址可通过 `COMBO_HOST` 环境变量(或 `--host` 参数)指定,域名部署时
+  设 `0.0.0.0`。

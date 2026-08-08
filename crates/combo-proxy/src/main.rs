@@ -12,16 +12,28 @@ async fn main() -> Result<()> {
     let mut upstream_arg = None;
     let mut port: u16 = 0;
     let mut host: std::net::IpAddr = [127, 0, 0, 1].into();
+    let mut host_explicit = false;
     let mut origins = Vec::new();
     let mut browse_root: Option<PathBuf> = None;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--upstream" => upstream_arg = Some(args.next().unwrap()),
             "--port" => port = args.next().unwrap().parse()?,
-            "--host" => host = args.next().unwrap().parse()?,
+            "--host" => {
+                host = args.next().unwrap().parse()?;
+                host_explicit = true;
+            }
             "--origin" => origins.push(args.next().unwrap()),
             "--browse-root" => browse_root = Some(args.next().unwrap().into()),
             _ => {}
+        }
+    }
+    // --host 未显式传入时,读 COMBO_HOST 环境变量(支持域名部署绑定 0.0.0.0)。
+    if !host_explicit {
+        if let Ok(h) = std::env::var("COMBO_HOST") {
+            if let Ok(parsed) = h.trim().parse::<std::net::IpAddr>() {
+                host = parsed;
+            }
         }
     }
     // 未显式传 --origin 时,允许用 COMBO_CORS_ORIGINS(逗号分隔)配置 CORS 白名单;

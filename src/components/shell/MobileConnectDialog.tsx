@@ -11,7 +11,7 @@ import {
 } from '../ui/dialog';
 import { Button } from '../ui/button';
 import { cn } from '../../lib/utils';
-import { getProxyBaseUrl } from '../../lib/connection';
+import { getExternalUrl, getProxyBaseUrl } from '../../lib/connection';
 import { createAccessToken, revokeAccessToken, type CreatedToken } from '../../lib/api';
 
 interface MobileConnectDialogProps {
@@ -28,14 +28,18 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
   // 避免 useCallback 依赖 tokenInfo 导致与 useEffect 形成无限循环。
   const tokenRef = useRef<CreatedToken | null>(null);
 
+  // 二维码基础地址:优先使用配置的外部域名,否则回退到当前页面地址
+  const externalUrl = typeof window !== 'undefined' ? getExternalUrl() : null;
   const pageUrl = (() => {
     if (typeof window === 'undefined') return '';
+    if (externalUrl) return externalUrl.replace(/\/$/, '');
     const { protocol, hostname, port, pathname } = window.location;
     return `${protocol}//${hostname}:${port}${pathname}`;
   })();
 
   const isLocalhost =
     typeof window !== 'undefined' &&
+    !externalUrl &&
     (window.location.hostname === 'localhost' ||
       window.location.hostname === '127.0.0.1');
 
@@ -182,7 +186,17 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
           </div>
 
           {/* 提示 */}
-          {isLocalhost && (
+          {externalUrl && (
+            <div className="w-full rounded-lg border border-success/30 bg-success/5 px-3 py-2 text-[12px] leading-relaxed text-foreground-subtle">
+              <p className="font-medium text-success">已配置外部域名</p>
+              <p className="mt-0.5">
+                扫码后将通过{' '}
+                <code className="break-all text-foreground">{externalUrl}</code>{' '}
+                访问,手机无需额外配置代理地址。
+              </p>
+            </div>
+          )}
+          {!externalUrl && isLocalhost && (
             <div className="w-full rounded-lg border border-warning/30 bg-warning/5 px-3 py-2 text-[12px] leading-relaxed text-foreground-subtle">
               <p className="font-medium text-warning">当前使用 localhost 访问</p>
               <p className="mt-0.5">
@@ -192,11 +206,11 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
                 <code className="break-all text-foreground">
                   {proxyUrl.replace('127.0.0.1', '电脑IP')}
                 </code>
-                。
+                。配置外部域名后可免此限制。
               </p>
             </div>
           )}
-          {!isLocalhost && (
+          {!externalUrl && !isLocalhost && (
             <div className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-[12px] leading-relaxed text-foreground-subtle">
               在手机上打开后,进入「设置」填入代理地址即可连接:
               <code className="mt-1 block break-all text-foreground">{proxyUrl}</code>
