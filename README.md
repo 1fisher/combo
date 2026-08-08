@@ -2,6 +2,11 @@
 
 <div align="center">
 
+[![CI / Release](https://github.com/1fisher/combo/actions/workflows/release.yml/badge.svg)](https://github.com/1fisher/combo/actions/workflows/release.yml)
+[![Release](https://img.shields.io/github/v/release/1fisher/combo)](https://github.com/1fisher/combo/releases)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![Last Commit](https://img.shields.io/github/last-commit/1fisher/combo)](https://github.com/1fisher/combo)
+
 **一个界面,多个 Agent 后端。**
 
 combo 是一款开源的多 Agent IDE 桌面应用:用统一的界面同时驱动
@@ -157,6 +162,21 @@ COMBO_CRUSH_BIN=/path/to/crush npx playwright test
 
 > E2E 会在运行前**清空工作区目录**(`/tmp/combo-e2e`),因为 rune 会在工作区内持久化
 > 状态(`.crush/`)。未设置 `COMBO_CRUSH_BIN` 时 spec 自动跳过。
+
+## 持续集成 (CI)
+
+GitHub Actions 工作流 [CI / Release](.github/workflows/release.yml) 自动运行在
+每次 push 到 `main` 与 PR 上,包含:
+
+| 作业 | 内容 |
+|------|------|
+| **CI Frontend** | `npm ci` → `npm run tsc` → `npm test` → `npm run build`(Node 22) |
+| **CI Backend** | `cargo check --workspace` → `cargo test --workspace`(Rust stable,含 Tauri Linux 系统依赖) |
+| **Bump Version** | `workflow_dispatch` 手动触发:版本 bump + 生成 changelog + 打 tag 推送 |
+| **Build** | 对 tag(`v*`) 推送或手动触发,多平台矩阵构建安装包 |
+| **Publish Release** | 构建产物发布为 GitHub Release |
+
+工作流状态与最新发布版本见 README 顶部徽章。
 
 ## 目录结构
 
