@@ -98,13 +98,13 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               onKeyDown={(e) => {
                 if (e.key === 'Enter') save();
               }}
-              placeholder="https://combo.example.com"
+              placeholder="https://relay.example.com"
               className="h-9 w-full rounded-lg border border-input-border bg-background px-2.5 text-[13px] outline-none placeholder:text-foreground-subtlest focus-visible:border-input-border-focused"
             />
             <div className="text-[12px] text-foreground-subtle">
               {hasDomain
-                ? '已配置域名,移动端扫码将使用此地址连接'
-                : '域名部署时填写;留空则使用当前页面地址(仅限局域网)'}
+                ? '已配置自定义域名,移动端扫码将使用此地址连接'
+                : '留空则使用默认中转域名(relay.example.com),扫码即可远程访问'}
             </div>
             {hasDomain && (
               <Button variant="ghost" size="sm" className="h-7 w-fit text-[12px]" onClick={resetDomain}>

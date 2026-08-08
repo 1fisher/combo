@@ -22,7 +22,7 @@ describe('SettingsDialog', () => {
 
   it('saves the external domain to localStorage', async () => {
     render(<SettingsDialog open onOpenChange={vi.fn()} />);
-    const input = screen.getByPlaceholderText('https://combo.example.com');
+    const input = screen.getByPlaceholderText('https://relay.example.com');
     await userEvent.type(input, 'https://combo.example.com');
     await userEvent.click(screen.getByRole('button', { name: '保存' }));
     expect(getExternalUrl()).toBe('https://combo.example.com');

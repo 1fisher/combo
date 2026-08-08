@@ -83,6 +83,8 @@ fn make_state(oc_addr: std::net::SocketAddr) -> AppState {
         registry: Arc::new(registry),
         crush_supervisor: None,
         browse_root: None,
+        relay: combo_proxy::RelayManager::new(),
+        local_port: 0,
     }
 }
 

@@ -8,12 +8,14 @@ pub mod handler;
 pub mod host;
 pub mod manager;
 pub mod meta;
+pub mod relay;
 pub mod rune;
 pub mod registry;
 pub mod router;
 pub mod session;
 pub mod skills;
 pub mod terminal;
+pub mod tunnel;
 pub mod upstream;
 pub mod workspace;
 
@@ -26,6 +28,7 @@ pub use db::{ComboDb, ConversationMeta, StoredMessage, default_db_path};
 pub use manager::opencode::OpenCodeManager;
 pub use meta::{MetaStore, WorkspaceMeta};
 pub use registry::BackendRegistry;
+pub use relay::RelayManager;
 pub use router::build_router;
 pub use rune::RuneManager;
 pub use upstream::Upstream;
@@ -43,6 +46,10 @@ pub struct AppState {
     pub crush_supervisor: Option<Arc<RuneManager>>,
     /// 服务器目录浏览的根限制(`/v1/host/*`);None 表示允许浏览整个文件系统。
     pub browse_root: Option<PathBuf>,
+    /// 隧道管理器(控制桌面端到中转服务器的反向隧道)。
+    pub relay: Arc<RelayManager>,
+    /// 本地监听端口(隧道转发目标)。
+    pub local_port: u16,
 }
 
 /// Parses a `--upstream` argument into an [`Upstream`].

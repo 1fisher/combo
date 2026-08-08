@@ -1,13 +1,14 @@
 use crate::auth;
+use crate::control;
 use crate::fs;
 use crate::git;
 use crate::handler::proxy;
 use crate::host;
+use crate::relay;
 use crate::session;
 use crate::skills;
 use crate::terminal;
 use crate::workspace;
-use crate::control;
 use crate::AppState;
 use axum::middleware::from_fn_with_state;
 use axum::routing::{delete, get, post};
@@ -38,6 +39,12 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/v1/skills", get(skills::list))
         .route("/v1/terminal", get(terminal::terminal_default))
         .route("/v1/control/ensure-crush", post(control::ensure_crush))
+        .route(
+            "/v1/relay/start",
+            post(relay::start_relay),
+        )
+        .route("/v1/relay/stop", post(relay::stop_relay))
+        .route("/v1/relay/status", get(relay::relay_status))
         .route("/v1/host/home", get(host::home))
         .route("/v1/host/dirs", get(host::dirs))
         .route("/v1/workspaces", get(workspace::list).post(workspace::create))

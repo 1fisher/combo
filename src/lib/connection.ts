@@ -9,6 +9,9 @@ const PROXY_OVERRIDE_KEY = 'combo.proxyUrl';
 /** 外部访问域名(localStorage),用于域名部署时生成二维码和远程连接。 */
 const EXTERNAL_URL_KEY = 'combo.externalUrl';
 
+/** 默认中转域名,远程访问时通过此地址做中转,实现扫码即用。 */
+export const DEFAULT_RELAY_URL = 'https://relay.example.com';
+
 // ---------- 外部访问域名 ----------
 
 export function getExternalUrl(): string | null {
@@ -17,6 +20,14 @@ export function getExternalUrl(): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * 获取生效的外部访问地址:优先用户配置的自定义域名,否则使用默认中转域名。
+ * 用于移动端扫码二维码的基础地址。
+ */
+export function getEffectiveExternalUrl(): string {
+  return getExternalUrl() ?? DEFAULT_RELAY_URL;
 }
 
 export function setExternalUrl(url: string): void {
@@ -164,6 +175,13 @@ export async function resolveProxyBaseUrl(): Promise<string> {
       // 最终兜底
       setTimeout(() => done('http://127.0.0.1:18234'), 6000);
     });
+  }
+  // 浏览器模式:非 localhost 域名(中转/域名部署)时,使用同源地址作为代理
+  if (typeof window !== 'undefined') {
+    const { hostname } = window.location;
+    if (hostname !== 'localhost' && hostname !== '127.0.0.1') {
+      return window.location.origin;
+    }
   }
   return 'http://127.0.0.1:18234';
 }

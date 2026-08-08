@@ -1,0 +1,26 @@
+# combo-relay systemd 服务
+# 部署路径: /etc/systemd/system/combo-relay.service
+#
+# 启用:
+#   sudo cp combo-relay.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now combo-relay
+
+[Unit]
+Description=combo-relay (中转服务器 — 反向隧道)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/opt/combo/combo-relay --host 127.0.0.1 --port 8080 --static-dir /var/www/combo/dist
+WorkingDirectory=/opt/combo
+Restart=on-failure
+RestartSec=3
+
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

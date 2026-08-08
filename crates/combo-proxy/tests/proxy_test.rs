@@ -66,6 +66,8 @@ async fn start_proxy(upstream_addr: SocketAddr, origins: Vec<String>) -> SocketA
             )))),
             crush_supervisor: None,
             browse_root: None,
+            relay: combo_proxy::RelayManager::new(),
+            local_port: 0,
         };
         serve(listener, state, origins).await.unwrap();
     });

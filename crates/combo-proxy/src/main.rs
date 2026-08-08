@@ -1,6 +1,6 @@
 use anyhow::Result;
 use combo_proxy::rune::RuneManager;
-use combo_proxy::{parse_upstream, serve, AppState, BackendRegistry, ClaudeCodeBackend, CodexBackend, CrushBackend, MetaStore, OpenCodeBackend, OpenCodeManager};
+use combo_proxy::{parse_upstream, serve, AppState, BackendRegistry, ClaudeCodeBackend, CodexBackend, CrushBackend, MetaStore, OpenCodeBackend, OpenCodeManager, RelayManager};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -15,6 +15,8 @@ async fn main() -> Result<()> {
     let mut host_explicit = false;
     let mut origins = Vec::new();
     let mut browse_root: Option<PathBuf> = None;
+    let mut relay_url: Option<String> = None;
+    let mut relay_token: Option<String> = None;
     while let Some(a) = args.next() {
         match a.as_str() {
             "--upstream" => upstream_arg = Some(args.next().unwrap()),
@@ -25,6 +27,8 @@ async fn main() -> Result<()> {
             }
             "--origin" => origins.push(args.next().unwrap()),
             "--browse-root" => browse_root = Some(args.next().unwrap().into()),
+            "--relay" => relay_url = Some(args.next().unwrap()),
+            "--relay-token" => relay_token = Some(args.next().unwrap()),
             _ => {}
         }
     }
@@ -99,14 +103,18 @@ async fn main() -> Result<()> {
         println!("COMBO_CODEX_STATUS=connected");
     }
 
+    let listener = TcpListener::bind(SocketAddr::new(host, port)).await?;
+    let actual = listener.local_addr()?.port();
+    println!("COMBO_PROXY_PORT={actual}");
+
     let state = AppState {
         meta: Arc::new(MetaStore::open_default()?),
         registry: Arc::new(registry),
         crush_supervisor: supervisor,
         browse_root,
+        relay: RelayManager::new(),
+        local_port: actual,
     };
-
-    // crush 为内存态,重启后 workspace 会被遗忘:启动时把元数据库里的
     // workspace 重新注册/对齐,否则转发到 crush 的请求会 404。
     let failed = combo_proxy::workspace::reconcile_all(&state).await;
     if failed > 0 {
@@ -135,9 +143,26 @@ async fn main() -> Result<()> {
         });
     }
 
-    let listener = TcpListener::bind(SocketAddr::new(host, port)).await?;
-    let actual = listener.local_addr()?.port();
-    println!("COMBO_PROXY_PORT={actual}");
+    // 如果配置了中转隧道(--relay + --relay-token),启动隧道客户端
+    let relay_handle = if let (Some(url), Some(token)) = (&relay_url, &relay_token) {
+        let config = combo_proxy::tunnel::TunnelClientConfig {
+            relay_url: url.clone(),
+            token: token.clone(),
+            local_proxy_url: format!("http://127.0.0.1:{actual}"),
+        };
+        println!("COMBO_RELAY_URL={url}");
+        let h = tokio::spawn(async move {
+            combo_proxy::tunnel::run_tunnel_client(config).await;
+        });
+        Some(h)
+    } else {
+        None
+    };
+
     serve(listener, state, origins).await?;
+
+    if let Some(h) = relay_handle {
+        h.abort();
+    }
     Ok(())
 }

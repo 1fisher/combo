@@ -105,6 +105,8 @@ mod tests {
             )))),
             crush_supervisor: None,
             browse_root: None,
+            relay: crate::RelayManager::new(),
+            local_port: 0,
         };
         let req = Request::builder()
             .uri("/v1/health")

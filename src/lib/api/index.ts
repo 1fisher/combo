@@ -384,3 +384,28 @@ export function revokeAccessToken(token?: string, all = false): Promise<{ revoke
   return apiRequest('/v1/auth/token/revoke', { method: 'DELETE', query });
 }
 
+// ---------- 隧道管理 ----------
+
+export interface RelayStatus {
+  running: boolean;
+}
+
+/**
+ * 启动桌面端到中转服务器的反向隧道。
+ * @param wsUrl 中转 WebSocket 地址 (wss://...)
+ * @param token 访问令牌
+ */
+export function startRelayTunnel(wsUrl: string, token: string): Promise<RelayStatus> {
+  return apiRequest('/v1/relay/start', { method: 'POST', body: { url: wsUrl, token } });
+}
+
+/** 停止隧道。 */
+export function stopRelayTunnel(): Promise<RelayStatus> {
+  return apiRequest('/v1/relay/stop', { method: 'POST' });
+}
+
+/** 查询隧道状态。 */
+export function getRelayStatus(): Promise<RelayStatus> {
+  return apiRequest('/v1/relay/status');
+}
+

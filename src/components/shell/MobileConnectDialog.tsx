@@ -11,8 +11,8 @@ import {
 } from '../ui/dialog';
 import { Button } from '../ui/button';
 import { cn } from '../../lib/utils';
-import { getExternalUrl, getProxyBaseUrl } from '../../lib/connection';
-import { createAccessToken, revokeAccessToken, type CreatedToken } from '../../lib/api';
+import { getExternalUrl, getEffectiveExternalUrl } from '../../lib/connection';
+import { createAccessToken, revokeAccessToken, startRelayTunnel, type CreatedToken } from '../../lib/api';
 
 interface MobileConnectDialogProps {
   open: boolean;
@@ -24,26 +24,17 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
   const [copied, setCopied] = useState(false);
   const [tokenInfo, setTokenInfo] = useState<CreatedToken | null>(null);
   const [loading, setLoading] = useState(false);
+  const [tunnelConnected, setTunnelConnected] = useState(false);
   // ref 持有当前令牌,供 generateToken 撤销旧令牌时读取,
   // 避免 useCallback 依赖 tokenInfo 导致与 useEffect 形成无限循环。
   const tokenRef = useRef<CreatedToken | null>(null);
 
-  // 二维码基础地址:优先使用配置的外部域名,否则回退到当前页面地址
+  // 二维码基础地址:优先使用配置的外部域名,否则使用默认中转域名
   const externalUrl = typeof window !== 'undefined' ? getExternalUrl() : null;
   const pageUrl = (() => {
     if (typeof window === 'undefined') return '';
-    if (externalUrl) return externalUrl.replace(/\/$/, '');
-    const { protocol, hostname, port, pathname } = window.location;
-    return `${protocol}//${hostname}:${port}${pathname}`;
+    return getEffectiveExternalUrl().replace(/\/$/, '');
   })();
-
-  const isLocalhost =
-    typeof window !== 'undefined' &&
-    !externalUrl &&
-    (window.location.hostname === 'localhost' ||
-      window.location.hostname === '127.0.0.1');
-
-  const proxyUrl = typeof window !== 'undefined' ? getProxyBaseUrl() : '';
 
   // 扫码后移动端打开的地址:页面 URL + token 参数
   const mobileUrl = tokenInfo ? `${pageUrl}?token=${encodeURIComponent(tokenInfo.token)}` : '';
@@ -58,6 +49,14 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
       const t = await createAccessToken('移动端扫码');
       tokenRef.current = t;
       setTokenInfo(t);
+
+      // 启动隧道:桌面端 → 中转服务器(反向隧道)
+      const wsUrl = getEffectiveExternalUrl()
+        .replace(/^http/, 'ws') // https→wss, http→ws
+        .replace(/\/$/, '') + '/v1/relay/tunnel';
+      void startRelayTunnel(wsUrl, t.token)
+        .then(() => setTunnelConnected(true))
+        .catch(() => setTunnelConnected(false));
     } catch {
       tokenRef.current = null;
       setTokenInfo(null);
@@ -71,6 +70,7 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
       tokenRef.current = null;
       setTokenInfo(null);
       setQrDataUrl('');
+      setTunnelConnected(false);
       return;
     }
     void generateToken();
@@ -157,6 +157,19 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
             </div>
           )}
 
+          {/* 隧道状态 */}
+          <div className="flex w-full items-center justify-between rounded-lg border border-border bg-surface-hover px-3 py-2 text-[12px]">
+            <span className="flex items-center gap-1.5 text-foreground-subtle">
+              <span
+                className={cn(
+                  'inline-block size-2 rounded-full',
+                  tunnelConnected ? 'bg-success' : 'bg-warning animate-pulse',
+                )}
+              />
+              {tunnelConnected ? '隧道已连接,可扫码访问' : '隧道连接中…'}
+            </span>
+          </div>
+
           {/* 访问地址 */}
           <div className="w-full">
             <div className="mb-1.5 flex items-center gap-1.5 text-[12px] font-medium text-foreground-subtle">
@@ -196,24 +209,14 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
               </p>
             </div>
           )}
-          {!externalUrl && isLocalhost && (
-            <div className="w-full rounded-lg border border-warning/30 bg-warning/5 px-3 py-2 text-[12px] leading-relaxed text-foreground-subtle">
-              <p className="font-medium text-warning">当前使用 localhost 访问</p>
+          {!externalUrl && (
+            <div className="w-full rounded-lg border border-brand/30 bg-brand/5 px-3 py-2 text-[12px] leading-relaxed text-foreground-subtle">
+              <p className="font-medium text-brand">通过中转域名连接</p>
               <p className="mt-0.5">
-                手机需与电脑在同一局域网。请将上方地址中的{' '}
-                <code className="text-foreground">localhost</code> 替换为电脑的局域网
-                IP(如 192.168.x.x),并在手机「设置」中填入代理地址{' '}
-                <code className="break-all text-foreground">
-                  {proxyUrl.replace('127.0.0.1', '电脑IP')}
-                </code>
-                。配置外部域名后可免此限制。
+                扫码后将通过{' '}
+                <code className="break-all text-foreground">{pageUrl}</code>{' '}
+                中转访问,手机无需额外配置。可在「设置」中自定义外部域名。
               </p>
-            </div>
-          )}
-          {!externalUrl && !isLocalhost && (
-            <div className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-[12px] leading-relaxed text-foreground-subtle">
-              在手机上打开后,进入「设置」填入代理地址即可连接:
-              <code className="mt-1 block break-all text-foreground">{proxyUrl}</code>
             </div>
           )}
         </div>

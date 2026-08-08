@@ -214,6 +214,8 @@ mod tests {
             ))),
             crush_supervisor: None,
             browse_root: Some(root.clone()),
+            relay: crate::RelayManager::new(),
+            local_port: 0,
         };
         assert!(resolve_dir(&state, &root).is_ok());
         let resp = resolve_dir(&state, &outside).unwrap_err();
@@ -234,6 +236,8 @@ mod tests {
             ))),
             crush_supervisor: None,
             browse_root: None,
+            relay: crate::RelayManager::new(),
+            local_port: 0,
         };
         let resp = resolve_dir(&state, &f).unwrap_err();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
