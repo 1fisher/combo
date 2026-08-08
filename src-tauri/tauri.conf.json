@@ -33,11 +33,6 @@
       "icons/icon.ico"
     ],
     "macOS": {
-      "signingIdentity": "-",
-      "entitlements": null,
-      "exceptionDomain": "",
-      "frameworks": [],
-      "providerShortName": null,
       "minimumSystemVersion": "10.15"
     },
     "windows": {
