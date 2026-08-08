@@ -8,3 +8,10 @@ playwright-report
 .env
 .env.local
 *.tsbuildinfo
+
+# Updater signing keys (never commit)
+combo-updater.key
+combo-updater.key.pub
+*.p12
+*.pfx
+*.pem

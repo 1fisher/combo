@@ -30,6 +30,7 @@ fn get_proxy_port(state: tauri::State<ProxyPort>) -> Option<u16> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(ProxyPort::default())
         .invoke_handler(tauri::generate_handler![get_proxy_port])
         .setup(|app| {

@@ -18,6 +18,7 @@ import {
   setExternalUrl,
   setProxyUrlOverride,
 } from '../../lib/connection';
+import { useUpdater } from '../../hooks/useUpdater';
 
 interface SettingsDialogProps {
   open: boolean;
@@ -35,6 +36,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [hasProxyOverride, setHasProxyOverride] = useState(false);
   const [domainInput, setDomainInput] = useState('');
   const [hasDomain, setHasDomain] = useState(false);
+  const updater = useUpdater();
 
   useEffect(() => {
     if (open) {
@@ -121,6 +123,67 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               </div>
             )}
           </div>
+
+          {/* 应用更新(仅桌面模式) */}
+          {isTauri() && (
+            <div className="flex flex-col gap-2">
+              <label className="text-[13px] font-medium text-foreground">应用更新</label>
+              {updater.status === 'idle' && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-8 w-fit text-[12px]"
+                  onClick={() => updater.checkForUpdate()}
+                >
+                  检查更新
+                </Button>
+              )}
+              {updater.status === 'checking' && (
+                <div className="text-[12px] text-foreground-subtle">正在检查更新…</div>
+              )}
+              {updater.status === 'available' && updater.updateInfo && (
+                <div className="flex flex-col gap-2">
+                  <div className="text-[12px] text-foreground-subtle">
+                    发现新版本 <span className="font-medium text-foreground">v{updater.updateInfo.version}</span>
+                  </div>
+                  {updater.updateInfo.body && (
+                    <pre className="max-h-32 overflow-auto whitespace-pre-wrap rounded-lg border border-input-border bg-background p-2.5 text-[11px] text-foreground-subtle">
+                      {updater.updateInfo.body}
+                    </pre>
+                  )}
+                  <div className="flex gap-2">
+                    <Button
+                      variant="default"
+                      size="sm"
+                      className="h-8 text-[12px]"
+                      onClick={() => updater.downloadAndInstall()}
+                    >
+                      下载并安装
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 text-[12px]"
+                      onClick={() => updater.checkForUpdate()}
+                    >
+                      重新检查
+                    </Button>
+                  </div>
+                </div>
+              )}
+              {(updater.status === 'downloading' || updater.status === 'installing') && (
+                <div className="text-[12px] text-foreground-subtle">
+                  {updater.status === 'downloading' ? '正在下载更新…' : '正在安装更新…'}
+                </div>
+              )}
+              {updater.status === 'done' && (
+                <div className="text-[12px] text-green-500">更新已安装,请重启应用。</div>
+              )}
+              {updater.status === 'error' && (
+                <div className="text-[12px] text-red-500">更新失败:{updater.error}</div>
+              )}
+            </div>
+          )}
         </div>
 
         <DialogFooter>

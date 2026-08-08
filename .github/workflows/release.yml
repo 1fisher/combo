@@ -204,13 +204,67 @@ jobs:
             echo "CHANGELOG_EOF"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Import Apple signing certificate (macOS only)
+        if: matrix.settings.platform != 'windows-x86_64' && matrix.settings.platform != 'linux-x86_64'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        shell: bash
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "ℹ️  未配置 APPLE_CERTIFICATE,跳过证书导入(将使用 ad-hoc 签名)"
+            exit 0
+          fi
+          echo "🔑 导入 Apple 证书…"
+          CERT_FILE=$(mktemp /tmp/certificate.XXXXXX.p12)
+          KEYCHAIN=$(mktemp -u /tmp/build-keychain.XXXXXX.keychain-db)
+          KEYCHAIN_PASSWORD=$(uuidgen)
+
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERT_FILE"
+
+          # 创建临时 keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+
+          # 导入证书
+          security import "$CERT_FILE" -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+
+          # 设为默认 keychain(后续 tauri 签名会用到)
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+
+          # 清理临时文件
+          rm -f "$CERT_FILE"
+          echo "✅ Apple 证书已导入"
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # ── macOS 代码签名 + 公证 ──
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # ── Windows / Updater 签名 ──
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ steps.tag.outputs.tag_name }}
           releaseName: 'Combo ${{ steps.tag.outputs.tag_name }}'
           releaseBody: ${{ steps.changelog.outputs.body || 'See assets below.' }}
           releaseDraft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft }}
           prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease }}
+          updaterJsonPreferNsis: true
           args: --target ${{ matrix.settings.target }}
+
+      - name: Cleanup keychain (macOS only)
+        if: always() && matrix.settings.platform != 'windows-x86_64' && matrix.settings.platform != 'linux-x86_64'
+        shell: bash
+        run: |
+          # 删除临时 keychain(如果存在)
+          security list-keychains -d user | grep -o '/tmp/build-keychain[^"]*' | while read -r kc; do
+            security delete-keychain "$kc" 2>/dev/null || true
+          done
