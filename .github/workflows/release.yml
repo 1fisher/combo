@@ -198,24 +198,18 @@ jobs:
           BODY="${{ steps.body.outputs.content }}"
           # 检查是否已存在 release
           EXISTING=$(gh release view "$TAG" --json isDraft --jq '.isDraft' 2>/dev/null || echo "none")
-          if [ "$EXISTING" = "true" ]; then
-            echo "Release $TAG 已存在(draft),跳过创建"
-            ID=$(gh release view "$TAG" --json databaseId --jq '.databaseId')
-            echo "id=${ID}" >> "$GITHUB_OUTPUT"
-            exit 0
-          elif [ "$EXISTING" = "false" ]; then
-            echo "Release $TAG 已发布,跳过创建"
+          if [ "$EXISTING" = "true" ] || [ "$EXISTING" = "false" ]; then
+            echo "Release $TAG 已存在,跳过创建"
             ID=$(gh release view "$TAG" --json databaseId --jq '.databaseId')
             echo "id=${ID}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # 创建 draft release
-          ID=$(gh release create "$TAG" \
+          gh release create "$TAG" \
             --title "Combo $TAG" \
             --notes "$BODY" \
-            --draft \
-            ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease && '--prerelease' || '' }} \
-            --json databaseId --jq '.databaseId')
+            --draft
+          ID=$(gh release view "$TAG" --json databaseId --jq '.databaseId')
           echo "id=${ID}" >> "$GITHUB_OUTPUT"
 
   # ─── 多平台构建 ───────────────────────────────────────────────────────
