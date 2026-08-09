@@ -92,89 +92,6 @@ fn expand_env(s: &str) -> Option<String> {
 pub fn builtin_providers() -> Vec<ProviderInfo> {
     vec![
         ProviderInfo {
-            id: "openai".into(),
-            name: Some("OpenAI".into()),
-            api_key: Some("$OPENAI_API_KEY".into()),
-            api_endpoint: Some("$OPENAI_API_ENDPOINT".into()),
-            provider_type: Some("openai".into()),
-            default_large_model_id: Some("gpt-4o".into()),
-            default_small_model_id: Some("gpt-4o-mini".into()),
-            models: vec![
-                ModelInfo {
-                    id: "gpt-4o".into(),
-                    name: Some("GPT-4o".into()),
-                    context_window: Some(128000),
-                    ..Default::default()
-                },
-                ModelInfo {
-                    id: "gpt-4o-mini".into(),
-                    name: Some("GPT-4o mini".into()),
-                    context_window: Some(128000),
-                    ..Default::default()
-                },
-            ],
-        },
-        ProviderInfo {
-            id: "anthropic".into(),
-            name: Some("Anthropic".into()),
-            api_key: Some("$ANTHROPIC_API_KEY".into()),
-            api_endpoint: Some("$ANTHROPIC_API_ENDPOINT".into()),
-            provider_type: Some("anthropic".into()),
-            default_large_model_id: Some("claude-sonnet-4-5".into()),
-            default_small_model_id: Some("claude-haiku-4-5-20251001".into()),
-            models: vec![ModelInfo {
-                id: "claude-sonnet-4-5".into(),
-                name: Some("Claude Sonnet 4.5".into()),
-                context_window: Some(200000),
-                ..Default::default()
-            }],
-        },
-        ProviderInfo {
-            id: "gemini".into(),
-            name: Some("Google Gemini".into()),
-            api_key: Some("$GEMINI_API_KEY".into()),
-            api_endpoint: Some("$GEMINI_API_ENDPOINT".into()),
-            provider_type: Some("google".into()),
-            default_large_model_id: Some("gemini-2.5-flash".into()),
-            default_small_model_id: Some("gemini-2.5-flash".into()),
-            models: vec![ModelInfo {
-                id: "gemini-2.5-flash".into(),
-                name: Some("Gemini 2.5 Flash".into()),
-                context_window: Some(1048576),
-                ..Default::default()
-            }],
-        },
-        ProviderInfo {
-            id: "ollama".into(),
-            name: Some("Ollama".into()),
-            api_key: None,
-            api_endpoint: Some("http://localhost:11434/v1".into()),
-            provider_type: Some("openai-compat".into()),
-            default_large_model_id: Some("llama3.1".into()),
-            default_small_model_id: Some("llama3.1".into()),
-            models: vec![ModelInfo {
-                id: "llama3.1".into(),
-                name: Some("Llama 3.1".into()),
-                context_window: Some(131072),
-                ..Default::default()
-            }],
-        },
-        ProviderInfo {
-            id: "deepseek".into(),
-            name: Some("DeepSeek".into()),
-            api_key: Some("$DEEPSEEK_API_KEY".into()),
-            api_endpoint: Some("https://api.deepseek.com/v1".into()),
-            provider_type: Some("openai-compat".into()),
-            default_large_model_id: Some("deepseek-chat".into()),
-            default_small_model_id: Some("deepseek-chat".into()),
-            models: vec![ModelInfo {
-                id: "deepseek-chat".into(),
-                name: Some("DeepSeek Chat".into()),
-                context_window: Some(131072),
-                ..Default::default()
-            }],
-        },
-        ProviderInfo {
             id: "opencode".into(),
             name: Some("OpenCode Zen".into()),
             api_key: Some("$OPENCODE_API_KEY".into()),
@@ -197,6 +114,129 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
                 },
             ],
         },
+        ProviderInfo {
+            id: "openrouter".into(),
+            name: Some("OpenRouter".into()),
+            api_key: Some("$OPENROUTER_API_KEY".into()),
+            api_endpoint: Some("https://openrouter.ai/api/v1".into()),
+            provider_type: Some("openai-compat".into()),
+            default_large_model_id: Some("anthropic/claude-sonnet-4".into()),
+            default_small_model_id: Some("anthropic/claude-3.5-haiku".into()),
+            models: vec![],
+        },
+        ProviderInfo {
+            id: "zhipu".into(),
+            name: Some("智谱 Coding".into()),
+            api_key: Some("$ZHIPU_API_KEY".into()),
+            api_endpoint: Some("https://open.bigmodel.cn/api/coding/paas/v4".into()),
+            provider_type: Some("openai-compat".into()),
+            default_large_model_id: Some("glm-4.6".into()),
+            default_small_model_id: Some("glm-4.5-flash".into()),
+            models: vec![
+                ModelInfo {
+                    id: "glm-4.6".into(),
+                    name: Some("GLM-4.6".into()),
+                    context_window: Some(128000),
+                    ..Default::default()
+                },
+                ModelInfo {
+                    id: "glm-4.5".into(),
+                    name: Some("GLM-4.5".into()),
+                    context_window: Some(128000),
+                    ..Default::default()
+                },
+                ModelInfo {
+                    id: "glm-4.5-flash".into(),
+                    name: Some("GLM-4.5 Flash".into()),
+                    context_window: Some(128000),
+                    ..Default::default()
+                },
+            ],
+        },
+        ProviderInfo {
+            id: "deepseek".into(),
+            name: Some("DeepSeek".into()),
+            api_key: Some("$DEEPSEEK_API_KEY".into()),
+            api_endpoint: Some("https://api.deepseek.com/v1".into()),
+            provider_type: Some("openai-compat".into()),
+            default_large_model_id: Some("deepseek-chat".into()),
+            default_small_model_id: Some("deepseek-chat".into()),
+            models: vec![ModelInfo {
+                id: "deepseek-chat".into(),
+                name: Some("DeepSeek Chat".into()),
+                context_window: Some(131072),
+                ..Default::default()
+            }],
+        },
+        // ---- 以下 provider 暂未启用,后续需要时取消注释 ----
+        // ProviderInfo {
+        //     id: "openai".into(),
+        //     name: Some("OpenAI".into()),
+        //     api_key: Some("$OPENAI_API_KEY".into()),
+        //     api_endpoint: Some("$OPENAI_API_ENDPOINT".into()),
+        //     provider_type: Some("openai".into()),
+        //     default_large_model_id: Some("gpt-4o".into()),
+        //     default_small_model_id: Some("gpt-4o-mini".into()),
+        //     models: vec![
+        //         ModelInfo {
+        //             id: "gpt-4o".into(),
+        //             name: Some("GPT-4o".into()),
+        //             context_window: Some(128000),
+        //             ..Default::default()
+        //         },
+        //         ModelInfo {
+        //             id: "gpt-4o-mini".into(),
+        //             name: Some("GPT-4o mini".into()),
+        //             context_window: Some(128000),
+        //             ..Default::default()
+        //         },
+        //     ],
+        // },
+        // ProviderInfo {
+        //     id: "anthropic".into(),
+        //     name: Some("Anthropic".into()),
+        //     api_key: Some("$ANTHROPIC_API_KEY".into()),
+        //     api_endpoint: Some("$ANTHROPIC_API_ENDPOINT".into()),
+        //     provider_type: Some("anthropic".into()),
+        //     default_large_model_id: Some("claude-sonnet-4-5".into()),
+        //     default_small_model_id: Some("claude-haiku-4-5-20251001".into()),
+        //     models: vec![ModelInfo {
+        //         id: "claude-sonnet-4-5".into(),
+        //         name: Some("Claude Sonnet 4.5".into()),
+        //         context_window: Some(200000),
+        //         ..Default::default()
+        //     }],
+        // },
+        // ProviderInfo {
+        //     id: "gemini".into(),
+        //     name: Some("Google Gemini".into()),
+        //     api_key: Some("$GEMINI_API_KEY".into()),
+        //     api_endpoint: Some("$GEMINI_API_ENDPOINT".into()),
+        //     provider_type: Some("google".into()),
+        //     default_large_model_id: Some("gemini-2.5-flash".into()),
+        //     default_small_model_id: Some("gemini-2.5-flash".into()),
+        //     models: vec![ModelInfo {
+        //         id: "gemini-2.5-flash".into(),
+        //         name: Some("Gemini 2.5 Flash".into()),
+        //         context_window: Some(1048576),
+        //         ..Default::default()
+        //     }],
+        // },
+        // ProviderInfo {
+        //     id: "ollama".into(),
+        //     name: Some("Ollama".into()),
+        //     api_key: None,
+        //     api_endpoint: Some("http://localhost:11434/v1".into()),
+        //     provider_type: Some("openai-compat".into()),
+        //     default_large_model_id: Some("llama3.1".into()),
+        //     default_small_model_id: Some("llama3.1".into()),
+        //     models: vec![ModelInfo {
+        //         id: "llama3.1".into(),
+        //         name: Some("Llama 3.1".into()),
+        //         context_window: Some(131072),
+        //         ..Default::default()
+        //     }],
+        // },
     ]
 }
 
@@ -348,6 +388,8 @@ fn default_endpoint(provider_type: &str, provider_id: &str) -> String {
         _ if provider_id == "ollama" => "http://localhost:11434/v1".to_string(),
         _ if provider_id == "deepseek" => "https://api.deepseek.com/v1".to_string(),
         _ if provider_id == "opencode" => "https://opencode.ai/zen/v1".to_string(),
+        _ if provider_id == "openrouter" => "https://openrouter.ai/api/v1".to_string(),
+        _ if provider_id == "zhipu" => "https://open.bigmodel.cn/api/coding/paas/v4".to_string(),
         _ if provider_id == "openai" => "https://api.openai.com/v1".to_string(),
         _ => "https://api.openai.com/v1".to_string(),
     }
@@ -610,8 +652,9 @@ mod tests {
 
     #[test]
     fn default_endpoint_returns_builtin_urls() {
-        assert_eq!(default_endpoint("anthropic", ""), "https://api.anthropic.com/v1");
-        assert_eq!(default_endpoint("google", ""), "https://generativelanguage.googleapis.com/v1beta");
         assert_eq!(default_endpoint("openai-compat", "deepseek"), "https://api.deepseek.com/v1");
+        assert_eq!(default_endpoint("openai-compat", "openrouter"), "https://openrouter.ai/api/v1");
+        assert_eq!(default_endpoint("openai-compat", "zhipu"), "https://open.bigmodel.cn/api/coding/paas/v4");
+        assert_eq!(default_endpoint("openai-compat", "opencode"), "https://opencode.ai/zen/v1");
     }
 }
