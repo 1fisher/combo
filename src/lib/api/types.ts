@@ -2122,6 +2122,7 @@ export namespace Api {
   export type ProviderEntry = {
     id: string;
     name?: string;
+    type?: string;
     models?: { id?: string; name?: string; [k: string]: unknown }[];
     [key: string]: unknown;
   };

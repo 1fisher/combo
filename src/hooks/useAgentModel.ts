@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  fetchProviderModels,
   getAgentInfo,
   getWorkspaceConfig,
   getWorkspaceProviders,
+  saveProviderKey,
   setWorkspaceModel,
 } from '../lib/api';
 import type { Api } from '../lib/api/types';
@@ -51,5 +53,45 @@ export function useSetModel(workspaceId: string | null | undefined) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['agent-info', workspaceId] });
     },
+  });
+}
+
+/** 拉取 provider 支持的远程模型列表。 */
+export function useFetchModels(workspaceId: string | null | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: {
+      providerId: string;
+      apiKey?: string;
+      apiEndpoint?: string;
+      providerType?: string;
+    }) =>
+      fetchProviderModels(workspaceId!, {
+        providerId: vars.providerId,
+        apiKey: vars.apiKey,
+        apiEndpoint: vars.apiEndpoint,
+        providerType: vars.providerType,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['providers', workspaceId] });
+    },
+  });
+}
+
+/** 持久化保存 provider 的 API Key。 */
+export function useSaveProviderKey(workspaceId: string | null | undefined) {
+  return useMutation({
+    mutationFn: (vars: {
+      providerId: string;
+      apiKey: string;
+      providerType?: string;
+      baseUrl?: string;
+    }) =>
+      saveProviderKey(workspaceId!, {
+        providerId: vars.providerId,
+        apiKey: vars.apiKey,
+        providerType: vars.providerType,
+        baseUrl: vars.baseUrl,
+      }),
   });
 }

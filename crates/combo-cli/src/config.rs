@@ -376,6 +376,50 @@ pub fn import_opencode_key(path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
+/// 把 provider 的 API key 保存到配置文件。
+///
+/// 写入 `[providers.{provider_id}]` 段;若 provider 段不存在则创建。
+/// api_key 为明文(不使用 $ENV_VAR 形式,因为是 UI 直接输入的值)。
+/// provider_type / base_url 可选,用于补全 provider 定义。
+pub fn save_provider_key(
+    path: &PathBuf,
+    provider_id: &str,
+    api_key: &str,
+    provider_type: Option<&str>,
+    base_url: Option<&str>,
+) -> Result<()> {
+    let mut cfg = if path.exists() {
+        let text = std::fs::read_to_string(path)?;
+        toml::from_str::<AppConfig>(&text)
+            .map_err(|e| anyhow::anyhow!("解析配置文件 {} 失败: {e}", path.display()))?
+    } else {
+        write_default(path, false)?;
+        AppConfig::default()
+    };
+
+    let entry = cfg
+        .providers
+        .entry(provider_id.to_string())
+        .or_insert_with(ProviderConfig::default);
+    entry.api_key = Some(api_key.to_string());
+    if let Some(pt) = provider_type {
+        entry.provider_type = Some(pt.to_string());
+    }
+    if let Some(url) = base_url {
+        if !url.is_empty() {
+            entry.base_url = Some(url.to_string());
+        }
+    }
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let out = toml::to_string_pretty(&cfg)
+        .map_err(|e| anyhow::anyhow!("序列化配置失败: {e}"))?;
+    std::fs::write(path, out)?;
+    Ok(())
+}
+
 /// 写入默认配置文件模板。`overwrite=false` 时若文件已存在则不写。
 pub fn write_default(path: &PathBuf, overwrite: bool) -> Result<()> {
     if path.exists() && !overwrite {
@@ -652,5 +696,24 @@ mod tests {
         let r = cfg.resolve(None, None, None, None, None, None);
         assert_eq!(r.api_key.as_deref(), Some("sk-abc"));
         assert_eq!(r.base_url.as_deref(), Some("https://custom.example/v1"));
+    }
+
+    #[test]
+    fn save_provider_key_creates_and_updates() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("combo-cli.toml");
+
+        // 首次保存
+        save_provider_key(&path, "deepseek", "sk-test-123", Some("openai-compat"), Some("https://api.deepseek.com/v1")).unwrap();
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        assert_eq!(cfg.providers.get("deepseek").unwrap().api_key.as_deref(), Some("sk-test-123"));
+        assert_eq!(cfg.providers.get("deepseek").unwrap().provider_type.as_deref(), Some("openai-compat"));
+
+        // 更新同一个 provider 的 key
+        save_provider_key(&path, "deepseek", "sk-new-key", None, None).unwrap();
+        let cfg2 = AppConfig::load_or_create(&path).unwrap();
+        assert_eq!(cfg2.providers.get("deepseek").unwrap().api_key.as_deref(), Some("sk-new-key"));
+        // type 应保留
+        assert_eq!(cfg2.providers.get("deepseek").unwrap().provider_type.as_deref(), Some("openai-compat"));
     }
 }

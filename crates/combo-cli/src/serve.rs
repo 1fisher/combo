@@ -114,6 +114,8 @@ pub async fn run(cfg: &agent::AskConfig, host: String, port: u16) -> Result<()> 
         )
         .route("/v1/workspaces/:id/events", get(events))
         .route("/v1/workspaces/:id/providers", get(list_providers))
+        .route("/v1/workspaces/:id/providers/fetch-models", post(fetch_models))
+        .route("/v1/workspaces/:id/providers/save-key", post(save_provider_key))
         .route("/v1/workspaces/:id/config/model", post(config_model))
         .with_state(state.clone());
 
@@ -533,6 +535,7 @@ async fn list_providers(State(state): State<AppState>) -> Json<Value> {
             json!({
                 "id": p.id,
                 "name": p.name.as_deref().unwrap_or(&p.id),
+                "type": p.provider_type.as_deref().unwrap_or(""),
                 "models": p.models.iter().map(|m| {
                     json!({
                         "id": m.id,
@@ -543,6 +546,105 @@ async fn list_providers(State(state): State<AppState>) -> Json<Value> {
         })
         .collect();
     Json(Value::Array(arr))
+}
+
+// ---------- 远程模型拉取 / API Key 保存 ----------
+
+/// POST /v1/workspaces/{id}/providers/fetch-models
+/// 请求体:`{ provider_id, api_key?, api_endpoint?, provider_type? }`
+/// 用提供的或已配置的 key 拉取 provider 支持的模型列表。
+#[derive(Deserialize)]
+struct FetchModelsReq {
+    provider_id: String,
+    api_key: Option<String>,
+    api_endpoint: Option<String>,
+    provider_type: Option<String>,
+}
+
+async fn fetch_models(
+    State(state): State<AppState>,
+    Json(body): Json<FetchModelsReq>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    // 从配置文件中获取 provider 基础信息
+    let config_path = AppConfig::load_or_create(&crate::config::default_config_path())
+        .unwrap_or_default();
+    let provider = providers::find_provider(&body.provider_id, &config_path.providers)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("未知 provider: {e}")))?;
+
+    let ptype = body
+        .provider_type
+        .or_else(|| provider.provider_type.clone())
+        .unwrap_or_else(|| "openai".to_string());
+
+    // api_key:请求体 > provider 解析(crush.json / providers.json / 内置 $ENV)
+    let api_key = body
+        .api_key
+        .filter(|k| !k.is_empty())
+        .or_else(|| provider.resolved_api_key())
+        .ok_or_else(|| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("provider `{}` 未配置 API Key", body.provider_id),
+            )
+        })?;
+
+    // api_endpoint:请求体 > provider 解析 > 内置默认
+    let api_endpoint = body
+        .api_endpoint
+        .filter(|e| !e.is_empty())
+        .or_else(|| provider.resolved_endpoint());
+
+    let models = providers::fetch_remote_models(&ptype, &api_key, api_endpoint.as_deref(), &body.provider_id)
+        .await
+        .map_err(|e| (StatusCode::SERVICE_UNAVAILABLE, format!("拉取模型失败: {e}")))?;
+
+    // 同时更新运行时 config(若拉取的是当前 provider)
+    {
+        let mut cfg = state.cfg.lock().unwrap();
+        if cfg.provider.id == body.provider_id {
+            cfg.provider.models = models.clone();
+        }
+    }
+
+    let arr: Vec<Value> = models
+        .iter()
+        .map(|m| {
+            json!({
+                "id": m.id,
+                "name": m.name.as_deref().unwrap_or(&m.id),
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "provider": body.provider_id, "models": arr })))
+}
+
+/// POST /v1/workspaces/{id}/providers/save-key
+/// 请求体:`{ provider_id, api_key, provider_type?, base_url? }`
+/// 将 API Key 持久化到配置文件。
+#[derive(Deserialize)]
+struct SaveKeyReq {
+    provider_id: String,
+    api_key: String,
+    provider_type: Option<String>,
+    base_url: Option<String>,
+}
+
+async fn save_provider_key(
+    _state: State<AppState>,
+    Json(body): Json<SaveKeyReq>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let path = crate::config::default_config_path();
+    crate::config::save_provider_key(
+        &path,
+        &body.provider_id,
+        &body.api_key,
+        body.provider_type.as_deref(),
+        body.base_url.as_deref(),
+    )
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("保存失败: {e}")))?;
+
+    tracing::info!("已保存 provider `{}` 的 API Key", body.provider_id);
+    Ok(Json(json!({ "ok": true, "provider": body.provider_id })))
 }
 
 /// GET /v1/workspaces/{id}/agent — 返回 agent 信息(含当前模型)。

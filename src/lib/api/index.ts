@@ -352,6 +352,38 @@ export function getWorkspaceProviders(workspaceId: string): Promise<Api.Provider
   return apiRequest(`/v1/workspaces/${workspaceId}/providers`);
 }
 
+/** 拉取 provider 支持的远程模型列表(需要 API Key)。 */
+export function fetchProviderModels(
+  workspaceId: string,
+  req: { providerId: string; apiKey?: string; apiEndpoint?: string; providerType?: string },
+): Promise<{ provider: string; models: { id: string; name: string }[] }> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/providers/fetch-models`, {
+    method: 'POST',
+    body: {
+      provider_id: req.providerId,
+      api_key: req.apiKey,
+      api_endpoint: req.apiEndpoint,
+      provider_type: req.providerType,
+    },
+  });
+}
+
+/** 持久化保存 provider 的 API Key 到配置文件。 */
+export function saveProviderKey(
+  workspaceId: string,
+  req: { providerId: string; apiKey: string; providerType?: string; baseUrl?: string },
+): Promise<{ ok: boolean; provider: string }> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/providers/save-key`, {
+    method: 'POST',
+    body: {
+      provider_id: req.providerId,
+      api_key: req.apiKey,
+      provider_type: req.providerType,
+      base_url: req.baseUrl,
+    },
+  });
+}
+
 /** 设置 workspace 当前使用的模型。 */
 export function setWorkspaceModel(
   workspaceId: string,

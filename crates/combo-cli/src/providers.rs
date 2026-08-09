@@ -337,6 +337,182 @@ pub fn builtin_ids() -> Vec<String> {
         .collect()
 }
 
+// ---------- 远程模型列表拉取 ----------
+
+/// 各 provider 类型的默认 API base URL(用户未配置 endpoint 时使用)。
+fn default_endpoint(provider_type: &str, provider_id: &str) -> String {
+    match provider_type {
+        "anthropic" => "https://api.anthropic.com/v1".to_string(),
+        "google" => "https://generativelanguage.googleapis.com/v1beta".to_string(),
+        // 内置 provider id 的默认 endpoint
+        _ if provider_id == "ollama" => "http://localhost:11434/v1".to_string(),
+        _ if provider_id == "deepseek" => "https://api.deepseek.com/v1".to_string(),
+        _ if provider_id == "opencode" => "https://opencode.ai/zen/v1".to_string(),
+        _ if provider_id == "openai" => "https://api.openai.com/v1".to_string(),
+        _ => "https://api.openai.com/v1".to_string(),
+    }
+}
+
+/// 规范化 endpoint:去掉尾部斜杠,确保包含合理路径。
+fn normalize_endpoint(endpoint: &str, provider_type: &str) -> String {
+    let base = endpoint.trim_end_matches('/');
+    // Google API 的 models 路径在 v1beta 下
+    if provider_type == "google" && !base.contains("/v1beta") && !base.contains("/v1") {
+        return format!("{}/v1beta", base);
+    }
+    base.to_string()
+}
+
+/// 拉取 provider 支持的模型列表。
+///
+/// 根据 provider_type 选择不同的 API 路径与鉴权方式:
+/// - openai / openai-compat: `GET {endpoint}/models`,`Authorization: Bearer {key}`
+/// - anthropic: `GET {endpoint}/models`,`x-api-key: {key}`
+/// - google: `GET {endpoint}/models`,`x-goog-api-key: {key}`
+pub async fn fetch_remote_models(
+    provider_type: &str,
+    api_key: &str,
+    api_endpoint: Option<&str>,
+    provider_id: &str,
+) -> Result<Vec<ModelInfo>> {
+    let endpoint = api_endpoint
+        .filter(|e| !e.is_empty())
+        .map(|e| normalize_endpoint(e, provider_type))
+        .unwrap_or_else(|| default_endpoint(provider_type, provider_id));
+
+    let url = format!("{}/models", endpoint);
+    tracing::info!("拉取远程模型列表: {} (type={})", url, provider_type);
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()?;
+
+    let resp = match provider_type {
+        "anthropic" => {
+            client
+                .get(&url)
+                .header("x-api-key", api_key)
+                .header("anthropic-version", "2023-06-01")
+        }
+        "google" => client.get(&url).header("x-goog-api-key", api_key),
+        _ => client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", api_key)),
+    }
+    .send()
+    .await
+    .map_err(|e| anyhow::anyhow!("请求 {} 失败: {e}", url))?;
+
+    let status = resp.status();
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| anyhow::anyhow!("读取响应体失败: {e}"))?;
+    if !status.is_success() {
+        let preview = body.chars().take(300).collect::<String>();
+        anyhow::bail!("API 返回 {}: {}", status, preview);
+    }
+
+    let data: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| anyhow::anyhow!("解析 JSON 失败: {e}"))?;
+
+    let models = match provider_type {
+        "anthropic" => parse_anthropic_models(&data),
+        "google" => parse_google_models(&data),
+        _ => parse_openai_models(&data),
+    };
+
+    tracing::info!("从 {} 拉取到 {} 个模型", url, models.len());
+    Ok(models)
+}
+
+/// 解析 OpenAI 兼容格式:`{ data: [{ id, ... }] }`。
+fn parse_openai_models(data: &serde_json::Value) -> Vec<ModelInfo> {
+    let Some(arr) = data.get("data").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    arr.iter()
+        .filter_map(|m| {
+            let id = m.get("id").and_then(|v| v.as_str())?.to_string();
+            // 过滤掉嵌入/语音/图像等非对话模型
+            if id.contains("embedding")
+                || id.contains("tts")
+                || id.contains("whisper")
+                || id.contains("davinci")
+                || id.contains("moderation")
+                || id.contains("image")
+            {
+                return None;
+            }
+            Some(ModelInfo {
+                id: id.clone(),
+                name: Some(id),
+                ..Default::default()
+            })
+        })
+        .collect()
+}
+
+/// 解析 Anthropic 格式:`{ data: [{ id, display_name, ... }] }`。
+fn parse_anthropic_models(data: &serde_json::Value) -> Vec<ModelInfo> {
+    let Some(arr) = data.get("data").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    arr.iter()
+        .filter_map(|m| {
+            let id = m.get("id").and_then(|v| v.as_str())?.to_string();
+            let name = m
+                .get("display_name")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&id)
+                .to_string();
+            Some(ModelInfo {
+                id,
+                name: Some(name),
+                ..Default::default()
+            })
+        })
+        .collect()
+}
+
+/// 解析 Google Gemini 格式:`{ models: [{ name: "models/gemini-...", displayName, supportedGenerationMethods: [...] }] }`。
+fn parse_google_models(data: &serde_json::Value) -> Vec<ModelInfo> {
+    let Some(arr) = data.get("models").and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    arr.iter()
+        .filter_map(|m| {
+            let raw_name = m.get("name").and_then(|v| v.as_str())?;
+            // name 形如 "models/gemini-2.0-flash",取后半段作为 id
+            let id = raw_name.strip_prefix("models/").unwrap_or(raw_name).to_string();
+            // 只保留支持内容生成的模型
+            let methods = m
+                .get("supportedGenerationMethods")
+                .and_then(|v| v.as_array());
+            if let Some(methods) = methods {
+                let supports = methods.iter().any(|meth| {
+                    meth.as_str()
+                        .map(|s| s == "generateContent" || s == "generateContent")
+                        .unwrap_or(false)
+                });
+                if !supports {
+                    return None;
+                }
+            }
+            let name = m
+                .get("displayName")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&id)
+                .to_string();
+            Some(ModelInfo {
+                id,
+                name: Some(name),
+                ..Default::default()
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,5 +554,64 @@ mod tests {
         let p = find_provider("opencode", &std::collections::BTreeMap::new()).unwrap();
         assert_eq!(p.default_model(), "deepseek-v4-flash-free");
         assert_eq!(p.resolved_endpoint().unwrap(), "https://opencode.ai/zen/v1");
+    }
+
+    #[test]
+    fn parse_openai_models_filters_non_chat() {
+        let data = serde_json::json!({
+            "data": [
+                {"id": "gpt-4o"},
+                {"id": "gpt-4o-mini"},
+                {"id": "text-embedding-3-small"},
+                {"id": "whisper-1"},
+                {"id": "dall-e-image-1"},
+            ]
+        });
+        let models = parse_openai_models(&data);
+        let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, vec!["gpt-4o", "gpt-4o-mini"]);
+    }
+
+    #[test]
+    fn parse_anthropic_models_extracts_display_name() {
+        let data = serde_json::json!({
+            "data": [
+                {"id": "claude-sonnet-4-5", "display_name": "Claude Sonnet 4.5"},
+                {"id": "claude-haiku-4-5-20251001", "display_name": "Claude Haiku 4.5"},
+            ]
+        });
+        let models = parse_anthropic_models(&data);
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "claude-sonnet-4-5");
+        assert_eq!(models[0].name.as_deref(), Some("Claude Sonnet 4.5"));
+    }
+
+    #[test]
+    fn parse_google_models_strips_prefix() {
+        let data = serde_json::json!({
+            "models": [
+                {"name": "models/gemini-2.0-flash", "displayName": "Gemini 2.0 Flash",
+                 "supportedGenerationMethods": ["generateContent", "countTokens"]},
+                {"name": "models/text-embedding-004", "displayName": "Embedding",
+                 "supportedGenerationMethods": ["embedContent"]},
+            ]
+        });
+        let models = parse_google_models(&data);
+        assert_eq!(models.len(), 1, "应过滤掉不支持 generateContent 的模型");
+        assert_eq!(models[0].id, "gemini-2.0-flash");
+        assert_eq!(models[0].name.as_deref(), Some("Gemini 2.0 Flash"));
+    }
+
+    #[test]
+    fn normalize_endpoint_strips_trailing_slash() {
+        assert_eq!(normalize_endpoint("https://api.openai.com/v1/", "openai"), "https://api.openai.com/v1");
+        assert_eq!(normalize_endpoint("https://api.openai.com/v1", "openai"), "https://api.openai.com/v1");
+    }
+
+    #[test]
+    fn default_endpoint_returns_builtin_urls() {
+        assert_eq!(default_endpoint("anthropic", ""), "https://api.anthropic.com/v1");
+        assert_eq!(default_endpoint("google", ""), "https://generativelanguage.googleapis.com/v1beta");
+        assert_eq!(default_endpoint("openai-compat", "deepseek"), "https://api.deepseek.com/v1");
     }
 }
