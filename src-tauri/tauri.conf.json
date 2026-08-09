@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "combo",
+        "title": "",
         "width": 1400,
         "height": 900
       }

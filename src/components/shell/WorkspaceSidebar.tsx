@@ -739,7 +739,10 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
           </span>
           <span className="min-w-0 flex-1 overflow-hidden">
             <span className="block min-w-0 truncate text-[13px] font-semibold text-foreground">
-              combo
+              Combo
+              <span className="ml-1.5 align-baseline text-[11px] font-normal text-foreground-subtlest">
+                v{__APP_VERSION__}
+              </span>
             </span>
             <span
               className={cn(
