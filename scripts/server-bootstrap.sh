@@ -14,7 +14,7 @@
 #
 set -euo pipefail
 
-DOMAIN="relay.example.com"
+DOMAIN="proxy.apesoft.cn"
 RELAY_PORT=8080
 INSTALL_DIR="/opt/combo"
 STATIC_DIR="/var/www/combo/dist"
@@ -168,7 +168,7 @@ cat > /etc/nginx/sites-available/${DOMAIN} << 'NGINX_HTTP'
 server {
     listen 80;
     listen [::]:80;
-    server_name relay.example.com;
+    server_name proxy.apesoft.cn;
 
     location /.well-known/acme-challenge/ {
         root /var/www/html;

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# combo-relay 中转服务器部署脚本 → relay.example.com
+# combo-relay 中转服务器部署脚本 → proxy.apesoft.cn
 #
 # 用法:
 #   REMOTE_HOST=your-server bash scripts/deploy-relay.sh
@@ -17,7 +17,7 @@
 set -euo pipefail
 
 REMOTE_HOST="${REMOTE_HOST:?请设置 REMOTE_HOST,如 your-server}"
-DOMAIN="relay.example.com"
+DOMAIN="proxy.apesoft.cn"
 CERT_DIR="/etc/combo-certs/${DOMAIN}"
 RELAY_DIR="/opt/combo"
 WEB_DIR="/var/www/combo/dist"
@@ -77,7 +77,7 @@ if [ ! -f "\$CERT_DIR/fullchain.pem" ]; then
     # 安装 acme.sh
     if [ ! -d ~/.acme.sh ]; then
         git clone --depth 1 https://github.com/acmesh-official/acme.sh.git /tmp/acme-repo
-        ( cd /tmp/acme-repo && ./acme.sh --install --home ~/.acme.sh --nocron --accountemail combo@example.com )
+        ( cd /tmp/acme-repo && ./acme.sh --install --home ~/.acme.sh --nocron --accountemail combo@apesoft.cn )
         ~/.acme.sh/acme.sh --set-default-ca --server zerossl
         ~/.acme.sh/acme.sh --install-cronjob
         rm -rf /tmp/acme-repo

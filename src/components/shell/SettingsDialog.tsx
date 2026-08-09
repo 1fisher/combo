@@ -28,7 +28,7 @@ interface SettingsDialogProps {
 
 /**
  * 设置对话框:
- * 1. 外部访问域名 — 域名部署时填写公开访问地址(如 https://combo.example.com),
+ * 1. 外部访问域名 — 域名部署时填写公开访问地址(如 https://proxy.apesoft.cn),
  *    二维码和远程连接会使用此地址。
  * 2. 代理地址 — 前后端分离部署时指定 combo-proxy 服务地址。
  */
@@ -98,13 +98,13 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               onKeyDown={(e) => {
                 if (e.key === 'Enter') save();
               }}
-              placeholder="https://relay.example.com"
+              placeholder="https://proxy.apesoft.cn"
               className="h-9 w-full rounded-lg border border-input-border bg-background px-2.5 text-[13px] outline-none placeholder:text-foreground-subtlest focus-visible:border-input-border-focused"
             />
             <div className="text-[12px] text-foreground-subtle">
               {hasDomain
                 ? '已配置自定义域名,移动端扫码将使用此地址连接'
-                : '留空则使用默认中转域名(relay.example.com),扫码即可远程访问'}
+                : '留空则使用默认中转域名(proxy.apesoft.cn),扫码即可远程访问'}
             </div>
             {hasDomain && (
               <Button variant="ghost" size="sm" className="h-7 w-fit text-[12px]" onClick={resetDomain}>

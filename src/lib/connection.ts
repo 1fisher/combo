@@ -10,7 +10,7 @@ const PROXY_OVERRIDE_KEY = 'combo.proxyUrl';
 const EXTERNAL_URL_KEY = 'combo.externalUrl';
 
 /** 默认中转域名,远程访问时通过此地址做中转,实现扫码即用。 */
-export const DEFAULT_RELAY_URL = 'https://relay.example.com';
+export const DEFAULT_RELAY_URL = 'https://proxy.apesoft.cn';
 
 // ---------- 外部访问域名 ----------
 

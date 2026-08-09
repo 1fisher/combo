@@ -4,7 +4,7 @@
 //! 建立**反向隧道**。中转服务器收到手机/Web 的 HTTP 请求后,通过隧道转发到桌面端,
 //! 桌面端在本地处理(转发给 combo-proxy)后将响应通过隧道返回。
 //!
-//! 连接: `wss://relay.example.com/v1/relay/tunnel?token=<access_token>`
+//! 连接: `wss://proxy.apesoft.cn/v1/relay/tunnel?token=<access_token>`
 //! 断线自动重连(指数退避)。
 
 use base64::Engine;
