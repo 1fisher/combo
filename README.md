@@ -11,11 +11,10 @@
 
 combo 是一款开源的多 Agent IDE 桌面应用:用统一的界面同时驱动
 [crush (rune)](https://charm.sh/crush)、[OpenCode](https://github.com/sst/opencode)、
-[Claude Code](https://docs.anthropic.com/en/docs/claude-code) 与
-[Codex](https://github.com/openai/codex) 等 coding agent,
+[Claude Code](https://docs.anthropic.com/en/docs/claude-code) 等 coding agent,
 在一个工作区里并发跑多个会话、对比不同模型的输出。
 
-Tauri v2 桌面壳 + React 19 / TypeScript 前端,通过内置 Rust 反向代理
+Tauri v2 桌面端 + React 19 / TypeScript 前端,通过内置 Rust 反向代理
 (`combo-proxy`)与各 agent 后端通信——所有协议差异(REST、stdio streaming-JSON、
 JSON-RPC)都在代理层吸收,前端永远只面对一套统一的 REST + SSE 契约。
 

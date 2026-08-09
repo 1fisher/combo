@@ -3,11 +3,10 @@
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
 use axum::response::Response;
 use futures_util::{SinkExt, StreamExt};
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::io::{Read, Write};
 use tokio::sync::mpsc;
 
@@ -165,14 +164,6 @@ async fn run_pty(socket: WebSocket, root: std::path::PathBuf) {
     read_handle.abort();
     let _ = child.kill();
     let _ = child.wait();
-}
-
-fn json_err(status: StatusCode, msg: &str) -> Response {
-    Response::builder()
-        .status(status)
-        .header("content-type", "application/json")
-        .body(axum::body::Body::from(json!({ "message": msg }).to_string()))
-        .unwrap()
 }
 
 /// 返回用户主目录作为默认终端工作目录。
