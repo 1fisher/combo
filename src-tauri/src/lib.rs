@@ -45,29 +45,50 @@ pub fn run() {
 }
 
 async fn init_backend(app: &tauri::AppHandle) {
+    use combo_proxy::combocli::ComboCliManager;
     use combo_proxy::rune::RuneManager;
-    use combo_proxy::{serve, AppState, BackendRegistry, ClaudeCodeBackend, CodexBackend, CrushBackend, MetaStore, OpenCodeBackend, OpenCodeManager, RelayManager, Upstream};
+    use combo_proxy::{serve, AppState, BackendRegistry, ClaudeCodeBackend, CodexBackend, ComboCliBackend, CrushBackend, MetaStore, OpenCodeBackend, OpenCodeManager, RelayManager, Upstream};
     use std::net::SocketAddr;
     use std::sync::Arc;
     use tokio::net::TcpListener;
 
-    let bin = std::env::var("COMBO_CRUSH_BIN").unwrap_or_else(|_| "crush".into());
-    let supervisor = Arc::new(RuneManager::new(bin));
+    // 可选:启动 crush 后端(存量 crush 项目;仅当显式指定 COMBO_CRUSH_BIN)
+    let crush_supervisor = if let Ok(bin) = std::env::var("COMBO_CRUSH_BIN") {
+        let supervisor = Arc::new(RuneManager::new(bin));
+        match supervisor.ensure_running().await {
+            Ok(_) => Some(supervisor),
+            Err(e) => {
+                eprintln!("rune server failed: {e:?}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let crush_upstream = match &crush_supervisor {
+        Some(_) => Upstream::Unix(combo_proxy::rune::default_socket_path()),
+        // crush 未启用:使用不可达地址,crush 项目转发会 502(前端可见)
+        None => Upstream::Tcp("127.0.0.1:1".parse().unwrap()),
+    };
+    let crush_monitor = crush_supervisor.clone();
+    let mut registry = BackendRegistry::new(Arc::new(CrushBackend::new(crush_upstream)));
 
-    // 尝试启动 crush,best-effort:即使失败也用 Unix socket 路径,
-    // 后台监控会持续重试拉起 crush。
-    let upstream = Upstream::Unix(combo_proxy::rune::default_socket_path());
-    match supervisor.ensure_running().await {
+    // 默认 agent:combo-cli serve(本机自有 agent)。
+    let combo_cli_mgr = Arc::new(ComboCliManager::new(
+        std::env::var("COMBO_CLI_BIN").unwrap_or_else(|_| combo_proxy::combocli::DEFAULT_BIN.into()),
+    ));
+    match combo_cli_mgr.ensure_running().await {
         Ok(_) => {
+            registry.set_combo_cli(Arc::new(ComboCliBackend::new_resolving(
+                combo_cli_mgr.addr_shared(),
+            )));
             let _ = app.emit(EVENT_RUNE_STATUS, RuneStatus { connected: true });
         }
         Err(e) => {
-            eprintln!("rune server failed: {e:?}");
+            eprintln!("combo-cli serve failed: {e:?}");
             let _ = app.emit(EVENT_RUNE_STATUS, RuneStatus { connected: false });
         }
     }
-
-    let mut registry = BackendRegistry::new(Arc::new(CrushBackend::new(upstream)));
 
     // 可选:启动 OpenCode 后端
     if let Ok(oc_bin) = std::env::var("COMBO_OPENCODE_BIN") {
@@ -109,7 +130,7 @@ async fn init_backend(app: &tauri::AppHandle) {
     let state = AppState {
         meta: Arc::new(MetaStore::open_default().unwrap_or_else(|_| MetaStore::new())),
         registry: Arc::new(registry),
-        crush_supervisor: Some(Arc::clone(&supervisor)),
+        crush_supervisor,
         browse_root: std::env::var("COMBO_BROWSE_ROOT")
             .ok()
             .filter(|s| !s.trim().is_empty())
@@ -125,9 +146,26 @@ async fn init_backend(app: &tauri::AppHandle) {
         eprintln!("rune workspace reconcile failed for {failed} workspaces");
     }
 
-    // 后台健康监控:crush 崩溃时自动重启并发事件通知前端
+    // 后台健康监控:combo-cli 崩溃时自动重启
     {
-        let sup = Arc::clone(&supervisor);
+        let mgr = Arc::clone(&combo_cli_mgr);
+        tauri::async_runtime::spawn(async move {
+            use std::time::Duration;
+            loop {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                if !mgr.is_healthy().await {
+                    eprintln!("combo-cli 健康检查失败,尝试重启...");
+                    if let Err(e) = mgr.ensure_running().await {
+                        eprintln!("combo-cli 重启失败: {e}");
+                    }
+                }
+            }
+        });
+    }
+
+    // 后台健康监控:crush 崩溃时自动重启并发事件通知前端(仅当 combo 托管 crush)
+    if let Some(supervisor) = crush_monitor {
+        let sup = supervisor;
         let app_h = app.clone();
         tauri::async_runtime::spawn(async move {
             use std::time::Duration;

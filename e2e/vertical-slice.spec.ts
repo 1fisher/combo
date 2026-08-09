@@ -29,7 +29,7 @@ test.describe('M1 vertical slice', () => {
         await fetch(`http://127.0.0.1:18234/v1/workspaces?client_id=${clientId}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: dir, client_id: clientId }),
+          body: JSON.stringify({ path: dir, client_id: clientId, backend: 'crush' }),
         });
       },
       { dir: tmp, clientId: cid }

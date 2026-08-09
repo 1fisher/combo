@@ -105,7 +105,7 @@ describe('WorkspaceSidebar', () => {
     // 目录选择器默认进入服务器浏览起点,点选子目录后确认
     await userEvent.click(await screen.findByText('c'));
     await userEvent.click(screen.getByRole('button', { name: '选择此目录' }));
-    expect(createWorkspace).toHaveBeenCalledWith('/proj/c', 'crush');
+    expect(createWorkspace).toHaveBeenCalledWith('/proj/c', 'combo-cli');
     expect((await screen.findAllByText('c')).length).toBeGreaterThan(0);
     expect(open).not.toHaveBeenCalled();
   });

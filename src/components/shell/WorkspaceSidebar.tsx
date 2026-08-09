@@ -60,6 +60,7 @@ function projectName(w: { name?: string; path: string }): string {
 }
 
 const BACKEND_LABEL: Record<string, string> = {
+  'combo-cli': 'Combo-cli',
   crush: 'Crush',
   opencode: 'OpenCode',
   claude_code: 'Claude Code',
@@ -227,7 +228,7 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
   const [projOpen, setProjOpen] = useState(true);
   const [taskOpen, setTaskOpen] = useState(true);
 
-  const [backend, setBackend] = useState<'crush' | 'opencode' | 'claude_code' | 'codex'>('crush');
+  const [backend, setBackend] = useState<'combo-cli' | 'crush' | 'opencode' | 'claude_code' | 'codex'>('combo-cli');
   // 服务器目录选择器(浏览器/移动端):add=添加项目,change=更换目录
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerMode, setPickerMode] = useState<'add' | 'change'>('add');
@@ -653,7 +654,7 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
                           {projectName(w)}
                         </span>
                         <span className="shrink-0 rounded-full border border-border bg-surface px-1.5 py-px text-[11px] leading-normal text-foreground-subtle">
-                          {BACKEND_LABEL[w.backend ?? 'crush'] ?? w.backend}
+                          {BACKEND_LABEL[w.backend ?? 'combo-cli'] ?? w.backend}
                         </span>
                         <button
                           onClick={(e) => {
@@ -984,7 +985,7 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
         }
         backend={pickerMode === 'add' ? backend : undefined}
         onBackendChange={(b) =>
-          setBackend(b as 'crush' | 'opencode' | 'claude_code' | 'codex')
+          setBackend(b as 'combo-cli' | 'crush' | 'opencode' | 'claude_code' | 'codex')
         }
         onOpenChange={setPickerOpen}
         onSelect={(path) => {

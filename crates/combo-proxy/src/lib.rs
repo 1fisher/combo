@@ -1,5 +1,6 @@
 pub mod backend;
 pub mod auth;
+pub mod combocli;
 pub mod control;
 pub mod db;
 pub mod fs;
@@ -21,9 +22,11 @@ pub mod workspace;
 
 pub use backend::claude_code::ClaudeCodeBackend;
 pub use backend::codex::CodexBackend;
+pub use backend::combo_cli::ComboCliBackend;
 pub use backend::crush::CrushBackend;
 pub use backend::opencode::OpenCodeBackend;
 pub use backend::{Backend, BackendType};
+pub use combocli::ComboCliManager;
 pub use db::{ComboDb, ConversationMeta, StoredMessage, default_db_path};
 pub use manager::opencode::OpenCodeManager;
 pub use meta::{MetaStore, WorkspaceMeta};

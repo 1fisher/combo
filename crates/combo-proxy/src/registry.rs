@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 /// 持有所有可用后端,按 workspace 查 MetaStore 决定使用哪个。
 pub struct BackendRegistry {
+    /// combo-cli serve(自有 agent,默认)。
+    combo_cli: Option<Arc<dyn Backend>>,
     crush: Arc<dyn Backend>,
     opencode: Option<Arc<dyn Backend>>,
     claude_code: Option<Arc<dyn Backend>>,
@@ -15,11 +17,16 @@ pub struct BackendRegistry {
 impl BackendRegistry {
     pub fn new(crush: Arc<dyn Backend>) -> Self {
         Self {
+            combo_cli: None,
             crush,
             opencode: None,
             claude_code: None,
             codex: None,
         }
+    }
+
+    pub fn set_combo_cli(&mut self, backend: Arc<dyn Backend>) {
+        self.combo_cli = Some(backend);
     }
 
     pub fn set_opencode(&mut self, backend: Arc<dyn Backend>) {
@@ -37,6 +44,7 @@ impl BackendRegistry {
     /// 按 backend_type 直接获取。
     pub fn by_type(&self, bt: BackendType) -> Option<&Arc<dyn Backend>> {
         match bt {
+            BackendType::ComboCli => self.combo_cli.as_ref(),
             BackendType::Crush => Some(&self.crush),
             BackendType::OpenCode => self.opencode.as_ref(),
             BackendType::ClaudeCode => self.claude_code.as_ref(),
@@ -44,16 +52,17 @@ impl BackendRegistry {
         }
     }
 
-    /// 按 workspace_id 查 MetaStore 确定后端。找不到时默认 crush。
+    /// 按 workspace_id 查 MetaStore 确定后端。找不到时默认 combo-cli。
     pub fn for_workspace(&self, ws_id: &str, meta: &MetaStore) -> &Arc<dyn Backend> {
         match meta.get(ws_id) {
             Some(m) => match m.backend_type {
+                BackendType::ComboCli => self.combo_cli.as_ref().unwrap_or(&self.crush),
                 BackendType::OpenCode => self.opencode.as_ref().unwrap_or(&self.crush),
                 BackendType::ClaudeCode => self.claude_code.as_ref().unwrap_or(&self.crush),
                 BackendType::Codex => self.codex.as_ref().unwrap_or(&self.crush),
                 BackendType::Crush => &self.crush,
             },
-            None => &self.crush,
+            None => self.combo_cli.as_ref().unwrap_or(&self.crush),
         }
     }
 }
@@ -61,7 +70,7 @@ impl BackendRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CrushBackend, Upstream};
+    use crate::{ComboCliBackend, CrushBackend, Upstream};
 
     fn dummy_crush() -> Arc<dyn Backend> {
         Arc::new(CrushBackend::new(Upstream::Tcp(
@@ -70,11 +79,14 @@ mod tests {
     }
 
     #[test]
-    fn defaults_to_crush_for_unknown_workspace() {
-        let reg = BackendRegistry::new(dummy_crush());
+    fn defaults_to_combo_cli_for_unknown_workspace() {
+        let mut reg = BackendRegistry::new(dummy_crush());
+        reg.set_combo_cli(Arc::new(ComboCliBackend::new(Upstream::Tcp(
+            "127.0.0.1:1".parse().unwrap(),
+        ))));
         let meta = MetaStore::new();
         let backend = reg.for_workspace("unknown", &meta);
-        assert_eq!(backend.backend_type(), BackendType::Crush);
+        assert_eq!(backend.backend_type(), BackendType::ComboCli);
     }
 
     #[test]
@@ -102,6 +114,20 @@ mod tests {
             backend_type: BackendType::OpenCode,
         });
         let backend = reg.for_workspace("ws3", &meta);
+        assert_eq!(backend.backend_type(), BackendType::Crush);
+    }
+
+    #[test]
+    fn combo_cli_workspace_falls_back_to_crush_when_not_set() {
+        let reg = BackendRegistry::new(dummy_crush());
+        let meta = MetaStore::new();
+        meta.insert(crate::WorkspaceMeta {
+            id: "ws4".into(),
+            path: "/tmp".into(),
+            name: "ws4".into(),
+            backend_type: BackendType::ComboCli,
+        });
+        let backend = reg.for_workspace("ws4", &meta);
         assert_eq!(backend.backend_type(), BackendType::Crush);
     }
 }

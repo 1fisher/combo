@@ -226,6 +226,111 @@ where
     Ok(out)
 }
 
+/// 流式运行事件(serve 模式转发为 SSE 事件)。
+#[derive(Clone, Debug)]
+pub enum RunEvent {
+    /// 文本增量。
+    TextDelta(String),
+    /// 完整工具调用(rig 已执行并自动回填结果)。
+    ToolCall { id: String, name: String, input: String },
+}
+
+/// 流式运行一次 agent 对话(多轮,含工具调用与历史)。
+///
+/// `history` 为之前的消息;`question` 作为本轮用户消息由 rig 追加。
+/// `cancel` 收到 `true` 时尽快中断;返回 `Ok(Some(回答))`,被取消返回 `Ok(None)`。
+pub async fn stream_run<F>(
+    cfg: &AskConfig,
+    question: &str,
+    history: &[Message],
+    mut cancel: tokio::sync::watch::Receiver<bool>,
+    mut on_event: F,
+) -> Result<Option<String>>
+where
+    F: FnMut(RunEvent),
+{
+    let builtin = if cfg.tools {
+        crate::tools::builtin_tools()
+    } else {
+        Vec::new()
+    };
+    let mcp = cfg.mcp_specs();
+    let ptype = cfg.provider.provider_type.clone().unwrap_or_else(|| "openai".into());
+    match ptype.as_str() {
+        "anthropic" => {
+            let client = rig::providers::anthropic::Client::from_env()?;
+            let (agent, _mcp) = build_agent(client, &cfg.model, &cfg.preamble, builtin, mcp).await?;
+            stream_one(&agent, question, history, &mut cancel, &mut on_event).await
+        }
+        "google" => {
+            let client = rig::providers::gemini::Client::from_env()?;
+            let (agent, _mcp) = build_agent(client, &cfg.model, &cfg.preamble, builtin, mcp).await?;
+            stream_one(&agent, question, history, &mut cancel, &mut on_event).await
+        }
+        // openai / openai-compat / 其它一律走 OpenAI 兼容协议
+        _ => {
+            let key = cfg.api_key()?;
+            let base = cfg.endpoint();
+            let builder = rig::providers::openai::CompletionsClient::builder()
+                .api_key(key)
+                .base_url(base);
+            let client = builder
+                .build()
+                .map_err(|e| anyhow::anyhow!("创建 client 失败: {e}"))?;
+            let (agent, _mcp) = build_agent(client, &cfg.model, &cfg.preamble, builtin, mcp).await?;
+            stream_one(&agent, question, history, &mut cancel, &mut on_event).await
+        }
+    }
+}
+
+/// 泛型流式执行:逐条消费 stream,文本增量与工具调用经 `on_event` 上报。
+async fn stream_one<M, F>(
+    agent: &Agent<M>,
+    question: &str,
+    history: &[Message],
+    cancel: &mut tokio::sync::watch::Receiver<bool>,
+    on_event: &mut F,
+) -> Result<Option<String>>
+where
+    M: CompletionModel + 'static,
+    M::StreamingResponse: GetTokenUsage,
+    F: FnMut(RunEvent),
+{
+    let mut stream = agent.stream_chat(question, history.to_vec()).await;
+    let mut out = String::new();
+    loop {
+        let item = tokio::select! {
+            _ = cancel.changed() => {
+                if *cancel.borrow() {
+                    return Ok(None);
+                }
+                continue;
+            }
+            item = stream.next() => item,
+        };
+        let Some(item) = item else { break };
+        match item? {
+            MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(t)) => {
+                out.push_str(&t.text);
+                on_event(RunEvent::TextDelta(t.text));
+            }
+            MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall {
+                tool_call,
+                ..
+            }) => {
+                let input = tool_call.function.arguments.to_string();
+                on_event(RunEvent::ToolCall {
+                    id: tool_call.id,
+                    name: tool_call.function.name,
+                    input,
+                });
+            }
+            _ => {}
+        }
+    }
+    Ok(Some(out))
+}
+
 /// 交互式多轮会话:读取 stdin,流式输出,消息持久化到 sqlite。
 pub async fn chat_loop(cfg: &AskConfig) -> Result<()> {
     let model = cfg.model.clone();

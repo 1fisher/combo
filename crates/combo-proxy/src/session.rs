@@ -42,12 +42,45 @@ pub async fn list(State(state): State<AppState>, Path(id): Path<String>) -> Resp
     }
 }
 
-/// POST /v1/workspaces/{id}/sessions — 转发 rune,成功后写入 sqlite 镜像。
+/// POST /v1/workspaces/{id}/sessions — 按 workspace 后端类型路由:
+/// - crush:转发 rune 创建,成功后写入 sqlite 镜像(双写)。
+/// - 其它后端(combo-cli 等):会话由 combo 本地 sqlite 直接管理,不转发。
 pub async fn create(
     State(state): State<AppState>,
     Path(id): Path<String>,
     axum::extract::Json(body): axum::extract::Json<Value>,
 ) -> Response {
+    let backend_type = state
+        .meta
+        .get(&id)
+        .map(|m| m.backend_type)
+        .unwrap_or(BackendType::ComboCli);
+
+    if backend_type != BackendType::Crush {
+        // combo 本地直接创建会话(sqlite 是会话列表的真正数据源)
+        let title = body
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("会话")
+            .to_string();
+        let now = now_secs();
+        let conv = ConversationMeta {
+            id: crate::workspace::uuid_like(),
+            workspace_id: id.clone(),
+            title,
+            message_count: 0,
+            created_at: now,
+            updated_at: now,
+        };
+        return match state.meta.db().upsert_conversation(&conv) {
+            Ok(_) => json_ok(&session_json(&conv)),
+            Err(e) => json_err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("创建会话失败: {e}"),
+            ),
+        };
+    }
+
     let Some(backend) = state.registry.by_type(BackendType::Crush) else {
         return json_err(StatusCode::BAD_GATEWAY, "crush 后端不可用");
     };

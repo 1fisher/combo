@@ -75,7 +75,8 @@ JSON-RPC)都在代理层吸收,前端永远只面对一套统一的 REST + SSE �
   - Linux:`libwebkit2gtk-4.1-dev libgtk-3-dev libdbus-1-dev pkg-config build-essential`
   - Windows:Microsoft C++ Build Tools 与 WebView2
 - **Agent 后端二进制**(按需,至少一个):
-  - [crush](https://charm.sh/crush)(rune server)—— 默认后端
+  - [combo-cli](crates/combo-cli)(combo 自有 agent,rig 驱动)—— **默认后端**,`cargo build -p combo-cli` 后把二进制放入 `PATH` 或设 `COMBO_CLI_BIN`
+  - [crush](https://charm.sh/crush)(rune server)—— 存量兼容,设 `COMBO_CRUSH_BIN` 才自动拉起
   - [opencode](https://github.com/sst/opencode)
   - [claude](https://docs.anthropic.com/en/docs/claude-code)(Claude Code CLI)
   - [codex](https://github.com/openai/codex)
@@ -96,7 +97,7 @@ npm install
 cargo tauri dev
 ```
 
-Tauri 壳会自动启动 combo-proxy 与 rune server,无需手动配置。
+Tauri 壳会自动启动 combo-proxy 与 combo-cli serve(默认 agent),无需手动配置。
 启动后通过 UI「添加项目」创建工作区,选择后端类型即可开始对话。
 
 > ⚠️ 注意:仓库内**没有** `tauri` npm 脚本,也未安装 `@tauri-apps/cli`,
@@ -114,10 +115,10 @@ bash scripts/dev-proxy.sh
 # 等价于:VITE_PROXY_URL=http://127.0.0.1:18234 npm run dev
 ```
 
-**终端 2** —— 启动 combo-proxy(自动 spawn rune;rune 二进制默认取 `PATH` 上的 `crush`):
+**终端 2** —— 一步编译并启动 combo-proxy(自动构建 combo-cli 并托管为默认 agent):
 
 ```bash
-cargo run -p combo-proxy --bin combo-proxy -- --port 18234
+bash scripts/dev-backend.sh          # 等价于:构建 combo-cli → 以 target/debug/combo-cli 为默认 agent 启动 proxy
 ```
 
 然后浏览器打开 **http://localhost:5173**。
@@ -126,7 +127,8 @@ cargo run -p combo-proxy --bin combo-proxy -- --port 18234
 
 | 变量 | 说明 |
 |------|------|
-| `COMBO_CRUSH_BIN` | rune 服务端二进制路径(默认取 `PATH` 上的 `crush`)。E2E 与 rune 集成测试必须设置。 |
+| `COMBO_CLI_BIN` | combo-cli serve 二进制路径(默认取 `PATH` 上的 `combo-cli`)。默认 agent,缺失时 proxy 仍可启动(combo-cli 项目 502)。 |
+| `COMBO_CRUSH_BIN` | 存量 crush(rune server)二进制路径。设此变量才会自动拉起 crush(不再默认启动)。E2E 与 rune 集成测试必须设置。 |
 | `COMBO_RUNE_IT` | 设为 `1` 启用 rune 集成测试(`crates/combo-proxy/tests/rune_integration_test.rs`),否则跳过。 |
 | `COMBO_IT_DIR` | E2E 工作区目录(默认 `/tmp/combo-e2e`)。 |
 | `VITE_PROXY_URL` | 浏览器模式下代理基地址,如 `http://127.0.0.1:18234`。Tauri 模式自动取代理事件端口(2s 回退到 `:18234`)。 |

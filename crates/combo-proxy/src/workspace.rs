@@ -40,7 +40,7 @@ pub async fn create(
         .get("backend")
         .and_then(|v| v.as_str())
         .map(BackendType::parse)
-        .unwrap_or(BackendType::Crush);
+        .unwrap_or(BackendType::ComboCli);
 
     let (ws_id, ws_path) = if backend == BackendType::Crush {
         match state.registry.by_type(BackendType::Crush) {
@@ -264,7 +264,7 @@ fn json_err(status: StatusCode, msg: &str) -> Response {
         .unwrap()
 }
 
-fn uuid_like() -> String {
+pub(crate) fn uuid_like() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

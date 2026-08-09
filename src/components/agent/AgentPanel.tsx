@@ -19,6 +19,7 @@ import { extractFileToolCalls } from '../../lib/fileChanges';
 import { cn } from '../../lib/utils';
 
 const BACKEND_LABEL: Record<string, string> = {
+  'combo-cli': 'Combo-cli',
   crush: 'Crush',
   opencode: 'OpenCode',
   claude_code: 'Claude Code',
@@ -84,7 +85,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
   }, [sessionId]);
   const ws = workspaces?.find((w) => w.id === workspaceId) ?? null;
   const wsName = ws ? (ws.name?.trim() ? ws.name : basename(ws.path)) : undefined;
-  const backend = ws ? (BACKEND_LABEL[ws.backend ?? 'crush'] ?? ws.backend) : 'Crush';
+  const backend = ws ? (BACKEND_LABEL[ws.backend ?? 'combo-cli'] ?? ws.backend) : 'Combo-cli';
 
   async function discardCreatedSession(sid: string | null) {
     if (!sid) return;

@@ -1,6 +1,8 @@
 pub mod claude_code;
 pub mod codex;
+pub mod combo_cli;
 pub mod crush;
+pub mod http;
 pub mod opencode;
 
 use anyhow::Result;
@@ -11,6 +13,8 @@ use std::path::PathBuf;
 /// 标识当前使用的 agent 后端类型。
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BackendType {
+    /// 自有 agent(combo-cli serve,默认)。
+    ComboCli,
     Crush,
     OpenCode,
     ClaudeCode,
@@ -21,6 +25,7 @@ impl BackendType {
     /// 序列化为与 wire/URL 一致的字符串。
     pub fn as_str(&self) -> &'static str {
         match self {
+            BackendType::ComboCli => "combo-cli",
             BackendType::Crush => "crush",
             BackendType::OpenCode => "opencode",
             BackendType::ClaudeCode => "claude_code",
@@ -28,13 +33,16 @@ impl BackendType {
         }
     }
 
-    /// 解析后端字符串,未知值回退到 Crush。
+    /// 解析后端字符串,未知值回退到 ComboCli(默认 agent)。
     pub fn parse(s: &str) -> BackendType {
         match s {
+            "crush" => BackendType::Crush,
             "opencode" => BackendType::OpenCode,
             "claude_code" => BackendType::ClaudeCode,
             "codex" => BackendType::Codex,
-            _ => BackendType::Crush,
+            // combo-cli 及历史拼写都归一化到 ComboCli
+            "combo-cli" | "combo_cli" | "combocli" => BackendType::ComboCli,
+            _ => BackendType::ComboCli,
         }
     }
 }

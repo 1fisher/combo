@@ -52,14 +52,26 @@ npm run tsc                 # tsc -b (project references: tsconfig.app.json + ts
 npm test                    # vitest run (jsdom; config lives inside vite.config.ts)
 npm run test:e2e            # Playwright; SKIPS itself unless COMBO_CRUSH_BIN is set
 npm run gen:api             # regenerate src/lib/api/types.ts from swagger/swagger.json
-cargo run -p combo-proxy --bin combo-proxy -- --port 18234   # proxy standalone (auto-spawns rune)
+cargo run -p combo-proxy --bin combo-proxy -- --port 18234   # proxy standalone(默认托管 combo-cli serve)
+bash scripts/dev-backend.sh    # 一步:编译 combo-cli → 启动 combo-proxy(端口 18234,可传参)
 cargo run -p combo-cli --bin combo-cli -- ask "你好"         # 自有 agent CLI(rig 驱动)
 cargo test -p combo-proxy   # Rust unit + integration tests
 cargo test -p combo-cli     # combo-cli 单元测试
 ```
 
+> **默认 agent 是 combo-cli(本机自有 agent),不再是 crush。** proxy 无
+> `--upstream` 时自动托管 `combo-cli serve`(`COMBO_CLI_BIN` 指定二进制,默认
+> `combo-cli`),新项目默认 `backend=combo-cli`;crush 变为可选项——显式传
+> `--upstream` 或设 `COMBO_CRUSH_BIN` 才会拉起(存量 crush 项目兼容)。
+> combo-cli serve 实现 rune 兼容协议(`/v1/workspaces/{id}/agent` + SSE
+> events + cancel + current-session/permissions stub),会话与历史由 proxy 的
+> sqlite 镜像负责,`/agent` 请求由 proxy 注入 `history`(见
+> `handler.rs::inject_history`)支撑多轮上下文;工具自动执行、无权限拦截。
+
 **Browser dev workflow (recommended):** terminal 1 `bash scripts/dev-proxy.sh`,
-terminal 2 `cargo run -p combo-proxy --bin combo-proxy -- --port 18234`, then open
+terminal 2 `bash scripts/dev-backend.sh`(一步编译 combo-cli 并以它为默认 agent
+启动 proxy,等价于先 `cargo build -p combo-cli` 再 `COMBO_CLI_BIN=target/debug/combo-cli
+cargo run -p combo-proxy --bin combo-proxy -- --port 18234`),then open
 http://localhost:5173.
 
 **Tauri desktop mode:** the README says `npm run tauri dev`, but **that does not
@@ -78,10 +90,14 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
 | `COMBO_DATA_DIR` | combo sqlite 数据目录(默认 `$XDG_DATA_HOME/combo`,macOS 无 XDG 时 `~/.local/share/combo`)。 |
 | `VITE_PROXY_URL` | Proxy base URL for browser mode (e.g. `http://127.0.0.1:18234`). In Tauri mode the port comes from the `proxy-ready` event with a 2s fallback to `:18234`. |
 | `COMBO_HOST` | Proxy 监听地址(默认 `127.0.0.1`)。域名部署时设 `0.0.0.0` 对外开放;命令行 `--host` 优先级更高。 |
+| `COMBO_CLI_BIN` | combo-cli serve 二进制(默认 `combo-cli` 从 PATH 找)。设此变量才会自动托管 combo-cli serve;二进制缺失时 proxy 仍可启动(combo-cli 项目转发 502)。 |
+| `COMBO_CRUSH_BIN` | 存量 crush 兼容:设此变量才自动拉起 `crush server`(不再默认启动)。 |
 
 `crush` is **not** installed in this environment — anything requiring it
 (integration/E2E tests, desktop mode) self-skips or fails unless the binary is
-provided.
+provided. combo-cli 同理:集成测试
+(`crates/combo-proxy/tests/combo_cli_integration_test.rs`)在 `COMBO_CLI_BIN`
+指定的二进制缺失时自动跳过。
 
 ## Architecture & data flow
 
@@ -97,10 +113,12 @@ provided.
   (rune session 的本地镜像)。`MetaStore` (`meta.rs`)是 sqlite-backed:
   `WorkspaceMeta.name` 创建时默认取目录 basename,`PATCH /v1/workspaces/{id}`
   可重命名并跨重启保留。**Session 镜像** (`session.rs`)拦截
-  `GET/POST/DELETE /v1/workspaces/{id}/sessions`:创建/删除转发 rune 成功后
-  双写 sqlite,列表直接从 sqlite 读(不依赖 rune 在线,首次访问自动回源
-  补齐历史会话);其余 session 子路径(history/messages/events 等)仍走
-  fallback 透传给 rune。项目列表在左侧显示 `name`(不再是完整路径),
+  `GET/POST/DELETE /v1/workspaces/{id}/sessions`:创建按 workspace 后端类型
+  路由——crush 转发 rune 成功后双写 sqlite,combo-cli 等其它后端直接本地
+  建会话(不转发);删除先删 sqlite 再尽力转发 rune。列表直接从 sqlite 读
+  (不依赖后端在线,首次访问自动回源补齐历史会话);其余 session 子路径
+  (history/messages/events 等)仍走 fallback 透传(combo-cli 由 serve 端
+  rune 兼容协议承接)。项目列表在左侧显示 `name`(不再是完整路径),
   hover 出现铅笔按钮可重命名。
 - **Selection persistence**: `agentStore` uses `zustand/persist`
   (`localStorage` key `combo.agent`) storing only `activeWorkspaceId` +
@@ -218,8 +236,15 @@ provided.
    `ask`(单轮流式)、`chat`(交互多轮流式,历史
    持久化 `COMBO_DATA_DIR`/`XDG_DATA_HOME/combo/combo-cli.db`,表
    `cli_conversations`/`cli_messages` 与 proxy 隔离)、`sessions list|show|rm`、
-   `serve`(RuneManager 式进程管理:`GET /v1/health` + `POST /v1/control`
-   优雅关闭 + `POST /v1/agent` 单轮问答,供 combo-proxy 托管)、`config
+   `serve`(RuneManager 式进程管理,stdout 输出 `COMBO_CLI_PORT=` 供
+   `combocli.rs::ComboCliManager` 解析端口;`GET /v1/health` + `POST
+   /v1/control` 优雅关闭 + **rune 兼容协议**:`POST /v1/workspaces/{id}/agent`
+   发起运行(请求体含 proxy 注入的 `history`)、`POST
+   .../agent/sessions/{sid}/cancel` 取消、`GET /v1/workspaces/{id}/events`
+   SSE 双层信封事件流(消息 created/updated + finish + run_complete,keepalive
+   用 15s `: ping`,不能用 `interval.tick()`——unfold 每帧重建会首 tick 洪泛)、
+   current-session/permissions-skip stub;无 API key 时也发
+   `finish(reason=error)` + `run_complete` 保证前端 run 收尾)、`config
    path|init|import`(配置文件管理)。**配置文件自动生成**:首次运行在
    `$XDG_CONFIG_HOME/combo/combo-cli.toml`(`COMBO_CONFIG_DIR` 覆盖目录,
    `--config` 覆盖路径)生成带注释的默认模板;优先级

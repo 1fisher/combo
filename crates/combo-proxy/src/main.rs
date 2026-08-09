@@ -1,6 +1,7 @@
 use anyhow::Result;
+use combo_proxy::combocli::ComboCliManager;
 use combo_proxy::rune::RuneManager;
-use combo_proxy::{parse_upstream, serve, AppState, BackendRegistry, ClaudeCodeBackend, CodexBackend, CrushBackend, MetaStore, OpenCodeBackend, OpenCodeManager, RelayManager};
+use combo_proxy::{parse_upstream, serve, AppState, BackendRegistry, ClaudeCodeBackend, CodexBackend, ComboCliBackend, CrushBackend, MetaStore, OpenCodeBackend, OpenCodeManager, RelayManager, Upstream};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -61,21 +62,52 @@ async fn main() -> Result<()> {
             .filter(|s| !s.trim().is_empty())
             .map(PathBuf::from);
     }
-    let (upstream, supervisor) = match upstream_arg {
-        Some(s) => (parse_upstream(&s)?, None),
+    // crush:--upstream 显式指定,或设 COMBO_CRUSH_BIN 才自动托管(兼容存量 crush 项目)。
+    // 不再默认启动 crush:默认 agent 是 combo-cli(见下)。
+    let (crush_upstream, crush_supervisor) = match upstream_arg {
+        Some(s) => (Some(parse_upstream(&s)?), None),
         None => {
-            // 自动接管 rune 生命周期
-            let mgr = RuneManager::new(
-                std::env::var("COMBO_CRUSH_BIN").unwrap_or_else(|_| "crush".into()),
-            );
-            let mgr = Arc::new(mgr);
-            let u = mgr.ensure_running().await?;
-            println!("COMBO_RUNE_STATUS=connected");
-            (u, Some(mgr))
+            if let Ok(bin) = std::env::var("COMBO_CRUSH_BIN") {
+                let mgr = Arc::new(RuneManager::new(bin));
+                match mgr.ensure_running().await {
+                    Ok(u) => {
+                        println!("COMBO_RUNE_STATUS=connected");
+                        (Some(u), Some(mgr))
+                    }
+                    Err(e) => {
+                        eprintln!("COMBO_RUNE_STATUS=failed: {e:?}");
+                        (None, None)
+                    }
+                }
+            } else {
+                (None, None)
+            }
         }
     };
 
-    let mut registry = BackendRegistry::new(Arc::new(CrushBackend::new(upstream)));
+    let mut registry = BackendRegistry::new(Arc::new(CrushBackend::new(
+        crush_upstream.unwrap_or(Upstream::Tcp("127.0.0.1:1".parse().unwrap())),
+    )));
+
+    // 默认 agent:托管 combo-cli serve(本机自有 agent)。
+    let combo_cli_mgr = Arc::new(ComboCliManager::new(
+        std::env::var("COMBO_CLI_BIN").unwrap_or_else(|_| combo_proxy::combocli::DEFAULT_BIN.into()),
+    ));
+    let combo_cli_connected = match combo_cli_mgr.ensure_running().await {
+        Ok(_) => {
+            // 地址随重启实时解析(combo-cli 崩溃重启后端口会变)
+            registry.set_combo_cli(Arc::new(ComboCliBackend::new_resolving(
+                combo_cli_mgr.addr_shared(),
+            )));
+            println!("COMBO_CLI_STATUS=connected");
+            true
+        }
+        Err(e) => {
+            // combo-cli 不可用不致命:combo-cli workspace 转发会 502,前端显示不可用。
+            eprintln!("COMBO_CLI_STATUS=failed: {e:?}");
+            false
+        }
+    };
 
     // 可选:启动 OpenCode 后端
     if let Ok(oc_bin) = std::env::var("COMBO_OPENCODE_BIN") {
@@ -110,7 +142,7 @@ async fn main() -> Result<()> {
     let state = AppState {
         meta: Arc::new(MetaStore::open_default()?),
         registry: Arc::new(registry),
-        crush_supervisor: supervisor,
+        crush_supervisor,
         browse_root,
         relay: RelayManager::new(),
         local_port: actual,
@@ -121,7 +153,29 @@ async fn main() -> Result<()> {
         eprintln!("COMBO_RECONCILE_WARN={failed} workspaces failed to register with crush");
     }
 
-    // 后台健康监控:crush 崩溃时自动重启
+    // 后台健康监控:combo-cli 崩溃时自动重启
+    if combo_cli_connected {
+        let mgr = Arc::clone(&combo_cli_mgr);
+        tokio::spawn(async move {
+            use std::time::Duration;
+            loop {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                if !mgr.is_healthy().await {
+                    eprintln!("combo-cli 健康检查失败,尝试重启...");
+                    match mgr.ensure_running().await {
+                        Ok(_) => {
+                            eprintln!("combo-cli 重启成功");
+                        }
+                        Err(e) => {
+                            eprintln!("combo-cli 重启失败: {e}");
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    // 后台健康监控:crush 崩溃时自动重启(仅当 combo 托管 crush 生命周期)
     if let Some(sup) = &state.crush_supervisor {
         let sup = Arc::clone(sup);
         tokio::spawn(async move {
