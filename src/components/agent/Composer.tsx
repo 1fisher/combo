@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   ArrowUp,
   Brain,
@@ -10,12 +11,16 @@ import {
   Plus,
   Quote,
   ShieldAlert,
+  Sparkles,
   Square,
   X,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { useAgentStore, type AgentMode } from '../../stores/agentStore';
 import { useContextStore, type ContextItem } from '../../stores/contextStore';
+import { useMention, type MentionResult } from '../../hooks/useMention';
+import { useFileIndex } from '../../hooks/useFileIndex';
+import { useSkills } from '../../hooks/useSkills';
 import type { Api } from '../../lib/api/types';
 import { cn } from '../../lib/utils';
 import { AttachmentPicker } from './AttachmentPicker';
@@ -65,6 +70,58 @@ export function Composer({
   const removeContextItem = useContextStore((s) => s.removeItem);
   const clearContextItems = useContextStore((s) => s.clear);
   const thought = THOUGHT_LEVELS[1];
+
+  // mention popover 定位(基于 textarea 的 fixed 坐标)
+  const [popoverPos, setPopoverPos] = useState<{ left: number; bottom: number; width: number } | null>(null);
+
+  // @ 文件提及 / $ 技能提及
+  const { mention, activeIndex, setActiveIndex, select: selectMention, handleKey: handleMentionKey } =
+    useMention(value, areaRef, onChange);
+  const { files: fileIndex } = useFileIndex(workspaceId);
+  const { data: skillsData } = useSkills();
+
+  const mentionResults: MentionResult[] = useMemo(() => {
+    if (!mention) return [];
+    const q = mention.query.toLowerCase();
+    if (mention.type === 'file') {
+      return fileIndex
+        .filter((f) => f.path.toLowerCase().includes(q))
+        .slice(0, 10)
+        .map((f) => ({
+          id: f.path,
+          label: f.name,
+          description: f.path,
+          insertText: f.path,
+          raw: f,
+        }));
+    }
+    // skill
+    return (skillsData ?? [])
+      .filter((s) => s.name.toLowerCase().includes(q))
+      .slice(0, 10)
+      .map((s) => ({
+        id: s.dir_name,
+        label: s.name,
+        description: s.description,
+        insertText: s.name,
+        raw: s,
+      }));
+  }, [mention, fileIndex, skillsData]);
+
+  function handleMentionSelect(r: MentionResult) {
+    const result = selectMention(r);
+    if (!result) return;
+    // 文件提及:同时添加为附件 chip
+    if (mention?.type === 'file') {
+      const raw = result.raw as { path: string; name: string; isDir?: boolean } | undefined;
+      if (raw) {
+        setAttachments((prev) => {
+          if (prev.some((a) => a.file_path === raw.path)) return prev;
+          return [...prev, { file_path: raw.path, file_name: raw.name }];
+        });
+      }
+    }
+  }
 
   function autosize() {
     const el = areaRef.current;
@@ -187,6 +244,15 @@ export function Composer({
                     composingRef.current = false;
                   }}
                   onKeyDown={(e) => {
+                    // mention 导航优先
+                    if (mention && mentionResults.length > 0) {
+                      const consumed = handleMentionKey(e, mentionResults.length);
+                      if (consumed && ((e.key === 'Enter' && !e.shiftKey) || e.key === 'Tab')) {
+                        handleMentionSelect(mentionResults[activeIndex]);
+                        return;
+                      }
+                      if (consumed) return;
+                    }
                     // keyCode 229 表示输入法正在组合中,此时回车用于确认候选词而非发送
                     if (e.key === 'Enter' && !e.shiftKey && !composingRef.current && e.keyCode !== 229) {
                       e.preventDefault();
@@ -346,6 +412,19 @@ export function Composer({
           </form>
         </div>
       </div>
+      {mention && mentionResults.length > 0 && createPortal(
+        <MentionPopover
+          type={mention.type as 'file' | 'skill'}
+          results={mentionResults}
+          activeIndex={activeIndex}
+          setActiveIndex={setActiveIndex}
+          onSelect={handleMentionSelect}
+          areaRef={areaRef}
+          onPositionChange={setPopoverPos}
+          popoverPos={popoverPos}
+        />,
+        document.body,
+      )}
       {pickerOpen && workspaceId && (
         <AttachmentPicker
           workspaceId={workspaceId}
@@ -354,6 +433,86 @@ export function Composer({
           onClose={() => setPickerOpen(false)}
         />
       )}
+    </div>
+  );
+}
+
+function MentionPopover({
+  type,
+  results,
+  activeIndex,
+  setActiveIndex,
+  onSelect,
+  areaRef,
+  onPositionChange,
+  popoverPos,
+}: {
+  type: 'file' | 'skill';
+  results: MentionResult[];
+  activeIndex: number;
+  setActiveIndex: (i: number) => void;
+  onSelect: (r: MentionResult) => void;
+  areaRef: React.RefObject<HTMLTextAreaElement | null>;
+  onPositionChange: (pos: { left: number; bottom: number; width: number }) => void;
+  popoverPos: { left: number; bottom: number; width: number } | null;
+}) {
+  useEffect(() => {
+    const el = areaRef.current;
+    if (!el) return;
+    function update() {
+      const el = areaRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      onPositionChange({ left: rect.left, bottom: window.innerHeight - rect.top + 8, width: rect.width });
+    }
+    update();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
+    };
+  }, [areaRef, onPositionChange]);
+
+  if (!popoverPos) return null;
+
+  return (
+    <div
+      className="fixed z-[100] max-h-64 overflow-y-auto rounded-xl border border-border bg-popover p-1 shadow-xl"
+      style={{ left: popoverPos.left, bottom: popoverPos.bottom, width: popoverPos.width }}
+    >
+      <div className="px-2 py-1 text-xs font-medium text-foreground-subtlest">
+        {type === 'file' ? '提及文件' : '使用技能'}
+      </div>
+      {results.map((r, i) => (
+        <button
+          key={r.id}
+          type="button"
+          onMouseEnter={() => setActiveIndex(i)}
+          onClick={() => onSelect(r)}
+          className={cn(
+            'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors',
+            i === activeIndex ? 'bg-surface-hover' : 'hover:bg-surface-hover',
+          )}
+        >
+          {type === 'file' ? (
+            <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+          ) : (
+            <Sparkles className="size-3.5 shrink-0 text-brand" />
+          )}
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="truncate font-medium">{r.label}</span>
+            {r.description && (
+              <span className="truncate text-[11px] text-foreground-subtle">
+                {r.description}
+              </span>
+            )}
+          </span>
+          {i === activeIndex && (
+            <Check className="size-3.5 shrink-0 text-brand" />
+          )}
+        </button>
+      ))}
     </div>
   );
 }
