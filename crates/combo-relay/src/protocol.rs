@@ -4,13 +4,14 @@ use std::collections::HashMap;
 /// 中转隧道线路协议消息。
 ///
 /// 协议基于 JSON-over-WebSocket:
-/// - 中转服务器 → 桌面客户端:只发 `TunnelRequest`(转发 HTTP 请求)
-/// - 桌面客户端 → 中转服务器:发 `TunnelResponseStart` / `TunnelResponseChunk` / `TunnelResponseEnd` / `TunnelResponseError`
+/// - 中转服务器 → 桌面客户端:发 `Request`(转发 HTTP 请求)或 WebSocket 隧道消息(`WsUpgrade`/`WsData`/`WsClose`)
+/// - 桌面客户端 → 中转服务器:发 `ResponseStart` / `ResponseChunk` / `ResponseEnd` / `ResponseError`
+///   或 WebSocket 隧道消息(`WsData`/`WsClose`/`WsError`)
 ///
-/// 每个 HTTP 请求用唯一 `id` 关联请求与响应,支持单 WebSocket 连接上多请求并发。
-/// 流式响应(SSE)通过多次 `TunnelResponseChunk` 实现。
+/// 每个 HTTP 请求 / WebSocket 连接用唯一 `id` 关联,支持单 WebSocket 连接上多请求并发。
+/// 流式响应(SSE)通过多次 `ResponseChunk` 实现。
 
-/// 中转服务器 → 桌面客户端:转发一个 HTTP 请求。
+/// 中转服务器 → 桌面客户端:转发 HTTP 请求或 WebSocket 隧道消息。
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TunnelMsg {
@@ -23,9 +24,27 @@ pub enum TunnelMsg {
         #[serde(default)]
         body: Option<String>, // base64 编码
     },
+    /// WebSocket 隧道:浏览器发起新的 WS 连接(如终端)。
+    WsUpgrade {
+        id: String,
+        path: String,
+        query: String,
+        #[serde(default)]
+        headers: HashMap<String, String>,
+    },
+    /// WebSocket 隧道:浏览器 → 桌面端的 WS 数据。
+    WsData {
+        id: String,
+        data: String, // base64 编码
+        binary: bool,
+    },
+    /// WebSocket 隧道:浏览器关闭了 WS 连接。
+    WsClose {
+        id: String,
+    },
 }
 
-/// 桌面客户端 → 中转服务器:HTTP 响应(可能跨多条消息,支持流式)。
+/// 桌面客户端 → 中转服务器:HTTP 响应或 WebSocket 隧道消息。
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DesktopMsg {
@@ -48,6 +67,21 @@ pub enum DesktopMsg {
     ResponseError {
         id: String,
         status: u16,
+        message: String,
+    },
+    /// WebSocket 隧道:桌面端 → 浏览器的 WS 数据(如 PTY 输出)。
+    WsData {
+        id: String,
+        data: String, // base64 编码
+        binary: bool,
+    },
+    /// WebSocket 隧道:桌面端关闭了 WS 连接(如 PTY 退出)。
+    WsClose {
+        id: String,
+    },
+    /// WebSocket 隧道:桌面端连接本地 WS 失败。
+    WsError {
+        id: String,
         message: String,
     },
 }
