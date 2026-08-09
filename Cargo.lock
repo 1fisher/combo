@@ -1172,6 +1172,8 @@ dependencies = [
  "clap",
  "dirs",
  "futures",
+ "glob",
+ "regex",
  "reqwest 0.13.4",
  "rig",
  "rmcp",
@@ -1185,6 +1187,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "walkdir",
 ]
 
 [[package]]

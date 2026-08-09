@@ -81,6 +81,8 @@ struct AgentReq {
     prompt: String,
     /// proxy 注入的历史消息:[{ role, parts }](可选)。
     history: Option<Vec<Value>>,
+    /// workspace 根目录(combo-proxy 注入),供 read/write/search 工具使用。
+    workspace_dir: Option<String>,
 }
 
 pub async fn run(cfg: &agent::AskConfig, host: String, port: u16) -> Result<()> {
@@ -154,7 +156,7 @@ async fn run_agent(
         .to_string();
 
     let cfg = state.cfg.lock().unwrap().clone();
-    let answer = crate::agent::ask_answer(&cfg, &question)
+    let answer = crate::agent::ask_answer(&cfg, &question, std::env::current_dir().ok())
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -205,7 +207,12 @@ async fn run_agent_ws(
         let mut parts: Vec<Value> = Vec::new();
         let mut text_buf = String::new();
         let tx_ev = tx.clone();
-        let result = crate::agent::stream_run(&cfg, &prompt, &rig_history, cancel_rx, |ev| {
+        let workspace_dir = body
+            .workspace_dir
+            .as_deref()
+            .map(std::path::PathBuf::from);
+        let result =
+            crate::agent::stream_run(&cfg, &prompt, &rig_history, workspace_dir, cancel_rx, |ev| {
             match ev {
                 RunEvent::TextDelta(t) => {
                     text_buf.push_str(&t);
@@ -219,6 +226,10 @@ async fn run_agent_ws(
                 }
                 RunEvent::ToolCall { id, name, input } => {
                     parts.push(tool_call_part(&id, &name, &input));
+                }
+                RunEvent::ToolResult { id, content } => {
+                    let msg = tool_result_message_json(&session_id, &id, &content);
+                    let _ = tx_ev.send(msg_env("created", msg));
                 }
             }
             let _ = tx_ev.send(msg_env(
@@ -341,6 +352,24 @@ fn tool_call_part(id: &str, name: &str, input: &str) -> Value {
     json!({
         "type": "tool_call",
         "data": { "id": id, "name": name, "input": input, "finished": true },
+    })
+}
+
+fn tool_result_part(tool_call_id: &str, content: &str) -> Value {
+    json!({
+        "type": "tool_result",
+        "data": { "tool_call_id": tool_call_id, "content": content, "is_error": false },
+    })
+}
+
+fn tool_result_message_json(session_id: &str, tool_call_id: &str, content: &str) -> Value {
+    json!({
+        "id": uuid::Uuid::new_v4().to_string(),
+        "session_id": session_id,
+        "role": "user",
+        "parts": [tool_result_part(tool_call_id, content)],
+        "created_at": now_secs(),
+        "updated_at": now_secs(),
     })
 }
 

@@ -33,16 +33,21 @@ fn is_session_read_path(path: &str) -> bool {
     p.contains("/sessions/") && p.ends_with("/messages")
 }
 
-/// 给 combo-cli 的 /agent 请求注入会话历史(combo sqlite 镜像中已持久化的消息)。
-/// combo-cli serve 是无状态后端,多轮上下文依赖这份 history。
+/// 给 combo-cli 的 /agent 请求注入 workspace 根目录与会话历史。
+/// combo-cli serve 是无状态后端:workspace_dir 供 read/write/search 工具使用,
+/// history 供多轮上下文(combo sqlite 镜像中已持久化的消息)。
 fn inject_history(state: &AppState, ws_id: &str, body: &[u8]) -> Vec<u8> {
     let mut v: Value = serde_json::from_slice(body).unwrap_or(Value::Object(Default::default()));
-    let session_id = v.get("session_id").and_then(Value::as_str).unwrap_or("");
-    if session_id.is_empty() {
-        return body.to_vec();
+
+    // 注入 workspace 根目录(combo-cli 的 read/write/search 工具需要)
+    if let Some(meta) = state.meta.get(ws_id) {
+        v["workspace_dir"] = json!(meta.path.to_string_lossy());
     }
-    match state.meta.db().list_messages(ws_id, session_id) {
-        Ok(msgs) => {
+
+    // 注入会话历史
+    let session_id = v.get("session_id").and_then(Value::as_str).unwrap_or("");
+    if !session_id.is_empty() {
+        if let Ok(msgs) = state.meta.db().list_messages(ws_id, session_id) {
             let history: Vec<Value> = msgs
                 .iter()
                 .map(|m| {
@@ -53,7 +58,6 @@ fn inject_history(state: &AppState, ws_id: &str, body: &[u8]) -> Vec<u8> {
                 .collect();
             v["history"] = Value::Array(history);
         }
-        Err(_) => {}
     }
     serde_json::to_vec(&v).unwrap_or_else(|_| body.to_vec())
 }

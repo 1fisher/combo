@@ -13,8 +13,9 @@ use rig::agent::{Agent, MultiTurnStreamItem};
 use rig::client::ProviderClient;
 use rig::completion::{CompletionModel, GetTokenUsage, Message};
 use rig::prelude::AgentClientExt;
-use rig::streaming::{StreamedAssistantContent, StreamingChat, StreamingPrompt};
+use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingChat, StreamingPrompt};
 use rig::tool::DynamicTool;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// 组装一个 agent:内置工具 + 可选 MCP 工具。
@@ -161,9 +162,13 @@ impl AskConfig {
 }
 
 /// 单轮问答:返回最终答案。
-pub async fn ask_answer(cfg: &AskConfig, question: &str) -> Result<String> {
+pub async fn ask_answer(
+    cfg: &AskConfig,
+    question: &str,
+    workspace_dir: Option<PathBuf>,
+) -> Result<String> {
     let builtin = if cfg.tools {
-        crate::tools::builtin_tools()
+        crate::tools::builtin_tools(workspace_dir)
     } else {
         Vec::new()
     };
@@ -202,7 +207,7 @@ pub async fn ask_answer(cfg: &AskConfig, question: &str) -> Result<String> {
 
 /// 单轮问答:直接打印最终结果。
 pub async fn ask_with(cfg: &AskConfig, question: &str) -> Result<()> {
-    let answer = ask_answer(cfg, question).await?;
+    let answer = ask_answer(cfg, question, std::env::current_dir().ok()).await?;
     println!("{answer}");
     Ok(())
 }
@@ -233,6 +238,8 @@ pub enum RunEvent {
     TextDelta(String),
     /// 完整工具调用(rig 已执行并自动回填结果)。
     ToolCall { id: String, name: String, input: String },
+    /// 工具执行结果。
+    ToolResult { id: String, content: String },
 }
 
 /// 流式运行一次 agent 对话(多轮,含工具调用与历史)。
@@ -243,6 +250,7 @@ pub async fn stream_run<F>(
     cfg: &AskConfig,
     question: &str,
     history: &[Message],
+    workspace_dir: Option<PathBuf>,
     mut cancel: tokio::sync::watch::Receiver<bool>,
     mut on_event: F,
 ) -> Result<Option<String>>
@@ -250,7 +258,7 @@ where
     F: FnMut(RunEvent),
 {
     let builtin = if cfg.tools {
-        crate::tools::builtin_tools()
+        crate::tools::builtin_tools(workspace_dir)
     } else {
         Vec::new()
     };
@@ -325,6 +333,21 @@ where
                     input,
                 });
             }
+            MultiTurnStreamItem::StreamUserItem(StreamedUserContent::ToolResult {
+                tool_result,
+                ..
+            }) => {
+                let content = tool_result
+                    .content
+                    .iter()
+                    .filter_map(|c| c.as_text().map(|s| s.to_string()))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                on_event(RunEvent::ToolResult {
+                    id: tool_result.id,
+                    content,
+                });
+            }
             _ => {}
         }
     }
@@ -335,7 +358,7 @@ where
 pub async fn chat_loop(cfg: &AskConfig) -> Result<()> {
     let model = cfg.model.clone();
     let builtin = if cfg.tools {
-        crate::tools::builtin_tools()
+        crate::tools::builtin_tools(std::env::current_dir().ok())
     } else {
         Vec::new()
     };
