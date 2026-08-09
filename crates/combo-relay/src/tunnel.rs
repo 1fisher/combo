@@ -13,6 +13,12 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info, warn};
 
+/// 浏览器侧 WS 隧道事件(中转 → 浏览器 WS)。
+pub enum WsTunnelEvent {
+    Data(Vec<u8>, bool),
+    Close,
+}
+
 /// 中转服务器共享状态。
 #[derive(Clone, Default)]
 pub struct RelayState {
@@ -27,6 +33,8 @@ pub struct TunnelHandle {
     pub tx: mpsc::UnboundedSender<TunnelMsg>,
     /// 待响应的请求:request_id → 响应通道。
     pub pending: Arc<DashMap<String, PendingResponse>>,
+    /// 活跃的 WS 隧道:id → 浏览器 WS 发送通道。
+    pub pending_ws: Arc<DashMap<String, mpsc::UnboundedSender<WsTunnelEvent>>>,
 }
 
 /// 待响应的 HTTP 请求(中转端等待桌面客户端的响应)。
@@ -60,10 +68,13 @@ async fn tunnel_task(state: RelayState, token: String, socket: WebSocket) {
     // 为这条隧道创建发送通道
     let (tx, mut rx) = mpsc::unbounded_channel::<TunnelMsg>();
     let pending = Arc::new(DashMap::new());
+    let pending_ws: Arc<DashMap<String, mpsc::UnboundedSender<WsTunnelEvent>>> =
+        Arc::new(DashMap::new());
 
     let handle = TunnelHandle {
         tx,
         pending: pending.clone(),
+        pending_ws: pending_ws.clone(),
     };
 
     // 注册隧道(覆盖同 token 旧连接)
@@ -154,11 +165,36 @@ async fn tunnel_task(state: RelayState, token: String, socket: WebSocket) {
                 drop(pending.get(&id));
                 pending.remove(&id);
             }
+            DesktopMsg::WsData { id, data, binary } => {
+                if let Some(entry) = pending_ws.get(&id) {
+                    let decoded = base64::engine::general_purpose::STANDARD
+                        .decode(&data)
+                        .unwrap_or_default();
+                    let _ = entry.send(WsTunnelEvent::Data(decoded, binary));
+                }
+            }
+            DesktopMsg::WsClose { id } => {
+                if let Some(entry) = pending_ws.get(&id) {
+                    let _ = entry.send(WsTunnelEvent::Close);
+                }
+                pending_ws.remove(&id);
+            }
+            DesktopMsg::WsError { id, message: _ } => {
+                if let Some(entry) = pending_ws.get(&id) {
+                    let _ = entry.send(WsTunnelEvent::Close);
+                }
+                pending_ws.remove(&id);
+            }
         }
     }
 
     // 清理
     send_task.abort();
+    // 关闭所有浏览器侧 WS 隧道
+    for entry in pending_ws.iter() {
+        let _ = entry.send(WsTunnelEvent::Close);
+    }
+    pending_ws.clear();
     state.tunnels.remove(&token);
     info!("隧道已断开: token={:.8}", token);
 }
@@ -313,4 +349,178 @@ fn extract_token(req: &Request) -> Option<String> {
         }
     }
     None
+}
+
+/// 判断请求是否为 WebSocket 升级请求。
+pub fn is_ws_upgrade(req: &Request) -> bool {
+    req.headers()
+        .get(header::UPGRADE)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.eq_ignore_ascii_case("websocket"))
+        .unwrap_or(false)
+}
+
+/// WebSocket 隧道代理:将浏览器的 WS 连接通过隧道桥接到桌面客户端。
+///
+/// 流程:
+/// 1. 提取令牌,查找隧道
+/// 2. 生成唯一 id,向桌面客户端发送 WsUpgrade
+/// 3. 注册 pending_ws 条目,桥接双向数据
+/// 4. 浏览器 WS 数据 → WsData 消息 → 桌面客户端
+/// 5. 桌面客户端 WsData/WsClose → pending_ws → 浏览器 WS
+pub async fn ws_proxy_handler(
+    State(state): State<RelayState>,
+    ws: WebSocketUpgrade,
+    req: Request,
+) -> Response {
+    let token = match extract_token(&req) {
+        Some(t) => t,
+        None => return StatusCode::UNAUTHORIZED.into_response(),
+    };
+
+    let handle = match state.tunnels.get(&token) {
+        Some(h) => h,
+        None => return StatusCode::BAD_GATEWAY.into_response(),
+    };
+
+    let id = uuid::Uuid::new_v4().to_string();
+
+    // 注册 pending_ws
+    let (ws_event_tx, ws_event_rx) = mpsc::unbounded_channel::<WsTunnelEvent>();
+    handle.pending_ws.insert(id.clone(), ws_event_tx);
+
+    // 发送 WsUpgrade 到桌面客户端
+    let mut headers_map = HashMap::new();
+    for (k, v) in req.headers().iter() {
+        let lower = k.as_str().to_lowercase();
+        if lower == "upgrade" || lower == "connection" || lower == "host"
+            || lower == "sec-websocket-key" || lower == "sec-websocket-version"
+            || lower == "sec-websocket-extensions"
+        {
+            continue;
+        }
+        if let Ok(s) = v.to_str() {
+            headers_map.insert(k.as_str().to_string(), s.to_string());
+        }
+    }
+
+    let ws_upgrade_msg = TunnelMsg::WsUpgrade {
+        id: id.clone(),
+        path: req.uri().path().to_string(),
+        query: req.uri().query().unwrap_or("").to_string(),
+        headers: headers_map,
+    };
+
+    if handle.tx.send(ws_upgrade_msg).is_err() {
+        drop(handle);
+        state.tunnels.get(&token).map(|h| h.pending_ws.remove(&id));
+        return StatusCode::BAD_GATEWAY.into_response();
+    }
+
+    let tunnel_tx = handle.tx.clone();
+    let id_for_close = id.clone();
+    let pending_ws = handle.pending_ws.clone();
+
+    drop(handle);
+
+    ws.on_upgrade(move |socket| async move {
+        let (socket_sink, socket_stream) = socket.split();
+        ws_bridge(socket_sink, socket_stream, tunnel_tx, pending_ws, id_for_close, ws_event_rx).await;
+    })
+}
+
+/// 双向桥接:浏览器 WS ↔ 隧道。
+async fn ws_bridge(
+    mut socket_sink: futures_util::stream::SplitSink<WebSocket, Message>,
+    mut socket_stream: futures_util::stream::SplitStream<WebSocket>,
+    tunnel_tx: mpsc::UnboundedSender<TunnelMsg>,
+    pending_ws: Arc<DashMap<String, mpsc::UnboundedSender<WsTunnelEvent>>>,
+    id: String,
+    mut ws_event_rx: mpsc::UnboundedReceiver<WsTunnelEvent>,
+) {
+    let id_fwd = id.clone();
+    let tunnel_tx_fwd = tunnel_tx.clone();
+
+    // 任务:浏览器 WS → 隧道 → 桌面客户端
+    let mut fwd_task = tokio::spawn(async move {
+        while let Some(msg) = socket_stream.next().await {
+            match msg {
+                Ok(Message::Text(t)) => {
+                    let data =
+                        base64::engine::general_purpose::STANDARD.encode(t.as_bytes());
+                    if tunnel_tx_fwd
+                        .send(TunnelMsg::WsData {
+                            id: id_fwd.clone(),
+                            data,
+                            binary: false,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Ok(Message::Binary(b)) => {
+                    let data = base64::engine::general_purpose::STANDARD.encode(&b);
+                    if tunnel_tx_fwd
+                        .send(TunnelMsg::WsData {
+                            id: id_fwd.clone(),
+                            data,
+                            binary: true,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Ok(Message::Close(_)) | Err(_) => {
+                    let _ = tunnel_tx_fwd.send(TunnelMsg::WsClose {
+                        id: id_fwd.clone(),
+                    });
+                    break;
+                }
+                Ok(_) => {} // ping/pong
+            }
+        }
+    });
+
+    // 任务:桌面客户端 → 隧道 → 浏览器 WS(读取 ws_event_rx)
+    let mut bwd_task = tokio::spawn(async move {
+        while let Some(event) = ws_event_rx.recv().await {
+            match event {
+                WsTunnelEvent::Data(data, binary) => {
+                    if binary {
+                        if socket_sink.send(Message::Binary(data.into())).await.is_err() {
+                            break;
+                        }
+                    } else {
+                        if socket_sink
+                            .send(Message::Text(
+                                String::from_utf8_lossy(&data).into_owned().into(),
+                            ))
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+                WsTunnelEvent::Close => {
+                    let _ = socket_sink.send(Message::Close(None)).await;
+                    break;
+                }
+            }
+        }
+    });
+
+    // 等任一方向结束
+    tokio::select! {
+        _ = &mut fwd_task => {
+            bwd_task.abort();
+        }
+        _ = &mut bwd_task => {
+            fwd_task.abort();
+        }
+    }
+
+    pending_ws.remove(&id);
 }

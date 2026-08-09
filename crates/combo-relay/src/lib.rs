@@ -1,10 +1,11 @@
 pub mod protocol;
 pub mod tunnel;
 
-pub use tunnel::{tunnel_forward, ws_tunnel_handler, RelayState};
+pub use tunnel::{is_ws_upgrade, tunnel_forward, ws_proxy_handler, ws_tunnel_handler, RelayState};
 
 use axum::body::Body;
-use axum::extract::{Request, State};
+use axum::extract::ws::WebSocketUpgrade;
+use axum::extract::{FromRequestParts, Request, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -49,16 +50,30 @@ pub fn build_router(
         .layer(cors)
 }
 
-/// fallback handler: /v1/* 走隧道转发,其余走静态文件。
+/// fallback handler: WS 升级请求走 WS 隧道代理,其余 /v1/* 走 HTTP 隧道转发,其余走静态文件。
 async fn fallback(state: RelayState, static_dir: Option<PathBuf>, req: Request) -> Response {
     let path = req.uri().path();
     if path.starts_with("/v1/") {
+        if is_ws_upgrade(&req) {
+            return ws_proxy(state, req).await;
+        }
         return tunnel_forward(State(state), req).await;
     }
     match static_dir {
         Some(dir) => serve_static(&dir, req).await,
         None => (StatusCode::NOT_FOUND, "Not Found").into_response(),
     }
+}
+
+/// 从 Request 中提取 WebSocketUpgrade,交给 ws_proxy_handler。
+async fn ws_proxy(state: RelayState, req: Request) -> Response {
+    let (mut parts, body) = req.into_parts();
+    let ws_upgrade = match WebSocketUpgrade::from_request_parts(&mut parts, &state).await {
+        Ok(ws) => ws,
+        Err(e) => return e.into_response(),
+    };
+    let req = Request::from_parts(parts, body);
+    ws_proxy_handler(State(state), ws_upgrade, req).await
 }
 
 async fn health() -> &'static str {
