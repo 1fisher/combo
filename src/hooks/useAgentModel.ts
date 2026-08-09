@@ -1,9 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  fetchGlobalProviderModels,
   fetchProviderModels,
   getAgentInfo,
+  getGlobalProviders,
   getWorkspaceConfig,
   getWorkspaceProviders,
+  saveGlobalProviderKey,
   saveProviderKey,
   setWorkspaceModel,
 } from '../lib/api';
@@ -24,8 +27,8 @@ export function useAgentInfo(workspaceId: string | null | undefined) {
 export function useProviders(workspaceId: string | null | undefined) {
   return useQuery({
     queryKey: ['providers', workspaceId],
-    queryFn: () => getWorkspaceProviders(workspaceId!),
-    enabled: !!workspaceId,
+    queryFn: () =>
+      workspaceId ? getWorkspaceProviders(workspaceId) : getGlobalProviders(),
     staleTime: 30_000,
     retry: false,
   });
@@ -65,13 +68,17 @@ export function useFetchModels(workspaceId: string | null | undefined) {
       apiKey?: string;
       apiEndpoint?: string;
       providerType?: string;
-    }) =>
-      fetchProviderModels(workspaceId!, {
+    }) => {
+      const req = {
         providerId: vars.providerId,
         apiKey: vars.apiKey,
         apiEndpoint: vars.apiEndpoint,
         providerType: vars.providerType,
-      }),
+      };
+      return workspaceId
+        ? fetchProviderModels(workspaceId, req)
+        : fetchGlobalProviderModels(req);
+    },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['providers', workspaceId] });
     },
@@ -80,18 +87,27 @@ export function useFetchModels(workspaceId: string | null | undefined) {
 
 /** 持久化保存 provider 的 API Key。 */
 export function useSaveProviderKey(workspaceId: string | null | undefined) {
+  const qc = useQueryClient();
   return useMutation({
     mutationFn: (vars: {
       providerId: string;
       apiKey: string;
       providerType?: string;
       baseUrl?: string;
-    }) =>
-      saveProviderKey(workspaceId!, {
+    }) => {
+      const req = {
         providerId: vars.providerId,
         apiKey: vars.apiKey,
         providerType: vars.providerType,
         baseUrl: vars.baseUrl,
-      }),
+      };
+      return workspaceId
+        ? saveProviderKey(workspaceId, req)
+        : saveGlobalProviderKey(req);
+    },
+    onSuccess: () => {
+      // 保存 key 后刷新所有 providers 查询(workspace 的和全局的)
+      qc.invalidateQueries({ queryKey: ['providers'] });
+    },
   });
 }

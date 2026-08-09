@@ -352,6 +352,11 @@ export function getWorkspaceProviders(workspaceId: string): Promise<Api.Provider
   return apiRequest(`/v1/workspaces/${workspaceId}/providers`);
 }
 
+/** 获取 provider 列表(全局,不绑定 workspace)。 */
+export function getGlobalProviders(): Promise<Api.ProviderEntry[]> {
+  return apiRequest('/v1/providers');
+}
+
 /** 拉取 provider 支持的远程模型列表(需要 API Key)。 */
 export function fetchProviderModels(
   workspaceId: string,
@@ -368,12 +373,42 @@ export function fetchProviderModels(
   });
 }
 
+/** 拉取 provider 支持的远程模型列表(全局,不绑定 workspace)。 */
+export function fetchGlobalProviderModels(
+  req: { providerId: string; apiKey?: string; apiEndpoint?: string; providerType?: string },
+): Promise<{ provider: string; models: { id: string; name: string }[] }> {
+  return apiRequest('/v1/providers/fetch-models', {
+    method: 'POST',
+    body: {
+      provider_id: req.providerId,
+      api_key: req.apiKey,
+      api_endpoint: req.apiEndpoint,
+      provider_type: req.providerType,
+    },
+  });
+}
+
 /** 持久化保存 provider 的 API Key 到配置文件。 */
 export function saveProviderKey(
   workspaceId: string,
   req: { providerId: string; apiKey: string; providerType?: string; baseUrl?: string },
 ): Promise<{ ok: boolean; provider: string }> {
   return apiRequest(`/v1/workspaces/${workspaceId}/providers/save-key`, {
+    method: 'POST',
+    body: {
+      provider_id: req.providerId,
+      api_key: req.apiKey,
+      provider_type: req.providerType,
+      base_url: req.baseUrl,
+    },
+  });
+}
+
+/** 持久化保存 provider 的 API Key(全局,不绑定 workspace)。 */
+export function saveGlobalProviderKey(
+  req: { providerId: string; apiKey: string; providerType?: string; baseUrl?: string },
+): Promise<{ ok: boolean; provider: string }> {
+  return apiRequest('/v1/providers/save-key', {
     method: 'POST',
     body: {
       provider_id: req.providerId,

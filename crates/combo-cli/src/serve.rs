@@ -116,6 +116,9 @@ pub async fn run(cfg: &agent::AskConfig, host: String, port: u16) -> Result<()> 
         .route("/v1/workspaces/:id/providers", get(list_providers))
         .route("/v1/workspaces/:id/providers/fetch-models", post(fetch_models))
         .route("/v1/workspaces/:id/providers/save-key", post(save_provider_key))
+        .route("/v1/providers", get(list_providers))
+        .route("/v1/providers/fetch-models", post(fetch_models))
+        .route("/v1/providers/save-key", post(save_provider_key))
         .route("/v1/workspaces/:id/config/model", post(config_model))
         .with_state(state.clone());
 

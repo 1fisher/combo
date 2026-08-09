@@ -22,7 +22,7 @@ import { useContextStore, type ContextItem } from '../../stores/contextStore';
 import { useMention, type MentionResult } from '../../hooks/useMention';
 import { useFileIndex } from '../../hooks/useFileIndex';
 import { useSkills } from '../../hooks/useSkills';
-import { useAgentInfo, useFetchModels, useProviders, useSaveProviderKey, useSetModel, useWorkspaceConfig } from '../../hooks/useAgentModel';
+import { useAgentInfo, useProviders, useSetModel, useWorkspaceConfig } from '../../hooks/useAgentModel';
 import type { Api } from '../../lib/api/types';
 import { cn } from '../../lib/utils';
 import { AttachmentPicker } from './AttachmentPicker';
@@ -76,14 +76,7 @@ export function Composer({
   const { data: providers } = useProviders(workspaceId);
   const { data: wsConfig } = useWorkspaceConfig(workspaceId);
   const setModel = useSetModel(workspaceId);
-  const fetchModels = useFetchModels(workspaceId);
-  const saveProviderKey = useSaveProviderKey(workspaceId);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
-  // API Key 配置
-  const [keyProviderId, setKeyProviderId] = useState('');
-  const [keyInput, setKeyInput] = useState('');
-  const [keyError, setKeyError] = useState('');
-  const [keySavedMsg, setKeySavedMsg] = useState('');
   // 当前模型:优先从 agent info 获取,否则从 combo config 加载默认模型
   const configModel = wsConfig?.models?.large?.model ?? wsConfig?.models?.small?.model;
   const currentModelId = agentInfo?.model_cfg?.model ?? agentInfo?.model?.id ?? configModel ?? '';
@@ -110,41 +103,6 @@ export function Composer({
   function handleModelChange(modelId: string, provider: string) {
     setModelMenuOpen(false);
     setModel.mutate({ model: { model: modelId, provider } });
-  }
-
-  // 拉取远程模型:先保存 key,再 fetch
-  async function handleFetchModels() {
-    setKeyError('');
-    setKeySavedMsg('');
-    const providerId = keyProviderId || providers?.[0]?.id || '';
-    if (!providerId) {
-      setKeyError('请先选择提供商');
-      return;
-    }
-    if (!keyInput.trim()) {
-      setKeyError('请输入 API Key');
-      return;
-    }
-    try {
-      // 先持久化保存 key
-      const ptype = providers?.find((p) => p.id === providerId)?.type;
-      await saveProviderKey.mutateAsync({
-        providerId,
-        apiKey: keyInput.trim(),
-        providerType: ptype,
-      });
-      setKeySavedMsg('Key 已保存');
-      // 再拉取模型
-      await fetchModels.mutateAsync({
-        providerId,
-        apiKey: keyInput.trim(),
-        providerType: ptype,
-      });
-      setKeyInput('');
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setKeyError(msg);
-    }
   }
 
   // mention popover 定位(基于 textarea 的 fixed 坐标)
@@ -464,109 +422,44 @@ export function Composer({
                       <>
                         <div
                           className="fixed inset-0 z-40"
-                          onClick={() => {
-                            setModelMenuOpen(false);
-                            setKeyError('');
-                            setKeySavedMsg('');
-                          }}
+                          onClick={() => setModelMenuOpen(false)}
                         />
-                        <div className="absolute bottom-full right-0 z-50 mb-2 flex max-h-96 w-80 flex-col rounded-xl border border-border bg-popover p-1.5 shadow-xl">
-                          {/* 模型列表区(可滚动) */}
-                          <div className="min-h-0 flex-1 overflow-y-auto">
-                            <div className="flex items-center justify-between px-2 py-1 text-xs font-medium text-foreground-subtlest">
-                              <span>模型</span>
-                              {currentModelId && (
-                                <span className="truncate text-[11px] text-foreground-subtle">
-                                  当前: {currentModelId}
-                                </span>
-                              )}
-                            </div>
-                            {modelList.length === 0 ? (
-                              <div className="px-2 py-2 text-[13px] text-foreground-subtle">
-                                暂无可用模型。请在下方输入 API Key 获取。
-                              </div>
-                            ) : (
-                              modelList.map((m) => (
-                                <button
-                                  key={`${m.provider}/${m.id}`}
-                                  type="button"
-                                  onClick={() => handleModelChange(m.id, m.provider)}
-                                  className={cn(
-                                    'flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-hover',
-                                    m.id === currentModelId && 'bg-surface-hover'
-                                  )}
-                                >
-                                  <span className="flex min-w-0 flex-1 flex-col">
-                                    <span className="truncate font-medium">{m.name || m.id}</span>
-                                    <span className="truncate text-[11px] text-foreground-subtle">
-                                      {m.providerName}
-                                    </span>
-                                  </span>
-                                  {m.id === currentModelId && (
-                                    <Check className="size-3.5 shrink-0 text-brand" />
-                                  )}
-                                </button>
-                              ))
+                        <div className="absolute bottom-full right-0 z-50 mb-2 max-h-80 w-72 overflow-y-auto rounded-xl border border-border bg-popover p-1.5 shadow-xl">
+                          <div className="flex items-center justify-between px-2 py-1 text-xs font-medium text-foreground-subtlest">
+                            <span>模型</span>
+                            {currentModelId && (
+                              <span className="truncate text-[11px] text-foreground-subtle">
+                                当前: {currentModelId}
+                              </span>
                             )}
                           </div>
-                          {/* API Key 配置区(固定底部) */}
-                          <div className="mt-1 shrink-0 border-t border-border pt-1.5">
-                            <div className="px-2 py-0.5 text-[11px] font-medium text-foreground-subtlest">
-                              API Key 配置
+                          {modelList.length === 0 ? (
+                            <div className="px-2 py-2 text-[13px] text-foreground-subtle">
+                              暂无可用模型。请在设置中配置 Provider API Key。
                             </div>
-                            <div className="flex items-center gap-1 px-1 py-0.5">
-                              <select
-                                    value={keyProviderId || providers?.[0]?.id || ''}
-                                    onChange={(e) => setKeyProviderId(e.target.value)}
-                                    className="h-7 min-w-0 flex-1 rounded-lg border border-input-border bg-input px-1.5 text-[12px] text-foreground outline-none focus:border-input-border-focused"
-                              >
-                                {(providers ?? []).map((p) => (
-                                  <option key={p.id} value={p.id}>
-                                    {p.name ?? p.id}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
-                            <div className="flex items-center gap-1 px-1 py-0.5">
-                              <input
-                                type="password"
-                                value={keyInput}
-                                onChange={(e) => setKeyInput(e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === 'Enter' && !fetchModels.isPending) {
-                                    e.preventDefault();
-                                    handleFetchModels();
-                                  }
-                                }}
-                                placeholder="输入 API Key..."
-                                className="h-7 min-w-0 flex-1 rounded-lg border border-input-border bg-input px-1.5 text-[12px] text-foreground outline-none placeholder:text-foreground-subtlest focus:border-input-border-focused"
-                              />
-                              <Button
+                          ) : (
+                            modelList.map((m) => (
+                              <button
+                                key={`${m.provider}/${m.id}`}
                                 type="button"
-                                size="sm"
-                                disabled={fetchModels.isPending || saveProviderKey.isPending || !keyInput.trim()}
-                                onClick={handleFetchModels}
-                                className="h-7 shrink-0 gap-1 rounded-lg px-2 text-[12px]"
-                              >
-                                {fetchModels.isPending || saveProviderKey.isPending ? (
-                                  <Loader2 className="size-3 animate-spin" />
-                                ) : (
-                                  <Zap className="size-3" />
+                                onClick={() => handleModelChange(m.id, m.provider)}
+                                className={cn(
+                                  'flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-hover',
+                                  m.id === currentModelId && 'bg-surface-hover'
                                 )}
-                                获取
-                              </Button>
-                            </div>
-                            {keyError && (
-                              <div className="px-2 py-0.5 text-[11px] text-destructive">
-                                {keyError}
-                              </div>
-                            )}
-                            {keySavedMsg && !keyError && (
-                              <div className="px-2 py-0.5 text-[11px] text-brand">
-                                {keySavedMsg}
-                              </div>
-                            )}
-                          </div>
+                              >
+                                <span className="flex min-w-0 flex-1 flex-col">
+                                  <span className="truncate font-medium">{m.name || m.id}</span>
+                                  <span className="truncate text-[11px] text-foreground-subtle">
+                                    {m.providerName}
+                                  </span>
+                                </span>
+                                {m.id === currentModelId && (
+                                  <Check className="size-3.5 shrink-0 text-brand" />
+                                )}
+                              </button>
+                            ))
+                          )}
                         </div>
                       </>
                     )}
