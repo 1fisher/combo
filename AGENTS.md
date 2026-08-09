@@ -232,6 +232,20 @@ provided.
    `ProviderClient`+`AgentClientExt` trait 在作用域),agent 用
    `tool_server_handle` 共享工具集;流式接口 `stream_prompt`/`stream_chat`
    返回 `StreamingPromptRequest`,需 `.await` 后才得到 `Stream`。
+   **配置与 crush 对齐**(`config.rs`):`[providers.<id>]` 内嵌多 API key
+   (type/api_key/base_url/default_large_model_id,`$ENV` 运行时展开)、
+   `[models.large|small]` 引用(provider/model/reasoning_effort/max_tokens,
+   未显式设 provider/model 时回退到 models.large)、`[mcp.<name>]`
+   (type=stdio|http,command/args/url,**可多个**,`mcp.rs::connect_many`
+   经 rig ToolServer 注册,单个失败按 `skip_missing` 跳过)、
+   `[lsp.<lang>]`(command/args/env,`lsp list` 检测可执行状态)、
+   `skills_paths`/`disabled_skills`(与 crush 同目录约定:每 skill 一目录
+   含 `SKILL.md`,frontmatter 的 description 解析后注入 preamble,
+   `skills.rs::discover`,默认扫 `~/.config/crush/skills` 等)。
+   provider 查找顺序:`config.providers` map → crush.json 的 `providers`
+   (真实 key 所在,`providers.rs::load_crush_json_providers`)→
+   `~/.local/share/crush/providers.json` → 内置;配置未写
+   `default_large_model_id` 时从 crush providers.json 合并默认模型。
 
 1. `npm run tauri dev` (README) is wrong as-is — no tauri npm script/CLI installed.
 2. Browser dev needs the proxy on `:18234`; that port is hard-coded as fallback in

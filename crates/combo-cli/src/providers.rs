@@ -226,20 +226,106 @@ pub fn crush_providers_path() -> std::path::PathBuf {
     base.join("crush").join("providers.json")
 }
 
-/// 按 id 查找 provider:先查自定义列表,再查 crush providers.json,
-/// 最后回退内置定义。
-pub fn find_provider(id: &str, custom: &[ProviderInfo]) -> Result<ProviderInfo> {
-    if let Some(p) = custom.iter().find(|p| p.id == id) {
-        return Ok(p.clone());
+/// 按 id 查找 provider:先查自定义 providers map,再查 crush.json 内嵌
+/// providers,再查 crush providers.json,最后回退内置定义。
+pub fn find_provider(
+    id: &str,
+    custom: &std::collections::BTreeMap<String, crate::config::ProviderConfig>,
+) -> Result<ProviderInfo> {
+    // 1. 配置文件内嵌 providers
+    if let Some(c) = custom.get(id) {
+        let mut p = ProviderInfo::from_config(id, c);
+        // 配置未指定模型时,从 crush providers.json 合并默认模型
+        if p.default_large_model_id.is_none() {
+            if let Ok(crush) = load_crush_providers() {
+                if let Some(cp) = crush.iter().find(|cp| cp.id == id) {
+                    p.default_large_model_id = cp.default_large_model_id.clone();
+                    p.default_small_model_id = cp.default_small_model_id.clone();
+                }
+            }
+        }
+        return Ok(p);
     }
+    // 2. crush.json 内嵌 providers(用户填过真实 key)
+    if let Ok(crush_cfg) = load_crush_json_providers() {
+        if let Some(c) = crush_cfg.get(id) {
+            return Ok(ProviderInfo::from_config(id, c));
+        }
+    }
+    // 3. crush providers.json(静态目录)
     let crush = load_crush_providers()?;
     if let Some(p) = crush.iter().find(|p| p.id == id) {
         return Ok(p.clone());
     }
+    // 4. 内置定义
     builtin_providers()
         .into_iter()
         .find(|p| p.id == id)
         .ok_or_else(|| anyhow::anyhow!("未知提供商 `{id}`(可配置 providers 或运行 `combo-cli config import`)"))
+}
+
+/// 从 crush.json 内嵌的 providers map 读取(真实 key 所在)。
+pub fn load_crush_json_providers(
+) -> Result<std::collections::BTreeMap<String, crate::config::ProviderConfig>> {
+    let path = crush_json_path();
+    if !path.exists() {
+        return Ok(std::collections::BTreeMap::new());
+    }
+    let text = std::fs::read_to_string(&path)?;
+    let data: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| anyhow::anyhow!("解析 {} 失败: {e}", path.display()))?;
+    let mut out = std::collections::BTreeMap::new();
+    if let Some(provs) = data.get("providers").and_then(|v| v.as_object()) {
+        for (id, cfg) in provs {
+            let pc: crate::config::ProviderConfig = serde_json::from_value(cfg.clone())
+                .map_err(|e| anyhow::anyhow!("解析 providers.{id} 失败: {e}"))?;
+            out.insert(id.clone(), pc);
+        }
+    }
+    Ok(out)
+}
+
+/// crush.json 路径(用户配置所在,含真实 providers key)。
+pub fn crush_json_path() -> std::path::PathBuf {
+    if let Ok(dir) = std::env::var("CRUSH_DATA_DIR") {
+        return std::path::PathBuf::from(dir).join("crush.json");
+    }
+    let base = std::env::var("XDG_DATA_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+            std::path::PathBuf::from(home).join(".local/share")
+        });
+    base.join("crush").join("crush.json")
+}
+
+impl ProviderInfo {
+    /// 从 crush 式 ProviderConfig 构造。
+    pub fn from_config(id: &str, c: &crate::config::ProviderConfig) -> Self {
+        let mut models = Vec::new();
+        for mid in [&c.default_large_model_id, &c.default_small_model_id]
+            .into_iter()
+            .flatten()
+        {
+            if !models.iter().any(|m: &ModelInfo| &m.id == mid) {
+                models.push(ModelInfo {
+                    id: mid.clone(),
+                    name: None,
+                    ..Default::default()
+                });
+            }
+        }
+        Self {
+            id: id.to_string(),
+            name: Some(id.to_string()),
+            api_key: c.api_key.clone(),
+            api_endpoint: c.base_url.clone(),
+            provider_type: c.provider_type.clone(),
+            default_large_model_id: c.default_large_model_id.clone(),
+            default_small_model_id: c.default_small_model_id.clone(),
+            models,
+        }
+    }
 }
 
 /// 内置 provider 的 id 列表(供提示)。
@@ -289,7 +375,7 @@ mod tests {
 
     #[test]
     fn find_provider_falls_back_to_builtin() {
-        let p = find_provider("opencode", &[]).unwrap();
+        let p = find_provider("opencode", &std::collections::BTreeMap::new()).unwrap();
         assert_eq!(p.default_model(), "deepseek-v4-flash-free");
         assert_eq!(p.resolved_endpoint().unwrap(), "https://opencode.ai/zen/v1");
     }

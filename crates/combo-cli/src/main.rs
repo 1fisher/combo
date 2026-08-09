@@ -6,9 +6,11 @@
 mod agent;
 mod config;
 mod db;
+mod lsp;
 mod mcp;
 mod providers;
 mod serve;
+mod skills;
 mod tools;
 
 use clap::{Parser, Subcommand};
@@ -80,6 +82,16 @@ enum Command {
         #[command(subcommand)]
         action: ConfigAction,
     },
+    /// 查看可用 skills(扫描配置的 skills 路径)
+    Skills {
+        #[command(subcommand)]
+        action: SkillsAction,
+    },
+    /// LSP server 管理(查看配置与可执行状态)
+    Lsp {
+        #[command(subcommand)]
+        action: LspAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -106,6 +118,18 @@ enum ConfigAction {
     Init,
     /// 从 opencode auth.json 导入 API key 到配置文件
     Import,
+}
+
+#[derive(Subcommand)]
+enum SkillsAction {
+    /// 列出扫描到的 skills
+    List,
+}
+
+#[derive(Subcommand)]
+enum LspAction {
+    /// 列出配置的 LSP server 与可执行状态
+    List,
 }
 
 #[tokio::main]
@@ -168,6 +192,12 @@ async fn main() -> anyhow::Result<()> {
             ConfigAction::Import => {
                 config::import_opencode_key(&config_path)?;
             }
+        },
+        Command::Skills { action } => match action {
+            SkillsAction::List => skills::list(&resolved)?,
+        },
+        Command::Lsp { action } => match action {
+            LspAction::List => lsp::list(&resolved)?,
         },
     }
     Ok(())

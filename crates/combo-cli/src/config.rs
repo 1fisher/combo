@@ -5,7 +5,78 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
+
+/// 内嵌 provider 定义(与 crush `providers` 字段同格式)。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProviderConfig {
+    /// provider 类型:openai / openai-compat / anthropic / google / azure ...
+    #[serde(rename = "type")]
+    pub provider_type: Option<String>,
+    /// 明文 key 或 `$ENV_VAR`。
+    pub api_key: Option<String>,
+    /// API endpoint。
+    pub base_url: Option<String>,
+    /// 默认大模型 id。
+    pub default_large_model_id: Option<String>,
+    /// 默认小模型 id。
+    pub default_small_model_id: Option<String>,
+}
+
+/// 模型引用(crush `models` 字段:large/small)。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ModelsConfig {
+    pub large: Option<ModelRef>,
+    pub small: Option<ModelRef>,
+}
+
+/// 单个模型引用。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ModelRef {
+    pub model: String,
+    pub provider: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub max_tokens: Option<i64>,
+}
+
+impl Default for ModelRef {
+    fn default() -> Self {
+        Self {
+            model: String::new(),
+            provider: None,
+            reasoning_effort: None,
+            max_tokens: None,
+        }
+    }
+}
+
+/// MCP server 配置(crush `mcp` 字段同格式)。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct McpServerConfig {
+    /// 传输类型:stdio / http。
+    #[serde(rename = "type")]
+    pub transport: String,
+    /// stdio 命令。
+    pub command: Option<String>,
+    /// stdio 命令参数。
+    pub args: Option<Vec<String>>,
+    /// http URL。
+    pub url: Option<String>,
+}
+
+/// LSP server 配置(crush `lsp` 字段同格式)。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LspServerConfig {
+    pub command: String,
+    pub args: Option<Vec<String>>,
+    pub env: Option<BTreeMap<String, String>>,
+}
 
 /// 配置文件路径。优先级:`COMBO_CONFIG_DIR` > `XDG_CONFIG_HOME` > `~/.config`。
 pub fn default_config_path() -> PathBuf {
@@ -22,28 +93,46 @@ pub fn default_config_path() -> PathBuf {
 }
 
 /// 配置文件内容。所有字段可选:未设置的项回退到 CLI 参数或默认值。
+///
+/// 结构与 crush 对齐:`providers`(内嵌多 API key)、`models`(large/small 引用)、
+/// `mcp`、`lsp`、`skills_paths`。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
-    /// 默认提供商(openai/anthropic/gemini/ollama/deepseek/opencode)
+    /// 默认提供商 id(如 openai / anthropic / deepseek / opencode-zen)
     pub provider: Option<String>,
-    /// 默认模型名
+    /// 默认模型名(未设置时用 provider 的 default_large_model_id)
     pub model: Option<String>,
     /// 系统提示词
     pub preamble: Option<String>,
     /// 是否启用内置工具
     pub tools: Option<bool>,
-    /// MCP server 命令(stdio)
+    /// MCP server 命令(stdio,兼容旧版单 server)
     pub mcp_command: Option<String>,
-    /// MCP server URL(streamable HTTP)
+    /// MCP server URL(streamable HTTP,兼容旧版单 server)
     pub mcp_url: Option<String>,
-    /// API key(用于 opencode 等无默认环境变量的提供商)
+    /// API key(兼容旧版,单一 provider 时使用)
     pub api_key: Option<String>,
-    /// 自定义 API base URL(默认按提供商取,如 opencode 用 api.opencode.ai/v1)
+    /// 自定义 API base URL(兼容旧版)
     pub base_url: Option<String>,
-    /// 自定义 provider 定义(与 crush providers.json 同格式的数组)。
+    /// 内嵌 provider 定义(crush providers 同格式,key = provider id)。
     #[serde(default)]
-    pub providers: Option<Vec<crate::providers::ProviderInfo>>,
+    pub providers: BTreeMap<String, ProviderConfig>,
+    /// 模型引用(crush models 同格式:large/small)。
+    #[serde(default)]
+    pub models: ModelsConfig,
+    /// MCP server 配置(crush mcp 同格式,key = server 名)。
+    #[serde(default)]
+    pub mcp: BTreeMap<String, McpServerConfig>,
+    /// LSP server 配置(crush lsp 同格式,key = 语言/服务器名)。
+    #[serde(default)]
+    pub lsp: BTreeMap<String, LspServerConfig>,
+    /// skills 搜索路径(默认 ~/.config/crush/skills)。
+    #[serde(default)]
+    pub skills_paths: Vec<String>,
+    /// 禁用的 skill 名列表。
+    #[serde(default)]
+    pub disabled_skills: Vec<String>,
 }
 
 impl AppConfig {
@@ -72,12 +161,21 @@ impl AppConfig {
         cli_mcp_command: Option<&str>,
         cli_mcp_url: Option<&str>,
     ) -> ResolvedConfig {
+        // 默认 provider 也参考 models.large(若配置了 provider 引用)
+        let provider = cli_provider
+            .or(self.provider.as_deref())
+            .or_else(|| self.models.large.as_ref().and_then(|m| m.provider.as_deref()))
+            .unwrap_or("openai")
+            .to_string();
+        // 默认模型:CLI > 配置 model > models.large.model > provider 默认
+        let model = cli_model
+            .or(self.model.as_deref())
+            .or_else(|| self.models.large.as_ref().map(|m| m.model.as_str()))
+            .map(String::from);
+
         ResolvedConfig {
-            provider: cli_provider
-                .or(self.provider.as_deref())
-                .unwrap_or("openai")
-                .to_string(),
-            model: cli_model.or(self.model.as_deref()).map(String::from),
+            provider,
+            model,
             preamble: cli_preamble
                 .or(self.preamble.as_deref())
                 .unwrap_or("你是 combo 内置的智能助手。")
@@ -91,7 +189,12 @@ impl AppConfig {
                 .or_else(|| self.mcp_url.clone()),
             api_key: self.api_key.clone(),
             base_url: self.base_url.clone(),
-            providers: self.providers.clone().unwrap_or_default(),
+            providers: self.providers.clone(),
+            models: self.models.clone(),
+            mcp: self.mcp.clone(),
+            lsp: self.lsp.clone(),
+            skills_paths: self.skills_paths.clone(),
+            disabled_skills: self.disabled_skills.clone(),
         }
     }
 }
@@ -174,13 +277,13 @@ pub fn write_default(path: &PathBuf, overwrite: bool) -> Result<()> {
     if path.exists() && !overwrite {
         return Ok(());
     }
-    let template = r#"# combo-cli 配置文件(自动生成)
+    let template = r#"# combo-cli 配置文件(自动生成,格式与 crush 对齐)
 # 优先级:命令行参数 > 本文件 > 内置默认值
 
-# 默认提供商:openai / anthropic / gemini / ollama / deepseek
+# 默认提供商 id(openai / anthropic / deepseek / opencode-zen / ...)
 # provider = "openai"
 
-# 默认模型名(留空则按提供商取默认)
+# 默认模型名(留空则按提供商取默认,或参考 [models])
 # model = "gpt-4o"
 
 # 系统提示词
@@ -189,28 +292,56 @@ pub fn write_default(path: &PathBuf, overwrite: bool) -> Result<()> {
 # 是否启用内置工具(当前时间/日期),默认 true
 # tools = true
 
-# MCP server 命令(stdio),如:
-# mcp_command = "npx -y @modelcontextprotocol/server-filesystem /tmp"
+# ========== 多 API key 配置(与 crush providers 同格式)==========
+# 每个 provider 一个表,key = provider id;api_key 可为明文或 $ENV_VAR。
+# 未在此定义的 provider 会依次回退到 crush.json 的 providers、
+# ~/.local/share/crush/providers.json 与内置定义。
+# [providers.opencode-zen]
+# type = "openai-compat"
+# api_key = "sk-xxx"
+# base_url = "https://opencode.ai/zen/v1"
+# default_large_model_id = "deepseek-v4-flash-free"
+#
+# [providers.deepseek]
+# type = "openai-compat"
+# api_key = "$DEEPSEEK_API_KEY"
+# base_url = "https://api.deepseek.com/v1"
 
-# MCP server URL(streamable HTTP),如:
-# mcp_url = "http://127.0.0.1:3001/mcp"
+# ========== 模型引用(与 crush models 同格式,可选)==========
+# [models.large]
+# model = "deepseek-v4-flash-free"
+# provider = "opencode-zen"
+# reasoning_effort = "high"
+# max_tokens = 384000
 
-# API key(可选):用于 opencode 等提供商;留空时 opencode 自动读取
-# ~/.local/share/opencode/auth.json 中的 opencode zen key
+# ========== MCP server(与 crush mcp 同格式,可多个)==========
+# [mcp.filesystem]
+# type = "stdio"
+# command = "npx -y @modelcontextprotocol/server-filesystem"
+# args = ["/tmp"]
+#
+# [mcp.some-http]
+# type = "http"
+# url = "http://127.0.0.1:3001/mcp"
+
+# ========== LSP server(与 crush lsp 同格式,可多个)==========
+# [lsp.typescript]
+# command = "typescript-language-server"
+# args = ["--stdio"]
+#
+# [lsp.python]
+# command = "pyright-langserver"
+# args = ["--stdio"]
+
+# ========== skills(与 crush 同约定,每个 skill 一个目录含 SKILL.md)==========
+# skills_paths = ["~/.config/crush/skills", "~/.crush/skills-store"]
+# disabled_skills = []
+
+# ========== 兼容旧版单 provider 配置 ==========
 # api_key = ""
-
-# 自定义 API base URL(可选):默认按提供商取
 # base_url = ""
-
-# 自定义 provider 定义(与 crush providers.json 同格式,可选):
-# 未在此定义时,combo-cli 会自动读取 crush 的
-# ~/.local/share/crush/providers.json 与内置定义
-# providers = [
-#   { id = "opencode-zen", name = "OpenCode Zen", api_key = "$OPENCODE_API_KEY",
-#     api_endpoint = "https://opencode.ai/zen/v1", type = "openai-compat",
-#     default_large_model_id = "deepseek-v4-flash-free",
-#     models = [ { id = "deepseek-v4-flash-free" } ] },
-# ]
+# mcp_command = ""
+# mcp_url = ""
 "#;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -232,6 +363,21 @@ pub fn print_path(path: &PathBuf) -> Result<()> {
     println!("mcp_url     = {:?}", cfg.mcp_url);
     println!("api_key     = {:?}", cfg.api_key.map(|_| "***".to_string()));
     println!("base_url    = {:?}", cfg.base_url);
+    println!(
+        "providers   = {} 个",
+        cfg.providers.keys().map(|k| k.as_str()).collect::<Vec<_>>().join(", ")
+    );
+    println!("mcp servers = {}", cfg.mcp.len());
+    println!("lsp servers = {}", cfg.lsp.len());
+    println!(
+        "skills_paths = {:?}",
+        if cfg.skills_paths.is_empty() {
+            "(默认)".to_string()
+        } else {
+            cfg.skills_paths.join(", ")
+        }
+    );
+    println!("disabled_skills = {:?}", cfg.disabled_skills);
     Ok(())
 }
 
@@ -246,8 +392,15 @@ pub struct ResolvedConfig {
     pub mcp_url: Option<String>,
     pub api_key: Option<String>,
     pub base_url: Option<String>,
-    /// 自定义 provider 定义(crush 同格式)。
-    pub providers: Vec<crate::providers::ProviderInfo>,
+    /// 内嵌 provider 定义(crush 格式)。
+    pub providers: BTreeMap<String, ProviderConfig>,
+    /// 模型引用(large/small),已在 resolve 时用于默认 provider/model 回退。
+    #[allow(dead_code)]
+    pub models: ModelsConfig,
+    pub mcp: BTreeMap<String, McpServerConfig>,
+    pub lsp: BTreeMap<String, LspServerConfig>,
+    pub skills_paths: Vec<String>,
+    pub disabled_skills: Vec<String>,
 }
 
 #[cfg(test)]
@@ -277,7 +430,12 @@ mod tests {
             mcp_url: None,
             api_key: None,
             base_url: None,
-            providers: None,
+            providers: BTreeMap::new(),
+            models: ModelsConfig::default(),
+            mcp: BTreeMap::new(),
+            lsp: BTreeMap::new(),
+            skills_paths: vec![],
+            disabled_skills: vec![],
         };
         let r = cfg.resolve(Some("openai"), None, None, None, None, Some("http://mcp:1"));
         assert_eq!(r.provider, "openai", "CLI 参数优先");

@@ -19,8 +19,29 @@ pub struct McpConnection {
     _running: Vec<McpRunning>,
 }
 
-/// 建立 MCP 连接。`command` 与 `url` 二选一(都提供时优先 command)。
-pub async fn connect(
+impl McpConnection {
+    /// 取出内部 RunningService(供组合时合并持有)。
+    pub fn take_running(&mut self) -> Vec<McpRunning> {
+        std::mem::take(&mut self._running)
+    }
+
+    /// 用多个已连接服务构造(共享 handle)。
+    pub fn from_many(handle: ToolServerHandle, conns: Vec<McpConnection>) -> Self {
+        let mut running = Vec::new();
+        for mut c in conns {
+            running.extend(c.take_running());
+        }
+        McpConnection {
+            handle,
+            _running: running,
+        }
+    }
+}
+
+/// 建立单个 MCP 连接。`command` 与 `url` 二选一(都提供时优先 command)。
+/// `name` 仅用于日志。
+pub async fn connect_one(
+    name: &str,
     command: Option<&str>,
     url: Option<&str>,
     handle: ToolServerHandle,
@@ -30,19 +51,19 @@ pub async fn connect(
     let mut running: Vec<McpRunning> = Vec::new();
 
     if let Some(cmd) = command {
-        tracing::info!("连接 MCP(stdio):{cmd}");
+        tracing::info!("连接 MCP[{name}](stdio):{cmd}");
         // 解析 shell 命令为 argv
         let argv = shell_words(cmd)?;
         let (prog, args) = argv
             .split_first()
-            .ok_or_else(|| anyhow::anyhow!("MCP 命令为空"))?;
+            .ok_or_else(|| anyhow::anyhow!("MCP[{name}] 命令为空"))?;
         let mut process = tokio::process::Command::new(prog);
         process.args(args);
         let child = TokioChildProcess::new(process)?;
         let service = handler.connect(child).await?;
         running.push(service);
     } else if let Some(url) = url {
-        tracing::info!("连接 MCP(http):{url}");
+        tracing::info!("连接 MCP[{name}](http):{url}");
         use rmcp::transport::streamable_http_client::StreamableHttpClientWorker;
         let worker =
             StreamableHttpClientWorker::<reqwest::Client>::new_simple(url.to_string());
@@ -50,13 +71,36 @@ pub async fn connect(
         let service = handler.connect(transport).await?;
         running.push(service);
     } else {
-        anyhow::bail!("MCP 连接需要 --mcp-command 或 --mcp-url");
+        anyhow::bail!("MCP[{name}] 连接需要 command 或 url");
     }
 
     Ok(McpConnection {
         handle,
         _running: running,
     })
+}
+
+/// 建立多个 MCP 连接(全部注册到同一 ToolServerHandle)。
+/// `specs` 为 (name, command, url) 三元组;`skip_missing` 时单个失败仅告警。
+pub async fn connect_many(
+    specs: Vec<(String, Option<String>, Option<String>)>,
+    handle: ToolServerHandle,
+    skip_missing: bool,
+) -> anyhow::Result<Vec<McpConnection>> {
+    let mut conns = Vec::new();
+    for (name, cmd, url) in specs {
+        if cmd.is_none() && url.is_none() {
+            continue;
+        }
+        match connect_one(&name, cmd.as_deref(), url.as_deref(), handle.clone()).await {
+            Ok(c) => conns.push(c),
+            Err(e) if skip_missing => {
+                tracing::warn!("跳过 MCP[{name}]: {e}");
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(conns)
 }
 
 /// 简易 shell 分词:按空白拆分,支持单双引号。

@@ -26,7 +26,7 @@ async fn build_agent<C>(
     model: &str,
     preamble: &str,
     builtin: Vec<DynamicTool>,
-    mcp: Option<(Option<String>, Option<String>)>,
+    mcp_specs: Vec<(String, Option<String>, Option<String>)>,
 ) -> Result<(
     Agent<C::CompletionModel>,
     Option<McpConnection>,
@@ -39,11 +39,16 @@ where
     let handle = tool_server_with_builtin(&builtin);
 
     // 2. MCP 连接(如有)注册工具到同一 handle
-    let mcp_conn = match mcp {
-        Some((cmd, url)) if cmd.is_some() || url.is_some() => {
-            Some(crate::mcp::connect(cmd.as_deref(), url.as_deref(), handle.clone()).await?)
-        }
-        _ => None,
+    let specs: Vec<_> = mcp_specs
+        .into_iter()
+        .filter(|(_, cmd, url)| cmd.is_some() || url.is_some())
+        .collect();
+    let mcp_conn = if specs.is_empty() {
+        None
+    } else {
+        let conns =
+            crate::mcp::connect_many(specs, handle.clone(), true).await?;
+        Some(McpConnection::from_many(handle.clone(), conns))
     };
 
     // 3. agent 通过 tool_server_handle 共享工具
@@ -70,6 +75,8 @@ pub struct AskConfig {
     pub explicit_api_key: Option<String>,
     /// 显式 base_url(配置文件 base_url 字段);优先于 provider 定义。
     pub explicit_base_url: Option<String>,
+    /// 配置文件中的 MCP server 列表((name, command, url))。
+    pub mcp_servers: Vec<(String, Option<String>, Option<String>)>,
 }
 
 impl AskConfig {
@@ -79,15 +86,32 @@ impl AskConfig {
             .model
             .clone()
             .unwrap_or_else(|| provider.default_model());
+        // 收集 MCP:旧版 mcp_command/mcp_url + 配置的 mcp map
+        let mut mcp_servers: Vec<(String, Option<String>, Option<String>)> = Vec::new();
+        for (name, srv) in &r.mcp {
+            let cmd = srv
+                .command
+                .clone()
+                .map(|c| {
+                    if let Some(args) = &srv.args {
+                        format!("{} {}", c, args.join(" "))
+                    } else {
+                        c
+                    }
+                });
+            mcp_servers.push((name.clone(), cmd, srv.url.clone()));
+        }
+        let skills = crate::skills::skills_preamble(r);
         Self {
             provider,
             model,
-            preamble: r.preamble.clone(),
+            preamble: format!("{}{}", r.preamble, skills),
             tools: r.tools,
             mcp_command: r.mcp_command.clone(),
             mcp_url: r.mcp_url.clone(),
             explicit_api_key: r.api_key.clone(),
             explicit_base_url: r.base_url.clone(),
+            mcp_servers,
         }
     }
 
@@ -121,6 +145,19 @@ impl AskConfig {
             .resolved_endpoint()
             .unwrap_or_else(|| "https://api.openai.com/v1".to_string())
     }
+
+    /// 收集全部 MCP 规格:配置文件 mcp map + 旧版 mcp_command/mcp_url。
+    pub fn mcp_specs(&self) -> Vec<(String, Option<String>, Option<String>)> {
+        let mut specs = self.mcp_servers.clone();
+        if self.mcp_command.is_some() || self.mcp_url.is_some() {
+            specs.push((
+                "legacy".into(),
+                self.mcp_command.clone(),
+                self.mcp_url.clone(),
+            ));
+        }
+        specs
+    }
 }
 
 /// 单轮问答:返回最终答案。
@@ -130,20 +167,20 @@ pub async fn ask_answer(cfg: &AskConfig, question: &str) -> Result<String> {
     } else {
         Vec::new()
     };
-    let mcp = (cfg.mcp_command.clone(), cfg.mcp_url.clone());
+    let mcp = cfg.mcp_specs();
     let ptype = cfg.provider.provider_type.as_deref().unwrap_or("openai");
 
     match ptype {
         "anthropic" => {
             let client = rig::providers::anthropic::Client::from_env()?;
             let (agent, _mcp) =
-                build_agent(client, &cfg.model, &cfg.preamble, builtin, Some(mcp)).await?;
+                build_agent(client, &cfg.model, &cfg.preamble, builtin, mcp).await?;
             ask_one(&agent, question).await
         }
         "google" => {
             let client = rig::providers::gemini::Client::from_env()?;
             let (agent, _mcp) =
-                build_agent(client, &cfg.model, &cfg.preamble, builtin, Some(mcp)).await?;
+                build_agent(client, &cfg.model, &cfg.preamble, builtin, mcp).await?;
             ask_one(&agent, question).await
         }
         // openai / openai-compat / 其它一律走 OpenAI 兼容协议
@@ -157,7 +194,7 @@ pub async fn ask_answer(cfg: &AskConfig, question: &str) -> Result<String> {
                 .build()
                 .map_err(|e| anyhow::anyhow!("创建 client 失败: {e}"))?;
             let (agent, _mcp) =
-                build_agent(client, &cfg.model, &cfg.preamble, builtin, Some(mcp)).await?;
+                build_agent(client, &cfg.model, &cfg.preamble, builtin, mcp).await?;
             ask_one(&agent, question).await
         }
     }
@@ -197,7 +234,7 @@ pub async fn chat_loop(cfg: &AskConfig) -> Result<()> {
     } else {
         Vec::new()
     };
-    let mcp_cfg = (cfg.mcp_command.clone(), cfg.mcp_url.clone());
+    let mcp_cfg = cfg.mcp_specs();
     let preamble = cfg.preamble.clone();
     let provider_id = cfg.provider.id.clone();
     let ptype = cfg.provider.provider_type.clone().unwrap_or_else(|| "openai".into());
@@ -212,12 +249,12 @@ pub async fn chat_loop(cfg: &AskConfig) -> Result<()> {
     let (agent, mcp_conn): (Box<dyn AnyAgent>, Option<McpConnection>) = match ptype.as_str() {
         "anthropic" => {
             let client = rig::providers::anthropic::Client::from_env()?;
-            let (a, m) = build_agent(client, &model, &preamble, builtin, Some(mcp_cfg)).await?;
+            let (a, m) = build_agent(client, &model, &preamble, builtin, mcp_cfg).await?;
             (Box::new(Arc::new(a)), m)
         }
         "google" => {
             let client = rig::providers::gemini::Client::from_env()?;
-            let (a, m) = build_agent(client, &model, &preamble, builtin, Some(mcp_cfg)).await?;
+            let (a, m) = build_agent(client, &model, &preamble, builtin, mcp_cfg).await?;
             (Box::new(Arc::new(a)), m)
         }
         _ => {
@@ -229,7 +266,7 @@ pub async fn chat_loop(cfg: &AskConfig) -> Result<()> {
             let client = builder
                 .build()
                 .map_err(|e| anyhow::anyhow!("创建 client 失败: {e}"))?;
-            let (a, m) = build_agent(client, &model, &preamble, builtin, Some(mcp_cfg)).await?;
+            let (a, m) = build_agent(client, &model, &preamble, builtin, mcp_cfg).await?;
             (Box::new(Arc::new(a)), m)
         }
     };
