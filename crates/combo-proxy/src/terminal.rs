@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use std::io::{Read, Write};
 use tokio::sync::mpsc;
 
-use crate::workspace::ensure_ws;
+use crate::fs::resolve_root;
 use crate::AppState;
 
 /// GET /v1/terminal — 无 workspace 的 WebSocket 终端,默认在用户主目录打开。
@@ -21,18 +21,17 @@ pub async fn terminal_default(ws: WebSocketUpgrade) -> Response {
 }
 
 /// GET /v1/workspaces/{id}/terminal — 在指定 workspace 根目录启动 PTY。
+///
+/// workspace 根目录直接从 sqlite 元数据解析(与 fs/git 一致),
+/// 不依赖 agent 后端在线——终端只是本地 shell,无需 crush/codex 等。
 pub async fn terminal(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Response {
-    let Some(effective_id) = ensure_ws(&state, &id).await else {
-        return json_err(StatusCode::BAD_GATEWAY, "workspace 在 crush 中不存在且注册失败");
-    };
-    let backend = state.registry.for_workspace(&effective_id, &state.meta);
-    let root = match backend.workspace_root(&effective_id).await {
+    let root = match resolve_root(&state, &id) {
         Ok(r) => r,
-        Err(e) => return json_err(StatusCode::BAD_GATEWAY, &format!("{e:#}")),
+        Err(resp) => return resp,
     };
     ws.on_upgrade(move |socket| run_pty(socket, root))
 }
