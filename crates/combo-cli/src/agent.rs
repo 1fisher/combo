@@ -53,10 +53,13 @@ where
     };
 
     // 3. agent 通过 tool_server_handle 共享工具
+    // rig 默认 max_turns=1(仅一轮),开启工具后需要多轮才能完成工具调用循环;
+    // 设为 30 允许 agent 进行多轮工具调用与推理。
     let agent = client
         .agent(model)
         .preamble(preamble)
         .tool_server_handle(handle)
+        .default_max_turns(30)
         .build();
 
     Ok((agent, mcp_conn))
