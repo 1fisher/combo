@@ -216,6 +216,18 @@ impl ComboDb {
         Ok(())
     }
 
+    /// 更新 workspace 的后端类型(切换 agent 时使用)。
+    pub fn update_workspace_backend(&self, id: &str, backend: &str) -> anyhow::Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE workspaces SET backend=?1 WHERE id=?2",
+                params![backend, id],
+            )?;
+        Ok(())
+    }
+
     // ---------- conversations ----------
 
     pub fn upsert_conversation(&self, c: &ConversationMeta) -> anyhow::Result<()> {

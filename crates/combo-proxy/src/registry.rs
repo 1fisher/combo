@@ -52,18 +52,10 @@ impl BackendRegistry {
         }
     }
 
-    /// 按 workspace_id 查 MetaStore 确定后端。找不到时默认 combo-cli。
-    pub fn for_workspace(&self, ws_id: &str, meta: &MetaStore) -> &Arc<dyn Backend> {
-        match meta.get(ws_id) {
-            Some(m) => match m.backend_type {
-                BackendType::ComboCli => self.combo_cli.as_ref().unwrap_or(&self.crush),
-                BackendType::OpenCode => self.opencode.as_ref().unwrap_or(&self.crush),
-                BackendType::ClaudeCode => self.claude_code.as_ref().unwrap_or(&self.crush),
-                BackendType::Codex => self.codex.as_ref().unwrap_or(&self.crush),
-                BackendType::Crush => &self.crush,
-            },
-            None => self.combo_cli.as_ref().unwrap_or(&self.crush),
-        }
+    /// 按 workspace_id 查 MetaStore 确定后端。
+    /// 当前只支持 combo-cli(自有 agent);其他后端类型一律回退到 combo-cli。
+    pub fn for_workspace(&self, _ws_id: &str, _meta: &MetaStore) -> &Arc<dyn Backend> {
+        self.combo_cli.as_ref().unwrap_or(&self.crush)
     }
 }
 
@@ -90,8 +82,11 @@ mod tests {
     }
 
     #[test]
-    fn routes_crush_workspace_to_crush() {
-        let reg = BackendRegistry::new(dummy_crush());
+    fn always_routes_to_combo_cli_regardless_of_backend_type() {
+        let mut reg = BackendRegistry::new(dummy_crush());
+        reg.set_combo_cli(Arc::new(ComboCliBackend::new(Upstream::Tcp(
+            "127.0.0.1:1".parse().unwrap(),
+        ))));
         let meta = MetaStore::new();
         meta.insert(crate::WorkspaceMeta {
             id: "ws1".into(),
@@ -99,26 +94,24 @@ mod tests {
             name: "ws1".into(),
             backend_type: BackendType::Crush,
         });
-        let backend = reg.for_workspace("ws1", &meta);
-        assert_eq!(backend.backend_type(), BackendType::Crush);
-    }
-
-    #[test]
-    fn opencode_workspace_falls_back_to_crush_when_not_set() {
-        let reg = BackendRegistry::new(dummy_crush());
-        let meta = MetaStore::new();
         meta.insert(crate::WorkspaceMeta {
-            id: "ws3".into(),
+            id: "ws2".into(),
             path: "/tmp".into(),
-            name: "ws3".into(),
-            backend_type: BackendType::OpenCode,
+            name: "ws2".into(),
+            backend_type: BackendType::ClaudeCode,
         });
-        let backend = reg.for_workspace("ws3", &meta);
-        assert_eq!(backend.backend_type(), BackendType::Crush);
+        assert_eq!(
+            reg.for_workspace("ws1", &meta).backend_type(),
+            BackendType::ComboCli
+        );
+        assert_eq!(
+            reg.for_workspace("ws2", &meta).backend_type(),
+            BackendType::ComboCli
+        );
     }
 
     #[test]
-    fn combo_cli_workspace_falls_back_to_crush_when_not_set() {
+    fn falls_back_to_crush_when_combo_cli_not_set() {
         let reg = BackendRegistry::new(dummy_crush());
         let meta = MetaStore::new();
         meta.insert(crate::WorkspaceMeta {

@@ -59,14 +59,6 @@ function projectName(w: { name?: string; path: string }): string {
   return w.name && w.name.trim() ? w.name : basename(w.path);
 }
 
-const BACKEND_LABEL: Record<string, string> = {
-  'combo-cli': 'Combo-cli',
-  crush: 'Crush',
-  opencode: 'OpenCode',
-  claude_code: 'Claude Code',
-  codex: 'Codex',
-};
-
 /** 可折叠分区:标题 + 折叠箭头 + 悬停操作(+ 等) */
 function Section({
   title,
@@ -227,8 +219,6 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
   const [tab, setTab] = useState<'grouped' | 'project'>('project');
   const [projOpen, setProjOpen] = useState(true);
   const [taskOpen, setTaskOpen] = useState(true);
-
-  const [backend, setBackend] = useState<'combo-cli' | 'crush' | 'opencode' | 'claude_code' | 'codex'>('combo-cli');
   // 服务器目录选择器(浏览器/移动端):add=添加项目,change=更换目录
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerMode, setPickerMode] = useState<'add' | 'change'>('add');
@@ -308,7 +298,7 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
       const dir = await open({ directory: true, multiple: false });
       if (typeof dir === 'string') {
         try {
-          await create({ path: dir, backend });
+          await create({ path: dir });
         } catch (e) {
           setSidebarError(e instanceof Error ? e.message : String(e));
         }
@@ -653,9 +643,6 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
                         <span className="min-w-0 flex-1 truncate font-medium" title={w.path}>
                           {projectName(w)}
                         </span>
-                        <span className="shrink-0 rounded-full border border-border bg-surface px-1.5 py-px text-[11px] leading-normal text-foreground-subtle">
-                          {BACKEND_LABEL[w.backend ?? 'combo-cli'] ?? w.backend}
-                        </span>
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -983,16 +970,12 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
             ? '在服务器上选择项目目录(服务器上的绝对路径)。'
             : '在服务器上选择新的绑定目录。'
         }
-        backend={pickerMode === 'add' ? backend : undefined}
-        onBackendChange={(b) =>
-          setBackend(b as 'combo-cli' | 'crush' | 'opencode' | 'claude_code' | 'codex')
-        }
         onOpenChange={setPickerOpen}
         onSelect={(path) => {
           setPickerOpen(false);
           if (pickerMode === 'add') {
             setSidebarError(null);
-            void create({ path, backend })
+            void create({ path })
               .then((w) => {
                 setActive(w.id);
                 onNavigate?.();

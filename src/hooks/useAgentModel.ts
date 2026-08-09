@@ -1,0 +1,55 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  getAgentInfo,
+  getWorkspaceConfig,
+  getWorkspaceProviders,
+  setWorkspaceModel,
+} from '../lib/api';
+import type { Api } from '../lib/api/types';
+
+/** 获取 workspace 当前 agent 信息(含模型)。 */
+export function useAgentInfo(workspaceId: string | null | undefined) {
+  return useQuery({
+    queryKey: ['agent-info', workspaceId],
+    queryFn: () => getAgentInfo(workspaceId!),
+    enabled: !!workspaceId,
+    staleTime: 5_000,
+    retry: false,
+  });
+}
+
+/** 获取 workspace 可用 provider 和模型列表。 */
+export function useProviders(workspaceId: string | null | undefined) {
+  return useQuery({
+    queryKey: ['providers', workspaceId],
+    queryFn: () => getWorkspaceProviders(workspaceId!),
+    enabled: !!workspaceId,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+/** 获取 workspace config(含默认模型配置)。 */
+export function useWorkspaceConfig(workspaceId: string | null | undefined) {
+  return useQuery({
+    queryKey: ['workspace-config-models', workspaceId],
+    queryFn: () => getWorkspaceConfig(workspaceId!),
+    enabled: !!workspaceId,
+    staleTime: 30_000,
+    retry: false,
+  });
+}
+
+/** 设置 workspace 当前使用的模型。 */
+export function useSetModel(workspaceId: string | null | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: {
+      model: Api.SelectedModel;
+      modelType?: Api.ModelType;
+    }) => setWorkspaceModel(workspaceId!, vars.model, vars.modelType),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['agent-info', workspaceId] });
+    },
+  });
+}

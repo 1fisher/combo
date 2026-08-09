@@ -2082,6 +2082,47 @@ export namespace Api {
       skills_paths?: string[];
       [key: string]: unknown;
     };
+    /** 配置的大/小模型(combo config 中的 models 字段)。 */
+    models?: { [key: string]: SelectedModel };
+    /** 最近使用的模型。 */
+    recent_models?: { [key: string]: SelectedModel[] };
+    [key: string]: unknown;
+  };
+
+  // ---------- agent / model 选择 ----------
+
+  export type SelectedModel = {
+    model?: string;
+    provider?: string;
+    max_tokens?: number;
+    temperature?: number;
+    think?: boolean;
+    reasoning_effort?: string;
+    [key: string]: unknown;
+  };
+
+  export type ModelType = 'large' | 'small';
+
+  export type ConfigModelRequest = {
+    model?: SelectedModel;
+    model_type?: ModelType;
+    scope?: ConfigScope;
+  };
+
+  /** GET /v1/workspaces/{id}/agent 返回的 agent 信息。 */
+  export type AgentInfo = {
+    is_busy?: boolean;
+    is_ready?: boolean;
+    model?: { id?: string; name?: string; [k: string]: unknown };
+    model_cfg?: SelectedModel;
+    [key: string]: unknown;
+  };
+
+  /** provider 列表中的一个 provider 条目。 */
+  export type ProviderEntry = {
+    id: string;
+    name?: string;
+    models?: { id?: string; name?: string; [k: string]: unknown }[];
     [key: string]: unknown;
   };
 }

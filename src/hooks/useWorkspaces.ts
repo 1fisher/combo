@@ -14,10 +14,7 @@ export function useWorkspaces() {
     queryFn: listWorkspaces,
   });
   const create = useMutation({
-    mutationFn: (vars: {
-      path: string;
-      backend?: 'combo-cli' | 'crush' | 'opencode' | 'claude_code' | 'codex';
-    }) => createWorkspace(vars.path, vars.backend),
+    mutationFn: (vars: { path: string }) => createWorkspace(vars.path),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['workspaces'] }),
   });
   const rename = useMutation({

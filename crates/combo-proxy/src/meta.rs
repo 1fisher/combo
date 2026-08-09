@@ -85,6 +85,16 @@ impl MetaStore {
         self.db.update_workspace_path(id, path)?;
         Ok(true)
     }
+
+    /// 更新项目后端类型,返回是否找到。
+    pub fn update_backend(&self, id: &str, backend: BackendType) -> anyhow::Result<bool> {
+        let before = self.db.get_workspace(id)?;
+        if before.is_none() {
+            return Ok(false);
+        }
+        self.db.update_workspace_backend(id, backend.as_str())?;
+        Ok(true)
+    }
 }
 
 impl Default for MetaStore {

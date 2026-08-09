@@ -14,6 +14,8 @@
 //! 这样 combo-cli 可被 combo-proxy 当作一个受管的 agent 后端进程。
 
 use crate::agent::{self, AskConfig, RunEvent};
+use crate::config::AppConfig;
+use crate::providers::{self, ProviderInfo};
 use anyhow::Result;
 use axum::{
     Json, Router,
@@ -37,7 +39,7 @@ use tokio::sync::{Notify, broadcast, watch};
 
 #[derive(Clone)]
 struct AppState {
-    cfg: AskConfig,
+    cfg: Arc<Mutex<AskConfig>>,
     shutdown: Arc<Notify>,
     runs: Arc<RunState>,
 }
@@ -83,7 +85,7 @@ struct AgentReq {
 
 pub async fn run(cfg: &agent::AskConfig, host: String, port: u16) -> Result<()> {
     let state = AppState {
-        cfg: cfg.clone(),
+        cfg: Arc::new(Mutex::new(cfg.clone())),
         shutdown: Arc::new(Notify::new()),
         runs: Arc::new(RunState::default()),
     };
@@ -92,7 +94,10 @@ pub async fn run(cfg: &agent::AskConfig, host: String, port: u16) -> Result<()> 
         .route("/v1/health", get(health))
         .route("/v1/control", post(control))
         .route("/v1/agent", post(run_agent))
-        .route("/v1/workspaces/:id/agent", post(run_agent_ws))
+        .route(
+            "/v1/workspaces/:id/agent",
+            get(agent_info).post(run_agent_ws),
+        )
         .route(
             "/v1/workspaces/:id/agent/sessions/:sid/cancel",
             post(cancel_agent),
@@ -106,6 +111,8 @@ pub async fn run(cfg: &agent::AskConfig, host: String, port: u16) -> Result<()> 
             get(permission_skip_get).post(permission_skip_post),
         )
         .route("/v1/workspaces/:id/events", get(events))
+        .route("/v1/workspaces/:id/providers", get(list_providers))
+        .route("/v1/workspaces/:id/config/model", post(config_model))
         .with_state(state.clone());
 
     let addr: SocketAddr = format!("{host}:{port}").parse()?;
@@ -146,7 +153,8 @@ async fn run_agent(
         .ok_or_else(|| (StatusCode::BAD_REQUEST, "缺少 question 字段".into()))?
         .to_string();
 
-    let answer = crate::agent::ask_answer(&state.cfg, &question)
+    let cfg = state.cfg.lock().unwrap().clone();
+    let answer = crate::agent::ask_answer(&cfg, &question)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
@@ -174,11 +182,11 @@ async fn run_agent_ws(
     let cancel_rx = state.runs.cancel_tx(&body.session_id).subscribe();
 
     // 1. 回传用户消息(created),前端据此移除乐观插入的 local- 消息
-    let user_msg = user_message_json(&body.session_id, &body.prompt, &state.cfg);
+    let cfg = state.cfg.lock().unwrap().clone();
+    let user_msg = user_message_json(&body.session_id, &body.prompt, &cfg);
     let _ = tx.send(msg_env("created", user_msg));
 
     // 2. 后台运行 agent,事件经广播流出
-    let cfg = state.cfg.clone();
     let history = body.history.clone().unwrap_or_default();
     tokio::spawn(async move {
         let session_id = body.session_id.clone();
@@ -195,10 +203,20 @@ async fn run_agent_ws(
 
         let rig_history = history_to_messages(&history);
         let mut parts: Vec<Value> = Vec::new();
+        let mut text_buf = String::new();
         let tx_ev = tx.clone();
         let result = crate::agent::stream_run(&cfg, &prompt, &rig_history, cancel_rx, |ev| {
             match ev {
-                RunEvent::TextDelta(t) => parts.push(text_part(&t)),
+                RunEvent::TextDelta(t) => {
+                    text_buf.push_str(&t);
+                    // 更新唯一的 text part(而非每个 delta 各建一个)
+                    let text_val = text_part(&text_buf);
+                    if parts.last().and_then(|p| p.get("type")).and_then(Value::as_str) == Some("text") {
+                        parts.last_mut().unwrap()["data"] = text_val["data"].clone();
+                    } else {
+                        parts.push(text_val);
+                    }
+                }
                 RunEvent::ToolCall { id, name, input } => {
                     parts.push(tool_call_part(&id, &name, &input));
                 }
@@ -439,6 +457,116 @@ fn history_to_messages(history: &[Value]) -> Vec<Message> {
         }
     }
     out
+}
+
+// ---------- providers / model 切换 ----------
+
+/// GET /v1/workspaces/{id}/providers — 返回可用 provider 列表(含模型)。
+async fn list_providers(State(state): State<AppState>) -> Json<Value> {
+    let cfg = state.cfg.lock().unwrap().clone();
+    let config_path = AppConfig::load_or_create(&crate::config::default_config_path())
+        .unwrap_or_default();
+
+    // 收集所有 provider:配置文件 + crush providers.json + 内置
+    let mut all: Vec<ProviderInfo> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    // 当前 provider 优先
+    all.push(cfg.provider.clone());
+    seen.insert(cfg.provider.id.clone());
+
+    // 配置文件中的自定义 providers
+    for (id, pc) in &config_path.providers {
+        if seen.insert(id.clone()) {
+            all.push(ProviderInfo::from_config(id, pc));
+        }
+    }
+
+    // crush providers.json
+    if let Ok(crush) = providers::load_crush_providers() {
+        for p in crush {
+            if seen.insert(p.id.clone()) {
+                all.push(p);
+            }
+        }
+    }
+
+    // 内置 providers
+    for p in providers::builtin_providers() {
+        if seen.insert(p.id.clone()) {
+            all.push(p);
+        }
+    }
+
+    let arr: Vec<Value> = all
+        .iter()
+        .map(|p| {
+            json!({
+                "id": p.id,
+                "name": p.name.as_deref().unwrap_or(&p.id),
+                "models": p.models.iter().map(|m| {
+                    json!({
+                        "id": m.id,
+                        "name": m.name.as_deref().unwrap_or(&m.id),
+                    })
+                }).collect::<Vec<_>>(),
+            })
+        })
+        .collect();
+    Json(Value::Array(arr))
+}
+
+/// GET /v1/workspaces/{id}/agent — 返回 agent 信息(含当前模型)。
+async fn agent_info(State(state): State<AppState>) -> Json<Value> {
+    let cfg = state.cfg.lock().unwrap().clone();
+    Json(json!({
+        "is_ready": true,
+        "model": { "id": cfg.model, "name": cfg.model },
+        "model_cfg": { "model": cfg.model, "provider": cfg.provider.id },
+    }))
+}
+
+/// POST /v1/workspaces/{id}/config/model — 运行时切换模型。
+#[derive(Deserialize)]
+struct ConfigModelReq {
+    model: Option<ConfigModelRef>,
+}
+
+#[derive(Deserialize)]
+struct ConfigModelRef {
+    model: Option<String>,
+    provider: Option<String>,
+}
+
+async fn config_model(
+    State(state): State<AppState>,
+    Json(body): Json<ConfigModelReq>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let mut cfg = state.cfg.lock().unwrap().clone();
+    if let Some(m) = &body.model {
+        if let Some(provider_id) = &m.provider {
+            if provider_id != &cfg.provider.id {
+                // 切换 provider
+                match providers::find_provider(provider_id, &std::collections::BTreeMap::new()) {
+                    Ok(p) => cfg.provider = p,
+                    Err(e) => {
+                        return Err((
+                            StatusCode::BAD_REQUEST,
+                            format!("未知 provider `{provider_id}`: {e}"),
+                        ))
+                    }
+                }
+            }
+        }
+        if let Some(model_id) = &m.model {
+            if !model_id.is_empty() {
+                cfg.model = model_id.clone();
+            }
+        }
+    }
+    *state.cfg.lock().unwrap() = cfg.clone();
+    tracing::info!("模型已切换:{} @ {}", cfg.model, cfg.provider.id);
+    Ok(Json(json!({ "ok": true })))
 }
 
 #[cfg(test)]

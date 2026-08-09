@@ -10,12 +10,11 @@ export function listWorkspaces(): Promise<Api.Workspace[]> {
 
 export function createWorkspace(
   path: string,
-  backend: 'combo-cli' | 'crush' | 'opencode' | 'claude_code' | 'codex' = 'combo-cli'
 ): Promise<Api.Workspace> {
   // rune 从请求体校验 client_id(UUID),而不是查询参数
   return apiRequest('/v1/workspaces', {
     method: 'POST',
-    body: { path, client_id: getClientId(), backend },
+    body: { path, client_id: getClientId(), backend: 'combo-cli' },
   });
 }
 
@@ -338,6 +337,31 @@ export function setConfigKey(
   return apiRequest(`/v1/workspaces/${workspaceId}/config/set`, {
     method: 'POST',
     body: { key, value, scope } satisfies Api.ConfigSetRequest,
+  });
+}
+
+// ---------- agent / model 选择 ----------
+
+/** 获取 agent 当前信息(含 model/model_cfg)。 */
+export function getAgentInfo(workspaceId: string): Promise<Api.AgentInfo> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/agent`);
+}
+
+/** 获取可用 provider 列表(含每个 provider 的模型列表)。 */
+export function getWorkspaceProviders(workspaceId: string): Promise<Api.ProviderEntry[]> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/providers`);
+}
+
+/** 设置 workspace 当前使用的模型。 */
+export function setWorkspaceModel(
+  workspaceId: string,
+  model: Api.SelectedModel,
+  modelType: Api.ModelType = 'large',
+  scope: Api.ConfigScope = 1
+): Promise<void> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/config/model`, {
+    method: 'POST',
+    body: { model, model_type: modelType, scope } satisfies Api.ConfigModelRequest,
   });
 }
 

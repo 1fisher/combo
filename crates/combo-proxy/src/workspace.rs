@@ -111,13 +111,14 @@ pub async fn get(State(state): State<AppState>, Path(id): Path<String>) -> Respo
     }
 }
 
-/// PATCH /v1/workspaces/{id} — 重命名项目 和/或 更换绑定目录。
+/// PATCH /v1/workspaces/{id} — 重命名项目、更换绑定目录 和/或 切换后端。
 ///
-/// 请求体:`{ name?: string, path?: string }`,至少传一个。
+/// 请求体:`{ name?: string, path?: string, backend?: string }`,至少传一个。
 /// - `name`:更新项目显示名。
 /// - `path`:更换绑定目录。更新 sqlite 元数据后,立即调 `ensure_ws`
 ///   用新 path 重新注册到 crush(crush 内存态,重建后 id 可能变化,
 ///   `ensure_ws` 会自动迁移会话镜像并返回新 id)。
+/// - `backend`:切换后端类型(combo-cli/crush/opencode/claude_code/codex)。
 pub async fn rename(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -125,15 +126,16 @@ pub async fn rename(
 ) -> Response {
     let name = body.get("name").and_then(|v| v.as_str()).map(|s| s.trim());
     let path = body.get("path").and_then(|v| v.as_str()).map(|s| s.trim());
+    let backend = body.get("backend").and_then(|v| v.as_str()).map(|s| s.trim());
 
-    match (name, path) {
-        (Some(n), _) if n.is_empty() && path.is_none() => {
+    match (name, path, backend) {
+        (Some(n), _, _) if n.is_empty() && path.is_none() && backend.is_none() => {
             return json_err(StatusCode::BAD_REQUEST, "name 不能为空");
         }
-        (_, Some(p)) if p.is_empty() && name.is_none() => {
+        (_, Some(p), _) if p.is_empty() && name.is_none() && backend.is_none() => {
             return json_err(StatusCode::BAD_REQUEST, "path 不能为空");
         }
-        (None, None) => return json_err(StatusCode::BAD_REQUEST, "需提供 name 或 path"),
+        (None, None, None) => return json_err(StatusCode::BAD_REQUEST, "需提供 name、path 或 backend"),
         _ => {}
     }
 
@@ -149,8 +151,19 @@ pub async fn rename(
                 );
             }
         }
-    } else if state.meta.get(&id).is_none() && path.is_some() {
+    } else if state.meta.get(&id).is_none() && (path.is_some() || backend.is_some()) {
         return json_err(StatusCode::NOT_FOUND, "workspace 不存在");
+    }
+
+    // 切换后端类型(若有)
+    if let Some(b) = backend.filter(|s| !s.is_empty()) {
+        let bt = BackendType::parse(b);
+        if let Err(e) = state.meta.update_backend(&id, bt) {
+            return json_err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                &format!("切换后端失败: {e}"),
+            );
+        }
     }
 
     // 再处理 path(若有):更新元数据 + 重新注册到 crush
@@ -286,6 +299,17 @@ const PROXY_CLIENT_ID: &str = "00000000-0000-4000-8000-000000000001";
 /// 此时同步更新元数据库并把旧 id 下的会话镜像迁移到新 id。
 /// 返回当前有效的 workspace id(None 表示注册失败)。
 pub async fn ensure_ws(state: &AppState, ws_id: &str) -> Option<String> {
+    // combo-cli 是当前唯一支持的 agent 后端,不需要 crush 注册。
+    // 仅在 backend_type == Crush 时走 crush 的 ensure_ws 流程。
+    let meta = match state.meta.get(ws_id) {
+        Some(m) => m,
+        None => return None,
+    };
+    if meta.backend_type != BackendType::Crush {
+        return Some(ws_id.to_string());
+    }
+
+    // 以下仅对 crush 后端的 workspace 执行:
     // 先确保 crush 进程在运行(可能在两次后台健康检查之间崩溃了)。
     // ensure_running 在 crush 已健康时仅做一次 GET /v1/health,开销极小;
     // 若 crush 已死则自动拉起并等待就绪(最多 15s)。
@@ -312,18 +336,6 @@ pub async fn ensure_ws(state: &AppState, ws_id: &str) -> Option<String> {
         }
     }
     // crush 不认识:用元数据库里的 path 重新注册
-    let meta = match state.meta.get(ws_id) {
-        Some(m) => m,
-        None => {
-            // 元数据丢失:通常是 crush 重启后分配了新 ID,而前端 localStorage
-            // 仍持有旧 ID。proxy handler 已对此返回 404,前端应清除选中态。
-            // 这里不再每次都 eprintln(前端可能循环重试导致刷屏)。
-            return None;
-        }
-    };
-    if meta.backend_type != BackendType::Crush {
-        return Some(ws_id.to_string());
-    }
     let body = serde_json::to_vec(&json!({
         "path": meta.path,
         "client_id": PROXY_CLIENT_ID,

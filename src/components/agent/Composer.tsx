@@ -6,7 +6,7 @@ import {
   Check,
   ChevronDown,
   FileText,
-  Package,
+  Loader2,
   Paperclip,
   Plus,
   Quote,
@@ -14,6 +14,7 @@ import {
   Sparkles,
   Square,
   X,
+  Zap,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { useAgentStore, type AgentMode } from '../../stores/agentStore';
@@ -21,6 +22,7 @@ import { useContextStore, type ContextItem } from '../../stores/contextStore';
 import { useMention, type MentionResult } from '../../hooks/useMention';
 import { useFileIndex } from '../../hooks/useFileIndex';
 import { useSkills } from '../../hooks/useSkills';
+import { useAgentInfo, useProviders, useSetModel, useWorkspaceConfig } from '../../hooks/useAgentModel';
 import type { Api } from '../../lib/api/types';
 import { cn } from '../../lib/utils';
 import { AttachmentPicker } from './AttachmentPicker';
@@ -40,7 +42,6 @@ const THOUGHT_LEVELS = [
 
 export function Composer({
   workspaceId,
-  backend,
   value,
   onChange,
   onSend,
@@ -50,7 +51,6 @@ export function Composer({
 }: {
   workspaceName?: string;
   workspaceId?: string;
-  backend: string;
   value: string;
   onChange: (v: string) => void;
   onSend: (attachments: Api.Attachment[], contextItems: ContextItem[]) => void;
@@ -70,6 +70,40 @@ export function Composer({
   const removeContextItem = useContextStore((s) => s.removeItem);
   const clearContextItems = useContextStore((s) => s.clear);
   const thought = THOUGHT_LEVELS[1];
+
+  // agent / model 选择
+  const { data: agentInfo } = useAgentInfo(workspaceId);
+  const { data: providers } = useProviders(workspaceId);
+  const { data: wsConfig } = useWorkspaceConfig(workspaceId);
+  const setModel = useSetModel(workspaceId);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  // 当前模型:优先从 agent info 获取,否则从 combo config 加载默认模型
+  const configModel = wsConfig?.models?.large?.model ?? wsConfig?.models?.small?.model;
+  const currentModelId = agentInfo?.model_cfg?.model ?? agentInfo?.model?.id ?? configModel ?? '';
+
+  // 扁平化 provider → model 列表
+  const modelList = useMemo(() => {
+    if (!providers) return [];
+    const out: { id: string; name: string; provider: string; providerName: string }[] = [];
+    for (const p of providers) {
+      const pName = p.name ?? p.id;
+      const models = Array.isArray(p.models) ? p.models : [];
+      for (const m of models) {
+        out.push({
+          id: m.id ?? '',
+          name: m.name ?? m.id ?? '',
+          provider: p.id,
+          providerName: pName,
+        });
+      }
+    }
+    return out;
+  }, [providers]);
+
+  function handleModelChange(modelId: string, provider: string) {
+    setModelMenuOpen(false);
+    setModel.mutate({ model: { model: modelId, provider } });
+  }
 
   // mention popover 定位(基于 textarea 的 fixed 坐标)
   const [popoverPos, setPopoverPos] = useState<{ left: number; bottom: number; width: number } | null>(null);
@@ -281,7 +315,10 @@ export function Composer({
                   </Button>
                   <button
                     type="button"
-                    onClick={() => setModeMenuOpen((o) => !o)}
+                    onClick={() => {
+                      setModeMenuOpen((o) => !o);
+                      setModelMenuOpen(false);
+                    }}
                     className="relative flex h-7 shrink-0 items-center justify-center gap-0 rounded-lg p-0 text-warning hover:bg-surface-hover hover:text-warning"
                     aria-label="切换模式"
                     title="切换模式"
@@ -362,15 +399,71 @@ export function Composer({
                       />
                     </svg>
                   </span>
-                  {/* 模型(由工作区后端决定) */}
-                  <span
-                    className="flex h-7 shrink-0 w-fit items-center justify-between gap-1 rounded-lg px-2 pr-1.5 text-[13px] whitespace-nowrap text-foreground-subtle"
-                    title={`后端:${backend}`}
-                  >
-                    <Package className="pointer-events-none size-4 shrink-0" />
-                    <span className="min-w-0 truncate">{backend}</span>
-                    <ChevronDown className="pointer-events-none size-3.5 text-foreground-subtlest" />
-                  </span>
+                  {/* 模型选择 */}
+                  <div className="relative shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setModelMenuOpen((o) => !o)}
+                      className="flex h-7 w-fit items-center justify-between gap-1 rounded-lg px-1.5 py-1.5 text-[13px] whitespace-nowrap text-foreground-subtle transition-colors hover:bg-surface-hover hover:text-foreground"
+                      aria-label="切换模型"
+                      title="切换模型"
+                    >
+                      {setModel.isPending ? (
+                        <Loader2 className="pointer-events-none size-4 animate-spin" />
+                      ) : (
+                        <Zap className="pointer-events-none size-4 text-current" />
+                      )}
+                      <span className="min-w-0 max-w-[8rem] truncate">
+                        {currentModelId || '默认模型'}
+                      </span>
+                      <ChevronDown className="pointer-events-none size-3.5 text-foreground-subtlest" />
+                    </button>
+                    {modelMenuOpen && (
+                      <>
+                        <div
+                          className="fixed inset-0 z-40"
+                          onClick={() => setModelMenuOpen(false)}
+                        />
+                        <div className="absolute bottom-full right-0 z-50 mb-2 max-h-80 w-72 overflow-y-auto rounded-xl border border-border bg-popover p-1.5 shadow-xl">
+                          <div className="flex items-center justify-between px-2 py-1 text-xs font-medium text-foreground-subtlest">
+                            <span>模型</span>
+                            {currentModelId && (
+                              <span className="truncate text-[11px] text-foreground-subtle">
+                                当前: {currentModelId}
+                              </span>
+                            )}
+                          </div>
+                          {modelList.length === 0 ? (
+                            <div className="px-2 py-2 text-[13px] text-foreground-subtle">
+                              暂无可用模型。请确认后端已配置 API Key。
+                            </div>
+                          ) : (
+                            modelList.map((m) => (
+                              <button
+                                key={`${m.provider}/${m.id}`}
+                                type="button"
+                                onClick={() => handleModelChange(m.id, m.provider)}
+                                className={cn(
+                                  'flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-hover',
+                                  m.id === currentModelId && 'bg-surface-hover'
+                                )}
+                              >
+                                <span className="flex min-w-0 flex-1 flex-col">
+                                  <span className="truncate font-medium">{m.name || m.id}</span>
+                                  <span className="truncate text-[11px] text-foreground-subtle">
+                                    {m.providerName}
+                                  </span>
+                                </span>
+                                {m.id === currentModelId && (
+                                  <Check className="size-3.5 shrink-0 text-brand" />
+                                )}
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      </>
+                    )}
+                  </div>
                   {/* 思考等级 */}
                   <span
                     className="flex h-7 shrink-0 w-fit items-center justify-between gap-1 rounded-lg px-1.5 py-1.5 text-[13px] whitespace-nowrap text-foreground-subtle"

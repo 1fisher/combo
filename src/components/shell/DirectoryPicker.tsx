@@ -19,9 +19,6 @@ interface DirectoryPickerProps {
   confirmLabel?: string;
   onOpenChange: (open: boolean) => void;
   onSelect: (path: string) => void;
-  /** 提供后端选择行时显示(创建项目场景)。 */
-  backend?: string;
-  onBackendChange?: (backend: string) => void;
 }
 
 /**
@@ -35,8 +32,6 @@ export function DirectoryPicker({
   confirmLabel = '选择此目录',
   onOpenChange,
   onSelect,
-  backend,
-  onBackendChange,
 }: DirectoryPickerProps) {
   const [path, setPath] = useState('');
   const [parent, setParent] = useState<string | null>(null);
@@ -155,22 +150,6 @@ export function DirectoryPicker({
               </ul>
             )}
           </div>
-          {onBackendChange && (
-            <div className="flex items-center gap-1.5">
-              <span className="shrink-0 text-[12px] text-foreground-subtle">后端</span>
-              <select
-                value={backend ?? 'combo-cli'}
-                onChange={(e) => onBackendChange(e.target.value)}
-                className="h-7 min-w-0 flex-1 rounded-lg border border-input-border bg-background px-1.5 text-[13px] outline-none"
-              >
-                <option value="combo-cli">Combo-cli</option>
-                <option value="crush">Crush</option>
-                <option value="opencode">OpenCode</option>
-                <option value="claude_code">Claude Code</option>
-                <option value="codex">Codex</option>
-              </select>
-            </div>
-          )}
         </div>
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)}>
