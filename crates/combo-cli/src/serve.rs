@@ -496,40 +496,47 @@ fn history_to_messages(history: &[Value]) -> Vec<Message> {
 // ---------- providers / model 切换 ----------
 
 /// GET /v1/workspaces/{id}/providers — 返回可用 provider 列表(含模型)。
+///
+/// 以内置 provider 为基准列表,再合并配置文件和 crush providers.json
+/// 中对应 provider 的 key/models 覆盖;不在内置列表中的 provider 不返回。
 async fn list_providers(State(state): State<AppState>) -> Json<Value> {
     let cfg = state.cfg.lock().unwrap().clone();
     let config_path = AppConfig::load_or_create(&crate::config::default_config_path())
         .unwrap_or_default();
 
-    // 收集所有 provider:配置文件 + crush providers.json + 内置
-    let mut all: Vec<ProviderInfo> = Vec::new();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // 内置 provider 作为基准(保持顺序)
+    let mut all: Vec<ProviderInfo> = providers::builtin_providers();
 
-    // 当前 provider 优先
-    all.push(cfg.provider.clone());
-    seen.insert(cfg.provider.id.clone());
-
-    // 配置文件中的自定义 providers
-    for (id, pc) in &config_path.providers {
-        if seen.insert(id.clone()) {
-            all.push(ProviderInfo::from_config(id, pc));
+    // 合并配置文件中的 providers(仅内置列表中已有的 id)
+    for p in &mut all {
+        if let Some(pc) = config_path.providers.get(&p.id) {
+            let from_cfg = ProviderInfo::from_config(&p.id, pc);
+            // 覆盖 key/endpoint/type/默认模型
+            if from_cfg.api_key.is_some() { p.api_key = from_cfg.api_key; }
+            if from_cfg.api_endpoint.is_some() { p.api_endpoint = from_cfg.api_endpoint; }
+            if from_cfg.provider_type.is_some() { p.provider_type = from_cfg.provider_type; }
+            if from_cfg.default_large_model_id.is_some() { p.default_large_model_id = from_cfg.default_large_model_id; }
+            if !from_cfg.models.is_empty() { p.models = from_cfg.models; }
         }
     }
 
-    // crush providers.json
+    // 合并 crush providers.json(仅内置列表中已有的 id)
     if let Ok(crush) = providers::load_crush_providers() {
-        for p in crush {
-            if seen.insert(p.id.clone()) {
-                all.push(p);
+        for p in &mut all {
+            if let Some(cp) = crush.iter().find(|cp| cp.id == p.id) {
+                if p.api_key.is_none() && cp.api_key.is_some() { p.api_key = cp.api_key.clone(); }
+                if p.api_endpoint.is_none() && cp.api_endpoint.is_some() { p.api_endpoint = cp.api_endpoint.clone(); }
+                if p.default_large_model_id.is_none() && cp.default_large_model_id.is_some() {
+                    p.default_large_model_id = cp.default_large_model_id.clone();
+                }
+                if p.models.is_empty() && !cp.models.is_empty() { p.models = cp.models.clone(); }
             }
         }
     }
 
-    // 内置 providers
-    for p in providers::builtin_providers() {
-        if seen.insert(p.id.clone()) {
-            all.push(p);
-        }
+    // 若当前运行时 provider 不在内置列表中,也加入(兼容旧配置)
+    if !all.iter().any(|p| p.id == cfg.provider.id) {
+        all.insert(0, cfg.provider.clone());
     }
 
     let arr: Vec<Value> = all
