@@ -340,15 +340,21 @@ pub async fn ensure_ws(state: &AppState, ws_id: &str) -> Option<String> {
     {
         Ok(r) if r.status().is_success() => r,
         Ok(r) => {
-            eprintln!(
-                "ensure_ws: crush 注册 workspace 失败(HTTP {}),path={}",
-                r.status(),
-                meta.path.display()
-            );
+            if state.crush_supervisor.is_some() {
+                eprintln!(
+                    "ensure_ws: crush 注册 workspace 失败(HTTP {}),path={}",
+                    r.status(),
+                    meta.path.display()
+                );
+            }
             return None;
         }
         Err(e) => {
-            eprintln!("ensure_ws: 转发注册请求到 crush 失败: {e}");
+            // crush 未托管(supervisor 为 None,通常指向不可达地址)时静默,
+            // 避免存量 crush 项目被访问时反复刷屏;显式托管时保留日志。
+            if state.crush_supervisor.is_some() {
+                eprintln!("ensure_ws: 转发注册请求到 crush 失败: {e}");
+            }
             return None;
         }
     };
@@ -359,7 +365,12 @@ pub async fn ensure_ws(state: &AppState, ws_id: &str) -> Option<String> {
     let v: Value = serde_json::from_slice(&bytes).unwrap_or_default();
     let new_id = v.get("id").and_then(|x| x.as_str()).unwrap_or("").to_string();
     if new_id.is_empty() {
-        eprintln!("ensure_ws: crush 注册响应缺少 id 字段,path={}", meta.path.display());
+        if state.crush_supervisor.is_some() {
+            eprintln!(
+                "ensure_ws: crush 注册响应缺少 id 字段,path={}",
+                meta.path.display()
+            );
+        }
         return None;
     }
     if new_id != ws_id {

@@ -6,12 +6,41 @@ use combo_proxy::combocli::ComboCliManager;
 use combo_proxy::{Backend, BackendRegistry, ComboCliBackend, MetaStore, Upstream};
 use futures_util::StreamExt;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Duration;
+
+/// 共享的隔离配置目录:serve 子进程在这里找不到任何 API key / MCP 配置,
+/// 保证测试走确定性的 error finish 路径,不真调外部 API、不连 MCP,
+/// 多个 serve 并行启动也不会因共享用户配置互相干扰。
+fn isolated_config_dir() -> &'static std::path::Path {
+    static DIR: OnceLock<std::path::PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "combo-cli-it-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("创建隔离配置目录");
+        // 预先写入最小配置:provider=openai 且无 api_key,serve 启动即报错。
+        std::fs::write(
+            dir.join("combo-cli.toml"),
+            "# 集成测试隔离配置\nprovider = \"openai\"\n",
+        )
+        .expect("写入隔离配置");
+        dir
+    })
+}
 
 /// 启动 combo-cli serve 并返回 (地址, 守护对象)。守护对象保持存活,
 /// 测试结束 drop 时强杀子进程,不残留孤儿进程。
 async fn start_combo_cli() -> Option<(std::net::SocketAddr, Arc<ComboCliManager>)> {
     let bin = std::env::var("COMBO_CLI_BIN").unwrap_or_else(|_| "combo-cli".into());
+    // 子进程继承本进程环境;隔离配置目录使 serve 不读用户真实配置。
+    std::env::set_var("COMBO_CONFIG_DIR", isolated_config_dir());
     let mgr = Arc::new(ComboCliManager::new(bin));
     match mgr.ensure_running().await {
         Ok(addr) => Some((addr, mgr)),
