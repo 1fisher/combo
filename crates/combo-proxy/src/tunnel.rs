@@ -143,7 +143,8 @@ async fn connect_and_serve(config: &TunnelClientConfig) -> anyhow::Result<()> {
     });
 
     let http_client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(300))
+        .connect_timeout(Duration::from_secs(10))
+        .tcp_keepalive(Some(Duration::from_secs(60)))
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
 

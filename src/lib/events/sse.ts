@@ -7,16 +7,25 @@ export type OnPayload = (env: EventEnvelope) => void;
 
 export interface EventSourceOpts {
   backoffMs?: number;
+  maxBackoffMs?: number;
   /** workspace 不存在(404)时回调,通常用于清除过期的选中态 */
   onGone?: () => void;
 }
+
+/** 页面从后台恢复后,超过此时长(毫秒)未收到数据则判定连接已 stale */
+const STALE_THRESHOLD_MS = 30_000;
 
 export class WorkspaceEventSource {
   private controller: AbortController | null = null;
   private stopped = false;
   connected = false;
   private readonly backoffMs: number;
+  private readonly maxBackoffMs: number;
   private readonly onGone?: () => void;
+  private lastDataAt = 0;
+  /** 当前退避等待的 resolve 函数,外部可调用以跳过等待立即重连 */
+  private resolveSleep: (() => void) | null = null;
+  private cleanupFns: Array<() => void> = [];
 
   constructor(
     private readonly workspaceId: string,
@@ -24,90 +33,150 @@ export class WorkspaceEventSource {
     opts?: EventSourceOpts
   ) {
     this.backoffMs = opts?.backoffMs ?? 1000;
+    this.maxBackoffMs = opts?.maxBackoffMs ?? 30_000;
     this.onGone = opts?.onGone;
   }
 
   start(): void {
     this.stopped = false;
+    this.setupLifecycleHandlers();
     void this.loop();
   }
 
   stop(): void {
     this.stopped = true;
+    this.cleanupFns.forEach((fn) => fn());
+    this.cleanupFns = [];
     this.controller?.abort();
     this.connected = false;
+  }
+
+  /**
+   * 立即中断当前等待或 stale 连接,触发重连。
+   * 在网络恢复(online 事件)或页面回到前台(visibilitychange)时调用。
+   */
+  private forceReconnect(): void {
+    // 情况 1: 正处于退避等待中 → 跳过等待立即重连
+    if (this.resolveSleep) {
+      this.resolveSleep();
+      return;
+    }
+    // 情况 2: 连接中但可能已 stale(长时间无数据)→ abort 强制重连
+    if (this.controller && Date.now() - this.lastDataAt > STALE_THRESHOLD_MS) {
+      this.controller.abort();
+    }
+  }
+
+  /** 监听页面可见性变化和网络恢复事件,触发立即重连 */
+  private setupLifecycleHandlers(): void {
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') this.forceReconnect();
+    };
+    const onOnline = () => this.forceReconnect();
+
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('online', onOnline);
+
+    this.cleanupFns.push(
+      () => document.removeEventListener('visibilitychange', onVisibility),
+      () => window.removeEventListener('online', onOnline),
+    );
   }
 
   private async loop(): Promise<void> {
     let delay = this.backoffMs;
     while (!this.stopped) {
+      let connected = false;
       try {
-        await this.consume();
+        connected = await this.consume();
         // 正常 EOF:短暂重连
       } catch {
         /* network error */
       }
       if (this.stopped) return;
-      await new Promise((r) => setTimeout(r, delay));
-      delay = Math.min(delay * 2, 30_000);
+      // 成功建立过连接则重置退避到初始值,避免重连间隔越来越长
+      if (connected) delay = this.backoffMs;
+      // 等待退避延迟,可被 forceReconnect 提前唤醒
+      await new Promise<void>((resolve) => {
+        this.resolveSleep = resolve;
+        setTimeout(resolve, delay);
+      });
+      this.resolveSleep = null;
+      delay = Math.min(delay * 2, this.maxBackoffMs);
     }
   }
 
-  private async consume(): Promise<void> {
+  /**
+   * 建立一次 SSE 连接并消费事件流,直到连接断开。
+   * @returns 是否成功建立过连接(用于退避重置判断)
+   */
+  private async consume(): Promise<boolean> {
     const controller = new AbortController();
     this.controller = controller;
-    // 等待代理地址就绪(未解析时异步解析),避免相对 URL 连到页面源
-    const base = await ensureProxyBaseUrl();
-    const url = `${base}/v1/workspaces/${this.workspaceId}/events?client_id=${encodeURIComponent(getClientId())}`;
-    const headers: Record<string, string> = { Accept: 'text/event-stream' };
-    const token = getAccessToken();
-    if (token) headers.Authorization = `Bearer ${token}`;
-    const res = await fetch(url, {
-      headers,
-      signal: controller.signal,
-    });
-    if (!res.ok || !res.body) {
-      if (res.status === 404) {
-        this.stopped = true;
-        this.onGone?.();
+    let didConnect = false;
+    try {
+      // 等待代理地址就绪(未解析时异步解析),避免相对 URL 连到页面源
+      const base = await ensureProxyBaseUrl();
+      const url = `${base}/v1/workspaces/${this.workspaceId}/events?client_id=${encodeURIComponent(getClientId())}`;
+      const headers: Record<string, string> = { Accept: 'text/event-stream' };
+      const token = getAccessToken();
+      if (token) headers.Authorization = `Bearer ${token}`;
+      const res = await fetch(url, {
+        headers,
+        signal: controller.signal,
+      });
+      if (!res.ok || !res.body) {
+        if (res.status === 404) {
+          this.stopped = true;
+          this.onGone?.();
+        }
+        throw new Error(`sse status ${res.status}`);
       }
-      throw new Error(`sse status ${res.status}`);
-    }
-    this.connected = true;
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = '';
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      let idx: number;
-      while ((idx = buf.indexOf('\n\n')) >= 0) {
-        const chunk = buf.slice(0, idx);
-        buf = buf.slice(idx + 2);
-        // SSE 规范:同一事件可有多行 data:,需用 \n 拼接为完整负载
-        const dataLines = chunk
-          .split('\n')
-          .filter((l) => l.startsWith('data:'))
-          .map((l) => l.slice(5));
-        if (dataLines.length === 0) continue;
-        const raw = dataLines.join('\n');
-        try {
-          const env = JSON.parse(raw.trim()) as EventEnvelope;
-          const inner = env.payload as { type?: string };
-          const ts = new Date().toISOString().slice(11, 23);
-          // [stream-debug] 完整 SSE 事件(含原始 JSON)
-          console.debug(
-            `[${ts}][sse] type="${env.type}" inner="${inner?.type}" data=${raw.trim().slice(0, 500)}`
-          );
-          this.onPayload(env);
-        } catch (e) {
-          console.warn('[sse] 事件解析失败', e);
+      didConnect = true;
+      this.connected = true;
+      this.lastDataAt = Date.now();
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        this.lastDataAt = Date.now();
+        buf += decoder.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = buf.indexOf('\n\n')) >= 0) {
+          const chunk = buf.slice(0, idx);
+          buf = buf.slice(idx + 2);
+          // SSE 规范:同一事件可有多行 data:,需用 \n 拼接为完整负载
+          const dataLines = chunk
+            .split('\n')
+            .filter((l) => l.startsWith('data:'))
+            .map((l) => l.slice(5));
+          if (dataLines.length === 0) continue;
+          const raw = dataLines.join('\n');
+          try {
+            const env = JSON.parse(raw.trim()) as EventEnvelope;
+            const inner = env.payload as { type?: string };
+            const ts = new Date().toISOString().slice(11, 23);
+            // [stream-debug] 完整 SSE 事件(含原始 JSON)
+            console.debug(
+              `[${ts}][sse] type="${env.type}" inner="${inner?.type}" data=${raw.trim().slice(0, 500)}`
+            );
+            this.onPayload(env);
+          } catch (e) {
+            console.warn('[sse] 事件解析失败', e);
+          }
         }
       }
+      const ts = new Date().toISOString().slice(11, 23);
+      console.debug(`[${ts}][sse] 连接断开 stopped=${this.stopped} workspace="${this.workspaceId}"`);
+      return true;
+    } catch (e) {
+      // abort 或网络错误:若此前已成功连接,则视为已连接过(用于退避重置)
+      if (didConnect) return true;
+      throw e;
+    } finally {
+      this.connected = false;
     }
-    this.connected = false;
-    const ts = new Date().toISOString().slice(11, 23);
-    console.debug(`[${ts}][sse] 连接断开 stopped=${this.stopped} workspace="${this.workspaceId}"`);
   }
 }
