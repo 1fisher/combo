@@ -1,7 +1,6 @@
 //! 配置文件:首次运行自动在用户目录生成,CLI 参数 > 配置文件 > 默认值。
 //!
-//! 路径遵循 XDG:`$XDG_CONFIG_HOME/combo/combo-cli.toml`(无 XDG 时
-//! `~/.config/combo/combo-cli.toml`),可用 `COMBO_CONFIG_DIR` 覆盖目录。
+//! 默认路径固定为 `~/.config/combo/combo-cli.toml`,可用 `COMBO_CONFIG_DIR` 覆盖目录。
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -78,18 +77,14 @@ pub struct LspServerConfig {
     pub env: Option<BTreeMap<String, String>>,
 }
 
-/// 配置文件路径。优先级:`COMBO_CONFIG_DIR` > `XDG_CONFIG_HOME` > `~/.config`。
+/// 配置文件路径。优先级:`COMBO_CONFIG_DIR` > `~/.config`。
+/// 默认固定为 `~/.config/combo/combo-cli.toml`(不走 XDG_CONFIG_HOME)。
 pub fn default_config_path() -> PathBuf {
     if let Ok(dir) = std::env::var("COMBO_CONFIG_DIR") {
         return PathBuf::from(dir).join("combo-cli.toml");
     }
-    let base = std::env::var("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-            PathBuf::from(home).join(".config")
-        });
-    base.join("combo").join("combo-cli.toml")
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    PathBuf::from(home).join(".config").join("combo").join("combo-cli.toml")
 }
 
 /// 配置文件内容。所有字段可选:未设置的项回退到 CLI 参数或默认值。

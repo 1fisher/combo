@@ -46,7 +46,7 @@ struct Cli {
     #[arg(long, global = true)]
     mcp_url: Option<String>,
 
-    /// 配置文件路径(默认 $XDG_CONFIG_HOME/combo/combo-cli.toml)
+    /// 配置文件路径(默认 ~/.config/combo/combo-cli.toml)
     #[arg(long, global = true)]
     config: Option<std::path::PathBuf>,
 

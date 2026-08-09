@@ -246,7 +246,7 @@ provided. combo-cli 同理:集成测试
    current-session/permissions-skip stub;无 API key 时也发
    `finish(reason=error)` + `run_complete` 保证前端 run 收尾)、`config
    path|init|import`(配置文件管理)。**配置文件自动生成**:首次运行在
-   `$XDG_CONFIG_HOME/combo/combo-cli.toml`(`COMBO_CONFIG_DIR` 覆盖目录,
+   `~/.config/combo/combo-cli.toml`(`COMBO_CONFIG_DIR` 覆盖目录,
    `--config` 覆盖路径)生成带注释的默认模板;优先级
    **CLI 参数 > 配置文件 > 内置默认值**,因此 `provider/preamble/tools`
    的 clap 参数是 `Option`,不能设 `default_value`,否则永远覆盖配置文件
