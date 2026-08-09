@@ -1,3 +1,9 @@
 [workspace]
 members = ["crates/combo-proxy", "crates/combo-relay", "src-tauri"]
 resolver = "2"
+
+[profile.release]
+opt-level = 2
+lto = "thin"
+codegen-units = 1
+strip = true

@@ -1,0 +1,25 @@
+target/
+node_modules/
+dist/
+.git/
+src-tauri/target/
+src-tauri/gen/
+
+*.log
+*.tsbuildinfo
+.env
+.env.*
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# 测试/E2E
+e2e/
+playwright-report/
+test-results/
+
+# 本地数据
+*.db
+*.db-journal

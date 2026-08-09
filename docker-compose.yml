@@ -1,0 +1,29 @@
+# combo-relay 中转服务器 — Docker Compose 部署
+#
+# 用法:
+#   docker compose up -d
+#
+# 自定义配置:
+#   COMBO_PORT=8443 COMBO_CORS_ORIGINS=https://combo.example.com docker compose up -d
+
+services:
+  combo-relay:
+    build: .
+    image: combo-relay:latest
+    container_name: combo-relay
+    restart: unless-stopped
+    ports:
+      - "${COMBO_PORT:-8080}:8080"
+    environment:
+      # CORS 白名单(逗号分隔);留空则全开放
+      COMBO_CORS_ORIGINS: "${COMBO_CORS_ORIGINS:-}"
+    healthcheck:
+      test: ["CMD", "true"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
