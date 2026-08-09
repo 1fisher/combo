@@ -5,7 +5,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// 内嵌 provider 定义(与 crush `providers` 字段同格式)。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -85,6 +85,115 @@ pub fn default_config_path() -> PathBuf {
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     PathBuf::from(home).join(".config").join("combo").join("combo-cli.toml")
+}
+
+/// 加载配置文件同目录下的 `.env` 到进程环境,供 `$ENV_VAR` 形式的
+/// api_key/base_url 引用取默认值。规则:
+/// - `.env` 不存在时自动生成带注释的模板(见 `write_default_dotenv`);
+/// - 已存在的环境变量优先,`.env` 不覆盖(仅补默认值);
+/// - 支持 `#` 注释、`export ` 前缀、单/双引号值、`$VAR`/`${VAR}` 展开
+///   (展开查进程环境,含本文件先前已加载的行);
+/// - 文件不存在(生成失败)或行格式非法时静默忽略。
+pub fn load_dotenv(config_path: &Path) {
+    let Some(dir) = config_path.parent() else { return };
+    let env_path = dir.join(".env");
+    if !env_path.exists() {
+        let _ = write_default_dotenv(&env_path); // 首次运行自动生成模板
+    }
+    let Ok(text) = std::fs::read_to_string(&env_path) else { return };
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let line = line.strip_prefix("export ").unwrap_or(line).trim();
+        let Some(eq) = line.find('=') else { continue };
+        let key = line[..eq].trim();
+        if !is_valid_key(key) {
+            continue;
+        }
+        if std::env::var(key).is_ok() {
+            continue; // 已有环境变量优先
+        }
+        let raw = line[eq + 1..].trim();
+        std::env::set_var(key, expand_vars(&unquote(raw)));
+    }
+}
+
+/// 生成默认 `.env` 模板(仅当文件不存在时由 `load_dotenv` 调用)。
+/// 模板默认启用 `RUST_LOG=info`(tracing 初始化前已加载,直接生效),
+/// 并提供各 provider 的 API key 占位注释。
+pub fn write_default_dotenv(env_path: &Path) -> Result<()> {
+    if env_path.exists() {
+        return Ok(());
+    }
+    let template = r#"# combo-cli .env —— 默认配置值(首次运行自动生成,与 combo-cli.toml 同目录)
+# 已存在的环境变量优先,.env 不覆盖;支持 # 注释、export 前缀、
+# 单/双引号值、$VAR / ${VAR} 展开。建议把敏感值放这里,配置中用 $KEY 引用。
+
+# ========== 日志 ==========
+# 日志级别:error / warn / info / debug / trace
+RUST_LOG=info
+
+# ========== API key(去掉 # 并填入实际值)==========
+# DEEPSEEK_API_KEY=sk-xxx
+# ZAI_API_KEY=sk-xxx
+# OPENCODE_API_KEY=sk-xxx
+"#;
+    if let Some(parent) = env_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(env_path, template)?;
+    Ok(())
+}
+
+/// 环境变量名:`[A-Za-z_][A-Za-z0-9_]*`。
+fn is_valid_key(key: &str) -> bool {
+    let mut chars = key.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// 去掉配对的首尾引号(单引号/双引号)。
+fn unquote(v: &str) -> String {
+    let b = v.as_bytes();
+    if b.len() >= 2 && ((b[0] == b'"' && b[b.len() - 1] == b'"') || (b[0] == b'\'' && b[b.len() - 1] == b'\'')) {
+        v[1..v.len() - 1].to_string()
+    } else {
+        v.to_string()
+    }
+}
+
+/// 展开 `$VAR` 与 `${VAR}`;未定义的变量展开为空串。
+fn expand_vars(s: &str) -> String {
+    let mut out = String::new();
+    let mut rest = s;
+    while let Some(dollar) = rest.find('$') {
+        out.push_str(&rest[..dollar]);
+        let after = &rest[dollar + 1..];
+        if let Some(inner) = after.strip_prefix('{') {
+            if let Some(end) = inner.find('}') {
+                out.push_str(&std::env::var(&inner[..end]).unwrap_or_default());
+                rest = &inner[end + 1..];
+                continue;
+            }
+        }
+        let end = after
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(after.len());
+        if end == 0 {
+            out.push('$');
+            rest = after;
+            continue;
+        }
+        out.push_str(&std::env::var(&after[..end]).unwrap_or_default());
+        rest = &after[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// 配置文件内容。所有字段可选:未设置的项回退到 CLI 参数或默认值。
@@ -291,6 +400,9 @@ pub fn write_default(path: &PathBuf, overwrite: bool) -> Result<()> {
 # 每个 provider 一个表,key = provider id;api_key 可为明文或 $ENV_VAR。
 # 未在此定义的 provider 会依次回退到 crush.json 的 providers、
 # ~/.local/share/crush/providers.json 与内置定义。
+# 提示:同目录的 .env 文件会在启动时加载到环境变量,建议把
+# DEEPSEEK_API_KEY 等敏感值放 .env(KEY=value,一行一个),
+# 这里用 $DEEPSEEK_API_KEY 引用即可。
 # [providers.opencode-zen]
 # type = "openai-compat"
 # api_key = "sk-xxx"
@@ -401,6 +513,66 @@ pub struct ResolvedConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn load_dotenv_sets_defaults_and_keeps_existing() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".env"),
+            "# 注释行\nDEEPSEEK_API_KEY = \"sk-test-123\"\nexport ZAI_KEY='zai-val'\nFOO=$DEEPSEEK_API_KEY-suffix\nBASE=\"$ZAI_KEY${ZAI_KEY}\"\n",
+        )
+        .unwrap();
+        std::env::set_var("KEEP_ME", "original");
+
+        load_dotenv(&dir.path().join("combo-cli.toml"));
+
+        assert_eq!(std::env::var("DEEPSEEK_API_KEY").unwrap(), "sk-test-123");
+        assert_eq!(std::env::var("ZAI_KEY").unwrap(), "zai-val");
+        assert_eq!(std::env::var("FOO").unwrap(), "sk-test-123-suffix");
+        assert_eq!(std::env::var("BASE").unwrap(), "zai-valzai-val");
+        assert_eq!(std::env::var("KEEP_ME").unwrap(), "original");
+        assert!(std::env::var_os("KEEP_ME").is_some(), "已有环境变量不被覆盖");
+
+        // 清理,避免污染其它测试
+        std::env::remove_var("DEEPSEEK_API_KEY");
+        std::env::remove_var("ZAI_KEY");
+        std::env::remove_var("FOO");
+        std::env::remove_var("BASE");
+    }
+
+    #[test]
+    fn load_dotenv_missing_file_generates_template() {
+        let dir = tempfile::tempdir().unwrap();
+        std::env::remove_var("RUST_LOG");
+        let before = std::env::var_os("DEEPSEEK_API_KEY").is_some();
+        load_dotenv(&dir.path().join("combo-cli.toml"));
+        let env_path = dir.path().join(".env");
+        assert!(env_path.exists(), "缺 .env 时应自动生成模板");
+        let text = std::fs::read_to_string(&env_path).unwrap();
+        assert!(text.contains("RUST_LOG=info"), "模板应启用 RUST_LOG=info");
+        assert_eq!(std::env::var("RUST_LOG").unwrap(), "info");
+        assert_eq!(
+            std::env::var_os("DEEPSEEK_API_KEY").is_some(),
+            before,
+            "只应加载模板里的 RUST_LOG,不应改动其它变量"
+        );
+        std::env::remove_var("RUST_LOG");
+    }
+
+    #[test]
+    fn load_dotenv_ignores_invalid_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".env"),
+            "NO_EQUALS\n1BAD=key\nGOOD_KEY=ok\n# 注释\n",
+        )
+        .unwrap();
+        load_dotenv(&dir.path().join("combo-cli.toml"));
+        assert!(std::env::var_os("NO_EQUALS").is_none());
+        assert!(std::env::var_os("1BAD").is_none());
+        assert_eq!(std::env::var("GOOD_KEY").unwrap(), "ok");
+        std::env::remove_var("GOOD_KEY");
+    }
 
     #[test]
     fn load_or_create_generates_file() {

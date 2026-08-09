@@ -134,6 +134,16 @@ enum LspAction {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    // 自动加载/生成配置文件(用户目录),命令行参数优先于文件
+    let config_path = cli
+        .config
+        .clone()
+        .unwrap_or_else(config::default_config_path);
+    // 先加载同目录 .env(为 $ENV_VAR 形式的 key/base_url 提供默认值,
+    // 也供下方 tracing 的 RUST_LOG 使用),再初始化日志与读配置文件
+    config::load_dotenv(&config_path);
+
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::INFO)
         .with_env_filter(
@@ -142,12 +152,6 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let cli = Cli::parse();
-    // 自动加载/生成配置文件(用户目录),命令行参数优先于文件
-    let config_path = cli
-        .config
-        .clone()
-        .unwrap_or_else(config::default_config_path);
     let file_cfg = config::AppConfig::load_or_create(&config_path)?;
     let resolved = file_cfg.resolve(
         cli.provider.as_deref(),

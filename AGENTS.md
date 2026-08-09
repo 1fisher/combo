@@ -250,7 +250,13 @@ provided. combo-cli 同理:集成测试
    `--config` 覆盖路径)生成带注释的默认模板;优先级
    **CLI 参数 > 配置文件 > 内置默认值**,因此 `provider/preamble/tools`
    的 clap 参数是 `Option`,不能设 `default_value`,否则永远覆盖配置文件
-   (合并逻辑在 `config.rs::resolve`)。内置工具
+   (合并逻辑在 `config.rs::resolve`)。**`.env` 默认值**:启动时
+   `config.rs::load_dotenv` 加载配置文件同目录的 `.env` 到进程环境
+   (已有环境变量优先,支持注释/引号/`$VAR` 展开),供 `$ENV_VAR`
+   形式的 api_key 引用取默认值;`.env` 不存在时由
+   `write_default_dotenv` 自动生成模板(默认启用 `RUST_LOG=info`,
+   含各 provider 的 key 占位),且 `.env` 在 tracing 初始化前加载
+   使 `RUST_LOG` 生效。内置工具
    (时间/日期)+ 可选 MCP 工具(`--mcp-command` stdio / `--mcp-url`
    streamable HTTP,经 rig `ToolServer`+`McpClientHandler` 注册)。rig 0.41
    注意:provider client 用 `Client::from_env()`(需 `rig::prelude::*` 的
