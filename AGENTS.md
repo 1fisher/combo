@@ -53,7 +53,9 @@ npm test                    # vitest run (jsdom; config lives inside vite.config
 npm run test:e2e            # Playwright; SKIPS itself unless COMBO_CRUSH_BIN is set
 npm run gen:api             # regenerate src/lib/api/types.ts from swagger/swagger.json
 cargo run -p combo-proxy --bin combo-proxy -- --port 18234   # proxy standalone (auto-spawns rune)
+cargo run -p combo-cli --bin combo-cli -- ask "你好"         # 自有 agent CLI(rig 驱动)
 cargo test -p combo-proxy   # Rust unit + integration tests
+cargo test -p combo-cli     # combo-cli 单元测试
 ```
 
 **Browser dev workflow (recommended):** terminal 1 `bash scripts/dev-proxy.sh`,
@@ -194,6 +196,42 @@ provided.
   桌面模式弹原生目录对话框,浏览器模式仅提示;e2e 改为经 API 创建工作区.
 
 ## Gotchas summary
+
+0. **combo-cli**(`crates/combo-cli`)是自有 agent CLI:基于 rig 0.41,
+   **provider 结构与 crush 的 providers.json 完全一致**(`providers.rs` 的
+   `ProviderInfo`/`ModelInfo`,字段:id/name/api_key/api_endpoint/type/
+   default_large_model_id/default_small_model_id/models)。`--provider` 按 id
+   解析,**查找顺序:配置文件内嵌 providers 数组(`config.rs` 的
+   `providers` 字段,同 crush 格式)→ `~/.local/share/crush/providers.json`
+   (`providers.rs::load_crush_providers`,`CRUSH_DATA_DIR` 可覆盖)→ 内置
+   定义(`providers.rs::builtin_providers`)**,支持 crush 的 40 个 provider
+   (opencode-zen/opencode-go/zai/deepseek/xai/zhipu/…)。`api_key`/`api_endpoint`
+   支持 `$ENV_VAR` 运行时展开(`providers.rs::expand_env`);agent 按
+   `type` 分派:anthropic→rig anthropic client、google→gemini、
+   其余(openai/openai-compat/azure…)→`openai::CompletionsClient` builder
+   (自定义 endpoint)。**opencode-zen**(crush 定义:
+   `https://opencode.ai/zen/v1`,默认模型 `deepseek-v4-flash-free`):key
+   从 `~/.local/share/opencode/auth.json` 的 `opencode` 条目自动回退
+   (id 为 opencode 或 opencode-zen 时,见 `agent.rs::AskConfig::api_key`),
+   或 `combo-cli config import` 一键导入到 combo 配置(provider=opencode)。
+   子命令:
+   `ask`(单轮流式)、`chat`(交互多轮流式,历史
+   持久化 `COMBO_DATA_DIR`/`XDG_DATA_HOME/combo/combo-cli.db`,表
+   `cli_conversations`/`cli_messages` 与 proxy 隔离)、`sessions list|show|rm`、
+   `serve`(RuneManager 式进程管理:`GET /v1/health` + `POST /v1/control`
+   优雅关闭 + `POST /v1/agent` 单轮问答,供 combo-proxy 托管)、`config
+   path|init|import`(配置文件管理)。**配置文件自动生成**:首次运行在
+   `$XDG_CONFIG_HOME/combo/combo-cli.toml`(`COMBO_CONFIG_DIR` 覆盖目录,
+   `--config` 覆盖路径)生成带注释的默认模板;优先级
+   **CLI 参数 > 配置文件 > 内置默认值**,因此 `provider/preamble/tools`
+   的 clap 参数是 `Option`,不能设 `default_value`,否则永远覆盖配置文件
+   (合并逻辑在 `config.rs::resolve`)。内置工具
+   (时间/日期)+ 可选 MCP 工具(`--mcp-command` stdio / `--mcp-url`
+   streamable HTTP,经 rig `ToolServer`+`McpClientHandler` 注册)。rig 0.41
+   注意:provider client 用 `Client::from_env()`(需 `rig::prelude::*` 的
+   `ProviderClient`+`AgentClientExt` trait 在作用域),agent 用
+   `tool_server_handle` 共享工具集;流式接口 `stream_prompt`/`stream_chat`
+   返回 `StreamingPromptRequest`,需 `.await` 后才得到 `Stream`。
 
 1. `npm run tauri dev` (README) is wrong as-is — no tauri npm script/CLI installed.
 2. Browser dev needs the proxy on `:18234`; that port is hard-coded as fallback in

@@ -1,0 +1,33 @@
+[package]
+name = "combo-cli"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "combo 自有 agent CLI:基于 rig 的多 provider 智能体命令行工具"
+
+[[bin]]
+name = "combo-cli"
+path = "src/main.rs"
+
+[dependencies]
+rig = { version = "0.41", features = ["rmcp"] }
+rmcp = { version = "2.2", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+futures = "0.3"
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+axum = { version = "0.7", features = ["ws"] }
+async-trait = "0.1"
+chrono = "0.4"
+toml = "0.8"
+dirs = "6"
+
+[dev-dependencies]
+tempfile = "3"

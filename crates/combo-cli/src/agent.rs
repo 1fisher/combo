@@ -1,0 +1,319 @@
+//! agent 核心:构建 agent(内置工具 + MCP 工具)、单轮 ask、交互式 chat。
+//!
+//! 由于 rig 各 provider 的 Client/CompletionModel 类型不同,统一走一个
+//! `build_agent` 泛型函数 + 顶层 provider 分发(macro 展开),避免类型爆炸。
+
+use crate::config::ResolvedConfig;
+use crate::mcp::{McpConnection, tool_server_with_builtin};
+use crate::providers::ProviderInfo;
+use crate::db;
+use anyhow::Result;
+use futures::StreamExt;
+use rig::agent::{Agent, MultiTurnStreamItem};
+use rig::client::ProviderClient;
+use rig::completion::{CompletionModel, GetTokenUsage, Message};
+use rig::prelude::AgentClientExt;
+use rig::streaming::{StreamedAssistantContent, StreamingChat, StreamingPrompt};
+use rig::tool::DynamicTool;
+use std::sync::Arc;
+
+/// 组装一个 agent:内置工具 + 可选 MCP 工具。
+///
+/// `client` 来自具体 provider;MCP 连接需要 ToolServerHandle 才能注册工具,
+/// 所以先建 ToolServer(带内置工具),MCP 连接后 agent 用该 handle。
+async fn build_agent<C>(
+    client: C,
+    model: &str,
+    preamble: &str,
+    builtin: Vec<DynamicTool>,
+    mcp: Option<(Option<String>, Option<String>)>,
+) -> Result<(
+    Agent<C::CompletionModel>,
+    Option<McpConnection>,
+)>
+where
+    C: AgentClientExt + Send + Sync + 'static,
+    C::CompletionModel: CompletionModel + Send + Sync + 'static,
+{
+    // 1. ToolServer:内置工具先进去
+    let handle = tool_server_with_builtin(&builtin);
+
+    // 2. MCP 连接(如有)注册工具到同一 handle
+    let mcp_conn = match mcp {
+        Some((cmd, url)) if cmd.is_some() || url.is_some() => {
+            Some(crate::mcp::connect(cmd.as_deref(), url.as_deref(), handle.clone()).await?)
+        }
+        _ => None,
+    };
+
+    // 3. agent 通过 tool_server_handle 共享工具
+    let agent = client
+        .agent(model)
+        .preamble(preamble)
+        .tool_server_handle(handle)
+        .build();
+
+    Ok((agent, mcp_conn))
+}
+
+/// 单轮问答配置。
+/// 单轮问答配置:已解析出 provider 信息、模型、key、endpoint。
+#[derive(Clone)]
+pub struct AskConfig {
+    pub provider: ProviderInfo,
+    pub model: String,
+    pub preamble: String,
+    pub tools: bool,
+    pub mcp_command: Option<String>,
+    pub mcp_url: Option<String>,
+    /// 显式 API key(配置文件 api_key 字段);优先于 provider 定义。
+    pub explicit_api_key: Option<String>,
+    /// 显式 base_url(配置文件 base_url 字段);优先于 provider 定义。
+    pub explicit_base_url: Option<String>,
+}
+
+impl AskConfig {
+    /// 从合并后的配置 + 解析出的 ProviderInfo 构造。
+    pub fn from_resolved(r: &ResolvedConfig, provider: ProviderInfo) -> Self {
+        let model = r
+            .model
+            .clone()
+            .unwrap_or_else(|| provider.default_model());
+        Self {
+            provider,
+            model,
+            preamble: r.preamble.clone(),
+            tools: r.tools,
+            mcp_command: r.mcp_command.clone(),
+            mcp_url: r.mcp_url.clone(),
+            explicit_api_key: r.api_key.clone(),
+            explicit_base_url: r.base_url.clone(),
+        }
+    }
+
+    /// 解析最终 API key:CLI/配置显式值 > provider 定义(支持 $ENV)> opencode auth.json。
+    pub fn api_key(&self) -> Result<String> {
+        if let Some(k) = self.explicit_api_key.as_deref().filter(|k| !k.is_empty()) {
+            return Ok(k.to_string());
+        }
+        if let Some(k) = self.provider.resolved_api_key().filter(|k| !k.is_empty()) {
+            return Ok(k);
+        }
+        // opencode zen(内置 id 或 crush 的 opencode-zen)回退到 opencode auth.json
+        if self.provider.id == "opencode" || self.provider.id == "opencode-zen" {
+            if let Some(k) = crate::config::read_opencode_key("opencode")?.filter(|k| !k.is_empty()) {
+                return Ok(k);
+            }
+        }
+        anyhow::bail!(
+            "提供商 `{}` 缺少 API key:请设置 {} 环境变量,或 `combo-cli config import`,或配置 api_key",
+            self.provider.id,
+            self.provider.api_key.as_deref().unwrap_or("对应环境变量")
+        )
+    }
+
+    /// 解析最终 endpoint:显式 base_url > provider 定义(支持 $ENV)> 默认。
+    pub fn endpoint(&self) -> String {
+        if let Some(u) = self.explicit_base_url.as_deref().filter(|u| !u.is_empty()) {
+            return u.to_string();
+        }
+        self.provider
+            .resolved_endpoint()
+            .unwrap_or_else(|| "https://api.openai.com/v1".to_string())
+    }
+}
+
+/// 单轮问答:返回最终答案。
+pub async fn ask_answer(cfg: &AskConfig, question: &str) -> Result<String> {
+    let builtin = if cfg.tools {
+        crate::tools::builtin_tools()
+    } else {
+        Vec::new()
+    };
+    let mcp = (cfg.mcp_command.clone(), cfg.mcp_url.clone());
+    let ptype = cfg.provider.provider_type.as_deref().unwrap_or("openai");
+
+    match ptype {
+        "anthropic" => {
+            let client = rig::providers::anthropic::Client::from_env()?;
+            let (agent, _mcp) =
+                build_agent(client, &cfg.model, &cfg.preamble, builtin, Some(mcp)).await?;
+            ask_one(&agent, question).await
+        }
+        "google" => {
+            let client = rig::providers::gemini::Client::from_env()?;
+            let (agent, _mcp) =
+                build_agent(client, &cfg.model, &cfg.preamble, builtin, Some(mcp)).await?;
+            ask_one(&agent, question).await
+        }
+        // openai / openai-compat / 其它一律走 OpenAI 兼容协议
+        _ => {
+            let key = cfg.api_key()?;
+            let base = cfg.endpoint();
+            let builder = rig::providers::openai::CompletionsClient::builder()
+                .api_key(key)
+                .base_url(base);
+            let client = builder
+                .build()
+                .map_err(|e| anyhow::anyhow!("创建 client 失败: {e}"))?;
+            let (agent, _mcp) =
+                build_agent(client, &cfg.model, &cfg.preamble, builtin, Some(mcp)).await?;
+            ask_one(&agent, question).await
+        }
+    }
+}
+
+/// 单轮问答:直接打印最终结果。
+pub async fn ask_with(cfg: &AskConfig, question: &str) -> Result<()> {
+    let answer = ask_answer(cfg, question).await?;
+    println!("{answer}");
+    Ok(())
+}
+
+/// 泛型单轮问答(流式打印)。
+async fn ask_one<M>(agent: &Agent<M>, question: &str) -> Result<String>
+where
+    M: CompletionModel + 'static,
+    M::StreamingResponse: GetTokenUsage,
+{
+    let mut stream = agent.stream_prompt(question).await;
+    let mut out = String::new();
+    while let Some(item) = stream.next().await {
+        match item? {
+            MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(t)) => {
+                out.push_str(&t.text);
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
+/// 交互式多轮会话:读取 stdin,流式输出,消息持久化到 sqlite。
+pub async fn chat_loop(cfg: &AskConfig) -> Result<()> {
+    let model = cfg.model.clone();
+    let builtin = if cfg.tools {
+        crate::tools::builtin_tools()
+    } else {
+        Vec::new()
+    };
+    let mcp_cfg = (cfg.mcp_command.clone(), cfg.mcp_url.clone());
+    let preamble = cfg.preamble.clone();
+    let provider_id = cfg.provider.id.clone();
+    let ptype = cfg.provider.provider_type.clone().unwrap_or_else(|| "openai".into());
+
+    // 新建一个会话
+    let db = db::CliDb::open(&db::default_db_path())?;
+    let session_id = uuid::Uuid::new_v4().to_string();
+    db.create_conversation(&session_id, "cli 会话", &provider_id, &model)?;
+    println!("会话已创建:{session_id}(Ctrl-D 退出)");
+
+    let mut history: Vec<Message> = Vec::new();
+    let (agent, mcp_conn): (Box<dyn AnyAgent>, Option<McpConnection>) = match ptype.as_str() {
+        "anthropic" => {
+            let client = rig::providers::anthropic::Client::from_env()?;
+            let (a, m) = build_agent(client, &model, &preamble, builtin, Some(mcp_cfg)).await?;
+            (Box::new(Arc::new(a)), m)
+        }
+        "google" => {
+            let client = rig::providers::gemini::Client::from_env()?;
+            let (a, m) = build_agent(client, &model, &preamble, builtin, Some(mcp_cfg)).await?;
+            (Box::new(Arc::new(a)), m)
+        }
+        _ => {
+            let key = cfg.api_key()?;
+            let base = cfg.endpoint();
+            let builder = rig::providers::openai::CompletionsClient::builder()
+                .api_key(key)
+                .base_url(base);
+            let client = builder
+                .build()
+                .map_err(|e| anyhow::anyhow!("创建 client 失败: {e}"))?;
+            let (a, m) = build_agent(client, &model, &preamble, builtin, Some(mcp_cfg)).await?;
+            (Box::new(Arc::new(a)), m)
+        }
+    };
+    // 保持 MCP 连接存活到会话结束
+    let _mcp_conn = mcp_conn;
+
+    use std::io::{BufRead, Write};
+    let stdin = std::io::stdin();
+    let mut input = stdin.lock();
+
+    loop {
+        print!("你: ");
+        std::io::stdout().flush()?;
+        let mut line = String::new();
+        if input.read_line(&mut line)? == 0 {
+            break; // EOF
+        }
+        let line = line.trim().to_string();
+        if line.is_empty() {
+            continue;
+        }
+        if line == "exit" || line == "退出" {
+            break;
+        }
+
+        // 持久化用户消息
+        db.append_message(&session_id, "user", &line)?;
+        history.push(Message::user(&line));
+
+        print!("助手: ");
+        std::io::stdout().flush()?;
+        let answer = agent
+            .chat_stream(&line, &history, &db, &session_id)
+            .await?;
+        history.push(Message::assistant(&answer));
+        println!();
+    }
+    println!("\n会话结束,记录已保存。");
+    Ok(())
+}
+
+/// 盒子化 agent 的统一接口(供 chat_loop 使用)。
+#[async_trait::async_trait]
+trait AnyAgent: Send + Sync {
+    async fn chat_stream(
+        &self,
+        question: &str,
+        history: &[Message],
+        db: &db::CliDb,
+        session_id: &str,
+    ) -> Result<String>;
+}
+
+#[async_trait::async_trait]
+impl<M> AnyAgent for Arc<Agent<M>>
+where
+    M: CompletionModel + Send + Sync + 'static,
+    M::StreamingResponse: GetTokenUsage,
+{
+    async fn chat_stream(
+        &self,
+        question: &str,
+        history: &[Message],
+        db: &db::CliDb,
+        session_id: &str,
+    ) -> Result<String> {
+        let mut stream = self.stream_chat(question, history.to_vec()).await;
+        let mut out = String::new();
+        while let Some(item) = stream.next().await {
+            match item? {
+                MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(t)) => {
+                    out.push_str(&t.text);
+                    print!("{}", t.text);
+                    std::io::Write::flush(&mut std::io::stdout()).ok();
+                }
+                MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall {
+                    ..
+                }) => {
+                    // 工具调用结果会由 rig 自动回填,这里可提示
+                }
+                _ => {}
+            }
+        }
+        db.append_message(session_id, "assistant", &out)?;
+        Ok(out)
+    }
+}
