@@ -25,7 +25,7 @@ tsc: ## TypeScript 类型检查 (tsc -b)
 test: ## 运行单元测试 (Vitest)
 	npm test
 
-test-e2e: ## 运行 E2E 测试 (需要 COMBO_CRUSH_BIN)
+test-e2e: ## 运行 E2E 测试 (需要 COMBO_CLI_BIN)
 	npm run test:e2e
 
 gen-api: ## 从 swagger.json 重新生成 API 类型

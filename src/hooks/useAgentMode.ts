@@ -3,7 +3,7 @@ import { getPermissionSkip, setPermissionSkip } from '../lib/api';
 import { useAgentStore } from '../stores/agentStore';
 
 /**
- * 根据 crush workspace 的 yolo / permissions-skip 状态同步前端 agentMode。
+ * 根据 workspace 的 yolo / permissions-skip 状态同步前端 agentMode。
  * 工作区切换时自动检测:若后端已 skip(等同 yolo),前端也保持 yolo;
  * 否则根据已有 agentMode 向后端写入对应的 skip 状态。
  */

@@ -2,7 +2,7 @@
 //!
 //! Claude Code 是 CLI 工具(无 HTTP 服务器)。本模块:
 //! - 为每条消息 spawn `claude -p --output-format stream-json` 子进程
-//! - 解析 newline-delimited JSON 事件,翻译为 crush 双层信封
+//! - 解析 newline-delimited JSON 事件,翻译为 combo 双层信封
 //! - 通过 broadcast channel 把事件推给 SSE 连接
 //! - 维护 combo session_id ↔ claude session_id 映射(用于 --resume)
 

@@ -1,7 +1,7 @@
 //! skills 支持:扫描配置的 skills 目录,解析 SKILL.md 的 frontmatter,
 //! 把可用 skill 注入到 agent 的 preamble,并提供 `skills list` 子命令。
 //!
-//! 目录约定与 crush 一致:每个 skill 一个目录,内含 `SKILL.md`,
+//! 目录约定:每个 skill 一个目录,内含 `SKILL.md`,
 //! frontmatter 含 `name`/`description`。
 
 use crate::config::ResolvedConfig;
@@ -30,13 +30,12 @@ struct Frontmatter {
     hidden: Option<bool>,
 }
 
-/// 默认 skills 搜索路径(与 crush 一致)。
+/// 默认 skills 搜索路径。
 pub fn default_skills_paths() -> Vec<String> {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     vec![
-        format!("{home}/.config/crush/skills"),
-        format!("{home}/.crush/skills-store"),
-        "./.crush/skills".to_string(),
+        format!("{home}/.config/combo/skills"),
+        "./.combo/skills".to_string(),
     ]
 }
 
@@ -119,7 +118,7 @@ pub fn skills_preamble(cfg: &ResolvedConfig) -> String {
     if skills.is_empty() {
         return String::new();
     }
-    let mut out = String::from("\n\n可用 skills(与 crush 通用,按需在回答中提及即可):\n");
+    let mut out = String::from("\n\n可用 skills(按需在回答中提及即可):\n");
     for s in &skills {
         let desc = s.description.trim();
         if desc.is_empty() {

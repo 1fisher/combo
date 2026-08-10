@@ -18,7 +18,7 @@ export type PayloadType = (typeof PAYLOAD_TYPES)[number];
 
 export type EventKind = 'created' | 'updated' | 'deleted';
 
-// rune SSE 信封:外层 type 是 PayloadType,payload 内层是
+// 后端 SSE 信封:外层 type 是 PayloadType,payload 内层是
 // { type: created|updated|deleted, payload: <真实数据> }
 export interface EventEnvelope {
   type: PayloadType;

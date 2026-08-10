@@ -2,10 +2,10 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { test, expect } from '@playwright/test';
 
-const hasCrush = !!process.env.COMBO_CRUSH_BIN;
+const hasCli = !!process.env.COMBO_CLI_BIN;
 
 test.describe('M1 vertical slice', () => {
-  test.skip(!hasCrush, 'set COMBO_CRUSH_BIN to run against a real rune server');
+  test.skip(!hasCli, 'set COMBO_CLI_BIN to run against a real combo-cli server');
 
   test('create workspace -> session -> agent run -> permission dialog', async ({
     page,
@@ -14,7 +14,7 @@ test.describe('M1 vertical slice', () => {
     const tmp = process.env.COMBO_IT_DIR ?? '/tmp/combo-e2e';
     // 侧边栏显示项目名(basename),而不是完整路径
     const projName = tmp.split('/').filter(Boolean).pop()!;
-    // rune 会在工作区目录内持久化状态(.crush/),每次运行前清空,避免会话序号/标题残留
+    // 每次运行前清空,避免会话序号/标题残留
     rmSync(tmp, { recursive: true, force: true });
     mkdirSync(tmp, { recursive: true });
 
@@ -29,7 +29,7 @@ test.describe('M1 vertical slice', () => {
         await fetch(`http://127.0.0.1:18234/v1/workspaces?client_id=${clientId}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path: dir, client_id: clientId, backend: 'crush' }),
+          body: JSON.stringify({ path: dir, client_id: clientId, backend: 'combo-cli' }),
         });
       },
       { dir: tmp, clientId: cid }

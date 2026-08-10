@@ -14,7 +14,6 @@ import {
   MoreHorizontal,
   Pencil,
   Plus,
-  RefreshCw,
   Search,
   Settings,
   Smartphone,
@@ -36,7 +35,6 @@ import { useSessions } from '../../hooks/useSessions';
 import { useActiveWorkspaceId } from '../../hooks/useActiveWorkspaceId';
 import { useAgentStore } from '../../stores/agentStore';
 import { useConnectionStore } from '../../stores/connectionStore';
-import { ensureCrush } from '../../lib/api';
 import { isTauri } from '../../lib/connection';
 import { confirmDialog } from '../../lib/confirm';
 import { ConversationList } from './ConversationList';
@@ -247,8 +245,6 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
     name: string;
   } | null>(null);
   const [deleting, setDeleting] = useState(false);
-  // 手动重启 crush
-  const [restarting, setRestarting] = useState(false);
   // 更换目录对话框
   const [pathTarget, setPathTarget] = useState<{
     id: string;
@@ -371,21 +367,6 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
       setSidebarError(e instanceof Error ? e.message : String(e));
     } finally {
       setDeleting(false);
-    }
-  }
-
-  async function restartCrush() {
-    setRestarting(true);
-    setSidebarError(null);
-    try {
-      const r = await ensureCrush();
-      if (!r.healthy) {
-        setSidebarError('crush 重启后仍不可用,请检查 crush 是否已安装');
-      }
-    } catch (e) {
-      setSidebarError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setRestarting(false);
     }
   }
 
@@ -757,24 +738,11 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
           </span>
         </button>
         <div className="flex shrink-0 items-center gap-1.5">
-          {connStatus !== 'connected' && (
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="shrink-0 text-foreground-subtle hover:bg-surface-hover hover:text-foreground"
-              aria-label="重启 crush 服务"
-              title="重启 crush 服务"
-              onClick={() => void restartCrush()}
-              disabled={restarting}
-            >
-              <RefreshCw className={cn('size-4', restarting && 'animate-spin')} />
-            </Button>
-          )}
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="shrink-0 text-foreground-subtle hover:bg-surface-hover hover:text-foreground"
-            aria-label="移动端远程控制"
+        <Button
+        variant="ghost"
+        size="icon-sm"
+        className="shrink-0 text-foreground-subtle hover:bg-surface-hover hover:text-foreground"
+        aria-label="移动端远程控制"
             title="移动端远程控制"
             onClick={() => setMobileConnectOpen(true)}
           >
@@ -894,8 +862,7 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
           <DialogHeader>
             <DialogTitle>更换目录</DialogTitle>
             <DialogDescription>
-              为「{pathTarget?.name}」指定新的绑定目录。更换后,将重新注册到 crush;
-              会话记录会保留并迁移到新 workspace。
+              为「{pathTarget?.name}」指定新的绑定目录;会话记录会保留并迁移到新 workspace。
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-2">

@@ -1,5 +1,4 @@
 use crate::auth;
-use crate::control;
 use crate::fs;
 use crate::git;
 use crate::handler::proxy;
@@ -38,7 +37,6 @@ pub fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/v1/auth/token/revoke", delete(auth::revoke_token))
         .route("/v1/skills", get(skills::list))
         .route("/v1/terminal", get(terminal::terminal_default))
-        .route("/v1/control/ensure-crush", post(control::ensure_crush))
         .route(
             "/v1/relay/start",
             post(relay::start_relay),

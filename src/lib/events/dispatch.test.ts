@@ -124,7 +124,7 @@ describe('applyEvent', () => {
       created_at: 1,
       updated_at: 1,
     });
-    // rune 回传真实用户消息(不同 id)
+    // 后端回传真实用户消息(不同 id)
     applyEvent(s, {
       type: 'message',
       payload: {

@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Api } from '../lib/api/types';
 
-/** crush 返回秒级时间戳,前端用毫秒;统一归一化为毫秒。 */
+/** 统一归一化秒/毫秒时间戳为毫秒。 */
 function toMs(ts: number): number {
   return ts > 1e12 ? ts : ts * 1000;
 }
@@ -22,7 +22,7 @@ export interface SessionRuntime {
   queued: boolean;
 }
 
-/** Agent 模式:与 crush 的 permission mode 对齐 */
+/** Agent 模式:与后端的 permission mode 对齐 */
 export type AgentMode = 'yolo' | 'build' | 'edit' | 'plan';
 
 /** yolo 模式自动放行全部权限;edit 模式自动放行写操作(build/edit 工具) */
@@ -37,7 +37,7 @@ export const WRITE_TOOL_NAMES = new Set([
 
 interface AgentState {
   activeWorkspaceId: string | null;
-  /** 上次选中项目的路径(crush 重启后 ID 会变,用路径做恢复) */
+  /** 上次选中项目的路径(后端重启后 ID 可能变化,用路径做恢复) */
   lastWorkspacePath: string | null;
   setActiveWorkspace: (id: string | null) => void;
   setLastWorkspacePath: (path: string | null) => void;
@@ -92,7 +92,7 @@ export const useAgentStore = create<AgentState>()(
       const idx = rt.messages.findIndex((x) => x.id === m.id);
       // 收到 finish part 的消息视为该条流式结束,
       // 不再依赖 run_complete 事件(可能延迟或丢失)
-      // rune 返回的消息可能缺少 parts 字段(生成类型为 parts?: unknown[]),需兜底
+      // 后端返回的消息可能缺少 parts 字段(生成类型为 parts?: unknown[]),需兜底
       const parts = m.parts ?? [];
       const hasFinish = parts.some((p) => p.type === 'finish');
       const vm: MessageVM = {

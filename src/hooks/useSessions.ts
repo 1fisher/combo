@@ -46,7 +46,7 @@ export function useSessions(workspaceId: string | null) {
       try {
         await setCurrentSession(workspaceId, sessionId);
       } catch {
-        /* rune 离线时不阻塞前端切换 */
+        /* 后端离线时不阻塞前端切换 */
       }
     }
   }

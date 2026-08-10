@@ -4,7 +4,6 @@
 # 用法:
 #   bash scripts/dev-backend.sh            # 端口 18234(与 dev-proxy.sh 配套)
 #   bash scripts/dev-backend.sh 19000      # 自定义端口
-#   COMBO_CRUSH_BIN=/path/to/crush bash scripts/dev-backend.sh   # 顺带拉起存量 crush
 set -euo pipefail
 
 PORT="${1:-${COMBO_PROXY_PORT:-18234}}"

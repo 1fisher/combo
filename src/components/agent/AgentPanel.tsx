@@ -89,7 +89,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
     try {
       await removeSession(sid);
     } catch {
-      /* rune 离线时删除可能失败,本地状态已清理 */
+      /* 后端离线时删除可能失败,本地状态已清理 */
     }
   }
 
@@ -145,7 +145,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
       st.markRun(sid!, runId, 'running');
     } catch (e) {
       const err = e as { status?: number; message?: string };
-      // crush 重启后会话丢失(404):若是复用的旧会话则自动重建后重试一次
+      // 后端重启后会话丢失(404):若是复用的旧会话则自动重建后重试一次
       if (reused && err?.status === 404) {
         st.deleteMessage(sid!, `local-${runId}`);
         try {

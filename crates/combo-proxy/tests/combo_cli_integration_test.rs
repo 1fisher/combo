@@ -52,12 +52,13 @@ async fn start_combo_cli() -> Option<(std::net::SocketAddr, Arc<ComboCliManager>
 }
 
 fn make_state(addr: std::net::SocketAddr) -> combo_proxy::AppState {
+    let mut reg = BackendRegistry::new();
+    reg.set_combo_cli(Arc::new(ComboCliBackend::new(
+        Upstream::Tcp(addr),
+    )));
     let state = combo_proxy::AppState {
         meta: Arc::new(MetaStore::new()),
-        registry: Arc::new(BackendRegistry::new(Arc::new(ComboCliBackend::new(
-            Upstream::Tcp(addr),
-        )))),
-        crush_supervisor: None,
+        registry: Arc::new(reg),
         browse_root: None,
         relay: combo_proxy::RelayManager::new(),
         local_port: 0,

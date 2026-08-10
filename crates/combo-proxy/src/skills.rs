@@ -1,4 +1,4 @@
-//! 技能列表服务:扫描本地 `~/.config/crush/skills/` 目录,
+//! 技能列表服务:扫描本地技能目录,
 //! 读取每个技能子目录中的 `SKILL.md` frontmatter(name + description),
 //! 返回 JSON 列表供前端展示与开关。
 
@@ -7,16 +7,16 @@ use axum::http::{header, StatusCode};
 use axum::response::Response;
 use serde_json::json;
 use std::path::PathBuf;
-/// crush 技能目录:`~/.config/crush/skills/`
+/// 技能目录:`~/.config/combo/skills/`
 fn skills_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("CRUSH_SKILLS_DIR") {
+    if let Ok(dir) = std::env::var("COMBO_SKILLS_DIR") {
         return PathBuf::from(dir);
     }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     let config_base = std::env::var("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(&home).join(".config"));
-    config_base.join("crush").join("skills")
+    config_base.join("combo").join("skills")
 }
 
 /// 从 `SKILL.md` 内容中解析 YAML frontmatter 的 `name` 和 `description`。

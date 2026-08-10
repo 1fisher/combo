@@ -127,7 +127,7 @@ impl AskConfig {
         if let Some(k) = self.provider.resolved_api_key().filter(|k| !k.is_empty()) {
             return Ok(k);
         }
-        // opencode zen(内置 id 或 crush 的 opencode-zen)回退到 opencode auth.json
+        // opencode zen(内置 id)回退到 opencode auth.json
         if self.provider.id == "opencode" || self.provider.id == "opencode-zen" {
             if let Some(k) = crate::config::read_opencode_key("opencode")?.filter(|k| !k.is_empty()) {
                 return Ok(k);

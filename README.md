@@ -10,7 +10,7 @@
 **一个界面,多个 Agent 后端。**
 
 combo 是一款开源的多 Agent IDE 桌面应用:用统一的界面同时驱动
-[crush (rune)](https://charm.sh/crush)、[OpenCode](https://github.com/sst/opencode)、
+[combo-cli](crates/combo-cli)(combo 自有 agent,rig 驱动)、[OpenCode](https://github.com/sst/opencode)、
 [Claude Code](https://docs.anthropic.com/en/docs/claude-code) 等 coding agent,
 在一个工作区里并发跑多个会话、对比不同模型的输出。
 
@@ -24,7 +24,7 @@ JSON-RPC)都在代理层吸收,前端永远只面对一套统一的 REST + SSE �
 
 ## 功能特性
 
-- 🤖 **多后端统一前端** —— 在同一个 UI 里切换 / 并发使用 crush、OpenCode、Claude Code、Codex。
+- 🤖 **多后端统一前端** —— 在同一个 UI 里切换 / 并发使用 combo-cli、OpenCode、Claude Code、Codex。
   代理层为每个后端实现 adapter,把原生协议翻译成 combo 统一的消息 / 工具 / 权限 / SSE 模型。
 - 💬 **多会话并发** —— 每个工作区可同时打开多个会话,SSE 实时推送,按 `sessionId` 分片管理状态。
 - 🛠️ **工具调用与权限弹窗** —— agent 的工具调用、权限请求、提问都在 UI 内以模态队列呈现,
@@ -32,7 +32,7 @@ JSON-RPC)都在代理层吸收,前端永远只面对一套统一的 REST + SSE �
 - 📂 **内置文件浏览与编辑** —— 代理层提供本地文件读写服务(目录列表 / 读取 / 原子写入),
   前端 FileExplorer + EditorPane 可直接查看与编辑工作区文件。
 - 🖥️ **纯浏览器可开发** —— 前端不依赖任何 Tauri API,`npm run dev` 即可在浏览器中完整调试。
-- 🔌 **进程托管** —— Tauri 壳内 `RuneManager` 自动 spawn / 守护 agent 子进程,
+- 🔌 **进程托管** —— Tauri 壳内 `ComboCliManager` 自动 spawn / 守护 combo-cli serve 子进程,
   健康轮询、崩溃自动重启、退出优雅关停。
 - 🌊 **SSE 流式透传** —— 代理层不缓冲流式响应,token 逐字到达前端。
 
@@ -47,15 +47,15 @@ JSON-RPC)都在代理层吸收,前端永远只面对一套统一的 REST + SSE �
                            ▼
 ┌──────────────────────────────────────────────────────────────┐
 │            combo-proxy  (axum 反向代理 + adapter 层)          │
-│   Backend trait  →  CrushBackend / OpenCodeBackend /          │
+│   Backend trait  →  ComboCliBackend / OpenCodeBackend /          │
 │                    ClaudeCodeBackend / CodexBackend           │
 │   · 协议翻译 (REST / stdio JSON / JSON-RPC → 统一模型)        │
 │   · CORS + SSE 流式透传                                       │
 │   · 本地文件读写服务 (fs.rs)                                  │
 └──────┬───────────────┬──────────────┬──────────────┬─────────┘
        ▼               ▼              ▼              ▼
-  crush server    opencode serve   claude -p      codex app-server
-  (unix socket)   (:4096 HTTP)    (stdio JSON)   (JSON-RPC)
+  combo-cli serve   opencode serve   claude -p      codex app-server
+  (:4096 HTTP)      (:4096 HTTP)    (stdio JSON)   (JSON-RPC)
 ```
 
 三大组件:
@@ -63,7 +63,7 @@ JSON-RPC)都在代理层吸收,前端永远只面对一套统一的 REST + SSE �
 | 组件 | 目录 | 说明 |
 |------|------|------|
 | **combo-proxy** | `crates/combo-proxy/` | Rust 反向代理 + adapter 层。监听 `127.0.0.1:0` 随机端口,把 `/v1/*` 路由到工作区绑定的后端 adapter;SSE 流式透传;CORS 放行 `tauri://localhost` 与 `http://localhost:5173`。 |
-| **Tauri 壳** | `src-tauri/` | 启动 `RuneManager` + 代理,健康轮询,崩溃自动重启,退出优雅关停;代理端口通过 Tauri event 推送给前端。 |
+| **Tauri 壳** | `src-tauri/` | 启动 `ComboCliManager` + 代理,健康轮询,崩溃自动重启,退出优雅关停;代理端口通过 Tauri event 推送给前端。 |
 | **前端** | `src/` | React 19 + Vite + shadcn/ui(Radix + Tailwind)。TanStack Query 管 REST,Zustand 按 `sessionId` 分片管 SSE 实时状态。 |
 
 ## 运行前提
@@ -76,7 +76,6 @@ JSON-RPC)都在代理层吸收,前端永远只面对一套统一的 REST + SSE �
   - Windows:Microsoft C++ Build Tools 与 WebView2
 - **Agent 后端二进制**(按需,至少一个):
   - [combo-cli](crates/combo-cli)(combo 自有 agent,rig 驱动)—— **默认后端**,`cargo build -p combo-cli` 后把二进制放入 `PATH` 或设 `COMBO_CLI_BIN`
-  - [crush](https://charm.sh/crush)(rune server)—— 存量兼容,设 `COMBO_CRUSH_BIN` 才自动拉起
   - [opencode](https://github.com/sst/opencode)
   - [claude](https://docs.anthropic.com/en/docs/claude-code)(Claude Code CLI)
   - [codex](https://github.com/openai/codex)
@@ -127,9 +126,7 @@ bash scripts/dev-backend.sh          # 等价于:构建 combo-cli → 以 target
 
 | 变量 | 说明 |
 |------|------|
-| `COMBO_CLI_BIN` | combo-cli serve 二进制路径(默认取 `PATH` 上的 `combo-cli`)。默认 agent,缺失时 proxy 仍可启动(combo-cli 项目 502)。 |
-| `COMBO_CRUSH_BIN` | 存量 crush(rune server)二进制路径。设此变量才会自动拉起 crush(不再默认启动)。E2E 与 rune 集成测试必须设置。 |
-| `COMBO_RUNE_IT` | 设为 `1` 启用 rune 集成测试(`crates/combo-proxy/tests/rune_integration_test.rs`),否则跳过。 |
+| `COMBO_CLI_BIN` | combo-cli serve 二进制路径(默认取 `PATH` 上的 `combo-cli`)。默认 agent,缺失时 proxy 仍可启动(combo-cli 项目 502)。E2E 与 combo-cli 集成测试依赖它。 |
 | `COMBO_IT_DIR` | E2E 工作区目录(默认 `/tmp/combo-e2e`)。 |
 | `VITE_PROXY_URL` | 浏览器模式下代理基地址,如 `http://127.0.0.1:18234`。Tauri 模式自动取代理事件端口(2s 回退到 `:18234`)。 |
 
@@ -140,7 +137,7 @@ npm run dev                 # Vite dev server(strictPort 5173,浏览器模式)
 npm run build               # tsc -b && vite build(生产构建,输出 dist/)
 npm run tsc                 # tsc -b(项目引用增量类型检查)
 npm test                    # vitest run(jsdom 环境)
-npm run test:e2e            # Playwright(未设 COMBO_CRUSH_BIN 时自动跳过)
+npm run test:e2e            # Playwright(未设 COMBO_CLI_BIN 时自动跳过)
 npm run gen:api             # 由 swagger/swagger.json 重新生成 src/lib/api/types.ts
 cargo test -p combo-proxy   # Rust 单测 + 集成测试
 cargo run -p combo-proxy --bin combo-proxy -- --port 18234   # 代理独立运行
@@ -157,12 +154,11 @@ npm run build                         # 生产构建
 # Rust
 cargo test -p combo-proxy             # 单测 + proxy 集成(内存 stub upstream)
 
-# E2E(需真实 rune 二进制)
-COMBO_CRUSH_BIN=/path/to/crush npx playwright test
+# E2E(需真实 combo-cli 二进制)
+COMBO_CLI_BIN=/path/to/combo-cli npx playwright test
 ```
 
-> E2E 会在运行前**清空工作区目录**(`/tmp/combo-e2e`),因为 rune 会在工作区内持久化
-> 状态(`.crush/`)。未设置 `COMBO_CRUSH_BIN` 时 spec 自动跳过。
+> E2E 会在运行前**清空工作区目录**(`/tmp/combo-e2e`)。未设置 `COMBO_CLI_BIN` 时 spec 自动跳过。
 
 ## 持续集成 (CI)
 
@@ -184,8 +180,8 @@ GitHub Actions 工作流 [CI / Release](.github/workflows/release.yml) 自动运
 ```
 combo/
 ├── crates/combo-proxy/   Rust 反向代理 + Backend adapter 层(库 + 二进制)
-│   └── src/              handler / router / rune / upstream / fs / backend trait
-├── src-tauri/            Tauri 壳(启动 RuneManager + 代理,init_backend)
+│   └── src/              handler / router / combocli / upstream / fs / backend trait
+├── src-tauri/            Tauri 壳(启动 ComboCliManager + 代理,init_backend)
 ├── src/                  前端(React 19 + Vite + TS + shadcn/ui)
 │   ├── components/       ui/(shadcn 基础组件) shell/(应用骨架) agent/(对话/工具/弹窗)
 │   ├── hooks/            TanStack Query hooks + SSE 生命周期(useWorkspaceEvents)
@@ -203,10 +199,10 @@ combo/
 ## 工作原理要点
 
 - **统一内部协议**:combo 对外永远暴露同一套 `/v1/*` REST + 双层 SSE 信封
-  `{ type, payload: { type, payload } }`,以 crush 协议为基线。`CrushBackend` 近似恒等映射,
+  `{ type, payload: { type, payload } }`,以 rune 兼容协议为基线。`ComboCliBackend` 近似恒等映射,
   其他后端各自把自己的协议(stdio JSON / JSON-RPC)翻译成这套形状。前端无需关心后端是谁。
 - **`client_id` 身份机制**:`apiRequest` 自动注入 `client_id` 查询参数(UUID,持久化于
-  `localStorage`)。注意 `createWorkspace` 必须把 `client_id` **同时放进请求 body**(rune 从
+  `localStorage`)。注意 `createWorkspace` 必须把 `client_id` **同时放进请求 body**(后端从
   body 校验)。SSE 订阅也携带它。
 - **SSE 双层信封**:`GET /v1/workspaces/{id}/events?client_id=...`,`Accept: text/event-stream`。
   每个 `data:` 是 `{ type: <PayloadType>, payload: { type: "created"|"updated"|"deleted", payload: <data> } }`,

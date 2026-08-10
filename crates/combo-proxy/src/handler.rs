@@ -27,7 +27,6 @@ fn is_agent_run_path(path: &str) -> bool {
 
 /// 判断路径是否为会话只读端点(messages 等)。
 /// history 已由 session::history 显式路由接管,不经过此 fallback。
-/// crush 离线时对这些端点返回空数组,避免前端报错。
 fn is_session_read_path(path: &str) -> bool {
     let p = path.split('?').next().unwrap_or(path);
     p.contains("/sessions/") && p.ends_with("/messages")
@@ -82,15 +81,12 @@ pub async fn proxy(State(state): State<AppState>, req: axum::extract::Request) -
 
     let ws_id = extract_workspace_id(path_query).unwrap_or("");
 
-    // crush 为内存态,重启后会遗忘 workspace:先确保已注册(必要时重建),
-    // 若 id 发生变化则把 path_query 中的旧 id 替换为新 id。
+    // 确保 workspace 存在(combo-cli 无状态,元数据在 sqlite)
     let effective_path_query = if !ws_id.is_empty() {
         match crate::workspace::ensure_ws(&state, ws_id).await {
             Some(eid) if eid != ws_id => path_query.replacen(ws_id, &eid, 1),
             Some(_) => path_query.to_string(),
             None => {
-                // crush 不可用/workspace 元数据丢失时,对会话历史等只读端点
-                // 返回空数据而非 404,避免前端报"workspace 不存在或已被删除"
                 if is_session_read_path(path_query) {
                     return Response::builder()
                         .status(StatusCode::OK)
@@ -112,6 +108,16 @@ pub async fn proxy(State(state): State<AppState>, req: axum::extract::Request) -
     };
 
     let backend = state.registry.for_workspace(ws_id, &state.meta);
+    let backend = match backend {
+        Some(b) => b,
+        None => {
+            return Response::builder()
+                .status(StatusCode::BAD_GATEWAY)
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::from(r#"{"message":"没有可用的 agent 后端"}"#))
+                .unwrap();
+        }
+    };
 
     // combo-cli 无状态后端:POST /agent 时注入该会话的历史消息,支撑多轮上下文。
     if backend.backend_type() == BackendType::ComboCli
@@ -137,23 +143,28 @@ pub async fn proxy(State(state): State<AppState>, req: axum::extract::Request) -
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{BackendRegistry, CrushBackend, MetaStore, Upstream};
+    use crate::{BackendRegistry, ComboCliBackend, MetaStore, Upstream};
     use axum::http::header::ACCEPT;
     use axum::http::Request;
     use std::sync::Arc;
 
-    #[tokio::test]
-    async fn proxy_returns_502_for_unreachable_upstream() {
-        let state = AppState {
+    fn test_state() -> AppState {
+        let mut reg = BackendRegistry::new();
+        reg.set_combo_cli(Arc::new(ComboCliBackend::new(Upstream::Tcp(
+            "127.0.0.1:1".parse().unwrap(),
+        ))));
+        AppState {
             meta: Arc::new(MetaStore::new()),
-            registry: Arc::new(BackendRegistry::new(Arc::new(CrushBackend::new(
-                Upstream::Tcp("127.0.0.1:1".parse().unwrap()),
-            )))),
-            crush_supervisor: None,
+            registry: Arc::new(reg),
             browse_root: None,
             relay: crate::RelayManager::new(),
             local_port: 0,
-        };
+        }
+    }
+
+    #[tokio::test]
+    async fn proxy_returns_502_for_unreachable_upstream() {
+        let state = test_state();
         let req = Request::builder()
             .uri("/v1/health")
             .header(ACCEPT, "application/json")
@@ -184,16 +195,7 @@ mod tests {
 
     #[test]
     fn inject_history_reads_sqlite_mirror() {
-        let state = AppState {
-            meta: Arc::new(MetaStore::new()),
-            registry: Arc::new(BackendRegistry::new(Arc::new(CrushBackend::new(
-                Upstream::Tcp("127.0.0.1:1".parse().unwrap()),
-            )))),
-            crush_supervisor: None,
-            browse_root: None,
-            relay: crate::RelayManager::new(),
-            local_port: 0,
-        };
+        let state = test_state();
         state
             .meta
             .db()
@@ -221,16 +223,7 @@ mod tests {
 
     #[test]
     fn inject_history_passthrough_without_session() {
-        let state = AppState {
-            meta: Arc::new(MetaStore::new()),
-            registry: Arc::new(BackendRegistry::new(Arc::new(CrushBackend::new(
-                Upstream::Tcp("127.0.0.1:1".parse().unwrap()),
-            )))),
-            crush_supervisor: None,
-            browse_root: None,
-            relay: crate::RelayManager::new(),
-            local_port: 0,
-        };
+        let state = test_state();
         let body = br#"{"run_id":"r1","prompt":"hi"}"#;
         let out = inject_history(&state, "w1", body);
         let v: Value = serde_json::from_slice(&out).unwrap();

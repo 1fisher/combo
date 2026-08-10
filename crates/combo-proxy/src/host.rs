@@ -209,10 +209,7 @@ mod tests {
         let outside = temp_dir("boutside");
         let state = AppState {
             meta: Arc::new(crate::MetaStore::new()),
-            registry: Arc::new(crate::BackendRegistry::new(Arc::new(
-                crate::CrushBackend::new(crate::Upstream::Tcp("127.0.0.1:1".parse().unwrap())),
-            ))),
-            crush_supervisor: None,
+            registry: Arc::new(crate::BackendRegistry::new()),
             browse_root: Some(root.clone()),
             relay: crate::RelayManager::new(),
             local_port: 0,
@@ -231,10 +228,7 @@ mod tests {
         std::fs::write(&f, "x").unwrap();
         let state = AppState {
             meta: Arc::new(crate::MetaStore::new()),
-            registry: Arc::new(crate::BackendRegistry::new(Arc::new(
-                crate::CrushBackend::new(crate::Upstream::Tcp("127.0.0.1:1".parse().unwrap())),
-            ))),
-            crush_supervisor: None,
+            registry: Arc::new(crate::BackendRegistry::new()),
             browse_root: None,
             relay: crate::RelayManager::new(),
             local_port: 0,

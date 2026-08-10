@@ -63,7 +63,7 @@ export function SkillsPanel({
           {!isLoading && filtered.length === 0 && (
             <div className="px-2.5 py-4 text-center text-[13px] text-foreground-subtle">
               {skills?.length === 0
-                ? '未安装任何技能。技能目录: ~/.config/crush/skills/'
+                ? '未安装任何技能。技能目录: ~/.config/combo/skills/'
                 : '没有匹配的技能'}
             </div>
           )}

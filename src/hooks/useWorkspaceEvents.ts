@@ -17,7 +17,7 @@ export function useWorkspaceEvents(workspaceId: string | null) {
         const st = useAgentStore.getState();
         if (env.type === 'session') {
           void qc.invalidateQueries({ queryKey: ['sessions', workspaceId] });
-          // crush 某些场景不发 finish part / run_complete 事件,
+          // 某些场景不发 finish part / run_complete 事件,
           // 而是通过 session.is_busy=false 表示运行结束。
           // 检测该信号并标记 run 完成。
           const inner = env.payload as { type: string; payload: { id?: string; is_busy?: boolean } };

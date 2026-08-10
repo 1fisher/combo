@@ -1,7 +1,6 @@
 pub mod backend;
 pub mod auth;
 pub mod combocli;
-pub mod control;
 pub mod db;
 pub mod fs;
 pub mod git;
@@ -10,7 +9,6 @@ pub mod host;
 pub mod manager;
 pub mod meta;
 pub mod relay;
-pub mod rune;
 pub mod registry;
 pub mod router;
 pub mod session;
@@ -23,7 +21,6 @@ pub mod workspace;
 pub use backend::claude_code::ClaudeCodeBackend;
 pub use backend::codex::CodexBackend;
 pub use backend::combo_cli::ComboCliBackend;
-pub use backend::crush::CrushBackend;
 pub use backend::opencode::OpenCodeBackend;
 pub use backend::{Backend, BackendType};
 pub use combocli::ComboCliManager;
@@ -33,7 +30,6 @@ pub use meta::{MetaStore, WorkspaceMeta};
 pub use registry::BackendRegistry;
 pub use relay::RelayManager;
 pub use router::build_router;
-pub use rune::RuneManager;
 pub use upstream::Upstream;
 
 use std::path::PathBuf;
@@ -44,9 +40,6 @@ use std::sync::Arc;
 pub struct AppState {
     pub meta: Arc<MetaStore>,
     pub registry: Arc<BackendRegistry>,
-    /// crush 进程守护器(仅当 combo 托管 crush 生命周期时存在)。
-    /// 后台监控和 HTTP control 端点通过它重启 crush。
-    pub crush_supervisor: Option<Arc<RuneManager>>,
     /// 服务器目录浏览的根限制(`/v1/host/*`);None 表示允许浏览整个文件系统。
     pub browse_root: Option<PathBuf>,
     /// 隧道管理器(控制桌面端到中转服务器的反向隧道)。
@@ -87,8 +80,8 @@ mod parse_tests {
 
     #[test]
     fn parses_unix_path() {
-        match parse_upstream("/tmp/crush.sock").unwrap() {
-            Upstream::Unix(p) => assert_eq!(p, std::path::PathBuf::from("/tmp/crush.sock")),
+        match parse_upstream("/tmp/test.sock").unwrap() {
+            Upstream::Unix(p) => assert_eq!(p, std::path::PathBuf::from("/tmp/test.sock")),
             _ => panic!("expected unix"),
         }
     }

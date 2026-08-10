@@ -46,32 +46,12 @@ pub fn run() {
 
 async fn init_backend(app: &tauri::AppHandle) {
     use combo_proxy::combocli::ComboCliManager;
-    use combo_proxy::rune::RuneManager;
-    use combo_proxy::{serve, AppState, BackendRegistry, ClaudeCodeBackend, CodexBackend, ComboCliBackend, CrushBackend, MetaStore, OpenCodeBackend, OpenCodeManager, RelayManager, Upstream};
+    use combo_proxy::{serve, AppState, BackendRegistry, ClaudeCodeBackend, CodexBackend, ComboCliBackend, MetaStore, OpenCodeBackend, OpenCodeManager, RelayManager};
     use std::net::SocketAddr;
     use std::sync::Arc;
     use tokio::net::TcpListener;
 
-    // 可选:启动 crush 后端(存量 crush 项目;仅当显式指定 COMBO_CRUSH_BIN)
-    let crush_supervisor = if let Ok(bin) = std::env::var("COMBO_CRUSH_BIN") {
-        let supervisor = Arc::new(RuneManager::new(bin));
-        match supervisor.ensure_running().await {
-            Ok(_) => Some(supervisor),
-            Err(e) => {
-                eprintln!("rune server failed: {e:?}");
-                None
-            }
-        }
-    } else {
-        None
-    };
-    let crush_upstream = match &crush_supervisor {
-        Some(_) => Upstream::Unix(combo_proxy::rune::default_socket_path()),
-        // crush 未启用:使用不可达地址,crush 项目转发会 502(前端可见)
-        None => Upstream::Tcp("127.0.0.1:1".parse().unwrap()),
-    };
-    let crush_monitor = crush_supervisor.clone();
-    let mut registry = BackendRegistry::new(Arc::new(CrushBackend::new(crush_upstream)));
+    let mut registry = BackendRegistry::new();
 
     // 默认 agent:combo-cli serve(本机自有 agent)。
     let combo_cli_mgr = Arc::new(ComboCliManager::new(
@@ -130,7 +110,6 @@ async fn init_backend(app: &tauri::AppHandle) {
     let state = AppState {
         meta: Arc::new(MetaStore::open_default().unwrap_or_else(|_| MetaStore::new())),
         registry: Arc::new(registry),
-        crush_supervisor,
         browse_root: std::env::var("COMBO_BROWSE_ROOT")
             .ok()
             .filter(|s| !s.trim().is_empty())
@@ -139,45 +118,24 @@ async fn init_backend(app: &tauri::AppHandle) {
         local_port: port,
     };
 
-    // crush 为内存态,重启后 workspace 会被遗忘:启动时把元数据库里的
-    // workspace 重新注册/对齐,否则转发到 crush 的请求会 404。
-    let failed = combo_proxy::workspace::reconcile_all(&state).await;
-    if failed > 0 {
-        eprintln!("rune workspace reconcile failed for {failed} workspaces");
-    }
+    // 启动时迁移遗留的 crush 类型 workspace 到 combo-cli。
+    combo_proxy::workspace::reconcile_all(&state).await;
 
     // 后台健康监控:combo-cli 崩溃时自动重启
     {
         let mgr = Arc::clone(&combo_cli_mgr);
-        tauri::async_runtime::spawn(async move {
-            use std::time::Duration;
-            loop {
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                if !mgr.is_healthy().await {
-                    eprintln!("combo-cli 健康检查失败,尝试重启...");
-                    if let Err(e) = mgr.ensure_running().await {
-                        eprintln!("combo-cli 重启失败: {e}");
-                    }
-                }
-            }
-        });
-    }
-
-    // 后台健康监控:crush 崩溃时自动重启并发事件通知前端(仅当 combo 托管 crush)
-    if let Some(supervisor) = crush_monitor {
-        let sup = supervisor;
         let app_h = app.clone();
+        let mut was_healthy = mgr.is_healthy().await;
         tauri::async_runtime::spawn(async move {
             use std::time::Duration;
-            let mut was_healthy = sup.is_healthy().await;
             loop {
                 tokio::time::sleep(Duration::from_secs(5)).await;
-                let now_healthy = sup.is_healthy().await;
+                let now_healthy = mgr.is_healthy().await;
                 if !now_healthy {
-                    eprintln!("crush 健康检查失败,尝试重启...");
-                    match sup.ensure_running().await {
+                    eprintln!("combo-cli 健康检查失败,尝试重启...");
+                    match mgr.ensure_running().await {
                         Ok(_) => {
-                            eprintln!("crush 重启成功");
+                            eprintln!("combo-cli 重启成功");
                             if !was_healthy {
                                 let _ = app_h
                                     .emit(EVENT_RUNE_STATUS, RuneStatus { connected: true });
@@ -185,7 +143,7 @@ async fn init_backend(app: &tauri::AppHandle) {
                             was_healthy = true;
                         }
                         Err(e) => {
-                            eprintln!("crush 重启失败: {e}");
+                            eprintln!("combo-cli 重启失败: {e}");
                             if was_healthy {
                                 let _ = app_h.emit(
                                     EVENT_RUNE_STATUS,

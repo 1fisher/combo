@@ -1,5 +1,5 @@
 //! 本地文件服务:仅接管 `/v1/workspaces/{id}/files/*` 的读写。
-//! workspace 的真实路径从 sqlite 元数据(`MetaStore`)直接获取,不依赖 crush 在线,
+//! workspace 的真实路径从 sqlite 元数据(`MetaStore`)直接获取,不依赖后端在线,
 //! 之后所有相对路径都在该根目录内做 canonicalize 前缀校验,防止目录穿越
 //! 与 symlink 逃逸。
 
@@ -35,7 +35,7 @@ fn mime_for(name: &str) -> &'static str {
     }
 }
 
-/// 从 sqlite 元数据解析 workspace 根目录,不依赖 crush 在线。
+/// 从 sqlite 元数据解析 workspace 根目录。
 pub fn resolve_root(state: &AppState, id: &str) -> Result<PathBuf, Response> {
     match state.meta.get(id) {
         Some(m) => Ok(m.path),
@@ -182,7 +182,7 @@ pub async fn list(
     for entry in rd.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
         if name.starts_with('.') {
-            continue; // 隐藏文件(如 .git/.crush)不进文件树
+            continue; // 隐藏文件(如 .git)不进文件树
         }
         let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
         let rel_path = if rel.is_empty() {

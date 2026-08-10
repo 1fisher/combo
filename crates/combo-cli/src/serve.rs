@@ -1,4 +1,4 @@
-//! serve 服务模式:RuneManager 式进程管理 + rune 兼容协议。
+//! serve 服务模式:进程守护式管理 + rune 兼容协议。
 //!
 //! 供 combo-proxy 直接托管的 HTTP 端点:
 //! - `GET /v1/health`                       → 健康检查(`{"ok":true}`)
@@ -497,7 +497,7 @@ fn history_to_messages(history: &[Value]) -> Vec<Message> {
 
 /// GET /v1/workspaces/{id}/providers — 返回可用 provider 列表(含模型)。
 ///
-/// 以内置 provider 为基准列表,再合并配置文件和 crush providers.json
+/// 以内置 provider 为基准列表,再合并配置文件和 combo providers.json
 /// 中对应 provider 的 key/models 覆盖;不在内置列表中的 provider 不返回。
 async fn list_providers(State(state): State<AppState>) -> Json<Value> {
     let cfg = state.cfg.lock().unwrap().clone();
@@ -520,10 +520,10 @@ async fn list_providers(State(state): State<AppState>) -> Json<Value> {
         }
     }
 
-    // 合并 crush providers.json(仅内置列表中已有的 id)
-    if let Ok(crush) = providers::load_crush_providers() {
+    // 合并 combo providers.json(仅内置列表中已有的 id)
+    if let Ok(combo) = providers::load_combo_providers() {
         for p in &mut all {
-            if let Some(cp) = crush.iter().find(|cp| cp.id == p.id) {
+            if let Some(cp) = combo.iter().find(|cp| cp.id == p.id) {
                 if p.api_key.is_none() && cp.api_key.is_some() { p.api_key = cp.api_key.clone(); }
                 if p.api_endpoint.is_none() && cp.api_endpoint.is_some() { p.api_endpoint = cp.api_endpoint.clone(); }
                 if p.default_large_model_id.is_none() && cp.default_large_model_id.is_some() {
@@ -586,7 +586,7 @@ async fn fetch_models(
         .or_else(|| provider.provider_type.clone())
         .unwrap_or_else(|| "openai".to_string());
 
-    // api_key:请求体 > provider 解析(crush.json / providers.json / 内置 $ENV)
+    // api_key:请求体 > provider 解析(combo providers.json / 内置 $ENV)
     let api_key = body
         .api_key
         .filter(|k| !k.is_empty())

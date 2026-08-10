@@ -1,5 +1,5 @@
 //! 后端共用的上游 HTTP 转发机制(TCP 与 Unix socket)。
-//! 从 crush.rs 抽出,供 CrushBackend / ComboCliBackend 等透明转发后端复用。
+//! 供 ComboCliBackend 等透明转发后端复用。
 
 use crate::upstream::Upstream;
 use anyhow::Result;

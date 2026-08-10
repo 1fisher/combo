@@ -2,7 +2,7 @@
 //!
 //! OpenCode 暴露 HTTP REST API(`opencode serve`)。本模块把 combo 的
 //! `/v1/workspaces/{id}/*` 协议翻译成 OpenCode 的 `/session/*` API,
-//! 并把 OpenCode 的 SSE 事件翻译成 crush 的双层信封格式。
+//! 并把 OpenCode 的 SSE 事件翻译成 combo 的双层信封格式。
 
 use crate::backend::{Backend, BackendType};
 use anyhow::Result;
@@ -223,7 +223,7 @@ impl OpenCodeBackend {
 
 // ── SSE 翻译 ───────────────────────────────────────────────────────
 
-/// 将 OpenCode SSE 字节流翻译为 crush 双层信封 SSE 字节流。
+/// 将 OpenCode SSE 字节流翻译为 combo 双层信封 SSE 字节流。
 fn translate_sse_stream(
     byte_stream: impl futures_util::Stream<Item = Result<bytes::Bytes, reqwest::Error>>,
 ) -> impl futures_util::Stream<Item = Result<bytes::Bytes, std::io::Error>> {
@@ -276,7 +276,7 @@ fn translate_sse_stream(
     })
 }
 
-/// 翻译单个 OpenCode SSE 事件为 crush 双层信封字符串。
+/// 翻译单个 OpenCode SSE 事件为 combo 双层信封字符串。
 fn translate_sse_event(
     etype: &str,
     props: &Value,

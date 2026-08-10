@@ -2,10 +2,9 @@
 //!
 //! 启动 `combo-cli serve`(默认监听随机端口),解析 stdout 输出的
 //! `COMBO_CLI_PORT=` 得到实际端口,轮询 `/v1/health` 直至就绪;
-//! 失败自动重启,退出时经 `/v1/control` 优雅关闭(与 RuneManager 同模式)。
+//! 失败自动重启,退出时经 `/v1/control` 优雅关闭。
 
 use crate::backend::http::ProxyClient;
-use crate::rune::poll_until;
 use crate::upstream::Upstream;
 use anyhow::Result;
 use axum::http::Method;
@@ -20,6 +19,22 @@ use tokio::time::timeout;
 
 /// 启动 combo-cli serve 的默认二进制名。
 pub const DEFAULT_BIN: &str = "combo-cli";
+
+/// 轮询 `probe` 直到返回 true,最多 `max_attempts` 次,间隔 `interval`。
+async fn poll_until<F, Fut>(mut probe: F, max_attempts: usize, interval: Duration) -> bool
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    use tokio::time::sleep;
+    for _ in 0..max_attempts {
+        if probe().await {
+            return true;
+        }
+        sleep(interval).await;
+    }
+    probe().await
+}
 
 /// combo-cli serve 进程守护。内部用 `Mutex` 实现 `&self` 可变性,
 /// 可安全包装在 `Arc` 中跨任务共享(后台健康监控 + 优雅关闭)。

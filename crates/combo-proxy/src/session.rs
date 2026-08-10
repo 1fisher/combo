@@ -1,22 +1,18 @@
-//! 会话镜像:combo 自己接管 `/v1/workspaces/{id}/sessions` 的
-//! 列表/创建/删除,把 rune 的 session 镜像到本地 sqlite(conversations)。
-//! 列表直接从 sqlite 读,不依赖 rune 在线;创建/删除仍转发给 rune,
-//! 成功后双写本地镜像。
+//! 会话管理:combo 自己接管 `/v1/workspaces/{id}/sessions` 的
+//! 列表/创建/删除,数据持久化在本地 sqlite(conversations 表)。
 
-use crate::backend::BackendType;
 use crate::db::ConversationMeta;
 use crate::AppState;
 use axum::body::Body;
 use axum::extract::{Path, State};
-use axum::http::{Method, StatusCode};
+use axum::http::StatusCode;
 use axum::response::Response;
 use serde_json::{json, Value};
 
-/// GET /v1/workspaces/{id}/sessions — 从 sqlite 读镜像列表。
-/// 同一 path 可能有多个别名 ID(crush 重启),会话可能挂在任一别名下,
+/// GET /v1/workspaces/{id}/sessions — 从 sqlite 读会话列表。
+/// 同一 path 可能有多个别名 ID,会话可能挂在任一别名下,
 /// 因此按 path 解析全部别名 ID 后合并查询。
 pub async fn list(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    // 解析该 workspace 的 path,再找出同 path 的所有别名 ID
     let ws_ids: Vec<String> = match state.meta.get(&id) {
         Some(meta) => {
             let target_path = meta.path.to_string_lossy().to_string();
@@ -42,119 +38,51 @@ pub async fn list(State(state): State<AppState>, Path(id): Path<String>) -> Resp
     }
 }
 
-/// POST /v1/workspaces/{id}/sessions — 按 workspace 后端类型路由:
-/// - crush:转发 rune 创建,成功后写入 sqlite 镜像(双写)。
-/// - 其它后端(combo-cli 等):会话由 combo 本地 sqlite 直接管理,不转发。
+/// POST /v1/workspaces/{id}/sessions — 本地 sqlite 直接创建会话。
 pub async fn create(
     State(state): State<AppState>,
     Path(id): Path<String>,
     axum::extract::Json(body): axum::extract::Json<Value>,
 ) -> Response {
-    let backend_type = state
-        .meta
-        .get(&id)
-        .map(|m| m.backend_type)
-        .unwrap_or(BackendType::ComboCli);
-
-    if backend_type != BackendType::Crush {
-        // combo 本地直接创建会话(sqlite 是会话列表的真正数据源)
-        let title = body
-            .get("title")
-            .and_then(Value::as_str)
-            .unwrap_or("会话")
-            .to_string();
-        let now = now_secs();
-        let conv = ConversationMeta {
-            id: crate::workspace::uuid_like(),
-            workspace_id: id.clone(),
-            title,
-            message_count: 0,
-            created_at: now,
-            updated_at: now,
-        };
-        return match state.meta.db().upsert_conversation(&conv) {
-            Ok(_) => json_ok(&session_json(&conv)),
-            Err(e) => json_err(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                &format!("创建会话失败: {e}"),
-            ),
-        };
+    // 确保 workspace 存在
+    if state.meta.get(&id).is_none() {
+        return json_err(StatusCode::NOT_FOUND, "workspace 不存在");
     }
 
-    let Some(backend) = state.registry.by_type(BackendType::Crush) else {
-        return json_err(StatusCode::BAD_GATEWAY, "crush 后端不可用");
+    let title = body
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or("会话")
+        .to_string();
+    let now = now_secs();
+    let conv = ConversationMeta {
+        id: crate::workspace::uuid_like(),
+        workspace_id: id.clone(),
+        title,
+        message_count: 0,
+        created_at: now,
+        updated_at: now,
     };
-    // crush 为内存态,重启后会遗忘 workspace:先确保已注册(必要时重建)
-    let Some(effective_id) = crate::workspace::ensure_ws(&state, &id).await else {
-        return json_err(
-            StatusCode::NOT_FOUND,
-            "workspace 在 crush 中不存在且注册失败",
-        );
-    };
-    let body_bytes = serde_json::to_vec(&body).unwrap_or_default();
-    let resp = match backend
-        .forward(
-            Method::POST,
-            &format!("/v1/workspaces/{effective_id}/sessions"),
-            &axum::http::HeaderMap::new(),
-            body_bytes,
-        )
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            return json_err(
-                StatusCode::BAD_GATEWAY,
-                &format!("转发创建会话失败: {e}"),
-            );
-        }
-    };
-    let status = resp.status();
-    let bytes = match axum::body::to_bytes(resp.into_body(), 65536).await {
-        Ok(b) => b.to_vec(),
-        Err(_) => Vec::new(),
-    };
-    if status.is_success() {
-        // rune 返回创建后的 session,镜像到 sqlite
-        if let Ok(v) = serde_json::from_slice::<Value>(&bytes) {
-            mirror_session(&state, &effective_id, &v);
-        }
+    match state.meta.db().upsert_conversation(&conv) {
+        Ok(_) => json_ok(&session_json(&conv)),
+        Err(e) => json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("创建会话失败: {e}"),
+        ),
     }
-    Response::builder()
-        .status(status)
-        .header("content-type", "application/json")
-        .body(Body::from(bytes))
-        .unwrap_or_else(|_| json_err(StatusCode::INTERNAL_SERVER_ERROR, "响应构造失败"))
 }
 
-/// DELETE /v1/workspaces/{id}/sessions/{sid} — 先删本地 sqlite 镜像,
-/// 再尽力转发 rune。会话列表以 sqlite 为准,确保 rune 离线时也能删除。
+/// DELETE /v1/workspaces/{id}/sessions/{sid} — 删除本地 sqlite 镜像 + 该会话的消息。
 pub async fn delete(
     State(state): State<AppState>,
     Path((id, sid)): Path<(String, String)>,
 ) -> Response {
-    // 先删除本地 sqlite 镜像(会话列表的真正数据源)+ 该会话的消息
     let _ = state.meta.db().delete_conversation(&sid);
     let _ = state.meta.db().delete_messages_by_session(&id, &sid);
-
-    // 尽力转发给 rune(rune 可能已不持有该会话,忽略其返回)
-    if let Some(backend) = state.registry.by_type(BackendType::Crush) {
-        if let Some(effective_id) = crate::workspace::ensure_ws(&state, &id).await {
-            let _ = backend
-                .forward(
-                    Method::DELETE,
-                    &format!("/v1/workspaces/{effective_id}/sessions/{sid}"),
-                    &axum::http::HeaderMap::new(),
-                    Vec::new(),
-                )
-                .await;
-        }
-    }
-
     json_ok(&json!({ "deleted": true }))
 }
 
-/// PATCH /v1/workspaces/{id}/sessions/{sid} — 重命名会话标题(仅更新 sqlite 镜像)。
+/// PATCH /v1/workspaces/{id}/sessions/{sid} — 重命名会话标题(仅更新 sqlite)。
 pub async fn rename(
     State(state): State<AppState>,
     Path((id, sid)): Path<(String, String)>,
@@ -185,23 +113,6 @@ pub async fn rename(
     }
 }
 
-/// 把 rune 返回的 session JSON 镜像进 sqlite。字段缺失时用默认值兜底。
-fn mirror_session(state: &AppState, workspace_id: &str, v: &Value) {
-    let meta = ConversationMeta {
-        id: v.get("id").and_then(|x| x.as_str()).unwrap_or_default().into(),
-        workspace_id: workspace_id.into(),
-        title: v.get("title").and_then(|x| x.as_str()).unwrap_or("会话").into(),
-        message_count: v.get("message_count").and_then(|x| x.as_i64()).unwrap_or(0),
-        created_at: v.get("created_at").and_then(|x| x.as_i64()).unwrap_or_else(now_secs),
-        updated_at: v.get("updated_at").and_then(|x| x.as_i64()).unwrap_or_else(now_secs),
-    };
-    if meta.id.is_empty() {
-        return;
-    }
-    let _ = state.meta.db().upsert_conversation(&meta);
-}
-
-/// 序列化为与 rune `proto.Session` 兼容的 JSON(前端类型依赖这些字段)。
 fn session_json(c: &ConversationMeta) -> Value {
     json!({
         "id": c.id,
@@ -223,7 +134,6 @@ fn now_secs() -> i64 {
 }
 
 /// GET /v1/workspaces/{id}/sessions/{sid}/history — 从 sqlite 读消息历史。
-/// 不再依赖 crush 在线,消息持久化在 combo 本地。
 pub async fn history(
     State(state): State<AppState>,
     Path((id, sid)): Path<(String, String)>,

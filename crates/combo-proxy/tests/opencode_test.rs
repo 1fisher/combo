@@ -67,9 +67,7 @@ async fn stub_opencode() -> std::net::SocketAddr {
 }
 
 fn make_state(oc_addr: std::net::SocketAddr) -> AppState {
-    let mut registry = BackendRegistry::new(Arc::new(CrushBackend::new(Upstream::Tcp(
-        "127.0.0.1:1".parse().unwrap(),
-    ))));
+    let mut registry = BackendRegistry::new();
     registry.set_opencode(Arc::new(OpenCodeBackend::new(format!("http://{}", oc_addr))));
     let meta = MetaStore::new();
     meta.insert(WorkspaceMeta {
@@ -81,7 +79,6 @@ fn make_state(oc_addr: std::net::SocketAddr) -> AppState {
     AppState {
         meta: Arc::new(meta),
         registry: Arc::new(registry),
-        crush_supervisor: None,
         browse_root: None,
         relay: combo_proxy::RelayManager::new(),
         local_port: 0,
@@ -92,7 +89,7 @@ fn make_state(oc_addr: std::net::SocketAddr) -> AppState {
 async fn opencode_health_works() {
     let addr = stub_opencode().await;
     let state = make_state(addr);
-    let backend = state.registry.for_workspace("ws_oc", &state.meta);
+    let backend = state.registry.for_workspace("ws_oc", &state.meta).unwrap();
     assert!(backend.health().await);
 }
 
@@ -100,7 +97,7 @@ async fn opencode_health_works() {
 async fn opencode_session_list_maps_fields() {
     let addr = stub_opencode().await;
     let state = make_state(addr);
-    let backend = state.registry.for_workspace("ws_oc", &state.meta);
+    let backend = state.registry.for_workspace("ws_oc", &state.meta).unwrap();
     let resp = backend
         .forward(
             axum::http::Method::GET,
@@ -124,7 +121,7 @@ async fn opencode_session_list_maps_fields() {
 async fn opencode_history_maps_messages_and_parts() {
     let addr = stub_opencode().await;
     let state = make_state(addr);
-    let backend = state.registry.for_workspace("ws_oc", &state.meta);
+    let backend = state.registry.for_workspace("ws_oc", &state.meta).unwrap();
     let resp = backend
         .forward(
             axum::http::Method::GET,
@@ -152,7 +149,7 @@ async fn opencode_history_maps_messages_and_parts() {
 async fn opencode_send_message_calls_prompt_async() {
     let addr = stub_opencode().await;
     let state = make_state(addr);
-    let backend = state.registry.for_workspace("ws_oc", &state.meta);
+    let backend = state.registry.for_workspace("ws_oc", &state.meta).unwrap();
     let body = serde_json::to_vec(&json!({
         "session_id": "ses_1",
         "run_id": "run_1",
@@ -175,7 +172,7 @@ async fn opencode_send_message_calls_prompt_async() {
 async fn opencode_cancel_calls_abort() {
     let addr = stub_opencode().await;
     let state = make_state(addr);
-    let backend = state.registry.for_workspace("ws_oc", &state.meta);
+    let backend = state.registry.for_workspace("ws_oc", &state.meta).unwrap();
     let resp = backend
         .forward(
             axum::http::Method::POST,
@@ -213,7 +210,7 @@ async fn opencode_sse_translates_text_delta_and_idle() {
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
     let state = make_state(addr);
-    let backend = state.registry.for_workspace("ws_oc", &state.meta);
+    let backend = state.registry.for_workspace("ws_oc", &state.meta).unwrap();
     let resp = backend
         .forward(
             axum::http::Method::GET,

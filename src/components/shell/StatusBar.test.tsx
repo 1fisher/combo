@@ -7,14 +7,14 @@ describe('StatusBar', () => {
   it('shows connected label with green dot', () => {
     useConnectionStore.setState({ status: 'connected', lastError: null });
     const { container } = render(<StatusBar />);
-    expect(screen.getByText('已连接 rune')).toBeTruthy();
+    expect(screen.getByText('已连接 combo')).toBeTruthy();
     expect(container.querySelector('.bg-emerald-500')).toBeTruthy();
   });
 
-  it('shows disconnected hint when crush is unreachable', () => {
+  it('shows disconnected hint when agent is unreachable', () => {
     useConnectionStore.setState({ status: 'disconnected', lastError: null });
     render(<StatusBar />);
-    expect(screen.getByText(/未检测到 crush server/)).toBeTruthy();
+    expect(screen.getByText(/未检测到 agent 服务/)).toBeTruthy();
   });
 
   it('shows connecting label', () => {

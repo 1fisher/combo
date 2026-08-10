@@ -6,7 +6,7 @@ import { useWorkspaces } from './useWorkspaces';
  * 返回经过 workspace 列表验证的 activeWorkspaceId。
  *
  * localStorage 恢复的 activeWorkspaceId 可能指向已被删除的项目
- * (crush 重启后 ID 变化等)。在 workspace 列表加载完成并确认其存在前,
+ * (后端重启后 ID 变化等)。在 workspace 列表加载完成并确认其存在前,
  * 返回 null,避免子组件对失效 ID 发请求。
  *
  * 恢复策略:
@@ -26,7 +26,7 @@ export function useActiveWorkspaceId(): string | null {
       ? activeRaw
       : null;
 
-  // 记录当前有效 workspace 的路径(crush 重启后 ID 会变,用路径恢复)
+  // 记录当前有效 workspace 的路径(后端重启后 ID 会变,用路径恢复)
   useEffect(() => {
     if (workspaceId && workspaces) {
       const ws = workspaces.find((w) => w.id === workspaceId);
@@ -43,7 +43,7 @@ export function useActiveWorkspaceId(): string | null {
     if (idValid) return;
 
     if (activeRaw) {
-      // ID 失效(crush 重启后 ID 变了):先清,再恢复
+      // ID 失效(后端重启后 ID 变了):先清,再恢复
       setActiveWorkspace(null);
     }
 

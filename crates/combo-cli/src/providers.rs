@@ -1,6 +1,6 @@
-//! provider 结构与 crush providers.json 格式保持一致。
+//! provider 结构为 JSON 数组格式(每个元素含 id/name/api_key 等)。
 //!
-//! crush 的 `~/.local/share/crush/providers.json` 是 JSON 数组,每个元素:
+//! combo 的 `~/.local/share/combo/providers.json` 是 JSON 数组,每个元素:
 //! `{ id, name, api_key, api_endpoint, type, default_large_model_id,
 //!    default_small_model_id, models: [{ id, name, ... }] }`。
 //! 本模块定义兼容的 `ProviderInfo`/`ModelInfo`,并保留内置 provider 快捷方式。
@@ -8,7 +8,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-/// 单个模型(与 crush 的 model 条目兼容;除 id 外均可选)。
+/// 单个模型条目(除 id 外均可选)。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ModelInfo {
     pub id: String,
@@ -28,7 +28,7 @@ pub struct ModelInfo {
     pub supports_attachments: Option<bool>,
 }
 
-/// 一个 provider 条目,字段名与 crush providers.json 完全一致。
+/// 一个 provider 条目(JSON 数组元素格式)。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderInfo {
     pub id: String,
@@ -88,7 +88,7 @@ fn expand_env(s: &str) -> Option<String> {
     }
 }
 
-/// 内置 provider 快捷方式(crush 格式的静态定义)。
+/// 内置 provider 快捷方式(静态定义)。
 pub fn builtin_providers() -> Vec<ProviderInfo> {
     vec![
         ProviderInfo {
@@ -240,9 +240,9 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
     ]
 }
 
-/// 从 crush 的 providers.json 读取 provider 列表(路径不存在返回空)。
-pub fn load_crush_providers() -> Result<Vec<ProviderInfo>> {
-    let path = crush_providers_path();
+/// 从 combo 的 providers.json 读取 provider 列表(路径不存在返回空)。
+pub fn load_combo_providers() -> Result<Vec<ProviderInfo>> {
+    let path = combo_providers_path();
     if !path.exists() {
         return Ok(Vec::new());
     }
@@ -252,9 +252,9 @@ pub fn load_crush_providers() -> Result<Vec<ProviderInfo>> {
     Ok(provs)
 }
 
-/// crush providers.json 路径(与 opencode 一致的 data 目录规则)。
-pub fn crush_providers_path() -> std::path::PathBuf {
-    if let Ok(dir) = std::env::var("CRUSH_DATA_DIR") {
+/// combo providers.json 路径(与 opencode 一致的 data 目录规则)。
+pub fn combo_providers_path() -> std::path::PathBuf {
+    if let Ok(dir) = std::env::var("COMBO_DATA_DIR") {
         return std::path::PathBuf::from(dir).join("providers.json");
     }
     let base = std::env::var("XDG_DATA_HOME")
@@ -263,11 +263,11 @@ pub fn crush_providers_path() -> std::path::PathBuf {
             let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
             std::path::PathBuf::from(home).join(".local/share")
         });
-    base.join("crush").join("providers.json")
+    base.join("combo").join("providers.json")
 }
 
-/// 按 id 查找 provider:先查自定义 providers map,再查 crush.json 内嵌
-/// providers,再查 crush providers.json,最后回退内置定义。
+/// 按 id 查找 provider:先查自定义 providers map,再查 combo providers.json,
+/// 最后回退内置定义。
 pub fn find_provider(
     id: &str,
     custom: &std::collections::BTreeMap<String, crate::config::ProviderConfig>,
@@ -275,10 +275,10 @@ pub fn find_provider(
     // 1. 配置文件内嵌 providers
     if let Some(c) = custom.get(id) {
         let mut p = ProviderInfo::from_config(id, c);
-        // 配置未指定模型时,从 crush providers.json 合并默认模型
+        // 配置未指定模型时,从 combo providers.json 合并默认模型
         if p.default_large_model_id.is_none() {
-            if let Ok(crush) = load_crush_providers() {
-                if let Some(cp) = crush.iter().find(|cp| cp.id == id) {
+            if let Ok(combo) = load_combo_providers() {
+                if let Some(cp) = combo.iter().find(|cp| cp.id == id) {
                     p.default_large_model_id = cp.default_large_model_id.clone();
                     p.default_small_model_id = cp.default_small_model_id.clone();
                 }
@@ -286,61 +286,20 @@ pub fn find_provider(
         }
         return Ok(p);
     }
-    // 2. crush.json 内嵌 providers(用户填过真实 key)
-    if let Ok(crush_cfg) = load_crush_json_providers() {
-        if let Some(c) = crush_cfg.get(id) {
-            return Ok(ProviderInfo::from_config(id, c));
-        }
-    }
-    // 3. crush providers.json(静态目录)
-    let crush = load_crush_providers()?;
-    if let Some(p) = crush.iter().find(|p| p.id == id) {
+    // 2. combo providers.json(静态目录)
+    let combo = load_combo_providers()?;
+    if let Some(p) = combo.iter().find(|p| p.id == id) {
         return Ok(p.clone());
     }
-    // 4. 内置定义
+    // 3. 内置定义
     builtin_providers()
         .into_iter()
         .find(|p| p.id == id)
         .ok_or_else(|| anyhow::anyhow!("未知提供商 `{id}`(可配置 providers 或运行 `combo-cli config import`)"))
 }
 
-/// 从 crush.json 内嵌的 providers map 读取(真实 key 所在)。
-pub fn load_crush_json_providers(
-) -> Result<std::collections::BTreeMap<String, crate::config::ProviderConfig>> {
-    let path = crush_json_path();
-    if !path.exists() {
-        return Ok(std::collections::BTreeMap::new());
-    }
-    let text = std::fs::read_to_string(&path)?;
-    let data: serde_json::Value = serde_json::from_str(&text)
-        .map_err(|e| anyhow::anyhow!("解析 {} 失败: {e}", path.display()))?;
-    let mut out = std::collections::BTreeMap::new();
-    if let Some(provs) = data.get("providers").and_then(|v| v.as_object()) {
-        for (id, cfg) in provs {
-            let pc: crate::config::ProviderConfig = serde_json::from_value(cfg.clone())
-                .map_err(|e| anyhow::anyhow!("解析 providers.{id} 失败: {e}"))?;
-            out.insert(id.clone(), pc);
-        }
-    }
-    Ok(out)
-}
-
-/// crush.json 路径(用户配置所在,含真实 providers key)。
-pub fn crush_json_path() -> std::path::PathBuf {
-    if let Ok(dir) = std::env::var("CRUSH_DATA_DIR") {
-        return std::path::PathBuf::from(dir).join("crush.json");
-    }
-    let base = std::env::var("XDG_DATA_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-            std::path::PathBuf::from(home).join(".local/share")
-        });
-    base.join("crush").join("crush.json")
-}
-
 impl ProviderInfo {
-    /// 从 crush 式 ProviderConfig 构造。
+    /// 从 ProviderConfig 构造。
     pub fn from_config(id: &str, c: &crate::config::ProviderConfig) -> Self {
         let mut models = Vec::new();
         for mid in [&c.default_large_model_id, &c.default_small_model_id]
@@ -567,7 +526,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_crush_provider_json() {
+    fn parse_provider_json() {
         let json = r#"[
           {
             "name": "OpenCode Zen",

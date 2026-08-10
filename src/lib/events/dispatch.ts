@@ -4,7 +4,7 @@ import type { EventEnvelope } from './payloadTypes';
 
 type Store = ReturnType<typeof useAgentStore.getState>;
 
-// rune 的 SSE 信封是两层:外层 type 是 PayloadType,内层是
+// 后端的 SSE 信封是两层:外层 type 是 PayloadType,内层是
 // { type: created|updated|deleted, payload: <真实数据> }。
 function unwrap<T>(env: EventEnvelope): T {
   return (env.payload as { type: string; payload: T }).payload;
@@ -23,7 +23,7 @@ export function applyEvent(s: Store, env: EventEnvelope): void {
       console.debug(
         `[${ts()}][dispatch] message id="${p.id}" role="${p.role}" inner="${(env.payload as { type: string }).type}" parts=[${partTypes}] hasFinish=${hasFinish} session="${p.session_id}"`
       );
-      // rune 会回传用户文本消息,与乐观插入的 local- 消息重复,先清除
+      // 后端会回传用户文本消息,与乐观插入的 local- 消息重复,先清除
       if (p.role === 'user' && (p.parts ?? []).some((part) => part.type === 'text')) {
         s.removeOptimisticMessages(p.session_id);
       }

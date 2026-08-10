@@ -1,7 +1,6 @@
 use anyhow::Result;
 use combo_proxy::combocli::ComboCliManager;
-use combo_proxy::rune::RuneManager;
-use combo_proxy::{parse_upstream, serve, AppState, BackendRegistry, ClaudeCodeBackend, CodexBackend, ComboCliBackend, CrushBackend, MetaStore, OpenCodeBackend, OpenCodeManager, RelayManager, Upstream};
+use combo_proxy::{serve, AppState, BackendRegistry, ClaudeCodeBackend, CodexBackend, ComboCliBackend, MetaStore, OpenCodeBackend, OpenCodeManager, RelayManager};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -10,7 +9,6 @@ use tokio::net::TcpListener;
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
-    let mut upstream_arg = None;
     let mut port: u16 = 0;
     let mut host: std::net::IpAddr = [127, 0, 0, 1].into();
     let mut host_explicit = false;
@@ -20,7 +18,6 @@ async fn main() -> Result<()> {
     let mut relay_token: Option<String> = None;
     while let Some(a) = args.next() {
         match a.as_str() {
-            "--upstream" => upstream_arg = Some(args.next().unwrap()),
             "--port" => port = args.next().unwrap().parse()?,
             "--host" => {
                 host = args.next().unwrap().parse()?;
@@ -62,32 +59,8 @@ async fn main() -> Result<()> {
             .filter(|s| !s.trim().is_empty())
             .map(PathBuf::from);
     }
-    // crush:--upstream 显式指定,或设 COMBO_CRUSH_BIN 才自动托管(兼容存量 crush 项目)。
-    // 不再默认启动 crush:默认 agent 是 combo-cli(见下)。
-    let (crush_upstream, crush_supervisor) = match upstream_arg {
-        Some(s) => (Some(parse_upstream(&s)?), None),
-        None => {
-            if let Ok(bin) = std::env::var("COMBO_CRUSH_BIN") {
-                let mgr = Arc::new(RuneManager::new(bin));
-                match mgr.ensure_running().await {
-                    Ok(u) => {
-                        println!("COMBO_RUNE_STATUS=connected");
-                        (Some(u), Some(mgr))
-                    }
-                    Err(e) => {
-                        eprintln!("COMBO_RUNE_STATUS=failed: {e:?}");
-                        (None, None)
-                    }
-                }
-            } else {
-                (None, None)
-            }
-        }
-    };
 
-    let mut registry = BackendRegistry::new(Arc::new(CrushBackend::new(
-        crush_upstream.unwrap_or(Upstream::Tcp("127.0.0.1:1".parse().unwrap())),
-    )));
+    let mut registry = BackendRegistry::new();
 
     // 默认 agent:托管 combo-cli serve(本机自有 agent)。
     let combo_cli_mgr = Arc::new(ComboCliManager::new(
@@ -142,16 +115,13 @@ async fn main() -> Result<()> {
     let state = AppState {
         meta: Arc::new(MetaStore::open_default()?),
         registry: Arc::new(registry),
-        crush_supervisor,
         browse_root,
         relay: RelayManager::new(),
         local_port: actual,
     };
-    // workspace 重新注册/对齐,否则转发到 crush 的请求会 404。
-    let failed = combo_proxy::workspace::reconcile_all(&state).await;
-    if failed > 0 {
-        eprintln!("COMBO_RECONCILE_WARN={failed} workspaces failed to register with crush");
-    }
+
+    // 启动时迁移遗留的 crush 类型 workspace 到 combo-cli。
+    combo_proxy::workspace::reconcile_all(&state).await;
 
     // 后台健康监控:combo-cli 崩溃时自动重启
     if combo_cli_connected {
@@ -168,28 +138,6 @@ async fn main() -> Result<()> {
                         }
                         Err(e) => {
                             eprintln!("combo-cli 重启失败: {e}");
-                        }
-                    }
-                }
-            }
-        });
-    }
-
-    // 后台健康监控:crush 崩溃时自动重启(仅当 combo 托管 crush 生命周期)
-    if let Some(sup) = &state.crush_supervisor {
-        let sup = Arc::clone(sup);
-        tokio::spawn(async move {
-            use std::time::Duration;
-            loop {
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                if !sup.is_healthy().await {
-                    eprintln!("crush 健康检查失败,尝试重启...");
-                    match sup.ensure_running().await {
-                        Ok(_) => {
-                            eprintln!("crush 重启成功");
-                        }
-                        Err(e) => {
-                            eprintln!("crush 重启失败: {e}");
                         }
                     }
                 }

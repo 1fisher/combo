@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// 内嵌 provider 定义(与 crush `providers` 字段同格式)。
+/// 内嵌 provider 定义。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProviderConfig {
@@ -24,7 +24,7 @@ pub struct ProviderConfig {
     pub default_small_model_id: Option<String>,
 }
 
-/// 模型引用(crush `models` 字段:large/small)。
+/// 模型引用(large/small)。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ModelsConfig {
@@ -53,7 +53,7 @@ impl Default for ModelRef {
     }
 }
 
-/// MCP server 配置(crush `mcp` 字段同格式)。
+/// MCP server 配置。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct McpServerConfig {
@@ -68,7 +68,7 @@ pub struct McpServerConfig {
     pub url: Option<String>,
 }
 
-/// LSP server 配置(crush `lsp` 字段同格式)。
+/// LSP server 配置。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LspServerConfig {
@@ -198,7 +198,7 @@ fn expand_vars(s: &str) -> String {
 
 /// 配置文件内容。所有字段可选:未设置的项回退到 CLI 参数或默认值。
 ///
-/// 结构与 crush 对齐:`providers`(内嵌多 API key)、`models`(large/small 引用)、
+/// 结构:`providers`(内嵌多 API key)、`models`(large/small 引用)、
 /// `mcp`、`lsp`、`skills_paths`。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -219,19 +219,19 @@ pub struct AppConfig {
     pub api_key: Option<String>,
     /// 自定义 API base URL(兼容旧版)
     pub base_url: Option<String>,
-    /// 内嵌 provider 定义(crush providers 同格式,key = provider id)。
+    /// 内嵌 provider 定义(key = provider id)。
     #[serde(default)]
     pub providers: BTreeMap<String, ProviderConfig>,
-    /// 模型引用(crush models 同格式:large/small)。
+    /// 模型引用(large/small)。
     #[serde(default)]
     pub models: ModelsConfig,
-    /// MCP server 配置(crush mcp 同格式,key = server 名)。
+    /// MCP server 配置(key = server 名)。
     #[serde(default)]
     pub mcp: BTreeMap<String, McpServerConfig>,
-    /// LSP server 配置(crush lsp 同格式,key = 语言/服务器名)。
+    /// LSP server 配置(key = 语言/服务器名)。
     #[serde(default)]
     pub lsp: BTreeMap<String, LspServerConfig>,
-    /// skills 搜索路径(默认 ~/.config/crush/skills)。
+    /// skills 搜索路径(默认 ~/.config/combo/skills)。
     #[serde(default)]
     pub skills_paths: Vec<String>,
     /// 禁用的 skill 名列表。
@@ -425,7 +425,7 @@ pub fn write_default(path: &PathBuf, overwrite: bool) -> Result<()> {
     if path.exists() && !overwrite {
         return Ok(());
     }
-    let template = r#"# combo-cli 配置文件(自动生成,格式与 crush 对齐)
+    let template = r#"# combo-cli 配置文件(自动生成)
 # 优先级:命令行参数 > 本文件 > 内置默认值
 
 # 默认提供商 id(openai / anthropic / deepseek / opencode-zen / ...)
@@ -440,10 +440,10 @@ pub fn write_default(path: &PathBuf, overwrite: bool) -> Result<()> {
 # 是否启用内置工具(当前时间/日期),默认 true
 # tools = true
 
-# ========== 多 API key 配置(与 crush providers 同格式)==========
+# ========== 多 API key 配置 ==========
 # 每个 provider 一个表,key = provider id;api_key 可为明文或 $ENV_VAR。
-# 未在此定义的 provider 会依次回退到 crush.json 的 providers、
-# ~/.local/share/crush/providers.json 与内置定义。
+# 未在此定义的 provider 会依次回退到 combo providers.json
+# (~/.local/share/combo/providers.json)与内置定义。
 # 提示:同目录的 .env 文件会在启动时加载到环境变量,建议把
 # DEEPSEEK_API_KEY 等敏感值放 .env(KEY=value,一行一个),
 # 这里用 $DEEPSEEK_API_KEY 引用即可。
@@ -458,14 +458,14 @@ pub fn write_default(path: &PathBuf, overwrite: bool) -> Result<()> {
 # api_key = "$DEEPSEEK_API_KEY"
 # base_url = "https://api.deepseek.com/v1"
 
-# ========== 模型引用(与 crush models 同格式,可选)==========
+# ========== 模型引用(可选)==========
 # [models.large]
 # model = "deepseek-v4-flash-free"
 # provider = "opencode-zen"
 # reasoning_effort = "high"
 # max_tokens = 384000
 
-# ========== MCP server(与 crush mcp 同格式,可多个)==========
+# ========== MCP server(可多个)==========
 # [mcp.filesystem]
 # type = "stdio"
 # command = "npx -y @modelcontextprotocol/server-filesystem"
@@ -475,7 +475,7 @@ pub fn write_default(path: &PathBuf, overwrite: bool) -> Result<()> {
 # type = "http"
 # url = "http://127.0.0.1:3001/mcp"
 
-# ========== LSP server(与 crush lsp 同格式,可多个)==========
+# ========== LSP server(可多个)==========
 # [lsp.typescript]
 # command = "typescript-language-server"
 # args = ["--stdio"]
@@ -484,8 +484,8 @@ pub fn write_default(path: &PathBuf, overwrite: bool) -> Result<()> {
 # command = "pyright-langserver"
 # args = ["--stdio"]
 
-# ========== skills(与 crush 同约定,每个 skill 一个目录含 SKILL.md)==========
-# skills_paths = ["~/.config/crush/skills", "~/.crush/skills-store"]
+# ========== skills(每个 skill 一个目录含 SKILL.md)==========
+# skills_paths = ["~/.config/combo/skills"]
 # disabled_skills = []
 
 # ========== 兼容旧版单 provider 配置 ==========
@@ -543,7 +543,7 @@ pub struct ResolvedConfig {
     pub mcp_url: Option<String>,
     pub api_key: Option<String>,
     pub base_url: Option<String>,
-    /// 内嵌 provider 定义(crush 格式)。
+    /// 内嵌 provider 定义。
     pub providers: BTreeMap<String, ProviderConfig>,
     /// 模型引用(large/small),已在 resolve 时用于默认 provider/model 回退。
     #[allow(dead_code)]

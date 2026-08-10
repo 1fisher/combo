@@ -276,7 +276,7 @@ impl ComboDb {
         Ok(out)
     }
 
-    /// 跨多个 workspace ID 查询会话(crush 重启后同一 path 有多个别名 ID,
+    /// 跨多个 workspace ID 查询会话(后端重启后同一 path 可能有多个别名 ID,
     /// 会话可能挂在任一别名下)。
     pub fn list_conversations_multi(
         &self,
@@ -367,7 +367,7 @@ impl ComboDb {
 
     /// 列出某个会话下的全部消息,按 created_at 升序。
     /// 仅按 session_id 过滤:session ID 是全局唯一的 UUID,
-    /// crush 重启后 workspace ID 会变,按 workspace_id 过滤会导致历史丢失。
+    /// 后端重启后 workspace ID 会变,按 workspace_id 过滤会导致历史丢失。
     pub fn list_messages(
         &self,
         _workspace_id: &str,
@@ -519,7 +519,7 @@ mod tests {
             id: id.into(),
             path: PathBuf::from(format!("/tmp/{id}")),
             name: name.into(),
-            backend_type: BackendType::Crush,
+            backend_type: BackendType::ComboCli,
         }
     }
 
@@ -622,7 +622,7 @@ mod tests {
 
     #[test]
     fn list_messages_ignores_workspace_id_mismatch() {
-        // crush 重启后 workspace ID 会变,但 session ID 不变。
+        // 后端重启后 workspace ID 会变,但 session ID 不变。
         // list_messages 按 session_id 查询,忽略 workspace_id 差异。
         let db = ComboDb::in_memory();
         db.upsert_message("old-ws", "s1", "m1", "user", r#"[{"type":"text"}]"#, 100, 100)
@@ -639,7 +639,7 @@ mod tests {
 
     #[test]
     fn list_conversations_multi_finds_across_alias_ids() {
-        // crush 重启后同一 path 产生多个 workspace ID,
+        // 后端重启后同一 path 产生多个 workspace ID,
         // 会话可能挂在任一别名下,list_conversations_multi 应全部找到。
         let db = ComboDb::in_memory();
         db.upsert_conversation(&conv("c1", "ws-old")).unwrap();

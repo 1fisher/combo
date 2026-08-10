@@ -1,5 +1,4 @@
 import { useConnectionStore } from '../stores/connectionStore';
-import { ensureCrush } from './api';
 
 let proxyBaseUrl = '';
 
@@ -194,7 +193,6 @@ export async function connectLoop(opts: { intervalMs?: number } = {}): Promise<v
     setProxyBaseUrl(base);
   }
   let staleCount = 0;
-  let ensureInFlight = false;
   // eslint-disable-next-line no-constant-condition
   while (true) {
     // 运行时覆盖/清除代理地址后立即切换
@@ -211,24 +209,9 @@ export async function connectLoop(opts: { intervalMs?: number } = {}): Promise<v
     useConnectionStore.getState().setStatus(ok ? 'connected' : 'disconnected');
     if (!ok) {
       staleCount++;
-      // 连续 3 次失败:触发 crush 重启(后台 supervisor 也在监控,
-      // 前端触发更快),同时重新解析端口(可能 proxy-ready 竞态导致用了错误端口)
+      // 连续 3 次失败:重新解析端口(可能 proxy-ready 竞态导致用了错误端口)
       if (staleCount >= 3) {
-        if (!ensureInFlight) {
-          ensureInFlight = true;
-          ensureCrush()
-            .then((r) => {
-              useConnectionStore.getState().setError(
-                r.healthy ? null : 'crush 服务不可用,正在重试...'
-              );
-            })
-            .catch(() => {
-              useConnectionStore.getState().setError('crush 重启失败,正在重试...');
-            })
-            .finally(() => {
-              ensureInFlight = false;
-            });
-        }
+        useConnectionStore.getState().setError('agent 服务不可用,正在重试...');
         const fresh = await resolveProxyBaseUrl();
         if (fresh !== base) {
           setProxyBaseUrl(fresh);

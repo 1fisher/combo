@@ -112,7 +112,7 @@ mod tests {
             id: id.into(),
             path: PathBuf::from(format!("/tmp/{id}")),
             name: format!("项目 {id}"),
-            backend_type: BackendType::Crush,
+            backend_type: BackendType::ComboCli,
         }
     }
 
@@ -124,7 +124,7 @@ mod tests {
         assert_eq!(meta.id, "w1");
         assert_eq!(meta.path, PathBuf::from("/tmp/w1"));
         assert_eq!(meta.name, "项目 w1");
-        assert_eq!(meta.backend_type, BackendType::Crush);
+        assert_eq!(meta.backend_type, BackendType::ComboCli);
     }
 
     #[test]

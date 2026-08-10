@@ -22,7 +22,7 @@ pub async fn terminal_default(ws: WebSocketUpgrade) -> Response {
 /// GET /v1/workspaces/{id}/terminal — 在指定 workspace 根目录启动 PTY。
 ///
 /// workspace 根目录直接从 sqlite 元数据解析(与 fs/git 一致),
-/// 不依赖 agent 后端在线——终端只是本地 shell,无需 crush/codex 等。
+/// 不依赖 agent 后端在线——终端只是本地 shell。
 pub async fn terminal(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,

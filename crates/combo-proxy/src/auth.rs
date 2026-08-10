@@ -280,14 +280,11 @@ mod tests {
             id: "w1".into(),
             path: PathBuf::from("/tmp/w1"),
             name: "项目".into(),
-            backend_type: BackendType::Crush,
+            backend_type: BackendType::ComboCli,
         });
         AppState {
             meta: std::sync::Arc::new(meta),
-            registry: std::sync::Arc::new(crate::BackendRegistry::new(std::sync::Arc::new(
-                crate::CrushBackend::new(crate::Upstream::Unix(PathBuf::from("/tmp/x.sock"))),
-            ))),
-            crush_supervisor: None,
+            registry: std::sync::Arc::new(crate::BackendRegistry::new()),
             browse_root: None,
             relay: crate::RelayManager::new(),
             local_port: 0,

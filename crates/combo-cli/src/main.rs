@@ -1,7 +1,7 @@
 //! combo-cli:combo 自有 agent 命令行工具。
 //! 基于 rig 0.41,支持多 provider(openai/anthropic/gemini/ollama/deepseek)、
 //! 内置工具 + MCP 工具、sqlite 会话持久化,以及 serve 服务模式
-//! (RuneManager 式进程管理,health + control 端点,供 combo-proxy 托管)。
+//! (进程守护式管理,health + control 端点,供 combo-proxy 托管)。
 
 mod agent;
 mod config;
@@ -68,7 +68,7 @@ enum Command {
         #[command(subcommand)]
         action: SessionsAction,
     },
-    /// 以服务模式运行(health + control 端点,RuneManager 式进程管理)
+    /// 以服务模式运行(health + control 端点,进程守护式管理)
     Serve {
         /// 监听端口(默认 0 = 随机)
         #[arg(long, default_value_t = 0)]
@@ -168,7 +168,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let provider_id = resolved.provider.clone();
-    // 解析 provider:自定义配置列表 → crush providers.json → 内置
+    // 解析 provider:自定义配置列表 → combo providers.json → 内置
     let provider = providers::find_provider(&provider_id, &resolved.providers)?;
     let cfg = agent::AskConfig::from_resolved(&resolved, provider);
 

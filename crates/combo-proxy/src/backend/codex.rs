@@ -2,7 +2,7 @@
 //!
 //! Codex 通过 `codex exec --json` 产生 newline-delimited JSON 事件流。
 //! 与 Claude Code 类似,为每条消息 spawn 子进程,解析输出翻译为
-//! crush 双层信封,通过 broadcast channel 推给 SSE 连接。
+//! combo 双层信封,通过 broadcast channel 推给 SSE 连接。
 
 use crate::backend::{Backend, BackendType};
 use anyhow::Result;

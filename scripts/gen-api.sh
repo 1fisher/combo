@@ -9,10 +9,10 @@ npx openapi-typescript swagger/swagger.json \
 cat >> src/lib/api/types.ts <<'EOF'
 
 /**
- * Api namespace: accurate aliases for the rune (Crush) wire types used by
+ * Api namespace: accurate aliases for the rune-compatible wire types used by
  * combo. The vendored swagger.json is incomplete (parts are typed as
  * unknown and question/part types are missing), so these are maintained
- * by hand against ../rune proto sources and verified by the contract test.
+ * by hand and verified by the contract test.
  */
 export namespace Api {
   export type Error = { message: string };
@@ -215,7 +215,7 @@ export namespace Api {
     status: string;
   };
 
-  // 技能(combo-proxy 本地端点,扫描 ~/.config/crush/skills/)
+  // 技能(combo-proxy 本地端点,扫描技能目录)
   export type Skill = {
     name: string;
     dir_name: string;
@@ -223,7 +223,7 @@ export namespace Api {
     path: string;
   };
 
-  // 配置(rune 透传)
+  // 配置(透传)
   export type ConfigScope = 0 | 1; // 0=global, 1=workspace
   export type ConfigSetRequest = {
     key: string;

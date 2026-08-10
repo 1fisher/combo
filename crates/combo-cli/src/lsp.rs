@@ -1,4 +1,4 @@
-//! LSP 支持:配置与 crush 同格式的 LSP server(command/args/env),
+//! LSP 支持:配置 LSP server(command/args/env),
 //! 提供 `lsp list`(查看已配置 server 与可执行状态)。
 //!
 //! combo-cli 本身不内嵌完整 LSP 客户端;本模块负责 server 配置、
@@ -20,7 +20,7 @@ pub struct LspStatus {
 /// 列出配置的 LSP server 及其可执行状态(供 `lsp list` 使用)。
 pub fn list(cfg: &ResolvedConfig) -> Result<()> {
     if cfg.lsp.is_empty() {
-        println!("未配置 LSP server(配置文件的 [lsp] 字段,格式同 crush)");
+        println!("未配置 LSP server(配置文件的 [lsp] 字段)");
         return Ok(());
     }
     println!("已配置 {} 个 LSP server:", cfg.lsp.len());

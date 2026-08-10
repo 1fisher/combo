@@ -29,7 +29,7 @@ vi.mock('../../lib/api', () => ({
   setCurrentSession: vi.fn(async () => {}),
   getSessionHistory: vi.fn(async () => []),
   listWorkspaces: vi.fn(async () => [
-    { id: 'w1', path: '/tmp/w1', name: 'w1', backend: 'crush' },
+    { id: 'w1', path: '/tmp/w1', name: 'w1', backend: 'combo-cli' },
   ]),
 }));
 

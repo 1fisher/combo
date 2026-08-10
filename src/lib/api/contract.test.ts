@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Api } from './types';
 
-describe('rune api contract', () => {
+describe('api contract', () => {
   it('exposes workspace, session, message, permission, question types', () => {
     // 类型级断言:以下变量赋值仅在类型正确时通过编译。
     const ws: Api.Workspace = {

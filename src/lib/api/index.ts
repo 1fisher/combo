@@ -11,7 +11,7 @@ export function listWorkspaces(): Promise<Api.Workspace[]> {
 export function createWorkspace(
   path: string,
 ): Promise<Api.Workspace> {
-  // rune 从请求体校验 client_id(UUID),而不是查询参数
+  // 后端从请求体校验 client_id(UUID),而不是查询参数
   return apiRequest('/v1/workspaces', {
     method: 'POST',
     body: { path, client_id: getClientId(), backend: 'combo-cli' },
@@ -29,7 +29,7 @@ export function renameWorkspace(id: string, name: string): Promise<Api.Workspace
   });
 }
 
-/** 更换 workspace 绑定目录:更新 sqlite 元数据并重新注册到 crush。 */
+/** 更换 workspace 绑定目录:更新 sqlite 元数据。 */
 export function changeWorkspacePath(id: string, path: string): Promise<Api.Workspace> {
   return apiRequest(`/v1/workspaces/${id}`, {
     method: 'PATCH',
@@ -291,14 +291,9 @@ export function getGitCommitDiff(
   });
 }
 
-// 技能:combo-proxy 本地端点,扫描 ~/.config/crush/skills/
+// 技能:combo-proxy 本地端点,扫描技能目录
 export function listSkills(): Promise<Api.Skill[]> {
   return apiRequest('/v1/skills');
-}
-
-// 确保 crush server 运行中(若已死则重启)。combo-proxy 本地端点。
-export function ensureCrush(): Promise<{ healthy: boolean }> {
-  return apiRequest('/v1/control/ensure-crush', { method: 'POST' });
 }
 
 // 服务器目录浏览:combo-proxy 本地端点,供浏览器/移动端在远端打开服务器上的项目目录
@@ -323,7 +318,7 @@ export function listHostDirs(path?: string): Promise<HostDirListing> {
   return apiRequest('/v1/host/dirs', { query: path ? { path } : {} });
 }
 
-// 配置:rune 透传
+// 配置:透传
 export function getWorkspaceConfig(workspaceId: string): Promise<Api.WorkspaceConfig> {
   return apiRequest(`/v1/workspaces/${workspaceId}/config`);
 }
