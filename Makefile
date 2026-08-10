@@ -1,8 +1,7 @@
 .PHONY: help dev dev-proxy build build-cli build-relay \
-
-        version version-patch version-minor version-major \
-        release release-patch release-minor release-major \
-        tag push clean
+	version version-patch version-minor version-major \
+	release release-patch release-minor release-major \
+	tag push clean
 
 # 默认目标
 .DEFAULT_GOAL := help
@@ -19,7 +18,8 @@ dev-proxy: ## 启动开发服务器并指向本地 proxy (:18234)
 
 build: ## 一键构建: 前端 + combo-cli / combo-relay / 桌面端
 	npm run build
-	cargo build --release --workspace
+	cargo build --release --workspace --exclude combo
+	cargo build --release -p combo --features tauri/custom-protocol
 
 build-cli: ## 仅编译 combo-cli
 	cargo build --release -p combo-cli
@@ -28,9 +28,9 @@ build-relay: ## 仅编译 combo-relay
 	cargo build --release -p combo-relay
 
 
-build-desktop: ## 编译桌面端 (Tauri 二进制, target/release/combo)
+build-desktop: ## 编译桌面端,内嵌前端资源 (target/release/combo)
 	npm run build
-	cargo build --release -p combo
+	cargo build --release -p combo --features tauri/custom-protocol
 
 bundle: ## 打包桌面端安装包 (需要 cargo install tauri-cli)
 	cargo tauri build

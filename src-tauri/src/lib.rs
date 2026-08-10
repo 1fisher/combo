@@ -33,6 +33,12 @@ pub fn run() {
         .manage(ProxyPort::default())
         .invoke_handler(tauri::generate_handler![get_proxy_port])
         .setup(|app| {
+            // 调试:COMBO_DEVTOOLS=1 时自动打开 WebView 开发者工具
+            if std::env::var("COMBO_DEVTOOLS").is_ok() {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.open_devtools();
+                }
+            }
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 init_backend(&handle).await;
