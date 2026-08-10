@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useMemo, useState } from 'react';
-import { FileEdit, Folder, Loader2 } from 'lucide-react';
+import { FileEdit, Folder, Loader2, CircleAlert } from 'lucide-react';
 import { randomUUID } from '../../lib/clientId';
 import { useAgentStore } from '../../stores/agentStore';
 import { formatContextPrompt, type ContextItem } from '../../stores/contextStore';
@@ -239,6 +239,14 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
       </div>
       {/* 输入区 */}
       <div className="relative z-20 w-full shrink-0">
+        {rt?.run?.status === 'done' && rt?.run?.error && (
+          <div className="mx-4 mb-2 flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
+            <div className="min-w-0 break-all whitespace-pre-wrap">
+              运行失败:{rt.run.error}
+            </div>
+          </div>
+        )}
         {wsMenuOpen && (
           <div className="absolute bottom-full left-1/2 z-30 mb-2 w-64 -translate-x-1/2 rounded-xl border border-border bg-popover p-1.5 shadow-xl">
             <div className="px-2 py-1 text-xs font-medium text-foreground-subtlest">选择项目</div>

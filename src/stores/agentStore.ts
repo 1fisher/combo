@@ -18,7 +18,7 @@ export interface MessageVM {
 
 export interface SessionRuntime {
   messages: MessageVM[];
-  run: { runId: string; status: 'running' | 'done' } | null;
+  run: { runId: string; status: 'running' | 'done'; error?: string } | null;
   queued: boolean;
 }
 
@@ -54,7 +54,12 @@ interface AgentState {
   removeOptimisticMessages: (sessionId: string) => void;
   hydrateMessages: (sessionId: string, msgs: Api.Message[]) => void;
   deleteMessage: (sessionId: string, messageId: string) => void;
-  markRun: (sessionId: string, runId: string, status: 'running' | 'done') => void;
+  markRun: (
+    sessionId: string,
+    runId: string,
+    status: 'running' | 'done',
+    error?: string
+  ) => void;
   setQueued: (sessionId: string, queued: boolean) => void;
   enqueuePermission: (p: Api.PermissionRequest) => void;
   resolvePermission: (toolCallId: string) => void;
@@ -177,7 +182,7 @@ export const useAgentStore = create<AgentState>()(
       };
     }),
 
-  markRun: (sessionId, runId, status) =>
+  markRun: (sessionId, runId, status, error) =>
     set((st) => {
       const rt = st.bySession[sessionId] ?? emptyRuntime();
       const ts = new Date().toISOString().slice(11, 23);
@@ -191,7 +196,11 @@ export const useAgentStore = create<AgentState>()(
       return {
         bySession: {
           ...st.bySession,
-          [sessionId]: { ...rt, run: { runId, status }, messages },
+          [sessionId]: {
+            ...rt,
+            run: { runId, status, ...(error ? { error } : {}) },
+            messages,
+          },
         },
       };
     }),

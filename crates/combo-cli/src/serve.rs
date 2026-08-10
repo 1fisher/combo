@@ -447,6 +447,15 @@ fn assistant_message_json(
 /// text/tool_call/tool_result 各成一跳,便于 provider 正确消费多轮上下文。
 /// 孤立 tool_call(上次 run 失败残留、无配对 tool_result)直接丢弃,
 /// 否则 OpenAI 兼容 provider 会报 400(assistant tool_calls 必须有 tool 消息跟随)。
+///
+/// 同一 assistant 消息内的多个 part 会合并输出,而不是逐 part 拆成独立消息:
+/// - 全部 text part 合并为一条 assistant 文本消息,排在 tool_call 之前;
+/// - 全部 tool_call part 合并进同一条 assistant 消息(OneOrMany::many)。
+/// 原因:流式运行中模型常先输出文本、再调工具、最后补充文本,单条 wire 消息
+/// 形如 [text, tool_call, text, finish];若逐 part 拆开会得到
+/// assistant(text) → assistant(tool_calls) → assistant(text) 的序列,
+/// OpenAI 兼容 provider 报 400("tool_calls must be followed by tool messages"),
+/// 导致同一会话的跟进消息失败(UI 表现为 agent 无响应)。
 fn history_to_messages(history: &[Value]) -> Vec<Message> {
     // 预扫描:收集有 tool_result 配对的 tool_call_id
     let mut answered: HashSet<String> = HashSet::new();
@@ -475,19 +484,46 @@ fn history_to_messages(history: &[Value]) -> Vec<Message> {
         let Some(parts) = h.get("parts").and_then(Value::as_array) else {
             continue;
         };
+        // 用户/工具消息:按 part 直出
+        if role == "user" || role == "tool" {
+            for p in parts {
+                let ptype = p.get("type").and_then(Value::as_str).unwrap_or("");
+                let Some(data) = p.get("data") else { continue };
+                match ptype {
+                    "text" => {
+                        let t = data.get("text").and_then(Value::as_str).unwrap_or("");
+                        out.push(Message::user(t));
+                    }
+                    "tool_result" => {
+                        let id = data
+                            .get("tool_call_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string();
+                        let content = data
+                            .get("content")
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_string();
+                        out.push(Message::tool_result(id, content));
+                    }
+                    _ => {}
+                }
+            }
+            continue;
+        }
+        // assistant 消息:文本合并为一条(置于 tool_call 前),tool_call 合并为一条
+        let mut texts: Vec<String> = Vec::new();
+        let mut calls: Vec<AssistantContent> = Vec::new();
         for p in parts {
             let ptype = p.get("type").and_then(Value::as_str).unwrap_or("");
             let Some(data) = p.get("data") else { continue };
-            match (role, ptype) {
-                ("user", "text") => {
+            match ptype {
+                "text" => {
                     let t = data.get("text").and_then(Value::as_str).unwrap_or("");
-                    out.push(Message::user(t));
+                    texts.push(t.to_string());
                 }
-                ("assistant", "text") => {
-                    let t = data.get("text").and_then(Value::as_str).unwrap_or("");
-                    out.push(Message::assistant(t));
-                }
-                ("assistant", "tool_call") => {
+                "tool_call" => {
                     let id = data.get("id").and_then(Value::as_str).unwrap_or("").to_string();
                     // 无配对 tool_result 的孤立 tool_call 丢弃(会导致 provider 400)
                     if !answered.contains(&id) {
@@ -497,29 +533,23 @@ fn history_to_messages(history: &[Value]) -> Vec<Message> {
                     let raw = data.get("input").and_then(Value::as_str).unwrap_or("{}");
                     let arguments: Value =
                         serde_json::from_str(raw).unwrap_or_else(|_| json!({}));
-                    out.push(Message::Assistant {
-                        id: Some(id.clone()),
-                        content: OneOrMany::one(AssistantContent::ToolCall(ToolCall::new(
-                            id,
-                            ToolFunction::new(name, arguments),
-                        ))),
-                    });
-                }
-                ("user" | "tool", "tool_result") => {
-                    let id = data
-                        .get("tool_call_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string();
-                    let content = data
-                        .get("content")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string();
-                    out.push(Message::tool_result(id, content));
+                    calls.push(AssistantContent::ToolCall(ToolCall::new(
+                        id,
+                        ToolFunction::new(name, arguments),
+                    )));
                 }
                 _ => {}
             }
+        }
+        if !texts.is_empty() {
+            out.push(Message::assistant(texts.join("\n")));
+        }
+        if !calls.is_empty() {
+            // calls 非空由上面的分支保证,unwrap 安全
+            out.push(Message::Assistant {
+                id: None,
+                content: OneOrMany::many(calls).expect("calls 非空"),
+            });
         }
     }
     out
@@ -848,6 +878,116 @@ mod tests {
         }
         // ok1 的 tool_result
         assert!(matches!(&msgs[3], Message::User { .. }));
+    }
+
+    #[test]
+    fn history_to_messages_merges_text_after_tool_call() {
+        // 流式运行常见的 wire 形态:assistant 消息 = [text, tool_call, text, finish],
+        // 工具结果紧随其后单独成条。逐 part 拆分会把 tool_call 之后的那段文本
+        // 插到 tool_call 与 tool_result 之间,触发 OpenAI 400,这里必须合并。
+        let history = vec![
+            json!({ "role": "user", "parts": [part("text", r#"{"text":"现在几点"}"#)] }),
+            json!({
+                "role": "assistant",
+                "parts": [
+                    part("text", r#"{"text":"让我查一下"}"#),
+                    part("tool_call", r#"{"id":"t1","name":"current_time","input":"{}"}"#),
+                    part("text", r#"{"text":"当前时间:13:34:12"}"#),
+                    part("finish", r#"{"reason":"end_turn","time":1}"#),
+                ],
+            }),
+            json!({
+                "role": "user",
+                "parts": [part("tool_result", r#"{"tool_call_id":"t1","content":"13:34:12"}"#)],
+            }),
+            json!({ "role": "user", "parts": [part("text", r#"{"text":"再查日期"}"#)] }),
+        ];
+        let msgs = history_to_messages(&history);
+        assert_eq!(msgs.len(), 5);
+        // 0: user text
+        assert!(matches!(&msgs[0], Message::User { .. }));
+        // 1: assistant 文本(调用前 + 调用后的文本合并为一条)
+        match &msgs[1] {
+            Message::Assistant { id, content } => {
+                assert!(id.is_none());
+                let texts: Vec<&str> = content
+                    .iter()
+                    .filter_map(|c| match c {
+                        AssistantContent::Text(t) => Some(t.text.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(texts, vec!["让我查一下\n当前时间:13:34:12"]);
+            }
+            _ => panic!("expected assistant text message"),
+        }
+        // 2: assistant tool_call(合并后仍只有 t1)
+        match &msgs[2] {
+            Message::Assistant { content, .. } => {
+                assert!(matches!(
+                    content.first_ref(),
+                    &rig::completion::AssistantContent::ToolCall(_)
+                ));
+            }
+            _ => panic!("expected assistant tool_call message"),
+        }
+        // 3: tool_result
+        assert!(matches!(&msgs[3], Message::User { .. }));
+        // 4: 跟进消息 user text
+        assert!(matches!(&msgs[4], Message::User { .. }));
+    }
+
+    #[test]
+    fn history_to_messages_groups_multiple_tool_calls_into_one_message() {
+        // 一次 run 内多次工具调用:wire 消息为 [text, tcA, text, tcB, finish],
+        // 两个 tool_call 必须合并进同一条 assistant 消息,否则 tool_calls
+        // 消息之间夹 assistant 文本同样会触发 OpenAI 400。
+        let history = vec![
+            json!({ "role": "user", "parts": [part("text", r#"{"text":"现在几点几分"}"#)] }),
+            json!({
+                "role": "assistant",
+                "parts": [
+                    part("tool_call", r#"{"id":"a","name":"current_time","input":"{}"}"#),
+                    part("text", r#"{"text":"时间是"}"#),
+                    part("tool_call", r#"{"id":"b","name":"current_date","input":"{}"}"#),
+                ],
+            }),
+            json!({
+                "role": "user",
+                "parts": [part("tool_result", r#"{"tool_call_id":"a","content":"13:34"}"#)],
+            }),
+            json!({
+                "role": "user",
+                "parts": [part("tool_result", r#"{"tool_call_id":"b","content":"2026-08-10"}"#)],
+            }),
+        ];
+        let msgs = history_to_messages(&history);
+        // user text / assistant 文本 / assistant{tcA+tcB} / tool_result a / tool_result b
+        assert_eq!(msgs.len(), 5);
+        assert!(matches!(&msgs[0], Message::User { .. }));
+        match &msgs[1] {
+            Message::Assistant { id, content } => {
+                assert!(id.is_none());
+                assert!(matches!(
+                    content.first_ref(),
+                    &rig::completion::AssistantContent::Text(_)
+                ));
+            }
+            _ => panic!("expected assistant text message"),
+        }
+        match &msgs[2] {
+            Message::Assistant { content, .. } => {
+                let calls: Vec<_> = content
+                    .iter()
+                    .filter(|c| matches!(c, AssistantContent::ToolCall(_)))
+                    .collect();
+                assert_eq!(calls.len(), 2, "两个 tool_call 应合并进同一条 assistant 消息");
+            }
+            _ => panic!("expected assistant tool_call message"),
+        }
+        // 两个 tool_result 紧随其后
+        assert!(matches!(&msgs[3], Message::User { .. }));
+        assert!(matches!(&msgs[4], Message::User { .. }));
     }
 
     #[test]

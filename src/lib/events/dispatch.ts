@@ -43,7 +43,7 @@ export function applyEvent(s: Store, env: EventEnvelope): void {
       console.debug(
         `[${ts()}][dispatch] ✓ run_complete session="${p.session_id}" run="${p.run_id}" error="${p.error ?? ''}"`
       );
-      s.markRun(p.session_id, p.run_id || p.session_id, 'done');
+      s.markRun(p.session_id, p.run_id || p.session_id, 'done', p.error);
       break;
     }
     case 'permission_request':

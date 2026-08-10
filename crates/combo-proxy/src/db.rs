@@ -365,7 +365,9 @@ impl ComboDb {
         Ok(())
     }
 
-    /// 列出某个会话下的全部消息,按 created_at 升序。
+    /// 列出某个会话下的全部消息,按 created_at 升序;
+    /// 同一秒内的多条消息(streaming 场景常见)再按插入顺序(rowid)排,
+    /// 保证与 SSE 事件到达顺序一致,避免 assistant 与 user 同秒时错位。
     /// 仅按 session_id 过滤:session ID 是全局唯一的 UUID,
     /// 后端重启后 workspace ID 会变,按 workspace_id 过滤会导致历史丢失。
     pub fn list_messages(
@@ -377,7 +379,7 @@ impl ComboDb {
         let mut stmt = conn.prepare(
             "SELECT id, role, parts, created_at, updated_at
              FROM messages WHERE session_id=?1
-             ORDER BY created_at ASC",
+             ORDER BY created_at ASC, rowid ASC",
         )?;
         let rows = stmt.query_map(params![session_id], |r| {
             Ok(StoredMessage {
