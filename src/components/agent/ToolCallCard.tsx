@@ -1,5 +1,4 @@
-import { FileText } from 'lucide-react';
-import { Badge } from '../ui/badge';
+import { CheckCircle2, FileText } from 'lucide-react';
 import { openFileInEditor } from '../../lib/openFile';
 
 export interface ToolCallInfo {
@@ -35,10 +34,12 @@ export function ToolCallCard({
   return (
     <details className="rounded-md border bg-muted/30">
       <summary className="flex cursor-pointer items-center gap-2 px-3 py-2">
-        <span className="font-mono text-xs">⚙ {call.name}</span>
-        <Badge variant={call.finished ? 'secondary' : 'outline'}>
-          {call.finished ? 'done' : 'pending'}
-        </Badge>
+        {call.finished ? (
+          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-green-500" />
+        ) : (
+          <span className="font-mono text-xs">⚙</span>
+        )}
+        <span className="font-mono text-xs">{call.name}</span>
         {path && (
           <button
             onClick={(e) => {

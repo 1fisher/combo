@@ -11,8 +11,20 @@ describe('ToolCallCard', () => {
       />
     );
     expect(screen.getByText(/bash/)).toBeTruthy();
-    expect(screen.getByText('done')).toBeTruthy();
+    // 完成时显示绿色对勾,而不是 done 文字
+    expect(screen.queryByText('done')).toBeNull();
+    expect(document.querySelector('svg.lucide-circle-check')).toBeTruthy();
     await userEvent.click(screen.getByText(/bash/));
     expect(screen.getByText('{"cmd":"ls"}')).toBeTruthy();
+  });
+
+  it('shows gear icon while pending', () => {
+    render(
+      <ToolCallCard
+        call={{ id: 'tc2', name: 'bash', input: '{}', finished: false }}
+      />
+    );
+    expect(screen.getByText('⚙')).toBeTruthy();
+    expect(document.querySelector('svg.lucide-circle-check')).toBeNull();
   });
 });

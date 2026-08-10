@@ -1,7 +1,7 @@
 //! 内置工具:read / write / search / web_search + current_time / current_date。
 //!
 //! read/write/search 需要 workspace 根目录(由 `builtin_tools` 传入);
-//! web_search 支持多搜索引擎(baidu/bing/ddg,默认 baidu),无需 API key。
+//! web_search 支持多搜索引擎(bing/ddg,默认 bing),无需 API key。
 
 use regex::Regex;
 use rig::tool::{DynamicTool, ToolOutput};
@@ -294,11 +294,11 @@ fn search_tool(ws: PathBuf) -> DynamicTool {
 
 // ============================= web_search =============================
 
-/// `web_search`:网络搜索,支持多引擎(baidu/bing/ddg,默认 baidu)。
+/// `web_search`:网络搜索,支持多引擎(bing/ddg,默认 bing)。
 fn web_search_tool() -> DynamicTool {
     DynamicTool::new(
         "web_search",
-        "网络搜索:使用搜索引擎查找信息,返回结果的标题、链接和摘要。参数:query(搜索关键词),max_results(结果数量上限,默认5),engine(搜索引擎:baidu/bing/ddg,默认baidu)。",
+        "网络搜索:使用搜索引擎查找信息,返回结果的标题、链接和摘要。参数:query(搜索关键词),max_results(结果数量上限,默认5),engine(搜索引擎:bing/ddg,默认bing)。",
         json!({
             "type": "object",
             "properties": {
@@ -306,8 +306,8 @@ fn web_search_tool() -> DynamicTool {
                 "max_results": { "type": "integer", "description": "返回结果数量上限,默认 5" },
                 "engine": {
                     "type": "string",
-                    "description": "搜索引擎:baidu/bing/ddg,默认 baidu",
-                    "enum": ["baidu", "bing", "ddg", "duckduckgo"]
+                    "description": "搜索引擎:bing/ddg,默认 bing",
+                    "enum": ["bing", "ddg", "duckduckgo"]
                 }
             },
             "required": ["query"]
@@ -317,7 +317,7 @@ fn web_search_tool() -> DynamicTool {
                 let query = args.get("query").and_then(Value::as_str).unwrap_or("");
                 let max_results =
                     args.get("max_results").and_then(Value::as_u64).unwrap_or(5) as usize;
-                let engine = args.get("engine").and_then(Value::as_str).unwrap_or("baidu");
+                let engine = args.get("engine").and_then(Value::as_str).unwrap_or("bing");
 
                 if query.is_empty() {
                     return Ok(ToolOutput::text("错误: query 不能为空"));
@@ -326,7 +326,7 @@ fn web_search_tool() -> DynamicTool {
                 let results = match engine {
                     "bing" => web_search_bing(query, max_results).await,
                     "ddg" | "duckduckgo" => web_search_ddg(query, max_results).await,
-                    _ => web_search_baidu(query, max_results).await,
+                    _ => web_search_bing(query, max_results).await,
                 };
 
                 match results {
@@ -362,87 +362,6 @@ struct WebResult {
     snippet: String,
 }
 
-/// 使用百度搜索。百度对无 cookie 的请求返回安全验证页,先访问首页获取 cookie。
-async fn web_search_baidu(query: &str, max_results: usize) -> anyhow::Result<Vec<WebResult>> {
-    let client = reqwest::Client::builder()
-        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
-        .cookie_store(true)
-        .timeout(std::time::Duration::from_secs(15))
-        .build()?;
-
-    // 先访问首页获取 BAIDUID 等 cookie,否则搜索结果会被安全验证拦截
-    client.get("https://www.baidu.com/").send().await?;
-
-    let url = format!(
-        "https://www.baidu.com/s?wd={}&ie=utf-8",
-        url_encode_query(query)
-    );
-    let resp = client.get(&url).send().await?;
-    if !resp.status().is_success() {
-        anyhow::bail!("百度返回状态码: {}", resp.status());
-    }
-
-    let html = resp.text().await?;
-    if html.contains("百度安全验证") {
-        anyhow::bail!("百度安全验证拦截了搜索请求,请稍后重试或改用其它引擎");
-    }
-    Ok(parse_baidu_html(&html, max_results))
-}
-
-/// 解析百度搜索结果页(桌面版 `www.baidu.com/s?wd=...`)。
-fn parse_baidu_html(html: &str, max_results: usize) -> Vec<WebResult> {
-    let tag_re = Regex::new(r"<[^>]+>").unwrap();
-    // 结果容器:class 同时含 result/result-op 与 c-container
-    let container_re = Regex::new(
-        r#"(?s)<div[^>]*class="[^"]*(?:result|result-op)[^"]*c-container[^"]*"[^>]*>"#,
-    )
-    .unwrap();
-    // 容器开标签中的真实地址(mu 属性)
-    let mu_re = Regex::new(r#"mu="([^"]*)""#).unwrap();
-    // 块内标题链接(href 是百度重定向链接,mu 缺失时兜底)
-    let title_re =
-        Regex::new(r#"(?s)<h3[^>]*>.*?<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>"#).unwrap();
-    // 块内摘要(data-module="abstract" 是新版稳定的标记)
-    let abstract_re = Regex::new(r#"(?s)<div data-module="abstract"[^>]*>(.*?)</div>"#).unwrap();
-
-    let starts: Vec<usize> = container_re.find_iter(html).map(|m| m.start()).collect();
-    let mut results = Vec::new();
-    for (i, start) in starts.iter().enumerate() {
-        let end = starts.get(i + 1).copied().unwrap_or(html.len());
-        let block = &html[*start..end];
-
-        let mu = mu_re
-            .captures(block)
-            .map(|c| c[1].to_string())
-            .unwrap_or_default();
-        let url = (!mu.is_empty() && !mu.contains("nourl.ubs.baidu.com"))
-            .then_some(mu)
-            .unwrap_or_default();
-
-        let (title, link) = title_re
-            .captures(block)
-            .map(|c| (strip_tags(&c[2], &tag_re), c[1].to_string()))
-            .unwrap_or_default();
-        if title.is_empty() {
-            continue;
-        }
-
-        let snippet = abstract_re
-            .captures(block)
-            .map(|c| strip_tags(&c[1], &tag_re))
-            .unwrap_or_default();
-
-        results.push(WebResult {
-            title,
-            url: if url.is_empty() { link } else { url },
-            snippet,
-        });
-        if results.len() >= max_results {
-            break;
-        }
-    }
-    results
-}
 
 /// 使用 Bing 搜索。
 async fn web_search_bing(query: &str, max_results: usize) -> anyhow::Result<Vec<WebResult>> {
@@ -791,27 +710,6 @@ mod tests {
         assert_eq!(results[0].url, "https://example.com");
         assert_eq!(results[0].snippet, "This is a snippet");
         assert_eq!(results[1].title, "Test Org");
-    }
-
-    #[test]
-    fn parse_baidu_html_extracts_results() {
-        let html = r#"
-        <div class="result c-container new-pmd" mu="https://www.rust-lang.org/zh-CN/">
-          <h3 class="cosc-title t cos-line-clamp-1 title_4QsBx" data-module="title"><a class="cosc-title-a" href="http://www.baidu.com/link?url=abc" target="_blank"><span><em>Rust</em> 程序设计语言</span></a></h3>
-          <div data-module="abstract" class="content-gap_3jlQr"><div role="text"><span class="summary-text_15QGa"><em>Rust</em> 是一门系统编程语言,注重安全与性能。</span></div></div>
-        </div>
-        <div class="result-op c-container xpath-log new-pmd" mu="http://nourl.ubs.baidu.com/279">
-          <h3 class="t"><a href="http://www.baidu.com/link?url=def">测试标题</a></h3>
-        </div>
-        "#;
-        let results = parse_baidu_html(html, 5);
-        assert_eq!(results.len(), 2);
-        assert_eq!(results[0].title, "Rust 程序设计语言");
-        assert_eq!(results[0].url, "https://www.rust-lang.org/zh-CN/");
-        assert_eq!(results[0].snippet, "Rust 是一门系统编程语言,注重安全与性能。");
-        // mu 为占位地址时回退到重定向链接
-        assert_eq!(results[1].title, "测试标题");
-        assert_eq!(results[1].url, "http://www.baidu.com/link?url=def");
     }
 
     #[test]
