@@ -2124,6 +2124,10 @@ export namespace Api {
     name?: string;
     type?: string;
     models?: { id?: string; name?: string; [k: string]: unknown }[];
+    /** 是否已配置 API Key(后端不回传明文,只给脱敏结果)。 */
+    has_api_key?: boolean;
+    /** 已配置 API Key 的脱敏展示,如 `sk-a****1234`。 */
+    api_key_masked?: string;
     [key: string]: unknown;
   };
 }

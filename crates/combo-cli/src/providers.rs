@@ -266,6 +266,52 @@ pub fn combo_providers_path() -> std::path::PathBuf {
     base.join("combo").join("providers.json")
 }
 
+/// 本地模型缓存条目:仅 id + 模型列表,不回存 key 等敏感字段。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CachedModels {
+    pub id: String,
+    #[serde(default)]
+    pub models: Vec<ModelInfo>,
+}
+
+/// 拉取模型缓存文件路径(数据目录,与 providers.json 同级)。
+pub fn model_cache_path() -> std::path::PathBuf {
+    combo_providers_path().with_file_name("provider-models.json")
+}
+
+/// 读取本地缓存的拉取模型(文件不存在返回空)。
+pub fn load_cached_models() -> Result<Vec<CachedModels>> {
+    let path = model_cache_path();
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let text = std::fs::read_to_string(&path)?;
+    let list: Vec<CachedModels> = serde_json::from_str(&text)
+        .map_err(|e| anyhow::anyhow!("解析 {} 失败: {e}", path.display()))?;
+    Ok(list)
+}
+
+/// 持久化某 provider 拉取到的模型列表(按 id 整体覆盖)。
+pub fn save_cached_models(provider_id: &str, models: &[ModelInfo]) -> Result<()> {
+    let mut list = load_cached_models().unwrap_or_default();
+    if let Some(existing) = list.iter_mut().find(|c| c.id == provider_id) {
+        existing.models = models.to_vec();
+    } else {
+        list.push(CachedModels {
+            id: provider_id.to_string(),
+            models: models.to_vec(),
+        });
+    }
+    let path = model_cache_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let out = serde_json::to_string_pretty(&list)
+        .map_err(|e| anyhow::anyhow!("序列化模型缓存失败: {e}"))?;
+    std::fs::write(&path, out)?;
+    Ok(())
+}
+
 /// 按 id 查找 provider:先查自定义 providers map,再查 combo providers.json,
 /// 最后回退内置定义。
 pub fn find_provider(
@@ -517,6 +563,36 @@ fn parse_google_models(data: &serde_json::Value) -> Vec<ModelInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_models_roundtrip_upserts_by_id() {
+        // 用临时数据目录隔离,避免写真实 providers.json 同级文件
+        let dir = tempfile::tempdir().unwrap();
+        let prev = std::env::var_os("COMBO_DATA_DIR");
+        std::env::set_var("COMBO_DATA_DIR", dir.path());
+        let models = vec![
+            ModelInfo { id: "m1".into(), name: Some("M1".into()), ..Default::default() },
+            ModelInfo { id: "m2".into(), name: None, ..Default::default() },
+        ];
+        save_cached_models("deepseek", &models).unwrap();
+        // 再存一次,覆盖 m1/m2 为单个 m3
+        let m3 = vec![ModelInfo { id: "m3".into(), name: None, ..Default::default() }];
+        save_cached_models("deepseek", &m3).unwrap();
+        save_cached_models("opencode", &models).unwrap();
+
+        let cached = load_cached_models().unwrap();
+        let ds = cached.iter().find(|c| c.id == "deepseek").unwrap();
+        assert_eq!(ds.models.len(), 1, "同 provider 应整体覆盖");
+        assert_eq!(ds.models[0].id, "m3");
+        assert!(cached.iter().any(|c| c.id == "opencode" && c.models.len() == 2));
+        // 缓存文件里不应出现 key 字段
+        let text = std::fs::read_to_string(model_cache_path()).unwrap();
+        assert!(!text.contains("api_key"));
+        match prev {
+            Some(v) => std::env::set_var("COMBO_DATA_DIR", v),
+            None => std::env::remove_var("COMBO_DATA_DIR"),
+        }
+    }
 
     #[test]
     fn expand_env_handles_dollar_and_literal() {

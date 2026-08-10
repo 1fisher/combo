@@ -596,6 +596,15 @@ async fn list_providers(State(state): State<AppState>) -> Json<Value> {
         }
     }
 
+    // 合并本地缓存的拉取模型(优先级最高:覆盖配置/内置)
+    if let Ok(cached) = providers::load_cached_models() {
+        for p in &mut all {
+            if let Some(cp) = cached.iter().find(|c| c.id == p.id) {
+                if !cp.models.is_empty() { p.models = cp.models.clone(); }
+            }
+        }
+    }
+
     // 若当前运行时 provider 不在内置列表中,也加入(兼容旧配置)
     if !all.iter().any(|p| p.id == cfg.provider.id) {
         all.insert(0, cfg.provider.clone());
@@ -604,10 +613,14 @@ async fn list_providers(State(state): State<AppState>) -> Json<Value> {
     let arr: Vec<Value> = all
         .iter()
         .map(|p| {
+            // 已配置的 key 仅回传脱敏结果,不回传明文
+            let masked = p.resolved_api_key().map(|k| mask_api_key(&k));
             json!({
                 "id": p.id,
                 "name": p.name.as_deref().unwrap_or(&p.id),
                 "type": p.provider_type.as_deref().unwrap_or(""),
+                "has_api_key": masked.is_some(),
+                "api_key_masked": masked.unwrap_or_default(),
                 "models": p.models.iter().map(|m| {
                     json!({
                         "id": m.id,
@@ -618,6 +631,17 @@ async fn list_providers(State(state): State<AppState>) -> Json<Value> {
         })
         .collect();
     Json(Value::Array(arr))
+}
+
+/// 脱敏 API Key:保留首尾各 4 个字符,中间用 `****` 替代;过短则整体 `****`。
+fn mask_api_key(key: &str) -> String {
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() <= 8 {
+        return "****".to_string();
+    }
+    let head: String = chars[..4].iter().collect();
+    let tail: String = chars[chars.len() - 4..].iter().collect();
+    format!("{head}****{tail}")
 }
 
 // ---------- 远程模型拉取 / API Key 保存 ----------
@@ -676,6 +700,11 @@ async fn fetch_models(
         if cfg.provider.id == body.provider_id {
             cfg.provider.models = models.clone();
         }
+    }
+
+    // 持久化到本地缓存,重启后 Composer 仍可直接查询/选中
+    if let Err(e) = providers::save_cached_models(&body.provider_id, &models) {
+        tracing::warn!("保存 provider `{}` 的模型缓存失败: {e}", body.provider_id);
     }
 
     let arr: Vec<Value> = models
@@ -996,5 +1025,12 @@ mod tests {
         assert_eq!(env["type"], "message");
         assert_eq!(env["payload"]["type"], "created");
         assert_eq!(env["payload"]["payload"]["id"], "x");
+    }
+
+    #[test]
+    fn mask_api_key_keeps_edges_only() {
+        assert_eq!(mask_api_key("sk-abcdefghijkl1234"), "sk-a****1234");
+        assert_eq!(mask_api_key("short"), "****");
+        assert_eq!(mask_api_key(""), "****");
     }
 }

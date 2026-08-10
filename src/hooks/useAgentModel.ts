@@ -80,7 +80,9 @@ export function useFetchModels(workspaceId: string | null | undefined) {
         : fetchGlobalProviderModels(req);
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['providers', workspaceId] });
+      // 拉取到模型后刷新所有 providers 查询(workspace 的和全局的),
+      // 保证 Composer 的模型选择列表能同步到最新
+      qc.invalidateQueries({ queryKey: ['providers'] });
     },
   });
 }

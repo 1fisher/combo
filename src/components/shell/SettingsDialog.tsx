@@ -261,27 +261,34 @@ function ProviderConfigSection({ open }: { open: boolean }) {
 
   async function handleFetch(providerId: string) {
     const apiKey = (keyInputs[providerId] ?? '').trim();
-    const ptype = providers?.find((p) => p.id === providerId)?.type;
+    const p = providers?.find((x) => x.id === providerId);
+    const ptype = p?.type;
     setStatusMsg((s) => ({ ...s, [providerId]: { ok: false, msg: '' } }));
-    if (!apiKey) {
+    if (!apiKey && !p?.has_api_key) {
       setStatusMsg((s) => ({ ...s, [providerId]: { ok: false, msg: '请输入 API Key' } }));
       return;
     }
     try {
-      await saveProviderKey.mutateAsync({
-        providerId,
-        apiKey,
-        providerType: ptype,
-      });
+      // 输入了新 key 才持久化保存;留空则沿用已保存的 key
+      if (apiKey) {
+        await saveProviderKey.mutateAsync({
+          providerId,
+          apiKey,
+          providerType: ptype,
+        });
+      }
       const result = await fetchModels.mutateAsync({
         providerId,
-        apiKey,
+        apiKey: apiKey || undefined,
         providerType: ptype,
       });
       setKeyInputs((prev) => ({ ...prev, [providerId]: '' }));
       setStatusMsg((s) => ({
         ...s,
-        [providerId]: { ok: true, msg: `已拉取到 ${result.models.length} 个模型` },
+        [providerId]: {
+          ok: true,
+          msg: `已拉取到 ${result.models.length} 个模型${apiKey ? '' : '(使用已保存的 Key)'}`,
+        },
       }));
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -301,6 +308,9 @@ function ProviderConfigSection({ open }: { open: boolean }) {
           const isExpanded = expanded[p.id] ?? false;
           const st = statusMsg[p.id];
           const busy = fetchModels.isPending || saveProviderKey.isPending;
+          const hasKey = !!p.has_api_key;
+          const typedKey = (keyInputs[p.id] ?? '').trim();
+          const canFetch = hasKey || typedKey.length > 0;
           return (
             <div key={p.id} className="rounded-lg border border-input-border bg-background">
               <button
@@ -310,8 +320,12 @@ function ProviderConfigSection({ open }: { open: boolean }) {
               >
                 <span className="flex items-center gap-1.5">
                   <span className="text-[13px] font-medium text-foreground">{p.name ?? p.id}</span>
-                  <span className="rounded bg-surface-hover px-1.5 py-0.5 text-[10px] text-foreground-subtle">
-                    {modelCount > 0 ? `${modelCount} 个模型` : '未配置'}
+                  <span
+                    className={`rounded px-1.5 py-0.5 text-[10px] ${
+                      hasKey ? 'bg-brand/10 text-brand' : 'bg-surface-hover text-foreground-subtle'
+                    }`}
+                  >
+                    {modelCount > 0 ? `${modelCount} 个模型` : hasKey ? '已配置 Key' : '未配置'}
                   </span>
                 </span>
                 <ChevronDown
@@ -338,6 +352,14 @@ function ProviderConfigSection({ open }: { open: boolean }) {
                       )}
                     </div>
                   )}
+                  {/* 已配置的脱敏 key 展示 */}
+                  {hasKey && !typedKey && (
+                    <div className="flex items-center gap-1 text-[11px] text-foreground-subtle">
+                      已配置 API Key:
+                      <span className="font-mono text-foreground">{p.api_key_masked || '****'}</span>
+                      <span className="text-foreground-subtlest">(输入新 Key 可覆盖)</span>
+                    </div>
+                  )}
                   <div className="flex items-center gap-1">
                     <input
                       type="password"
@@ -346,18 +368,20 @@ function ProviderConfigSection({ open }: { open: boolean }) {
                         setKeyInputs((prev) => ({ ...prev, [p.id]: e.target.value }))
                       }
                       onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !busy) {
+                        if (e.key === 'Enter' && !busy && canFetch) {
                           e.preventDefault();
                           handleFetch(p.id);
                         }
                       }}
-                      placeholder="输入 API Key..."
+                      placeholder={
+                        hasKey ? '输入新 API Key 覆盖(留空使用已保存)' : '输入 API Key...'
+                      }
                       className="h-7 min-w-0 flex-1 rounded-lg border border-input-border bg-input px-2 text-[12px] text-foreground outline-none placeholder:text-foreground-subtlest focus:border-input-border-focused"
                     />
                     <Button
                       type="button"
                       size="sm"
-                      disabled={busy || !(keyInputs[p.id] ?? '').trim()}
+                      disabled={busy || !canFetch}
                       onClick={() => handleFetch(p.id)}
                       className="h-7 shrink-0 gap-1 rounded-lg px-2 text-[12px]"
                     >
@@ -381,7 +405,8 @@ function ProviderConfigSection({ open }: { open: boolean }) {
         })}
       </div>
       <div className="text-[12px] text-foreground-subtle">
-        输入 API Key 后点击「拉取模型」获取该 Provider 支持的模型列表。
+        输入 API Key 后点击「拉取模型」获取该 Provider 支持的模型列表;已配置 Key 的
+        Provider 可直接点击「拉取模型」同步最新模型。
       </div>
     </div>
   );
