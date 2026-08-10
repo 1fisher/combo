@@ -79,6 +79,7 @@ export function Composer({
   const setModel = useSetModel(workspaceId);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [providerMenuOpen, setProviderMenuOpen] = useState(false);
+  const [modelErr, setModelErr] = useState('');
   // 当前模型:优先从 agent info 获取,否则从 combo config 加载默认模型
   const configModel = wsConfig?.models?.large?.model ?? wsConfig?.models?.small?.model;
   const currentModelId = agentInfo?.model_cfg?.model ?? agentInfo?.model?.id ?? configModel ?? '';
@@ -119,15 +120,33 @@ export function Composer({
   );
   const currentProviderName = (currentProvider?.name ?? currentProviderId) || '默认';
 
-  // 仅当前 provider 支持的模型
-  const providerModelList = useMemo(
-    () => modelList.filter((m) => m.provider === currentProviderId),
-    [modelList, currentProviderId]
-  );
+  // 全部 provider 的模型,按 provider 分组(可跨 provider 直接选模型)
+  const modelGroups = useMemo(() => {
+    const out: {
+      providerId: string;
+      providerName: string;
+      models: { id: string; name: string }[];
+    }[] = [];
+    for (const m of modelList) {
+      let g = out.find((x) => x.providerId === m.provider);
+      if (!g) {
+        g = { providerId: m.provider, providerName: m.providerName, models: [] };
+        out.push(g);
+      }
+      g.models.push({ id: m.id, name: m.name });
+    }
+    return out;
+  }, [modelList]);
 
   function handleModelChange(modelId: string, provider: string) {
     setModelMenuOpen(false);
-    setModel.mutate({ model: { model: modelId, provider } });
+    setModelErr('');
+    setModel.mutate(
+      { model: { model: modelId, provider } },
+      {
+        onError: (e) => setModelErr(e instanceof Error ? e.message : '切换失败,请稍后重试'),
+      }
+    );
   }
 
   function handleProviderChange(providerId: string) {
@@ -137,7 +156,13 @@ export function Composer({
     const models = p && Array.isArray(p.models) ? p.models : [];
     // 切换 provider 时自动选用其默认大模型(未配置则取第一个模型)
     const defaultModel = (p?.default_large_model_id ?? models[0]?.id) ?? '';
-    setModel.mutate({ model: { model: defaultModel, provider: providerId } });
+    setModelErr('');
+    setModel.mutate(
+      { model: { model: defaultModel, provider: providerId } },
+      {
+        onError: (e) => setModelErr(e instanceof Error ? e.message : '切换失败,请稍后重试'),
+      }
+    );
   }
 
   // mention popover 定位(基于 textarea 的 fixed 坐标)
@@ -234,7 +259,7 @@ export function Composer({
               submit();
             }}
           >
-            <div className="relative flex flex-col gap-3 overflow-hidden rounded-2xl border border-input-border bg-input p-3 transition-colors hover:border-input-border-hover focus-within:!border-input-border-focused focus-within:bg-input-focused">
+            <div className="relative flex flex-col gap-3 rounded-2xl border border-input-border bg-input p-3 transition-colors hover:border-input-border-hover focus-within:!border-input-border-focused focus-within:bg-input-focused">
               {/* 附件 chips */}
               {(attachments.length > 0 || contextItems.length > 0) && (
                 <div className="flex flex-wrap items-center gap-1.5">
@@ -534,35 +559,47 @@ export function Composer({
                         />
                         <div className="absolute bottom-full right-0 z-50 mb-2 max-h-80 w-72 overflow-y-auto rounded-xl border border-border bg-popover p-1.5 shadow-xl">
                           <div className="flex items-center justify-between px-2 py-1 text-xs font-medium text-foreground-subtlest">
-                            <span>{currentProviderName} 模型</span>
+                            <span>选择模型</span>
                             {currentModelId && (
                               <span className="truncate text-[11px] text-foreground-subtle">
                                 当前: {currentModelId}
                               </span>
                             )}
                           </div>
-                          {providerModelList.length === 0 ? (
+                          {modelGroups.length === 0 ? (
                             <div className="px-2 py-2 text-[13px] text-foreground-subtle">
-                              该 Provider 暂无可用模型。可在「设置」中配置 API Key 后拉取模型。
+                              暂无可用的模型。可在「设置」中配置 API Key 后拉取模型。
                             </div>
                           ) : (
-                            providerModelList.map((m) => (
-                              <button
-                                key={`${m.provider}/${m.id}`}
-                                type="button"
-                                onClick={() => handleModelChange(m.id, m.provider)}
-                                className={cn(
-                                  'flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-hover',
-                                  m.id === currentModelId && 'bg-surface-hover'
-                                )}
-                              >
-                                <span className="flex min-w-0 flex-1 flex-col">
-                                  <span className="truncate font-medium">{m.name || m.id}</span>
-                                </span>
-                                {m.id === currentModelId && (
-                                  <Check className="size-3.5 shrink-0 text-brand" />
-                                )}
-                              </button>
+                            modelGroups.map((g) => (
+                              <div key={g.providerId}>
+                                <div className="flex items-center gap-1.5 px-2 pt-1.5 pb-0.5 text-[11px] font-medium text-foreground-subtlest">
+                                  <ProviderLogo
+                                    providerId={g.providerId}
+                                    name={g.providerName}
+                                    className="size-3.5"
+                                  />
+                                  <span className="truncate">{g.providerName}</span>
+                                </div>
+                                {g.models.map((m) => (
+                                  <button
+                                    key={`${g.providerId}/${m.id}`}
+                                    type="button"
+                                    onClick={() => handleModelChange(m.id, g.providerId)}
+                                    className={cn(
+                                      'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-hover',
+                                      m.id === currentModelId && 'bg-surface-hover'
+                                    )}
+                                  >
+                                    <span className="min-w-0 flex-1 truncate font-medium">
+                                      {m.name || m.id}
+                                    </span>
+                                    {m.id === currentModelId && (
+                                      <Check className="size-3.5 shrink-0 text-brand" />
+                                    )}
+                                  </button>
+                                ))}
+                              </div>
                             ))
                           )}
                         </div>
@@ -606,6 +643,11 @@ export function Composer({
                   )}
                 </div>
               </div>
+              {modelErr && (
+                <p className="px-1 text-xs text-destructive" role="alert">
+                  {modelErr}
+                </p>
+              )}
             </div>
           </form>
         </div>

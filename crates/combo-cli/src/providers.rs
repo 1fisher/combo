@@ -320,8 +320,26 @@ pub fn find_provider(
 ) -> Result<ProviderInfo> {
     // 1. 配置文件内嵌 providers
     if let Some(c) = custom.get(id) {
-        let mut p = ProviderInfo::from_config(id, c);
-        // 配置未指定模型时,从 combo providers.json 合并默认模型
+        let from_cfg = ProviderInfo::from_config(id, c);
+        let mut p =
+            if let Some(mut b) = builtin_providers().into_iter().find(|b| b.id == id) {
+                // 内置 provider 被配置部分覆盖:仅覆盖显式给出的字段,
+                // 缺失的 base_url/key/模型回落内置定义(与 list_providers 口径一致)
+                if from_cfg.api_key.is_some() { b.api_key = from_cfg.api_key; }
+                if from_cfg.api_endpoint.is_some() { b.api_endpoint = from_cfg.api_endpoint; }
+                if from_cfg.provider_type.is_some() { b.provider_type = from_cfg.provider_type; }
+                if from_cfg.default_large_model_id.is_some() {
+                    b.default_large_model_id = from_cfg.default_large_model_id;
+                }
+                if from_cfg.default_small_model_id.is_some() {
+                    b.default_small_model_id = from_cfg.default_small_model_id;
+                }
+                if !from_cfg.models.is_empty() { b.models = from_cfg.models; }
+                b
+            } else {
+                from_cfg
+            };
+        // 配置未指定默认模型时,从 combo providers.json 合并默认模型
         if p.default_large_model_id.is_none() {
             if let Ok(combo) = load_combo_providers() {
                 if let Some(cp) = combo.iter().find(|cp| cp.id == id) {
@@ -631,6 +649,45 @@ mod tests {
         let p = find_provider("opencode", &std::collections::BTreeMap::new()).unwrap();
         assert_eq!(p.default_model(), "deepseek-v4-flash-free");
         assert_eq!(p.resolved_endpoint().unwrap(), "https://opencode.ai/zen/v1");
+    }
+
+    #[test]
+    fn find_provider_keeps_builtin_endpoint_when_config_misses_base_url() {
+        // 配置只覆盖 key、缺 base_url:endpoint 应回落内置定义,
+        // 否则运行时请求会落到默认 OpenAI 端点(与 list_providers 口径一致)
+        let mut custom = std::collections::BTreeMap::new();
+        custom.insert(
+            "opencode".to_string(),
+            crate::config::ProviderConfig {
+                provider_type: Some("openai-compat".into()),
+                api_key: Some("sk-test".into()),
+                base_url: None,
+                ..Default::default()
+            },
+        );
+        let p = find_provider("opencode", &custom).unwrap();
+        assert_eq!(p.resolved_endpoint().unwrap(), "https://opencode.ai/zen/v1");
+        assert_eq!(p.api_key.as_deref(), Some("sk-test"));
+        assert_eq!(p.name.as_deref(), Some("OpenCode Zen"));
+        assert_eq!(p.default_model(), "deepseek-v4-flash-free");
+    }
+
+    #[test]
+    fn find_provider_config_overrides_builtin_endpoint_when_provided() {
+        let mut custom = std::collections::BTreeMap::new();
+        custom.insert(
+            "opencode".to_string(),
+            crate::config::ProviderConfig {
+                provider_type: Some("openai-compat".into()),
+                api_key: Some("sk-test".into()),
+                base_url: Some("https://custom.example/v1".into()),
+                ..Default::default()
+            },
+        );
+        let p = find_provider("opencode", &custom).unwrap();
+        assert_eq!(p.resolved_endpoint().unwrap(), "https://custom.example/v1");
+        // 未配置默认模型时保留内置模型的默认模型
+        assert_eq!(p.default_model(), "deepseek-v4-flash-free");
     }
 
     #[test]
