@@ -39,6 +39,12 @@ export function MessageItem({
 }) {
   const isUser = vm.role === 'user';
 
+  // 只有 tool_result/finish 等不可见 part 的消息整条隐藏(气泡也不显示)
+  const visibleParts = (vm.parts ?? []).filter((p) =>
+    ['text', 'reasoning', 'tool_call', 'shell_command'].includes(p.type),
+  );
+  if (visibleParts.length === 0) return null;
+
   // 提取 finish part,不参与 inline 渲染,合并进 header
   const finishPart = vm.parts.find((p) => p.type === 'finish');
   const finishReason = (finishPart?.data as { reason?: string } | undefined)?.reason ?? '';
@@ -121,20 +127,8 @@ export function MessageItem({
                   );
                 }
                 case 'tool_result': {
-                  const tr = d as {
-                    tool_call_id: string;
-                    name: string;
-                    content: string;
-                    metadata?: string;
-                    is_error?: boolean;
-                  };
-                  // 空内容的 tool_result 不渲染
-                  if (!tr.content || tr.content.trim() === '') return null;
-                  return (
-                    <div key={i}>
-                      <ToolResultCard result={tr as never} />
-                    </div>
-                  );
+                  // 工具执行结果不展示在对话里(tool_call 卡片已显示调用)
+                  return null;
                 }
                 case 'shell_command': {
                   const sc = d as { command: string; output: string; exit_code: number };

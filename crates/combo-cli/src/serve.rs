@@ -30,7 +30,7 @@ use rig::completion::{AssistantContent, Message};
 use rig::OneOrMany;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -440,7 +440,30 @@ fn assistant_message_json(
 
 /// 把 proxy 注入的历史消息([{ role, parts }])还原为 rig Message 列表。
 /// text/tool_call/tool_result 各成一跳,便于 provider 正确消费多轮上下文。
+/// 孤立 tool_call(上次 run 失败残留、无配对 tool_result)直接丢弃,
+/// 否则 OpenAI 兼容 provider 会报 400(assistant tool_calls 必须有 tool 消息跟随)。
 fn history_to_messages(history: &[Value]) -> Vec<Message> {
+    // 预扫描:收集有 tool_result 配对的 tool_call_id
+    let mut answered: HashSet<String> = HashSet::new();
+    for h in history {
+        let role = h.get("role").and_then(Value::as_str).unwrap_or("assistant");
+        if role != "user" && role != "tool" {
+            continue;
+        }
+        let Some(parts) = h.get("parts").and_then(Value::as_array) else {
+            continue;
+        };
+        for p in parts {
+            if p.get("type").and_then(Value::as_str) != Some("tool_result") {
+                continue;
+            }
+            if let Some(data) = p.get("data") {
+                if let Some(id) = data.get("tool_call_id").and_then(Value::as_str) {
+                    answered.insert(id.to_string());
+                }
+            }
+        }
+    }
     let mut out = Vec::new();
     for h in history {
         let role = h.get("role").and_then(Value::as_str).unwrap_or("assistant");
@@ -461,6 +484,10 @@ fn history_to_messages(history: &[Value]) -> Vec<Message> {
                 }
                 ("assistant", "tool_call") => {
                     let id = data.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+                    // 无配对 tool_result 的孤立 tool_call 丢弃(会导致 provider 400)
+                    if !answered.contains(&id) {
+                        continue;
+                    }
                     let name = data.get("name").and_then(Value::as_str).unwrap_or("").to_string();
                     let raw = data.get("input").and_then(Value::as_str).unwrap_or("{}");
                     let arguments: Value =
@@ -771,6 +798,51 @@ mod tests {
             }
             _ => panic!("expected user tool_result message"),
         }
+    }
+
+    #[test]
+    fn history_to_messages_drops_orphan_tool_call() {
+        // 上次 run 失败残留:assistant tool_call 没有配对 tool_result
+        let history = vec![
+            json!({ "role": "user", "parts": [part("text", r#"{"text":"今天是什么日子"}"#)] }),
+            json!({
+                "role": "assistant",
+                "parts": [
+                    part("tool_call", r#"{"id":"orphan1","name":"current_date","input":"{}"}"#),
+                ],
+            }),
+            json!({ "role": "user", "parts": [part("text", r#"{"text":"明天呢"}"#)] }),
+            // 正常的一对:tool_call + tool_result 都要保留
+            json!({
+                "role": "assistant",
+                "parts": [
+                    part("tool_call", r#"{"id":"ok1","name":"bash","input":"{\"command\":\"pwd\"}"}"#),
+                ],
+            }),
+            json!({
+                "role": "user",
+                "parts": [part("tool_result", r#"{"tool_call_id":"ok1","content":"/tmp"}"#)],
+            }),
+        ];
+        let msgs = history_to_messages(&history);
+        // orphan1 被丢弃,ok1 的 tool_call + tool_result 保留
+        assert_eq!(msgs.len(), 4);
+        // user text(今天是什么日子)
+        assert!(matches!(&msgs[0], Message::User { .. }));
+        // user text(明天呢)
+        assert!(matches!(&msgs[1], Message::User { .. }));
+        // ok1 的 assistant tool_call
+        match &msgs[2] {
+            Message::Assistant { content, .. } => {
+                assert!(matches!(
+                    content.first_ref(),
+                    &rig::completion::AssistantContent::ToolCall(_)
+                ));
+            }
+            _ => panic!("expected assistant tool_call message"),
+        }
+        // ok1 的 tool_result
+        assert!(matches!(&msgs[3], Message::User { .. }));
     }
 
     #[test]

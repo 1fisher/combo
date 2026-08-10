@@ -34,7 +34,7 @@ vi.mock('../../lib/api', () => ({
 }));
 
 describe('ConversationList', () => {
-  it('lists sessions and creates a new one', async () => {
+  it('lists sessions', async () => {
     useAgentStore.setState({ activeWorkspaceId: 'w1', activeSessionId: null });
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
@@ -43,9 +43,7 @@ describe('ConversationList', () => {
       </QueryClientProvider>
     );
     expect(await screen.findByText('会话一')).toBeTruthy();
-    await userEvent.click(screen.getByRole('button', { name: /新建会话/ }));
-    expect(await screen.findByText('会话 3')).toBeTruthy();
-    expect(useAgentStore.getState().activeSessionId).toBe('s3');
+    expect(screen.getByText('会话二')).toBeTruthy();
   });
 
   it('renames a session via inline edit', async () => {

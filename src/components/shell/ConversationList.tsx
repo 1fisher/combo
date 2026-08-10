@@ -1,5 +1,3 @@
-import { MessageSquarePlus } from 'lucide-react';
-import { Button } from '../ui/button';
 import { useSessions } from '../../hooks/useSessions';
 import { useActiveWorkspaceId } from '../../hooks/useActiveWorkspaceId';
 import { useAgentStore } from '../../stores/agentStore';
@@ -23,7 +21,7 @@ export function ConversationList({
 }: ConversationListProps = {}) {
   const workspaceId = useActiveWorkspaceId();
   const activeSessionId = useAgentStore((s) => s.activeSessionId);
-  const { sessions, isLoading, create, activate, remove, rename } = useSessions(workspaceId);
+  const { sessions, isLoading, activate, remove, rename } = useSessions(workspaceId);
 
   if (!workspaceId) {
     return (
@@ -31,13 +29,6 @@ export function ConversationList({
         先添加/选择项目,再创建任务。
       </div>
     );
-  }
-
-  async function onNew() {
-    const base = `会话 ${(sessions?.length ?? 0) + 1}`;
-    const s = await create(base);
-    void activate(s.id);
-    onNavigate?.();
   }
 
   // 拆分:活跃会话 vs 归档会话(超过7天)
@@ -87,18 +78,6 @@ export function ConversationList({
         <div className="px-3 py-2 text-[13px] text-foreground-subtle">
           {archiveOpen ? '没有归档的任务' : '还没有任务'}
         </div>
-      )}
-      {!isLoading && !archiveOpen && sessions && (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-7 justify-start gap-1.5 px-2.5 text-[13px] font-normal text-foreground-subtle hover:text-foreground"
-          onClick={() => void onNew()}
-          title="新建会话"
-        >
-          <MessageSquarePlus className="size-3.5" />
-          新建会话
-        </Button>
       )}
     </div>
   );
