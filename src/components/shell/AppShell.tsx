@@ -1,12 +1,17 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { useEffect, useRef, useState, type PointerEvent } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type PointerEvent } from 'react';
 import { ArrowLeft, ArrowRight, CircleHelp, PanelLeftClose, PanelRight, SquareTerminal, X } from 'lucide-react';
 import { connectLoop } from '../../lib/connection';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
 import { AgentPanel } from '../agent/AgentPanel';
-import { TerminalPanel } from './TerminalPanel';
-import { EditorPane } from '../editor/EditorPane';
+// xterm / CodeMirror 体量大,按需加载并各自独立成 chunk
+const TerminalPanel = lazy(() =>
+  import('./TerminalPanel').then((m) => ({ default: m.TerminalPanel })),
+);
+const EditorPane = lazy(() =>
+  import('../editor/EditorPane').then((m) => ({ default: m.EditorPane })),
+);
 import { ModalQueue } from '../agent/ModalQueue';
 import { useEditorStore } from '../../stores/editorStore';
 import { useActiveWorkspaceId } from '../../hooks/useActiveWorkspaceId';
@@ -15,6 +20,15 @@ import { cn } from '../../lib/utils';
 import { HelpDialog } from './HelpDialog';
 
 const qc = new QueryClient();
+
+/** lazy 面板加载期间的占位 */
+function PanelLoading() {
+  return (
+    <div className="flex min-h-0 w-full flex-1 items-center justify-center text-sm text-foreground-subtle">
+      加载中…
+    </div>
+  );
+}
 
 const SIDEBAR_MIN = 264;
 const SIDEBAR_DEFAULT = 372;
@@ -46,7 +60,14 @@ function AppShellInner() {
     () => typeof window === 'undefined' || window.innerWidth < 768
   );
   const [view, setView] = useState<'agent' | 'terminal' | 'editor'>('agent');
+  // 面板首次切换过去才挂载(lazy 按需拉取),挂载后保持不卸载以保留终端/编辑器状态
+  const [paneMounted, setPaneMounted] = useState({ terminal: false, editor: false });
   const [helpOpen, setHelpOpen] = useState(false);
+
+  useEffect(() => {
+    if (view === 'terminal') setPaneMounted((p) => (p.terminal ? p : { ...p, terminal: true }));
+    if (view === 'editor') setPaneMounted((p) => (p.editor ? p : { ...p, editor: true }));
+  }, [view]);
   const dragRef = useRef<{ startX: number; startW: number } | null>(null);
   const isMobile = useIsMobile();
 
@@ -179,10 +200,22 @@ function AppShellInner() {
                 <AgentPanel workspaceId={workspaceId} />
               </div>
               <div className={cn('flex min-h-0 w-full flex-1', view !== 'terminal' && 'hidden')}>
-                <TerminalPanel workspaceId={workspaceId} onClose={() => setView('agent')} />
+                {paneMounted.terminal && (
+                  <Suspense fallback={<PanelLoading />}>
+                    <TerminalPanel workspaceId={workspaceId} onClose={() => setView('agent')} />
+                  </Suspense>
+                )}
               </div>
               <div className={cn('flex min-h-0 w-full flex-1', view !== 'editor' && 'hidden')}>
-                {workspaceId ? <EditorPane workspaceId={workspaceId} /> : <AgentPanel workspaceId={workspaceId} />}
+                {workspaceId ? (
+                  paneMounted.editor && (
+                    <Suspense fallback={<PanelLoading />}>
+                      <EditorPane workspaceId={workspaceId} />
+                    </Suspense>
+                  )
+                ) : (
+                  <AgentPanel workspaceId={workspaceId} />
+                )}
               </div>
             </div>
           </section>

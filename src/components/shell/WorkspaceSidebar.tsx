@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Archive,
   CalendarClock,
@@ -44,7 +44,10 @@ import { DirectoryPicker } from './DirectoryPicker';
 import { SettingsDialog } from './SettingsDialog';
 import { SearchDialog } from './SearchDialog';
 import { AutomationPanel } from './AutomationPanel';
-import { MobileConnectDialog } from './MobileConnectDialog';
+// qrcode 依赖较大,首次打开二维码前不加载
+const MobileConnectDialog = lazy(() =>
+  import('./MobileConnectDialog').then((m) => ({ default: m.MobileConnectDialog })),
+);
 
 function basename(p: string): string {
   const clean = p.replace(/[\\/]+$/, '');
@@ -228,6 +231,11 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
   const [searchOpen, setSearchOpen] = useState(false);
   const [autoOpen, setAutoOpen] = useState(false);
   const [mobileConnectOpen, setMobileConnectOpen] = useState(false);
+  // 首次打开后才挂载,之后保持以保留关闭动画
+  const [mobileConnectLoaded, setMobileConnectLoaded] = useState(false);
+  useEffect(() => {
+    if (mobileConnectOpen && !mobileConnectLoaded) setMobileConnectLoaded(true);
+  }, [mobileConnectOpen, mobileConnectLoaded]);
   // 会话列表排序 & 筛选
   const [sortMode, setSortMode] = useState<'recent' | 'name'>('recent');
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
@@ -764,7 +772,11 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
       <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} onNavigate={onNavigate} />
       <AutomationPanel open={autoOpen} onOpenChange={setAutoOpen} />
-      <MobileConnectDialog open={mobileConnectOpen} onOpenChange={setMobileConnectOpen} />
+      {mobileConnectLoaded && (
+        <Suspense fallback={null}>
+          <MobileConnectDialog open={mobileConnectOpen} onOpenChange={setMobileConnectOpen} />
+        </Suspense>
+      )}
       {/* 右键上下文菜单 */}
       {ctxMenu && (
         <div
