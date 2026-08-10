@@ -37,16 +37,25 @@ export function MessageItem({
   vm: MessageVM;
   workspaceId?: string;
 }) {
+  const parts = vm.parts ?? [];
   const isUser = vm.role === 'user';
+  // 用户消息中是否包含真正的发送文本(否则只是工具结果的载体)
+  const hasUserText = isUser && parts.some((p) => p.type === 'text');
+  // 仅含工具结果、无用户文本的消息:作为中间过程展示,不伪装成用户消息
+  const isToolProcess = isUser && !hasUserText && parts.some((p) => p.type === 'tool_result');
 
-  // 只有 tool_result/finish 等不可见 part 的消息整条隐藏(气泡也不显示)
-  const visibleParts = (vm.parts ?? []).filter((p) =>
-    ['text', 'reasoning', 'tool_call', 'shell_command'].includes(p.type),
+  // 无任何可见 part 的消息整条隐藏(如仅 finish)
+  const visibleParts = parts.filter((p) =>
+    ['text', 'reasoning', 'tool_call', 'tool_result', 'shell_command'].includes(p.type),
   );
   if (visibleParts.length === 0) return null;
 
+  const align = isToolProcess ? 'start' : isUser ? 'end' : 'start';
+  const bubbleVariant = isToolProcess ? 'ghost' : isUser ? 'default' : 'muted';
+  const roleLabel = isToolProcess ? '工具' : ROLE_LABEL[vm.role];
+
   // 提取 finish part,不参与 inline 渲染,合并进 header
-  const finishPart = vm.parts.find((p) => p.type === 'finish');
+  const finishPart = parts.find((p) => p.type === 'finish');
   const finishReason = (finishPart?.data as { reason?: string } | undefined)?.reason ?? '';
   const isAbnormal = !['end_turn', 'stop', 'tool_use', 'tool_use_end', ''].includes(finishReason);
   const reasonLabel = REASON_LABELS[finishReason] ?? finishReason ?? '回复完成';
@@ -58,7 +67,7 @@ export function MessageItem({
     minute: '2-digit',
   });
   return (
-    <Message align={isUser ? 'end' : 'start'}>
+    <Message align={align}>
       <MessageContent>
         <MessageHeader>
           {showFinishBadge ? (
@@ -76,7 +85,7 @@ export function MessageItem({
               {reasonLabel}
             </span>
           ) : (
-            <span>{ROLE_LABEL[vm.role]}</span>
+            <span>{roleLabel}</span>
           )}
           {!vm.streaming && (
             <span className="ml-2 font-mono text-[10px] text-muted-foreground/60">{time}</span>
@@ -90,9 +99,9 @@ export function MessageItem({
             </span>
           )}
         </MessageHeader>
-        <Bubble variant={isUser ? 'default' : 'muted'} align={isUser ? 'end' : 'start'}>
+        <Bubble variant={bubbleVariant} align={align}>
           <BubbleContent>
-            {vm.parts.map((part, i) => {
+            {parts.map((part, i) => {
               const d = part.data as never as {
                 text?: string;
                 thinking?: string;
@@ -127,8 +136,20 @@ export function MessageItem({
                   );
                 }
                 case 'tool_result': {
-                  // 工具执行结果不展示在对话里(tool_call 卡片已显示调用)
-                  return null;
+                  const tr = d as {
+                    tool_call_id: string;
+                    name: string;
+                    content: string;
+                    metadata?: string;
+                    is_error?: boolean;
+                  };
+                  // 空内容的 tool_result 不渲染
+                  if (!tr.content || tr.content.trim() === '') return null;
+                  return (
+                    <div key={i}>
+                      <ToolResultCard result={tr as never} />
+                    </div>
+                  );
                 }
                 case 'shell_command': {
                   const sc = d as { command: string; output: string; exit_code: number };
