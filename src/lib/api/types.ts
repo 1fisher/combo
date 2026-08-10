@@ -2128,6 +2128,10 @@ export namespace Api {
     has_api_key?: boolean;
     /** 已配置 API Key 的脱敏展示,如 `sk-a****1234`。 */
     api_key_masked?: string;
+    /** provider 默认大模型 id(切换 provider 时自动选用)。 */
+    default_large_model_id?: string;
+    /** provider 默认小模型 id。 */
+    default_small_model_id?: string;
     [key: string]: unknown;
   };
 }

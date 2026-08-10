@@ -387,7 +387,7 @@ async fn run_agent(
     let cfg = state.cfg.lock().unwrap().clone();
     let answer = crate::agent::ask_answer(&cfg, &question, std::env::current_dir().ok())
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, friendly_error(&e)))?;
 
     Ok(Json(json!({ "ok": true, "answer": answer })))
 }
@@ -495,7 +495,10 @@ async fn run_agent_ws(
         let (reason, error, text) = match &result {
             Ok(Some(t)) => ("end_turn", None, t.clone()),
             Ok(None) => ("cancelled", None, String::new()),
-            Err(e) => ("error", Some(e.to_string()), e.to_string()),
+            Err(e) => {
+                let msg = friendly_error(e);
+                ("error", Some(msg.clone()), msg)
+            }
         };
         parts.push(finish_part(reason, now_secs()));
         let _ = tx.send(msg_env(
@@ -627,6 +630,23 @@ fn tool_result_message_json(
 
 fn finish_part(reason: &str, time: i64) -> Value {
     json!({ "type": "finish", "data": { "reason": reason, "time": time } })
+}
+
+/// 把运行错误转成对用户友好的中文提示;原始错误附在第二行便于排查。
+/// 覆盖常见场景:余额不足(402)、密钥无效(401)、限流(429),其余原样返回。
+fn friendly_error(e: &anyhow::Error) -> String {
+    let raw = e.to_string();
+    let low = raw.to_ascii_lowercase();
+    let hint = if low.contains("402") || low.contains("insufficient balance") || low.contains("payment required") {
+        "余额不足:当前 API 服务商账户余额不足或已欠费,充值后即可继续对话。"
+    } else if low.contains("401") || low.contains("invalid api key") || low.contains("unauthorized") || low.contains("authentication") {
+        "API 密钥无效或已过期:请在「设置」中检查当前 provider 的 API Key。"
+    } else if low.contains("429") || low.contains("rate limit") || low.contains("too many requests") {
+        "请求过于频繁(限流):请稍等片刻再试。"
+    } else {
+        return raw;
+    };
+    format!("{hint}\n原始错误:{raw}")
 }
 
 /// rune 双层信封:`{ type, payload: { type: created|updated|deleted, payload } }`。
@@ -838,6 +858,13 @@ async fn list_providers(State(state): State<AppState>) -> Json<Value> {
         }
     }
 
+    // 追加配置文件中自定义的 provider(不在内置列表中的 id)
+    for (id, pc) in &config_path.providers {
+        if !all.iter().any(|p| &p.id == id) {
+            all.push(ProviderInfo::from_config(id, pc));
+        }
+    }
+
     // 合并本地缓存的拉取模型(优先级最高:覆盖配置/内置)
     if let Ok(cached) = providers::load_cached_models() {
         for p in &mut all {
@@ -863,6 +890,8 @@ async fn list_providers(State(state): State<AppState>) -> Json<Value> {
                 "type": p.provider_type.as_deref().unwrap_or(""),
                 "has_api_key": masked.is_some(),
                 "api_key_masked": masked.unwrap_or_default(),
+                "default_large_model_id": p.default_large_model_id,
+                "default_small_model_id": p.default_small_model_id,
                 "models": p.models.iter().map(|m| {
                     json!({
                         "id": m.id,
@@ -1020,8 +1049,10 @@ async fn config_model(
     if let Some(m) = &body.model {
         if let Some(provider_id) = &m.provider {
             if provider_id != &cfg.provider.id {
-                // 切换 provider
-                match providers::find_provider(provider_id, &std::collections::BTreeMap::new()) {
+                // 切换 provider:合并配置文件内嵌 providers,与 list_providers 口径一致
+                let config_path = AppConfig::load_or_create(&crate::config::default_config_path())
+                    .unwrap_or_default();
+                match providers::find_provider(provider_id, &config_path.providers) {
                     Ok(p) => cfg.provider = p,
                     Err(e) => {
                         return Err((
@@ -1103,6 +1134,32 @@ mod tests {
                 ));
             }
             _ => panic!("expected user tool_result message"),
+        }
+    }
+
+    #[test]
+    fn friendly_error_maps_common_status_codes() {
+        let cases = [
+            (
+                "CompletionError: HttpError: Invalid status code 402 Payment Required with message: {\"error\":{\"message\":\"Insufficient Balance\"}}",
+                "余额不足",
+            ),
+            (
+                "CompletionError: HttpError: Invalid status code 401 Unauthorized with message: invalid api key",
+                "API 密钥无效",
+            ),
+            (
+                "CompletionError: HttpError: Invalid status code 429 Too Many Requests with message: rate limit exceeded",
+                "限流",
+            ),
+            ("Connection refused (os error 61)", "Connection refused"),
+        ];
+        for (raw, expect) in cases {
+            let msg = friendly_error(&anyhow::anyhow!("{raw}"));
+            assert!(msg.contains(expect), "raw={raw} msg={msg}");
+            if msg != raw {
+                assert!(msg.contains("原始错误"), "raw={raw} msg={msg}");
+            }
         }
     }
 
