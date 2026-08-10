@@ -12,7 +12,7 @@ path = "src/main.rs"
 [dependencies]
 rig = { version = "0.41", features = ["rmcp"] }
 rmcp = { version = "2.2", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json", "cookies"] }
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
