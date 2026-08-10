@@ -1996,7 +1996,7 @@ export namespace Api {
     responses: QuestionResponse[];
   };
 
-  // 文件服务(combo-proxy 本地端点,swagger 无此定义)
+  // 文件服务(combo-cli serve 本地端点,swagger 无此定义)
   export type FileEntryType = 'dir' | 'file';
   export type FileEntry = {
     name: string;
@@ -2007,7 +2007,7 @@ export namespace Api {
   export type FileContent = { content: string };
   export type WriteFileResult = { ok: boolean };
 
-  // Git 服务(combo-proxy 本地端点,在 workspace 根目录执行 git 子命令)
+  // Git 服务(combo-cli serve 本地端点,在 workspace 根目录执行 git 子命令)
   export type GitFileStatus =
     | 'modified'
     | 'added'
@@ -2061,7 +2061,7 @@ export namespace Api {
     status: string;
   };
 
-  // 技能(combo-proxy 本地端点,扫描技能目录)
+  // 技能(combo-cli serve 本地端点,扫描技能目录)
   export type Skill = {
     name: string;
     dir_name: string;

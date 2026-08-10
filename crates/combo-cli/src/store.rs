@@ -3,11 +3,37 @@
 //! conversations:rune session 的本地镜像,创建/删除时双写,列表直接从
 //! sqlite 读取,不依赖 rune 在线。
 
-use crate::backend::BackendType;
 use crate::meta::WorkspaceMeta;
 use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+
+/// 历史 workspace 的后端标识(仅用于解析存量 sqlite 数据的 backend 字段)。
+/// combo 现在只有 combo-cli 一个后端,其余值均归一化到 ComboCli。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BackendType {
+    /// 自有 agent(combo-cli serve,默认)。
+    ComboCli,
+}
+
+impl BackendType {
+    /// 序列化为与 wire/URL 一致的字符串。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            BackendType::ComboCli => "combo-cli",
+        }
+    }
+
+    /// 解析后端字符串,未知值(含历史 "crush")回退到 ComboCli(默认 agent)。
+    pub fn parse(s: &str) -> BackendType {
+        match s {
+            // combo-cli 及历史拼写都归一化到 ComboCli;
+            // "crush" 已废弃,存量数据自动迁移到 ComboCli。
+            "combo-cli" | "combo_cli" | "combocli" | "crush" => BackendType::ComboCli,
+            _ => BackendType::ComboCli,
+        }
+    }
+}
 
 /// 默认数据库路径:`COMBO_DATA_DIR` 或 `XDG_DATA_HOME/combo/combo.db`。
 pub fn default_db_path() -> PathBuf {
@@ -332,6 +358,7 @@ impl ComboDb {
     }
 
     /// workspace 重建后 id 变化时,把旧 id 下的会话镜像迁移到新 id。
+    #[allow(dead_code)] // 保留:workspace 别名合并等场景可用
     pub fn move_conversations(&self, from_ws: &str, to_ws: &str) -> anyhow::Result<()> {
         self.conn.lock().unwrap().execute(
             "UPDATE conversations SET workspace_id=?1 WHERE workspace_id=?2",

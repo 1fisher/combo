@@ -1,19 +1,10 @@
 //! combo-cli:combo 自有 agent 命令行工具。
 //! 基于 rig 0.41,支持多 provider(openai/anthropic/gemini/ollama/deepseek)、
 //! 内置工具 + MCP 工具、sqlite 会话持久化,以及 serve 服务模式
-//! (进程守护式管理,health + control 端点,供 combo-proxy 托管)。
-
-mod agent;
-mod config;
-mod db;
-mod lsp;
-mod mcp;
-mod providers;
-mod serve;
-mod skills;
-mod tools;
+//! (进程守护式管理,health + control 端点,直接承担 combo 全部 API)。
 
 use clap::{Parser, Subcommand};
+use combo_cli::{agent, config, db, lsp, providers, serve, skills};
 
 #[derive(Parser)]
 #[command(

@@ -12,7 +12,7 @@ use std::path::Path as FsPath;
 use std::process::Command;
 
 use crate::fs::{error, ok_json, resolve_root, safe_join};
-use crate::AppState;
+use crate::serve::AppState;
 
 #[derive(Deserialize)]
 pub struct PathQuery {

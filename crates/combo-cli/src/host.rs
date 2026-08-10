@@ -11,7 +11,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::path::{Path as FsPath, PathBuf};
 
-use crate::AppState;
+use crate::serve::AppState;
 
 #[derive(Deserialize)]
 pub struct PathQuery {
@@ -207,13 +207,7 @@ mod tests {
     fn resolve_dir_rejects_outside_browse_root() {
         let root = temp_dir("broot");
         let outside = temp_dir("boutside");
-        let state = AppState {
-            meta: Arc::new(crate::MetaStore::new()),
-            registry: Arc::new(crate::BackendRegistry::new()),
-            browse_root: Some(root.clone()),
-            relay: crate::RelayManager::new(),
-            local_port: 0,
-        };
+        let state = AppState::test_state(Arc::new(crate::meta::MetaStore::new()), Some(root.clone()));
         assert!(resolve_dir(&state, &root).is_ok());
         let resp = resolve_dir(&state, &outside).unwrap_err();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
@@ -226,13 +220,7 @@ mod tests {
         let base = temp_dir("nondir");
         let f = base.join("f.txt");
         std::fs::write(&f, "x").unwrap();
-        let state = AppState {
-            meta: Arc::new(crate::MetaStore::new()),
-            registry: Arc::new(crate::BackendRegistry::new()),
-            browse_root: None,
-            relay: crate::RelayManager::new(),
-            local_port: 0,
-        };
+        let state = AppState::test_state(Arc::new(crate::meta::MetaStore::new()), None);
         let resp = resolve_dir(&state, &f).unwrap_err();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let _ = std::fs::remove_dir_all(&base);

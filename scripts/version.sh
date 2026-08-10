@@ -11,7 +11,7 @@
 #   - package.json
 #   - src-tauri/tauri.conf.json
 #   - src-tauri/Cargo.toml
-#   - crates/combo-proxy/Cargo.toml
+#   - crates/combo-cli/Cargo.toml
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -21,7 +21,7 @@ FILES=(
   "package.json"
   "src-tauri/tauri.conf.json"
   "src-tauri/Cargo.toml"
-  "crates/combo-proxy/Cargo.toml"
+  "crates/combo-cli/Cargo.toml"
 )
 
 # ---------- helpers ----------
@@ -153,7 +153,7 @@ main() {
   if [ -f "$ROOT/Cargo.lock" ] && command -v cargo >/dev/null 2>&1; then
     echo "  更新 Cargo.lock…"
     (cd "$ROOT" && cargo update -p combo --precise "$new") 2>/dev/null || true
-    (cd "$ROOT" && cargo update -p combo-proxy --precise "$new") 2>/dev/null || true
+    (cd "$ROOT" && cargo update -p combo-cli --precise "$new") 2>/dev/null || true
   fi
 
   echo ""

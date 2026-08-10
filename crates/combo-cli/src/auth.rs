@@ -5,7 +5,7 @@
 //! Bearer <token>` 或 `?token=<token>`)。鉴权中间件对非回环请求强制
 //! 校验,本地(127.0.0.1/::1)与公开端点(`/v1/health`、`/v1/auth/*`)放行。
 
-use crate::AppState;
+use crate::serve::AppState;
 use axum::body::Body;
 use axum::extract::{Query, Request, State};
 use axum::http::{header, StatusCode};
@@ -255,7 +255,7 @@ pub async fn revoke_token(
     }
 }
 
-fn token_to_json(t: &crate::db::AccessToken) -> serde_json::Value {
+fn token_to_json(t: &crate::store::AccessToken) -> serde_json::Value {
     json!({
         "token": t.token,
         "label": t.label,
@@ -269,12 +269,12 @@ fn token_to_json(t: &crate::db::AccessToken) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::BackendType;
+    use crate::store::BackendType;
     use crate::meta::WorkspaceMeta;
     use std::path::PathBuf;
 
     fn make_state() -> AppState {
-        let meta = crate::MetaStore::new();
+        let meta = crate::meta::MetaStore::new();
         // 填充一个 workspace 让 AppState 可构造
         meta.insert(WorkspaceMeta {
             id: "w1".into(),
@@ -282,13 +282,7 @@ mod tests {
             name: "项目".into(),
             backend_type: BackendType::ComboCli,
         });
-        AppState {
-            meta: std::sync::Arc::new(meta),
-            registry: std::sync::Arc::new(crate::BackendRegistry::new()),
-            browse_root: None,
-            relay: crate::RelayManager::new(),
-            local_port: 0,
-        }
+        AppState::test_state(std::sync::Arc::new(meta), None)
     }
 
     #[test]

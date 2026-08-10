@@ -147,7 +147,7 @@ export function answerQuestion(
   });
 }
 
-// 文件服务:combo-proxy 提供的受限本地读写(路径必须相对工作区根目录)
+// 文件服务:combo-cli serve 提供的受限本地读写(路径必须相对工作区根目录)
 export function listFiles(workspaceId: string, path = ''): Promise<Api.FileEntry[]> {
   return apiRequest(`/v1/workspaces/${workspaceId}/files/list`, { query: { path } });
 }
@@ -168,7 +168,7 @@ export function putFileContent(
   });
 }
 
-// Git 服务:combo-proxy 本地端点,在 workspace 根目录执行 git 子命令
+// Git 服务:combo-cli serve 本地端点,在 workspace 根目录执行 git 子命令
 export function getGitStatus(workspaceId: string): Promise<Api.GitStatus> {
   return apiRequest(`/v1/workspaces/${workspaceId}/git/status`);
 }
@@ -291,12 +291,12 @@ export function getGitCommitDiff(
   });
 }
 
-// 技能:combo-proxy 本地端点,扫描技能目录
+// 技能:combo-cli serve 本地端点,扫描技能目录
 export function listSkills(): Promise<Api.Skill[]> {
   return apiRequest('/v1/skills');
 }
 
-// 服务器目录浏览:combo-proxy 本地端点,供浏览器/移动端在远端打开服务器上的项目目录
+// 服务器目录浏览:combo-cli serve 本地端点,供浏览器/移动端在远端打开服务器上的项目目录
 export interface HostDirEntry {
   name: string;
   path: string;

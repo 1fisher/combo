@@ -1,28 +1,40 @@
-//! serve 服务模式:进程守护式管理 + rune 兼容协议。
+//! serve 服务模式:进程守护式管理 + rune 兼容协议 + combo 自有 REST 端点。
 //!
-//! 供 combo-proxy 直接托管的 HTTP 端点:
+//! combo-cli 现在直接充当 combo 的完整后端(不再经 combo-proxy 反向代理):
 //! - `GET /v1/health`                       → 健康检查(`{"ok":true}`)
 //! - `POST /v1/control`                     → 优雅关闭(信号驱动)
 //! - `POST /v1/agent`                       → 单轮问答(旧接口)
 //! - `POST /v1/workspaces/{id}/agent`       → 发起一次 agent 运行
 //! - `POST /v1/workspaces/{id}/agent/sessions/{sid}/cancel` → 取消运行
 //! - `GET  /v1/workspaces/{id}/events`      → SSE 事件流(与 rune 双层信封一致)
+//! - 其余 REST(workspaces/sessions/files/git/auth/host/skills/relay/terminal)
+//!   由本地 sqlite(`MetaStore`)直接提供服务,不再转发。
 //!
-//! 会话/历史由 combo-proxy 的 sqlite 镜像负责(combo 自有数据源),
-//! 因此 serve 侧无状态:`/agent` 请求体可携带 `history`(proxy 注入的
-//! `[{role, parts}]` 历史消息),运行过程中的消息事件经 broadcast 广播。
-//! 这样 combo-cli 可被 combo-proxy 当作一个受管的 agent 后端进程。
+//! 会话/历史落在本地 sqlite(combo.db),`/agent` 请求处理时自行从
+//! `MetaStore` 读取历史并还原成 rig 消息,支撑多轮上下文;运行过程中的
+//! 消息事件经 broadcast 广播。
 
 use crate::agent::{self, AskConfig, RunEvent};
+use crate::auth;
 use crate::config::AppConfig;
+use crate::fs;
+use crate::git;
+use crate::host;
+use crate::meta::MetaStore;
 use crate::providers::{self, ProviderInfo};
+use crate::relay::{self, RelayManager};
+use crate::session;
+use crate::skills_api;
+use crate::terminal;
+use crate::workspace;
 use anyhow::Result;
 use axum::{
     Json, Router,
     extract::{Path, State},
-    http::{StatusCode, header},
+    http::{HeaderValue, StatusCode, header},
+    middleware::from_fn_with_state,
     response::Response,
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use futures::stream::unfold;
 use rig::completion::message::{ToolCall, ToolFunction};
@@ -32,21 +44,86 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
-use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{Notify, broadcast, watch};
+use tower_http::cors::{Any, CorsLayer};
 
+/// 所有 axum handler 共享的应用状态。
 #[derive(Clone)]
-struct AppState {
-    cfg: Arc<Mutex<AskConfig>>,
-    shutdown: Arc<Notify>,
-    runs: Arc<RunState>,
+pub struct AppState {
+    pub cfg: Arc<Mutex<AskConfig>>,
+    pub shutdown: Arc<Notify>,
+    pub runs: Arc<RunState>,
+    /// workspace/session/message 的 sqlite 镜像(combo 自有数据源)。
+    pub meta: Arc<MetaStore>,
+    /// 服务器目录浏览的根限制(`/v1/host/*`);None 表示允许浏览整个文件系统。
+    pub browse_root: Option<PathBuf>,
+    /// 隧道管理器(控制桌面端到中转服务器的反向隧道)。
+    pub relay: Arc<RelayManager>,
+    /// 本地监听端口(隧道转发目标)。
+    pub local_port: u16,
+}
+
+impl AppState {
+    /// 用本地 sqlite 构建完整状态(供 `serve_listener` 内嵌调用)。
+    pub fn new(cfg: AskConfig) -> anyhow::Result<Self> {
+        let meta = Arc::new(MetaStore::open_default()?);
+        // 存量 crush 数据迁移为 combo-cli
+        workspace::reconcile_all(&meta);
+        Ok(Self {
+            cfg: Arc::new(Mutex::new(cfg)),
+            shutdown: Arc::new(Notify::new()),
+            runs: Arc::new(RunState::default()),
+            meta,
+            browse_root: std::env::var("COMBO_BROWSE_ROOT")
+                .ok()
+                .map(PathBuf::from),
+            relay: RelayManager::new(),
+            local_port: 0,
+        })
+    }
+
+    /// 测试用最小状态(仅 meta/browse_root/relay,其余取默认)。
+    #[cfg(test)]
+    pub(crate) fn test_state(meta: Arc<MetaStore>, browse_root: Option<PathBuf>) -> Self {
+        let provider = crate::providers::ProviderInfo {
+            id: "test".into(),
+            name: None,
+            api_key: None,
+            api_endpoint: None,
+            provider_type: None,
+            default_large_model_id: None,
+            default_small_model_id: None,
+            models: Vec::new(),
+        };
+        let cfg = AskConfig {
+            provider,
+            model: "test-model".into(),
+            preamble: String::new(),
+            tools: false,
+            mcp_command: None,
+            mcp_url: None,
+            explicit_api_key: None,
+            explicit_base_url: None,
+            mcp_servers: Vec::new(),
+        };
+        Self {
+            cfg: Arc::new(Mutex::new(cfg)),
+            shutdown: Arc::new(Notify::new()),
+            runs: Arc::new(RunState::default()),
+            meta,
+            browse_root,
+            relay: RelayManager::new(),
+            local_port: 0,
+        }
+    }
 }
 
 /// 运行态:按 workspace 广播事件,按 session 取消运行。
 #[derive(Default)]
-struct RunState {
+pub struct RunState {
     broadcasts: Mutex<HashMap<String, broadcast::Sender<Value>>>,
     cancels: Mutex<HashMap<String, watch::Sender<bool>>>,
 }
@@ -81,21 +158,67 @@ struct AgentReq {
     prompt: String,
     /// proxy 注入的历史消息:[{ role, parts }](可选)。
     history: Option<Vec<Value>>,
-    /// workspace 根目录(combo-proxy 注入),供 read/write/search 工具使用。
+    /// workspace 根目录(旧 proxy 注入字段,保留兜底),供 read/write/search 工具使用。
     workspace_dir: Option<String>,
 }
 
 pub async fn run(cfg: &agent::AskConfig, host: String, port: u16) -> Result<()> {
-    let state = AppState {
-        cfg: Arc::new(Mutex::new(cfg.clone())),
-        shutdown: Arc::new(Notify::new()),
-        runs: Arc::new(RunState::default()),
-    };
+    let mut state = AppState::new(cfg.clone())?;
+    let listener = tokio::net::TcpListener::bind(format!("{host}:{port}")).await?;
+    let actual = listener.local_addr()?;
+    state.local_port = actual.port();
+    // 机器可读端口输出(供外部脚本解析)
+    println!("COMBO_CLI_PORT={}", actual.port());
+    println!("combo-cli serve 已启动:http://{actual}");
+    serve_listener(listener, state, Vec::new()).await
+}
 
-    let app = Router::new()
+/// 在指定 listener 上提供服务(可内嵌调用,如 Tauri 直接托管)。
+/// 优雅关闭:调用方对 `state.shutdown.notify_one()` 后服务退出。
+pub async fn serve_listener(
+    listener: tokio::net::TcpListener,
+    state: AppState,
+    allowed_origins: Vec<String>,
+) -> Result<()> {
+    let app = build_router(state.clone(), allowed_origins);
+    // 注入 ConnectInfo<SocketAddr> 供鉴权中间件判断请求来源是否回环。
+    let shutdown_handle = state.shutdown.clone();
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(async move {
+        shutdown_handle.notified().await;
+        tracing::info!("收到关闭信号,退出服务");
+    })
+    .await?;
+    Ok(())
+}
+
+/// 构建 serve router(combo 全部 REST/WS 端点 + CORS + 令牌鉴权)。
+fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
+    let cors = if allowed_origins.is_empty() {
+        CorsLayer::permissive()
+    } else {
+        let origins: Vec<HeaderValue> = allowed_origins
+            .iter()
+            .map(|o| {
+                o.parse()
+                    .expect("allowed_origins must contain valid origin values")
+            })
+            .collect();
+        CorsLayer::new()
+            .allow_origin(origins)
+            .allow_methods(Any)
+            .allow_headers(Any)
+    };
+    Router::new()
+        // ---- dispose:健康检查 / 优雅关闭 ----
         .route("/v1/health", get(health))
         .route("/v1/control", post(control))
+        // ---- 旧单轮接口 ----
         .route("/v1/agent", post(run_agent))
+        // ---- agent 运行 / SSE / 模型 ----
         .route(
             "/v1/workspaces/:id/agent",
             get(agent_info).post(run_agent_ws),
@@ -112,32 +235,133 @@ pub async fn run(cfg: &agent::AskConfig, host: String, port: u16) -> Result<()> 
             "/v1/workspaces/:id/permissions/skip",
             get(permission_skip_get).post(permission_skip_post),
         )
+        .route(
+            "/v1/workspaces/:id/permissions/grant",
+            post(permission_grant),
+        )
+        .route(
+            "/v1/workspaces/:id/questions/answer",
+            post(question_answer),
+        )
         .route("/v1/workspaces/:id/events", get(events))
         .route("/v1/workspaces/:id/providers", get(list_providers))
-        .route("/v1/workspaces/:id/providers/fetch-models", post(fetch_models))
+        .route(
+            "/v1/workspaces/:id/providers/fetch-models",
+            post(fetch_models),
+        )
         .route("/v1/workspaces/:id/providers/save-key", post(save_provider_key))
         .route("/v1/providers", get(list_providers))
         .route("/v1/providers/fetch-models", post(fetch_models))
         .route("/v1/providers/save-key", post(save_provider_key))
         .route("/v1/workspaces/:id/config/model", post(config_model))
-        .with_state(state.clone());
+        .route(
+            "/v1/workspaces/:id/config",
+            get(workspace_config_get),
+        )
+        .route(
+            "/v1/workspaces/:id/config/set",
+            post(workspace_config_set),
+        )
+        // ---- 认证(移动端远程访问令牌) ----
+        .route(
+            "/v1/auth/token",
+            post(auth::create_token).get(auth::list_tokens),
+        )
+        .route("/v1/auth/verify", get(auth::verify_token))
+        .route("/v1/auth/token/revoke", delete(auth::revoke_token))
+        // ---- skills / 终端 / 隧道 ----
+        .route("/v1/skills", get(skills_api::list))
+        .route("/v1/terminal", get(terminal::terminal_default))
+        .route("/v1/workspaces/:id/terminal", get(terminal::terminal))
+        .route("/v1/relay/start", post(relay::start_relay))
+        .route("/v1/relay/stop", post(relay::stop_relay))
+        .route("/v1/relay/status", get(relay::relay_status))
+        // ---- 服务器目录浏览 ----
+        .route("/v1/host/home", get(host::home))
+        .route("/v1/host/dirs", get(host::dirs))
+        // ---- workspaces / sessions / 文件 / git ----
+        .route(
+            "/v1/workspaces",
+            get(workspace::list).post(workspace::create),
+        )
+        .route(
+            "/v1/workspaces/:id",
+            get(workspace::get)
+                .patch(workspace::rename)
+                .delete(workspace::delete),
+        )
+        .route(
+            "/v1/workspaces/:id/sessions",
+            get(session::list).post(session::create),
+        )
+        .route(
+            "/v1/workspaces/:id/sessions/:sid",
+            delete(session::delete).patch(session::rename),
+        )
+        .route(
+            "/v1/workspaces/:id/sessions/:sid/history",
+            get(session::history),
+        )
+        .route(
+            "/v1/workspaces/:id/sessions/:sid/messages",
+            post(session::upsert_msg),
+        )
+        .route("/v1/workspaces/:id/files/list", get(fs::list))
+        .route(
+            "/v1/workspaces/:id/files/content",
+            get(fs::read).put(fs::write),
+        )
+        .route("/v1/workspaces/:id/files/raw", get(fs::raw))
+        .route("/v1/workspaces/:id/git/status", get(git::status))
+        .route("/v1/workspaces/:id/git/diff", get(git::diff))
+        .route("/v1/workspaces/:id/git/diff/staged", get(git::diff_staged))
+        .route("/v1/workspaces/:id/git/diff/head", get(git::diff_head))
+        .route("/v1/workspaces/:id/git/file", get(git::file_at_head))
+        .route("/v1/workspaces/:id/git/log", get(git::git_log))
+        .route("/v1/workspaces/:id/git/stage", post(git::stage))
+        .route("/v1/workspaces/:id/git/unstage", post(git::unstage))
+        .route("/v1/workspaces/:id/git/discard", post(git::discard))
+        .route("/v1/workspaces/:id/git/commit", post(git::commit))
+        .route("/v1/workspaces/:id/git/push", post(git::push))
+        .route("/v1/workspaces/:id/git/pull", post(git::pull))
+        .route("/v1/workspaces/:id/git/fetch", post(git::fetch))
+        .route("/v1/workspaces/:id/git/branch-info", get(git::branch_info))
+        .route("/v1/workspaces/:id/git/commit/files", get(git::commit_files))
+        .route("/v1/workspaces/:id/git/commit/diff", get(git::commit_diff))
+        .layer(from_fn_with_state(state.clone(), auth::require_token))
+        .with_state(state)
+        .layer(cors)
+}
 
-    let addr: SocketAddr = format!("{host}:{port}").parse()?;
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    let actual = listener.local_addr()?;
-    // 机器可读端口输出(combo-proxy 的 ComboCliManager 解析此行为准)。
-    println!("COMBO_CLI_PORT={}", actual.port());
-    println!("combo-cli serve 已启动:http://{actual}");
+/// GET /v1/workspaces/{id}/config — rune 兼容 stub。
+/// 返回技能配置与模型选择占位(前端按字段宽放解析)。
+async fn workspace_config_get() -> Json<Value> {
+    Json(json!({
+        "options": {
+            "disabled_skills": [],
+            "skills_paths": [],
+        },
+        "models": {},
+        "recent_models": {},
+    }))
+}
 
-    // 收到 control 通知后优雅退出:在 axum serve 的 graceful_shutdown 里等待
-    let shutdown_handle = state.shutdown.clone();
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            shutdown_handle.notified().await;
-            tracing::info!("收到关闭信号,退出服务");
-        })
-        .await?;
-    Ok(())
+/// POST /v1/workspaces/{id}/config/set — rune 兼容 stub,接受并回显。
+/// combo 的技能开关等设置在 src 侧经 worker 请求(本仓库不落配置库)。
+async fn workspace_config_set(Json(body): Json<Value>) -> Json<Value> {
+    Json(json!({ "ok": true, "key": body.get("key"), "value": body.get("value") }))
+}
+
+/// POST /v1/workspaces/{id}/permissions/grant — rune 兼容 stub。
+/// combo-cli 工具调用自动执行、无权限拦截。
+async fn permission_grant() -> Json<Value> {
+    Json(json!({ "ok": true }))
+}
+
+/// POST /v1/workspaces/{id}/questions/answer — rune 兼容 stub。
+/// combo-cli 无人工确认流程,恒返回成功。
+async fn question_answer() -> Json<Value> {
+    Json(json!({ "ok": true }))
 }
 
 async fn health() -> Json<Value> {
@@ -193,8 +417,30 @@ async fn run_agent_ws(
     let user_msg = user_message_json(&body.session_id, &body.prompt, &cfg);
     let _ = tx.send(msg_env("created", user_msg));
 
-    // 2. 后台运行 agent,事件经广播流出
-    let history = body.history.clone().unwrap_or_default();
+    // 2. 会话历史与 workspace 根目录从本地 sqlite 解析(多轮上下文)。
+    //    body 里旧客户端注入的 history/workspace_dir 仅在 sqlite 无数据时兜底。
+    let history: Vec<Value> = match &body.history {
+        Some(h) if !h.is_empty() => h.clone(),
+        _ => state
+            .meta
+            .db()
+            .list_messages(&ws_id, &body.session_id)
+            .unwrap_or_default()
+            .iter()
+            .map(|m| {
+                let parts: Value =
+                    serde_json::from_str(&m.parts).unwrap_or(Value::Array(vec![]));
+                json!({ "role": m.role, "parts": parts })
+            })
+            .collect(),
+    };
+    let workspace_dir = state
+        .meta
+        .get(&ws_id)
+        .map(|m| m.path)
+        .or_else(|| body.workspace_dir.as_deref().map(std::path::PathBuf::from));
+
+    // 3. 后台运行 agent,事件经广播流出
     tokio::spawn(async move {
         let session_id = body.session_id.clone();
         let prompt = body.prompt.clone();
@@ -212,10 +458,6 @@ async fn run_agent_ws(
         let mut parts: Vec<Value> = Vec::new();
         let mut text_buf = String::new();
         let tx_ev = tx.clone();
-        let workspace_dir = body
-            .workspace_dir
-            .as_deref()
-            .map(std::path::PathBuf::from);
         let result =
             crate::agent::stream_run(&cfg, &prompt, &rig_history, workspace_dir, cancel_rx, |ev| {
             match ev {

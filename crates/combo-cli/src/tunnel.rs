@@ -1,14 +1,14 @@
 //! 桌面端隧道客户端。
 //!
-//! 桌面客户端(combo-proxy)通过 WebSocket 连出到中转服务器(combo-relay),
+//! 桌面客户端(combo-cli serve)通过 WebSocket 连出到中转服务器(combo-relay),
 //! 建立**反向隧道**。中转服务器收到手机/Web 的 HTTP 请求后,通过隧道转发到桌面端,
-//! 桌面端在本地处理(转发给 combo-proxy)后将响应通过隧道返回。
+//! 桌面端在本地处理(转发给自己 serve 的 /v1/*)后将响应通过隧道返回。
 //!
 //! 连接: `wss://proxy.apesoft.cn/v1/relay/tunnel?token=<access_token>`
 //! 断线自动重连(指数退避)。
 
 use base64::Engine;
-use futures_util::{SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -97,7 +97,7 @@ pub struct TunnelClientConfig {
     pub relay_url: String,
     /// 访问令牌。
     pub token: String,
-    /// 本地 combo-proxy 地址。
+    /// 本地 serve 地址。
     pub local_proxy_url: String,
 }
 
@@ -219,7 +219,7 @@ async fn connect_and_serve(config: &TunnelClientConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// 处理单个隧道请求:转发到本地 combo-proxy,流式回传响应。
+/// 处理单个隧道请求:转发到本地 serve,流式回传响应。
 async fn handle_request(
     ws_tx: mpsc::UnboundedSender<Message>,
     config: TunnelClientConfig,
@@ -242,7 +242,7 @@ async fn handle_request(
     // 透传请求头
     for (k, v) in &headers {
         let lower = k.to_lowercase();
-        // 跳过 host(combo-proxy 会自己设置)
+        // 跳过 host(serve 会自己设置)
         if lower == "host" || lower == "content-length" {
             continue;
         }
@@ -300,7 +300,7 @@ async fn handle_request(
     );
 
     // 流式读取响应体(支持 SSE 长连接)
-    use futures_util::TryStreamExt;
+    use futures::TryStreamExt;
     let mut stream = resp.bytes_stream();
     while let Ok(Some(chunk)) = stream.try_next().await {
         if chunk.is_empty() {

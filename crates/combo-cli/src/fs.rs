@@ -11,7 +11,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::path::{Component, Path as FsPath, PathBuf};
 
-use crate::AppState;
+use crate::serve::AppState;
 
 /// 单文件读取上限(1MB),超过视为过大。
 const MAX_FILE_BYTES: u64 = 1024 * 1024;

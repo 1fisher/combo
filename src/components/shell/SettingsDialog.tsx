@@ -32,7 +32,7 @@ interface SettingsDialogProps {
  * 设置对话框:
  * 1. 模型 Provider 配置 — 为各 provider 填入 API Key 并拉取可用模型。
  * 2. 外部访问域名 — 域名部署时填写公开访问地址。
- * 3. 代理地址 — 前后端分离部署时指定 combo-proxy 服务地址。
+ * 3. 代理地址 — 前后端分离部署时指定 combo-cli serve 服务地址。
  */
 export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [proxyInput, setProxyInput] = useState('');

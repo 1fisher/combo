@@ -5,7 +5,7 @@ import { test, expect } from '@playwright/test';
 const hasCli = !!process.env.COMBO_CLI_BIN;
 
 test.describe('M1 vertical slice', () => {
-  test.skip(!hasCli, 'set COMBO_CLI_BIN to run against a real combo-cli server');
+  test.skip(!hasCli, 'set COMBO_CLI_BIN to opt in to e2e (needs a working provider/API key)');
 
   test('create workspace -> session -> agent run -> permission dialog', async ({
     page,

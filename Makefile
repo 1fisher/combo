@@ -1,4 +1,5 @@
-.PHONY: help dev dev-proxy build tsc test test-e2e gen-api \
+.PHONY: help dev dev-proxy build build-cli build-relay \
+
         version version-patch version-minor version-major \
         release release-patch release-minor release-major \
         tag push clean
@@ -14,8 +15,25 @@ dev: ## 启动 Vite 开发服务器 (浏览器模式, 端口 5173)
 dev-proxy: ## 启动开发服务器并指向本地 proxy (:18234)
 	bash scripts/dev-proxy.sh
 
-build: ## 生产构建 (tsc + vite build)
+##@ 构建
+
+build: ## 一键构建: 前端 + combo-cli / combo-relay / 桌面端
 	npm run build
+	cargo build --release --workspace
+
+build-cli: ## 仅编译 combo-cli
+	cargo build --release -p combo-cli
+
+build-relay: ## 仅编译 combo-relay
+	cargo build --release -p combo-relay
+
+
+build-desktop: ## 编译桌面端 (Tauri 二进制, target/release/combo)
+	npm run build
+	cargo build --release -p combo
+
+bundle: ## 打包桌面端安装包 (需要 cargo install tauri-cli)
+	cargo tauri build
 
 tsc: ## TypeScript 类型检查 (tsc -b)
 	npm run tsc

@@ -76,7 +76,7 @@ pub struct RelayStatus {
 }
 
 pub async fn start_relay(
-    State(state): State<crate::AppState>,
+    State(state): State<crate::serve::AppState>,
     Json(body): Json<StartRelayBody>,
 ) -> Json<RelayStatus> {
     // local_proxy_url 未指定时使用 AppState 中的本地端口
@@ -88,14 +88,14 @@ pub async fn start_relay(
 }
 
 pub async fn stop_relay(
-    State(state): State<crate::AppState>,
+    State(state): State<crate::serve::AppState>,
 ) -> Json<RelayStatus> {
     state.relay.stop().await;
     Json(RelayStatus { running: false })
 }
 
 pub async fn relay_status(
-    State(state): State<crate::AppState>,
+    State(state): State<crate::serve::AppState>,
 ) -> Json<RelayStatus> {
     Json(RelayStatus {
         running: state.relay.is_running().await,

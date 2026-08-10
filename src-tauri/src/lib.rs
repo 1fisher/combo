@@ -1,5 +1,4 @@
 use serde::Serialize;
-use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 
@@ -44,54 +43,52 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
+/// 读取 combo-cli 配置并解析出 AskConfig(与 CLI 相同的流程,无命令行参数)。
+fn load_cfg() -> anyhow::Result<combo_cli::agent::AskConfig> {
+    let config_path = combo_cli::config::default_config_path();
+    // 先加载同目录 .env(为 $ENV_VAR 形式的 key/base_url 提供默认值)
+    combo_cli::config::load_dotenv(&config_path);
+    let file_cfg = combo_cli::config::AppConfig::load_or_create(&config_path)?;
+    let resolved = file_cfg.resolve(None, None, None, None, None, None);
+    let provider =
+        combo_cli::providers::find_provider(&resolved.provider, &resolved.providers)?;
+    Ok(combo_cli::agent::AskConfig::from_resolved(&resolved, provider))
+}
+
+/// 配置缺失/无法解析时的兜底:内置 opencode provider。
+/// serve 的 health/文件/会话等端点不依赖 API key,agent 运行会在无 key 时以 error 收尾。
+fn fallback_cfg() -> combo_cli::agent::AskConfig {
+    let provider = combo_cli::providers::builtin_providers()
+        .into_iter()
+        .find(|p| p.id == "opencode")
+        .expect("builtin opencode provider 必然存在");
+    combo_cli::agent::AskConfig {
+        provider,
+        model: "deepseek-v4-flash-free".to_string(),
+        preamble: "你是 combo 内置的智能助手。".to_string(),
+        tools: true,
+        mcp_command: None,
+        mcp_url: None,
+        explicit_api_key: None,
+        explicit_base_url: None,
+        mcp_servers: Vec::new(),
+    }
+}
+
+/// 直接内嵌 combo-cli serve:在随机端口上提供 combo 全部 API
+/// (不再有独立的 combo-proxy 子进程,combo-cli 与桌面端同进程)。
 async fn init_backend(app: &tauri::AppHandle) {
-    use combo_proxy::combocli::ComboCliManager;
-    use combo_proxy::{serve, AppState, BackendRegistry, ClaudeCodeBackend, CodexBackend, ComboCliBackend, MetaStore, OpenCodeBackend, OpenCodeManager, RelayManager};
+    use combo_cli::serve::{AppState, serve_listener};
     use std::net::SocketAddr;
-    use std::sync::Arc;
     use tokio::net::TcpListener;
 
-    let mut registry = BackendRegistry::new();
-
-    // 默认 agent:combo-cli serve(本机自有 agent)。
-    let combo_cli_mgr = Arc::new(ComboCliManager::new(
-        std::env::var("COMBO_CLI_BIN").unwrap_or_else(|_| combo_proxy::combocli::DEFAULT_BIN.into()),
-    ));
-    match combo_cli_mgr.ensure_running().await {
-        Ok(_) => {
-            registry.set_combo_cli(Arc::new(ComboCliBackend::new_resolving(
-                combo_cli_mgr.addr_shared(),
-            )));
-            let _ = app.emit(EVENT_RUNE_STATUS, RuneStatus { connected: true });
-        }
+    let cfg = match load_cfg() {
+        Ok(cfg) => cfg,
         Err(e) => {
-            eprintln!("combo-cli serve failed: {e:?}");
-            let _ = app.emit(EVENT_RUNE_STATUS, RuneStatus { connected: false });
+            eprintln!("读取 combo 配置失败,使用内置默认 provider: {e:#}");
+            fallback_cfg()
         }
-    }
-
-    // 可选:启动 OpenCode 后端
-    if let Ok(oc_bin) = std::env::var("COMBO_OPENCODE_BIN") {
-        let mut oc_mgr = OpenCodeManager::new(oc_bin);
-        match oc_mgr.ensure_running().await {
-            Ok(url) => {
-                registry.set_opencode(Arc::new(OpenCodeBackend::new(url)));
-            }
-            Err(e) => {
-                eprintln!("opencode server failed: {e:?}");
-            }
-        }
-    }
-
-    // 可选:启动 Claude Code 后端
-    if let Ok(cc_bin) = std::env::var("COMBO_CLAUDE_BIN") {
-        registry.set_claude_code(Arc::new(ClaudeCodeBackend::new(cc_bin)));
-    }
-
-    // 可选:启动 Codex 后端
-    if let Ok(cx_bin) = std::env::var("COMBO_CODEX_BIN") {
-        registry.set_codex(Arc::new(CodexBackend::new(cx_bin)));
-    }
+    };
 
     // 绑定地址:默认 127.0.0.1(仅本地);域名部署时可设 COMBO_HOST=0.0.0.0 对外开放。
     let bind_host: std::net::IpAddr = std::env::var("COMBO_HOST")
@@ -101,65 +98,20 @@ async fn init_backend(app: &tauri::AppHandle) {
     let listener = match TcpListener::bind(SocketAddr::from((bind_host, 0))).await {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("proxy bind failed: {e:?}");
+            eprintln!("serve bind failed: {e:?}");
             return;
         }
     };
     let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
 
-    let state = AppState {
-        meta: Arc::new(MetaStore::open_default().unwrap_or_else(|_| MetaStore::new())),
-        registry: Arc::new(registry),
-        browse_root: std::env::var("COMBO_BROWSE_ROOT")
-            .ok()
-            .filter(|s| !s.trim().is_empty())
-            .map(PathBuf::from),
-        relay: RelayManager::new(),
-        local_port: port,
+    let mut state = match AppState::new(cfg) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("初始化 combo 数据目录失败: {e:?}");
+            return;
+        }
     };
-
-    // 启动时迁移遗留的 crush 类型 workspace 到 combo-cli。
-    combo_proxy::workspace::reconcile_all(&state).await;
-
-    // 后台健康监控:combo-cli 崩溃时自动重启
-    {
-        let mgr = Arc::clone(&combo_cli_mgr);
-        let app_h = app.clone();
-        let mut was_healthy = mgr.is_healthy().await;
-        tauri::async_runtime::spawn(async move {
-            use std::time::Duration;
-            loop {
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                let now_healthy = mgr.is_healthy().await;
-                if !now_healthy {
-                    eprintln!("combo-cli 健康检查失败,尝试重启...");
-                    match mgr.ensure_running().await {
-                        Ok(_) => {
-                            eprintln!("combo-cli 重启成功");
-                            if !was_healthy {
-                                let _ = app_h
-                                    .emit(EVENT_RUNE_STATUS, RuneStatus { connected: true });
-                            }
-                            was_healthy = true;
-                        }
-                        Err(e) => {
-                            eprintln!("combo-cli 重启失败: {e}");
-                            if was_healthy {
-                                let _ = app_h.emit(
-                                    EVENT_RUNE_STATUS,
-                                    RuneStatus { connected: false },
-                                );
-                            }
-                            was_healthy = false;
-                        }
-                    }
-                } else if !was_healthy {
-                    was_healthy = true;
-                    let _ = app_h.emit(EVENT_RUNE_STATUS, RuneStatus { connected: true });
-                }
-            }
-        });
-    }
+    state.local_port = port;
 
     // 存入 Tauri state,前端可通过 get_proxy_port command 主动查询
     if let Some(state) = app.try_state::<ProxyPort>() {
@@ -170,6 +122,7 @@ async fn init_backend(app: &tauri::AppHandle) {
         "http://localhost:5173".to_string(),
     ];
     // emit 事件(兼容已有逻辑),同时持续重发以覆盖前端 listener 注册竞态
+    let _ = app.emit(EVENT_RUNE_STATUS, RuneStatus { connected: true });
     let _ = app.emit(EVENT_PROXY_READY, ProxyReady { port });
     let app_clone = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -179,7 +132,8 @@ async fn init_backend(app: &tauri::AppHandle) {
             let _ = app_clone.emit(EVENT_PROXY_READY, ProxyReady { port });
         }
     });
-    if let Err(e) = serve(listener, state, origins).await {
-        eprintln!("proxy exited: {e:?}");
+    // 长驻服务:combo-cli 与桌面端同进程,退出由桌面端进程回收;失败时仅记录
+    if let Err(e) = serve_listener(listener, state, origins).await {
+        eprintln!("serve exited: {e:?}");
     }
 }

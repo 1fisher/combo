@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/combo-proxy", "crates/combo-relay", "crates/combo-cli", "src-tauri"]
+members = ["crates/combo-relay", "crates/combo-cli", "src-tauri"]
 resolver = "2"
 
 [profile.release]

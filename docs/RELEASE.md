@@ -40,6 +40,6 @@ git push origin main --tags
 | `package.json` | `version` |
 | `src-tauri/tauri.conf.json` | `version` |
 | `src-tauri/Cargo.toml` | `version` |
-| `crates/combo-proxy/Cargo.toml` | `version` |
+|  `crates/combo-cli/Cargo.toml` | `version` |
 
 遵循 [SemVer](https://semver.org/lang/zh-CN/) 规范: `MAJOR.MINOR.PATCH`

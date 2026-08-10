@@ -1,8 +1,8 @@
 //! 会话管理:combo 自己接管 `/v1/workspaces/{id}/sessions` 的
 //! 列表/创建/删除,数据持久化在本地 sqlite(conversations 表)。
 
-use crate::db::ConversationMeta;
-use crate::AppState;
+use crate::serve::AppState;
+use crate::store::ConversationMeta;
 use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;

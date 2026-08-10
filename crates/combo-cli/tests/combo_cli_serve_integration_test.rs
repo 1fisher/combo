@@ -1,0 +1,277 @@
+//! combo-cli serve 集成测试:以库方式在同一进程内启动 `serve_listener`,
+//! 验证 rune 兼容协议(health、workspaces REST、会话、agent 运行、双层 SSE 事件流)。
+//!
+//! 使用无 API key 的 AskConfig:`agent::stream_run` 必然失败,serve 走确定性的
+//! `finish(reason=error)` + `run_complete` 路径,不真调外部 API、不连 MCP、
+//! 不读用户真实配置(MetaStore 用内存库,端口随机)。
+
+use axum::http::StatusCode;
+use combo_cli::agent::AskConfig;
+use combo_cli::meta::{MetaStore, WorkspaceMeta};
+use combo_cli::providers::ProviderInfo;
+use combo_cli::relay::RelayManager;
+use combo_cli::serve::{AppState, RunState, serve_listener};
+use combo_cli::store::BackendType;
+use futures::StreamExt;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+use tokio::sync::Notify;
+
+/// 无 API key 的最小 AskConfig(保证 agent 运行走 error finish 路径)。
+fn cfg_no_key() -> AskConfig {
+    AskConfig {
+        provider: ProviderInfo {
+            id: "test".into(),
+            name: None,
+            api_key: None,
+            api_endpoint: None,
+            provider_type: Some("openai-compat".into()),
+            default_large_model_id: None,
+            default_small_model_id: None,
+            models: Vec::new(),
+        },
+        model: "test-model".into(),
+        preamble: String::new(),
+        tools: false,
+        mcp_command: None,
+        mcp_url: None,
+        explicit_api_key: None,
+        explicit_base_url: None,
+        mcp_servers: Vec::new(),
+    }
+}
+
+fn make_state() -> AppState {
+    let meta = Arc::new(MetaStore::new());
+    meta.insert(WorkspaceMeta {
+        id: "ws_cli".into(),
+        path: "/tmp/combo-cli-it".into(),
+        name: "cli".into(),
+        backend_type: BackendType::ComboCli,
+    });
+    AppState {
+        cfg: Arc::new(Mutex::new(cfg_no_key())),
+        shutdown: Arc::new(Notify::new()),
+        runs: Arc::new(RunState::default()),
+        meta,
+        browse_root: None,
+        relay: RelayManager::new(),
+        local_port: 0,
+    }
+}
+
+/// 启动 serve 并返回 base URL 与可 abort 的任务句柄。
+async fn start_server() -> (String, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        serve_listener(listener, make_state(), Vec::new())
+            .await
+            .unwrap();
+    });
+    (format!("http://{addr}"), task)
+}
+
+#[tokio::test]
+async fn health_ok() {
+    let (base, _task) = start_server().await;
+    let resp = reqwest::get(format!("{base}/v1/health"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn workspace_create_list_rename() {
+    let (base, _task) = start_server().await;
+    let client = reqwest::Client::new();
+
+    // 创建 workspace:client_id 必须同时出现在 body
+    let resp = client
+        .post(format!("{base}/v1/workspaces?client_id=it-cid"))
+        .json(&serde_json::json!({
+            "path": "/tmp/combo-cli-it",
+            "client_id": "it-cid",
+            "backend": "combo-cli",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v: serde_json::Value = resp.json().await.unwrap();
+    let id = v["id"].as_str().unwrap().to_string();
+    assert_eq!(v["name"].as_str().unwrap(), "combo-cli-it");
+
+    // 列表可见
+    let list: serde_json::Value = client
+        .get(format!("{base}/v1/workspaces"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(
+        list.as_array().unwrap().iter().any(|w| w["id"] == id.as_str()),
+        "列表应包含新建 workspace: {list}"
+    );
+
+    // 重命名并跨进程保留(同一 sqlite 镜像)
+    let resp = client
+        .patch(format!("{base}/v1/workspaces/{id}"))
+        .json(&serde_json::json!({ "name": "新名字" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let got: serde_json::Value = client
+        .get(format!("{base}/v1/workspaces/{id}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(got["name"].as_str().unwrap(), "新名字");
+}
+
+#[tokio::test]
+async fn session_agent_and_sse_flow() {
+    let (base, _task) = start_server().await;
+    let client = reqwest::Client::new();
+
+    // 1. 创建会话(本地 sqlite 接管)
+    let resp = client
+        .post(format!("{base}/v1/workspaces/ws_cli/sessions"))
+        .json(&serde_json::json!({ "title": "IT 会话" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v: serde_json::Value = resp.json().await.unwrap();
+    let session = v["id"].as_str().unwrap().to_string();
+
+    // 2. 先订阅 SSE(后台流式消费,读到 run_complete 即停)
+    let sse_url = format!("{base}/v1/workspaces/ws_cli/events?client_id=it");
+    let sse = client
+        .get(&sse_url)
+        .header("Accept", "text/event-stream")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(sse.status(), StatusCode::OK);
+    assert!(sse
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .contains("text/event-stream"));
+    let sse_task = tokio::spawn(async move {
+        let mut out = String::new();
+        let mut stream = sse.bytes_stream();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while tokio::time::Instant::now() < deadline {
+            match tokio::time::timeout(Duration::from_secs(1), stream.next()).await {
+                Ok(Some(Ok(chunk))) => {
+                    out.push_str(&String::from_utf8_lossy(&chunk));
+                    if out.contains("run_complete") {
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+        out
+    });
+
+    // 3. 发起 agent 运行(无 API key → 确定性的 error finish + run_complete)
+    let resp = client
+        .post(format!("{base}/v1/workspaces/ws_cli/agent"))
+        .json(&serde_json::json!({
+            "session_id": session,
+            "run_id": "it-run",
+            "prompt": "你好",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 4. 断言 SSE 事件序列:用户消息 → assistant 空消息 → finish/error → run_complete
+    let events = sse_task.await.unwrap();
+    assert!(
+        events.contains("\"type\":\"message\"") && events.contains("\"role\":\"user\""),
+        "缺少用户消息事件: {events}"
+    );
+    assert!(
+        events.contains("\"role\":\"assistant\""),
+        "缺少 assistant 消息事件: {events}"
+    );
+    assert!(
+        events.contains("\"type\":\"finish\""),
+        "缺少 finish part: {events}"
+    );
+    assert!(
+        events.contains("run_complete"),
+        "缺少 run_complete 事件: {events}"
+    );
+}
+
+#[tokio::test]
+async fn file_read_write_roundtrip() {
+    let (base, _task) = start_server().await;
+    let client = reqwest::Client::new();
+    let dir = std::env::temp_dir().join(format!("combo-cli-it-fs-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    // 本测试用的 workspace 指向临时目录,便于验证文件服务
+    let resp = client
+        .post(format!("{base}/v1/workspaces?client_id=it-fs"))
+        .json(&serde_json::json!({
+            "path": dir.to_string_lossy(),
+            "client_id": "it-fs",
+            "backend": "combo-cli",
+        }))
+        .send()
+        .await
+        .unwrap();
+    let v: serde_json::Value = resp.json().await.unwrap();
+    let ws = v["id"].as_str().unwrap().to_string();
+
+    // 写入
+    let resp = client
+        .put(format!("{base}/v1/workspaces/{ws}/files/content?path=hello.txt"))
+        .json(&serde_json::json!({ "content": "你好 combo" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 读取
+    let resp = client
+        .get(format!(
+            "{base}/v1/workspaces/{ws}/files/content?path=hello.txt"
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(v["content"].as_str().unwrap(), "你好 combo");
+
+    // 列表(目录在前,隐藏文件跳过)
+    let resp = client
+        .get(format!("{base}/v1/workspaces/{ws}/files/list?path="))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        v.as_array().unwrap().iter().any(|f| f["name"] == "hello.txt"),
+        "列表应包含 hello.txt: {v}"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}

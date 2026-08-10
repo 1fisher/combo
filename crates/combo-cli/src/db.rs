@@ -1,6 +1,6 @@
 //! combo-cli 的 sqlite 持久化:本地会话(conversations)与消息(messages)。
-//! 沿用 combo-proxy 的存储约定(`COMBO_DATA_DIR` 或 `XDG_DATA_HOME/combo`),
-//! 但表名加 `cli_` 前缀,与 combo-proxy 的表隔离。
+//! 沿用 serve 的存储约定(`COMBO_DATA_DIR` 或 `XDG_DATA_HOME/combo`),
+//! 但表名加 `cli_` 前缀,与 serve 的 ComboDb 表隔离。
 
 use rusqlite::{Connection, params};
 use std::path::PathBuf;

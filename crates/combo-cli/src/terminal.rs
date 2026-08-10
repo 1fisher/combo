@@ -4,14 +4,14 @@
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, State};
 use axum::response::Response;
-use futures_util::{SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt};
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 use serde_json::Value;
 use std::io::{Read, Write};
 use tokio::sync::mpsc;
 
 use crate::fs::resolve_root;
-use crate::AppState;
+use crate::serve::AppState;
 
 /// GET /v1/terminal — 无 workspace 的 WebSocket 终端,默认在用户主目录打开。
 pub async fn terminal_default(ws: WebSocketUpgrade) -> Response {

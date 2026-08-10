@@ -1,8 +1,7 @@
 //! combo 自有的 workspace 元数据存储(sqlite 落盘)。
 //! 项目名可重命名,跨重启保留;conversations 镜像见 `db.rs`。
 
-use crate::backend::BackendType;
-use crate::db::{default_db_path, ComboDb};
+use crate::store::{default_db_path, BackendType, ComboDb};
 use std::path::{Path, PathBuf};
 
 /// combo 拥有的 workspace 元数据。

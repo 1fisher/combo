@@ -1,7 +1,8 @@
 //! Workspace CRUD handlers。combo 自己拥有 workspace 元数据(sqlite)。
 
-use crate::backend::BackendType;
-use crate::AppState;
+use crate::meta::WorkspaceMeta;
+use crate::serve::AppState;
+use crate::store::BackendType;
 use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -13,7 +14,7 @@ use std::path::Path as FsPath;
 pub async fn list(State(state): State<AppState>) -> Response {
     let workspaces = state.meta.list();
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let deduped: Vec<&crate::WorkspaceMeta> = workspaces
+    let deduped: Vec<&WorkspaceMeta> = workspaces
         .iter()
         .rev()
         .filter(|w| seen.insert(w.path.to_string_lossy().to_string()))
@@ -49,7 +50,7 @@ pub async fn create(
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|| basename(&ws_path));
 
-    let meta = crate::WorkspaceMeta {
+    let meta = WorkspaceMeta {
         id: ws_id.clone(),
         path: ws_path.clone().into(),
         name,
@@ -176,7 +177,7 @@ pub async fn delete(State(state): State<AppState>, Path(id): Path<String>) -> Re
     json_ok(&json!({ "ok": true }))
 }
 
-fn workspace_json(w: &crate::WorkspaceMeta) -> Value {
+fn workspace_json(w: &WorkspaceMeta) -> Value {
     json!({
         "id": w.id,
         "path": w.path,
@@ -220,22 +221,10 @@ pub(crate) fn uuid_like() -> String {
     format!("{:x}", nanos)
 }
 
-/// 确保 workspace 在后端中存在。
-/// combo-cli 是无状态后端,workspace 元数据完全由 combo sqlite 管理,
-/// 因此直接返回 ws_id 即可。
-pub async fn ensure_ws(state: &AppState, ws_id: &str) -> Option<String> {
-    if state.meta.get(ws_id).is_some() {
-        Some(ws_id.to_string())
-    } else {
-        None
-    }
-}
-
 /// 启动时把元数据库里遗留的 "crush" 类型 workspace 迁移到 combo-cli。
 /// crush 后端已移除,存量数据(旧版本写入的 backend=crush)自动迁移为 ComboCli。
-pub async fn reconcile_all(state: &AppState) {
-    let legacy = state
-        .meta
+pub fn reconcile_all(meta: &crate::meta::MetaStore) {
+    let legacy = meta
         .db()
         .list_workspaces()
         .unwrap_or_default()
@@ -247,7 +236,7 @@ pub async fn reconcile_all(state: &AppState) {
         return;
     }
     for id in &legacy {
-        if let Err(e) = state.meta.update_backend(id, BackendType::ComboCli) {
+        if let Err(e) = meta.update_backend(id, BackendType::ComboCli) {
             eprintln!("reconcile_all: 迁移 workspace {id} 到 combo-cli 失败: {e}");
         }
     }

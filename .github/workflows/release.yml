@@ -50,7 +50,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
-            crates/combo-proxy
+            crates/combo-cli
             src-tauri
       - name: Install Linux system dependencies
         run: |
@@ -129,7 +129,7 @@ jobs:
           - platform: macos-x86_64
             runner: macos-15
             target: x86_64-apple-darwin
-          # Windows 暂不支持:combo-proxy 使用 Unix domain socket
+          # Windows 暂不支持:combo-cli 依赖 Unix 风格路径与符号链接
           # - platform: windows-x86_64
           #   runner: windows-latest
           #   target: x86_64-pc-windows-msvc
@@ -157,7 +157,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
-            crates/combo-proxy
+            crates/combo-cli
             src-tauri
 
       - name: Install dependencies (Linux only)

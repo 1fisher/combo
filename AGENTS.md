@@ -7,36 +7,35 @@
 
 ## What this is
 
-**combo** is a multi-agent IDE desktop app: a Tauri v2 shell + React 19/TypeScript
-frontend that talks to **combo-cli**(自研 agent serve 进程)through an
-embedded Rust reverse proxy. All UI copy, code comments, and the README are in
-**Chinese** — keep new UI strings and comments in Chinese to match.
+**combo** is an Agent IDE desktop app: a Tauri v2 shell + React 19/TypeScript
+frontend backed directly by **combo-cli serve**(自研 agent 服务,进程内 axum)。
+原 combo-proxy 反向代理 crate 已删除,combo-cli serve 直接承担全部职责。All UI copy,
+code comments, and the README are in **Chinese** — keep new UI strings and comments
+in Chinese to match.
 
 ```
 Tauri Webview (React/TS)
    fetch / EventSource ──→ http://127.0.0.1:<random-port>/v1/*
-                              │ combo-proxy (axum, pure forwarder, CORS + SSE passthrough)
+                              │ combo-cli serve (crates/combo-cli, 进程内 axum,
+                              │   REST + 双层 SSE + CORS + 令牌鉴权 + 文件/git/终端/隧道)
                               ▼
-                    combo-cli serve (自研 agent 进程,随机端口 HTTP)
+               rig agent(多 provider:deepseek/opencode-zen/zhipu/...)
 ```
 
 Three components, three languages/dirs:
 
-- **`crates/combo-proxy`** (Rust, axum) — reverse proxy. Forwards every request
-  under `/v1/*` to combo-cli(经 `BackendRegistry` 按 workspace 后端类型路由);
-  streams SSE bodies through un-buffered. Also serves
-  **local file read/write** (`fs.rs`, only `/v1/workspaces/{id}/files/*`):
-  list-dir / read / write with canonicalize prefix checks against the
-  workspace root(路径从 sqlite 元数据解析,不依赖后端在线)。Contains
-  `ComboCliManager` (`combocli.rs`),which spawns/guards the `combo-cli serve`
-  subprocess (health-poll, auto-restart via `ensure_running`, graceful shutdown
-  via `/v1/control`). 可选接入 OpenCode / Claude Code / Codex 后端
-  (`COMBO_*_BIN` 环境变量,默认不启用)。
+- **`crates/combo-cli`** (Rust, axum + rig) — combo 完整后端(库 + 二进制)。
+  `serve_listener`(`serve.rs`)提供 `/v1/*` 全部端点:agent 运行 + 双层 SSE 事件流、
+  workspace/session sqlite 镜像(`store.rs`/`meta.rs`/`workspace.rs`/`session.rs`)、
+  受限文件读写(`fs.rs`,仅 `/v1/workspaces/:id/files/*`,canonicalize 前缀校验对
+  workspace 根)、git(`git.rs`)、令牌鉴权(`auth.rs`)、服务器目录浏览(`host.rs`)、
+  终端 WS(`terminal.rs`)、隧道(`relay.rs` + `tunnel.rs`)、skills(`skills_api.rs`)、
+  技能注入(`skills.rs`)。`AppState::new(cfg)` 打开默认 MetaStore 并迁移 crush 数据;
+  `reconcile_all` 已并入构造函数。
 - **`src-tauri`** (Rust, Tauri v2) — thin shell. `init_backend` in `src/lib.rs`
-  starts `ComboCliManager` + proxy on `127.0.0.1:0` (random port), emits Tauri events
-  `proxy-ready` (`{port}`) and `rune-status` (`{connected}`). On combo-cli failure it
-  keeps the proxy alive pointing at an unreachable TCP address so the UI shows
-  "disconnected".
+  加载 combo 配置、构造 `combo_cli::serve::AppState`、绑定 `127.0.0.1:0` 随机端口、
+  spawn `serve_listener`(同进程内嵌,无子进程)。端口经 Tauri events
+  `proxy-ready` (`{port}`) 与 `rune-status` (`{connected}`) 推给前端。
 - **`src/`** (React 19 + Vite + TS, shadcn/ui) — the frontend. TanStack Query
   for REST data, **Zustand** (`stores/agentStore.ts`) for SSE-driven live state,
   keyed by `sessionId`.
@@ -55,28 +54,26 @@ npm run tsc                 # tsc -b (project references: tsconfig.app.json + ts
 npm test                    # vitest run (jsdom; config lives inside vite.config.ts)
 npm run test:e2e            # Playwright; SKIPS itself unless COMBO_CLI_BIN is set
 npm run gen:api             # regenerate src/lib/api/types.ts from swagger/swagger.json
-cargo run -p combo-proxy --bin combo-proxy -- --port 18234   # proxy standalone(默认托管 combo-cli serve)
-bash scripts/dev-backend.sh    # 一步:编译 combo-cli → 启动 combo-proxy(端口 18234,可传参)
+cargo run -p combo-cli -- serve --port 18234                # 后端独立运行(combo 全部 API)
+bash scripts/dev-backend.sh    # 一步:编译 combo-cli → serve 模式跑在 :18234(可传参)
 cargo run -p combo-cli --bin combo-cli -- ask "你好"         # 自有 agent CLI(rig 驱动)
-cargo test -p combo-proxy   # Rust unit + integration tests
 cargo test -p combo-cli     # combo-cli 单元测试
+cargo test -p combo         # src-tauri 单元测试
 ```
 
-> **默认 agent 是 combo-cli(本机自有 agent)。** proxy 自动托管 `combo-cli serve`
-> (`COMBO_CLI_BIN` 指定二进制,默认 `combo-cli`),新项目默认 `backend=combo-cli`;
-> 其它后端(opencode/claude_code/codex)需显式设对应环境变量才启用。
-> combo-cli serve 实现 rune 兼容协议(`/v1/workspaces/{id}/agent` + SSE
-> events + cancel + current-session/permissions stub),会话与历史由 proxy 的
-> sqlite 镜像负责,`/agent` 请求由 proxy 注入 `history`(见
-> `handler.rs::inject_history`)支撑多轮上下文;工具自动执行、无权限拦截。
-> 历史版本写入的 `backend=crush` workspace 会在启动时自动迁移为 combo-cli
-> (`workspace.rs::reconcile_all`)。
+> **combo-cli serve 就是唯一的后端。** 无反向代理、无多后端选项。serve 实现
+> rune 兼容协议(`/v1/workspaces/{id}/agent` + 双层 SSE events + cancel +
+> current-session/permissions stub);会话与历史由 serve 自己的 sqlite 镜像
+> (`store.rs`)负责,多轮上下文由 `run_agent_ws` 从
+> `state.meta.db().list_messages(ws_id, session_id)` 读历史注入
+> (`serve.rs::history_to_messages`);工具自动执行、无权限拦截。
+> 历史版本写入的 `backend=crush` / `backend=combo-cli` workspace 会在
+> `AppState::new` 时自动归一化迁移(`workspace.rs::reconcile_all`)。
 
 **Browser dev workflow (recommended):** terminal 1 `bash scripts/dev-proxy.sh`,
-terminal 2 `bash scripts/dev-backend.sh`(一步编译 combo-cli 并以它为默认 agent
-启动 proxy,等价于先 `cargo build -p combo-cli` 再 `COMBO_CLI_BIN=target/debug/combo-cli
-cargo run -p combo-proxy --bin combo-proxy -- --port 18234`),then open
-http://localhost:5173.
+terminal 2 `bash scripts/dev-backend.sh`(一步编译 combo-cli 并以 serve 模式跑在
+:18234,等价于 `cargo build -p combo-cli` 后运行 `target/debug/combo-cli serve
+--port 18234`),then open http://localhost:5173.
 
 **Tauri desktop mode:** the README says `npm run tauri dev`, but **that does not
 work out of the box** — there is no `tauri` npm script and `@tauri-apps/cli` is not
@@ -91,26 +88,20 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
 | `COMBO_IT_DIR` | E2E workspace directory (default `/tmp/combo-e2e`). |
 | `COMBO_DATA_DIR` | combo sqlite 数据目录(默认 `$XDG_DATA_HOME/combo`,macOS 无 XDG 时 `~/.local/share/combo`)。combo-cli 的 providers.json 也在此目录。 |
 | `VITE_PROXY_URL` | Proxy base URL for browser mode (e.g. `http://127.0.0.1:18234`). In Tauri mode the port comes from the `proxy-ready` event with a 2s fallback to `:18234`. |
-| `COMBO_HOST` | Proxy 监听地址(默认 `127.0.0.1`)。域名部署时设 `0.0.0.0` 对外开放;命令行 `--host` 优先级更高。 |
-| `COMBO_CLI_BIN` | combo-cli serve 二进制(默认 `combo-cli` 从 PATH 找)。设此变量才会自动托管 combo-cli serve;二进制缺失时 proxy 仍可启动(combo-cli 项目转发 502)。E2E 与 combo-cli 集成测试依赖它。 |
-| `COMBO_OPENCODE_BIN` | 可选:启用 OpenCode 后端。 |
-| `COMBO_CLAUDE_BIN` | 可选:启用 Claude Code 后端。 |
-| `COMBO_CODEX_BIN` | 可选:启用 Codex 后端。 |
+| `COMBO_HOST` | serve 监听地址(默认 `127.0.0.1`)。域名部署时设 `0.0.0.0` 对外开放;命令行 `--host` 优先级更高。 |
+| `COMBO_CLI_BIN` | E2E 开关:设置后 Playwright spec 才运行(验证真实 agent 工作流)。 |
 | `COMBO_CONFIG_DIR` | combo-cli 配置文件目录(默认 `~/.config/combo`,文件 `combo-cli.toml`)。 |
-| `COMBO_SKILLS_DIR` | combo-proxy 技能扫描目录(默认 `~/.config/combo/skills`)。 |
-
-combo-cli 集成测试(`crates/combo-proxy/tests/combo_cli_integration_test.rs`)
-在 `COMBO_CLI_BIN` 指定的二进制缺失时自动跳过。
+| `COMBO_SKILLS_DIR` | combo-cli 技能扫描目录(默认 `~/.config/combo/skills`)。 |
 
 ## Architecture & data flow
 
-- **File service** (`crates/combo-proxy/src/fs.rs`): `GET .../files/list?path=`
+- **File service** (`crates/combo-cli/src/fs.rs`): `GET .../files/list?path=`
   lists one directory (hidden files skipped, dirs first), `GET .../files/content`
   reads text (≤1MB, binary rejected), `PUT .../files/content` writes atomically.
-  `path` must be relative; the proxy resolves the workspace root from sqlite
+  `path` must be relative; serve resolves the workspace root from sqlite
   `MetaStore`. Frontend: `src/lib/api` wrappers +
   `stores/editorStore.ts` + `FileExplorer`/`EditorPane`.
-- **Sqlite 持久化** (`crates/combo-proxy/src/db.rs`): combo 自有元数据落盘在
+- **Sqlite 持久化** (`crates/combo-cli/src/store.rs`): combo 自有元数据落盘在
   sqlite(默认 `~/.local/share/combo/combo.db`,`COMBO_DATA_DIR` 可覆盖)。
   表 `workspaces`(项目元数据,含可重命名的 `name`)与 `conversations`
   (会话的本地镜像)。`MetaStore` (`meta.rs`)是 sqlite-backed:
@@ -147,18 +138,17 @@ combo-cli 集成测试(`crates/combo-proxy/tests/combo_cli_integration_test.rs`)
   `run_complete` sets the run to `done`. Note: `MessageVM.streaming` is set to
   `true` on every upsert and never flipped back — completion is signaled by run
   status, not message flags.
-- **Proxy gotchas** (`crates/combo-proxy/src/handler.rs`): strips `HOST`,
-  `CONNECTION`, `CONTENT_LENGTH`, `TRANSFER_ENCODING` headers in both directions.
-  When `--origin` flags are absent, CORS is fully
-  permissive; Tauri mode passes `tauri://localhost` and `http://localhost:5173`.
+- **serve gotchas** (`crates/combo-cli/src/serve.rs`): CORS 由 `build_router` 的
+  `CorsLayer` 处理,`allowed_origins` 为空则全开放(独立 `serve` 模式);
+  Tauri 模式传 `tauri://localhost` 和 `http://localhost:5173`。
 
 ## Code organization & conventions
 
-- **Rust:** module-per-concern under `crates/combo-proxy/src/` (`handler`, `router`,
-  `combocli`, `workspace`, `session`, `registry`, `upstream`), `pub` API
-  re-exported from `lib.rs`. Workspace root
-  `Cargo.toml` has members `crates/combo-proxy`, `crates/combo-cli`,
-  `crates/combo-relay` and `src-tauri`.
+- **Rust:** module-per-concern under `crates/combo-cli/src/` (`serve`, `agent`,
+  `store`, `meta`, `workspace`, `session`, `auth`, `fs`, `git`, `host`,
+  `terminal`, `relay`, `tunnel`, `skills`, `skills_api`), `pub` API
+  re-exported from `lib.rs`(`AppState` / `run` / `serve_listener`)。Workspace root
+  `Cargo.toml` has members `crates/combo-cli`, `crates/combo-relay` and `src-tauri`.
 - **Frontend layout:** `src/components/{ui,shell,agent}` — `ui/` is generated
   shadcn primitives, `shell/` is app chrome, `agent/` is the chat/tool/modal UI.
   The shell is a 1:1 仿写 ZCode 的 agent 布局:左侧 `WorkspaceSidebar`(默认 372px,
@@ -197,15 +187,15 @@ combo-cli 集成测试(`crates/combo-proxy/tests/combo_cli_integration_test.rs`)
   assert against the Zustand store directly. **`src/test-setup.ts`** polyfills
   `localStorage` (jsdom 25 + Node 26 下 getter 失效)和 `ResizeObserver`
   (radix ScrollArea 依赖),并在每个测试前清空持久化状态,所有 Vitest 测试共用。
-- **Rust:** in-module `#[cfg(test)]` units plus `tests/proxy_test.rs` (spins an
-  in-memory stub axum upstream and asserts proxying incl. SSE passthrough),
-  `tests/opencode_test.rs` (stub OpenCode server) and
-  `tests/combo_cli_integration_test.rs` (real combo-cli, gated on `COMBO_CLI_BIN`).
-  sqlite 用 `ComboDb::in_memory()`,不落盘。
+- **Rust:** in-module `#[cfg(test)]` units (dedicated `AppState::test_state(meta,
+  browse_root)` in `serve.rs` for handler tests in `auth.rs` / `host.rs` / `fs.rs`
+  etc.; sqlite 用 in-memory `ComboDb`/`MetaStore`,不落盘)。`cargo test -p combo-cli`
+  跑全部单元测试(70+ 项)。
 - **E2E (Playwright):** `playwright.config.ts` `webServer` auto-starts both Vite
-  (`bash scripts/dev-proxy.sh`) and the proxy (`cargo run ... --port 18234`) with
-  `reuseExistingServer: true`. The spec skips itself unless `COMBO_CLI_BIN` is
-  set. It **wipes the workspace dir (`/tmp/combo-e2e`) before running**.
+  (`bash scripts/dev-proxy.sh`) and the backend (`bash scripts/dev-backend.sh
+  18234`,即 `combo-cli serve`) with `reuseExistingServer: true`. The spec skips
+  itself unless `COMBO_CLI_BIN` is set. It **wipes the workspace dir
+  (`/tmp/combo-e2e`) before running**.
   Selectors rely on Chinese UI text (e.g. button `添加项目`, `发送`, title `新建会话`);
   项目在左侧以 basename 显示,会话列表在中间(`ConversationList`)。「添加项目」在
   桌面模式弹原生目录对话框,浏览器模式仅提示;e2e 改为经 API 创建工作区.
@@ -232,11 +222,10 @@ combo-cli 集成测试(`crates/combo-proxy/tests/combo_cli_integration_test.rs`)
    子命令:
    `ask`(单轮流式)、`chat`(交互多轮流式,历史
    持久化 `COMBO_DATA_DIR`/`XDG_DATA_HOME/combo/combo-cli.db`,表
-   `cli_conversations`/`cli_messages` 与 proxy 隔离)、`sessions list|show|rm`、
-   `serve`(进程守护,stdout 输出 `COMBO_CLI_PORT=` 供
-   `combocli.rs::ComboCliManager` 解析端口;`GET /v1/health` + `POST
-   /v1/control` 优雅关闭 + **rune 兼容协议**:`POST /v1/workspaces/{id}/agent`
-   发起运行(请求体含 proxy 注入的 `history`)、`POST
+   `cli_conversations`/`cli_messages` 与 serve 的表隔离)、`sessions list|show|rm`、
+   `serve`(进程守护,stdout 输出 `COMBO_CLI_PORT=` 供外部脚本解析;
+   `GET /v1/health` + `POST /v1/control` 优雅关闭 + **rune 兼容协议**:
+   `POST /v1/workspaces/{id}/agent` 发起运行(serve 从 sqlite 读历史注入)、`POST
    .../agent/sessions/{sid}/cancel` 取消、`GET /v1/workspaces/{id}/events`
    SSE 双层信封事件流(消息 created/updated + finish + run_complete,keepalive
    用 15s `: ping`,不能用 `interval.tick()`——unfold 每帧重建会首 tick 洪泛)、
@@ -275,7 +264,7 @@ combo-cli 集成测试(`crates/combo-proxy/tests/combo_cli_integration_test.rs`)
    `default_large_model_id` 时从 combo providers.json 合并默认模型。
 
 1. `npm run tauri dev` (README) is wrong as-is — no tauri npm script/CLI installed.
-2. Browser dev needs the proxy on `:18234`; that port is hard-coded as fallback in
+2. Browser dev needs the backend on `:18234`; that port is hard-coded as fallback in
    `connection.ts`, `dev-proxy.sh`, `playwright.config.ts`, and the e2e spec.
 3. `client_id` goes in query params everywhere, but must also be in the
    `createWorkspace` request body.
@@ -290,28 +279,35 @@ combo-cli 集成测试(`crates/combo-proxy/tests/combo_cli_integration_test.rs`)
    history is refetched via `getSessionHistory` when a session is activated.
    Only the active workspace/session selection is persisted (see above).
 10. **axum 0.7 route params use `:id`, not `{id}`** (that's axum 0.8 syntax).
-    The file-service routes in `router.rs` and the stub in `proxy_test.rs` both
-    use `:id`; a `{id}` route silently falls through to the proxy fallback.
-11. **会话列表来自 sqlite 镜像,不是后端。** `GET .../sessions` 由
-    `session.rs` 本地接管(从 sqlite 读);新建会话必须走 proxy
-    (`POST .../sessions`),直接调后端的会话不会进 sqlite 镜像。
+    All serve routes in `serve.rs` (`build_router`) and its tests use `:id`;
+    a `{id}` route silently 404s.
+11. **会话列表来自 sqlite 镜像,直接由 serve 处理。** `GET .../sessions` 与
+    `POST .../sessions` 都由 `session.rs` 本地接管(从 sqlite 读/写)。
 12. **sqlite 用 `std::sync::Mutex<Connection>`**,`rusqlite` 连接不是 `Sync`;
     `list_*` 方法里 lock 的临时值要绑定到 `let`,否则借用检查报 E0716。
 13. **历史 `backend=crush` 数据自动迁移。** `BackendType::parse("crush")`
-    归一化为 ComboCli;启动时 `reconcile_all` 会把 sqlite 里遗留的 crush
+    归一化为 ComboCli;`AppState::new` 时 `reconcile_all` 会把 sqlite 里遗留的 crush
     workspace 迁移为 combo-cli,无需手工处理。
+14. **combo-cli 同时有 lib 与 bin target。** lib 声明全部模块(`src/lib.rs`,
+    `pub mod`),bin(`src/main.rs`)通过 `use combo_cli::...` 引用;`--lib` 测试与
+    `--bin` 测试都会跑。Tauri 内嵌用 `combo_cli::serve::{AppState, serve_listener}`;
+    `AppState::new(cfg)` 已含 reconcile 与 COMBO_BROWSE_ROOT 解析,构造后需手动
+    设置 `local_port`。`RelayManager::new()` 返回 `Arc<Self>`,不能二次 `Arc::new`。
+15. **serve 配置加载**:独立 `serve` 模式若有配置缺失(找不到 provider)会退出;
+    Tauri 内嵌(`init_backend`)失败时回退内置 opencode provider,仅保证
+    health/文件/会话等端点可用,agent 运行无 key 时以 finish(error) 收尾。
 
 ## 远端 Web / 移动端支持
 
-combo 支持前后端分离部署:proxy 只当 API 服务,前端(dist/)部署到任意静态托管
+combo 支持前后端分离部署:combo-cli serve 只当 API 服务,前端(dist/)部署到任意静态托管
 (nginx/Vercel 等),浏览器/手机通过 `VITE_PROXY_URL`(构建期)或「设置」里的
-**运行时代理地址覆盖**(`localStorage["combo.proxyUrl"]`,见 `connection.ts`
-`get/set/clearProxyUrlOverride`)指向远端 proxy。`resolveProxyBaseUrl` 优先级:
+**运行时后端地址覆盖**(`localStorage["combo.proxyUrl"]`,见 `connection.ts`
+`get/set/clearProxyUrlOverride`)指向远端 serve。`resolveProxyBaseUrl` 优先级:
 运行时覆盖 → `VITE_PROXY_URL` → Tauri 内置端口 → `127.0.0.1:18234`。SSE 与
 health 都走同一 base,跨域由 CORS 放开。
 
-- **CORS**:proxy `--origin` 白名单;未传时读 `COMBO_CORS_ORIGINS`(逗号分隔)
-  环境变量,两者都缺省则全开放(见 `main.rs`)。
+- **CORS**:serve 的 `build_router` 接收 `allowed_origins` 白名单;独立运行时为空即
+  全开放,Tauri 模式传 `tauri://localhost` 与 `http://localhost:5173`。
 - **服务器目录浏览**(`host.rs`,`/v1/host/*`):`GET /v1/host/home` 返回缺省起点
   (HOME 或浏览根),`GET /v1/host/dirs?path=<绝对路径>` 列出单层子目录
   (过滤隐藏项,dir 在前)。只读;`--browse-root` / `COMBO_BROWSE_ROOT` 可限制
@@ -323,7 +319,7 @@ health 都走同一 base,跨域由 CORS 放开。
   分隔条与后退/前进在移动端隐藏;终端/编辑器已是全内容区切换。触屏下
   悬停才显示的操作(重命名笔、右键菜单)改为 `md:` 前缀常驻 + 行内
   `⋯`(MoreHorizontal)按钮打开同一上下文菜单(桌面右键行为不变)。
-- **访问令牌(远程连接鉴权)**:移动端扫码远程访问时由 proxy 强制校验令牌。
+- **访问令牌(远程连接鉴权)**:移动端扫码远程访问时由 serve 强制校验令牌。
   桌面端打开「移动端远程控制」(`MobileConnectDialog`)时调
   `POST /v1/auth/token` 生成新令牌(默认 7 天有效),令牌嵌入二维码 URL
   (`?token=<xxx>`)。手机扫码打开前端页面后,`main.tsx` 调
@@ -335,13 +331,13 @@ health 都走同一 base,跨域由 CORS 放开。
   `with_state` 之前)对**非回环、非公开端点**的请求强制校验:本地回环
   (127.0.0.1/::1,通过 `into_make_service_with_connect_info` 注入的
   `ConnectInfo<SocketAddr>` 判定)和公开端点(`/v1/health`、`/v1/auth/*`)放行,
-  其余无有效令牌返回 401。令牌落盘 sqlite `access_tokens` 表(`db.rs`,
+  其余无有效令牌返回 401。令牌落盘 sqlite `access_tokens` 表(`store.rs`,
   支持撤销/过期/记录最后使用时间),刷新令牌时撤销旧令牌。令牌明文由
   `/dev/urandom` 生成 32 字节 hex(64 字符),不可用时回退到时间+pid 哈希。
 - **域名远程访问**:`connection.ts` 的 `getExternalUrl`/`setExternalUrl`/
   `clearExternalUrl`(localStorage `combo.externalUrl`)管理外部访问域名。
   在「设置」对话框中配置(如 `https://combo.example.com`),`MobileConnectDialog`
   二维码优先使用该域名作为基础地址;未配置时回退到 `window.location`(仅限
-  局域网)。配置域名后手机扫码即可通过公网/域名访问,无需额外设置代理地址。
-  Proxy 监听地址可通过 `COMBO_HOST` 环境变量(或 `--host` 参数)指定,域名部署时
-  设 `0.0.0.0`。
+  局域网)。配置域名后手机扫码即可通过公网/域名访问,无需额外设置后端地址。
+  serve 监听地址可通过 `COMBO_HOST` 环境变量(或 `serve --host` 参数)指定,域名
+  部署时设 `0.0.0.0`。
