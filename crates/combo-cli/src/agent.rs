@@ -11,10 +11,12 @@ use anyhow::Result;
 use futures::StreamExt;
 use rig::agent::{Agent, MultiTurnStreamItem};
 use rig::client::ProviderClient;
+use rig::completion::message::ToolResultContent;
 use rig::completion::{CompletionModel, GetTokenUsage, Message};
 use rig::prelude::AgentClientExt;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingChat, StreamingPrompt};
 use rig::tool::DynamicTool;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -242,7 +244,7 @@ pub enum RunEvent {
     /// 完整工具调用(rig 已执行并自动回填结果)。
     ToolCall { id: String, name: String, input: String },
     /// 工具执行结果。
-    ToolResult { id: String, content: String },
+    ToolResult { id: String, name: String, content: String },
 }
 
 /// 流式运行一次 agent 对话(多轮,含工具调用与历史)。
@@ -309,6 +311,8 @@ where
 {
     let mut stream = agent.stream_chat(question, history.to_vec()).await;
     let mut out = String::new();
+    // tool_call id → 工具名,供 ToolResult 上报时配对
+    let mut tool_names: HashMap<String, String> = HashMap::new();
     loop {
         let item = tokio::select! {
             _ = cancel.changed() => {
@@ -330,6 +334,7 @@ where
                 ..
             }) => {
                 let input = tool_call.function.arguments.to_string();
+                tool_names.insert(tool_call.id.clone(), tool_call.function.name.clone());
                 on_event(RunEvent::ToolCall {
                     id: tool_call.id,
                     name: tool_call.function.name,
@@ -340,14 +345,24 @@ where
                 tool_result,
                 ..
             }) => {
+                // text / json 内容块都转成字符串;image 块跳过
                 let content = tool_result
                     .content
                     .iter()
-                    .filter_map(|c| c.as_text().map(|s| s.to_string()))
+                    .filter_map(|c| match c {
+                        ToolResultContent::Text(t) => Some(t.text.clone()),
+                        ToolResultContent::Json { value } => Some(value.to_string()),
+                        ToolResultContent::Image(_) => None,
+                    })
                     .collect::<Vec<_>>()
                     .join("\n");
+                let name = tool_names
+                    .get(&tool_result.id)
+                    .cloned()
+                    .unwrap_or_default();
                 on_event(RunEvent::ToolResult {
                     id: tool_result.id,
+                    name,
                     content,
                 });
             }

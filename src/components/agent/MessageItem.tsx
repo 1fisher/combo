@@ -138,16 +138,26 @@ export function MessageItem({
                 case 'tool_result': {
                   const tr = d as {
                     tool_call_id: string;
-                    name: string;
-                    content: string;
+                    name?: string;
+                    content?: string | Record<string, unknown>;
                     metadata?: string;
                     is_error?: boolean;
                   };
-                  // 空内容的 tool_result 不渲染
-                  if (!tr.content || tr.content.trim() === '') return null;
+                  // 结构化内容(对象/数组)转为字符串;空内容的 tool_result 不渲染
+                  const content =
+                    typeof tr.content === 'string'
+                      ? tr.content
+                      : tr.content
+                        ? JSON.stringify(tr.content, null, 2)
+                        : '';
+                  if (!content || content.trim() === '') return null;
                   return (
                     <div key={i}>
-                      <ToolResultCard result={tr as never} />
+                      <ToolResultCard
+                        result={
+                          { ...tr, content, name: tr.name ?? '' } as never
+                        }
+                      />
                     </div>
                   );
                 }

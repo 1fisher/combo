@@ -232,8 +232,8 @@ async fn run_agent_ws(
                 RunEvent::ToolCall { id, name, input } => {
                     parts.push(tool_call_part(&id, &name, &input));
                 }
-                RunEvent::ToolResult { id, content } => {
-                    let msg = tool_result_message_json(&session_id, &id, &content);
+                RunEvent::ToolResult { id, name, content } => {
+                    let msg = tool_result_message_json(&session_id, &id, &name, &content);
                     let _ = tx_ev.send(msg_env("created", msg));
                 }
             }
@@ -360,19 +360,24 @@ fn tool_call_part(id: &str, name: &str, input: &str) -> Value {
     })
 }
 
-fn tool_result_part(tool_call_id: &str, content: &str) -> Value {
+fn tool_result_part(tool_call_id: &str, name: &str, content: &str) -> Value {
     json!({
         "type": "tool_result",
-        "data": { "tool_call_id": tool_call_id, "content": content, "is_error": false },
+        "data": { "tool_call_id": tool_call_id, "name": name, "content": content, "is_error": false },
     })
 }
 
-fn tool_result_message_json(session_id: &str, tool_call_id: &str, content: &str) -> Value {
+fn tool_result_message_json(
+    session_id: &str,
+    tool_call_id: &str,
+    name: &str,
+    content: &str,
+) -> Value {
     json!({
         "id": uuid::Uuid::new_v4().to_string(),
         "session_id": session_id,
         "role": "user",
-        "parts": [tool_result_part(tool_call_id, content)],
+        "parts": [tool_result_part(tool_call_id, name, content)],
         "created_at": now_secs(),
         "updated_at": now_secs(),
     })

@@ -40,11 +40,18 @@ function useToolCallInput(toolCallId: string): { name: string; input: string } |
 export function ToolResultCard({ result }: { result: Api.ToolResult }) {
   const [expanded, setExpanded] = useState(false);
   const isError = result.is_error ?? false;
-  const content = result.content ?? '';
+  const content =
+    typeof result.content === 'string'
+      ? result.content
+      : result.content
+        ? JSON.stringify(result.content, null, 2)
+        : '';
   const toolCall = useToolCallInput(result.tool_call_id);
+  // 后端可能缺 name(如旧版 combo-cli 的 tool_result),回退到配对 tool_call 的名字
+  const name = result.name || toolCall?.name || '工具';
 
-  const isFileTool = FILE_DIFF_TOOLS.has(result.name);
-  const isBash = BASH_TOOLS.has(result.name) || result.name === 'bash';
+  const isFileTool = FILE_DIFF_TOOLS.has(name);
+  const isBash = BASH_TOOLS.has(name) || name === 'bash';
 
   // 对文件修改工具计算 diff
   const diffLines = useMemo<DiffLine[] | null>(() => {
@@ -83,10 +90,10 @@ export function ToolResultCard({ result }: { result: Api.ToolResult }) {
 
   // 摘要标题
   const titleLabel = isFileTool
-    ? `${result.name} 变更`
+    ? `${name} 变更`
     : isBash
       ? '终端输出'
-      : `${result.name} 返回`;
+      : `${name} 返回`;
 
   return (
     <details className="rounded-md border bg-muted/20" open={isError || !!diffLines}>
