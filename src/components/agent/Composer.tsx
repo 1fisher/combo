@@ -10,7 +10,6 @@ import {
   Paperclip,
   Plus,
   Quote,
-  Server,
   ShieldAlert,
   Sparkles,
   Square,
@@ -27,6 +26,7 @@ import { useAgentInfo, useProviders, useSetModel, useWorkspaceConfig } from '../
 import type { Api } from '../../lib/api/types';
 import { cn } from '../../lib/utils';
 import { AttachmentPicker } from './AttachmentPicker';
+import { ProviderLogo } from './ProviderLogo';
 
 const MODES: { id: AgentMode; label: string; desc: string }[] = [
   { id: 'yolo', label: '完全访问', desc: '自动放行全部权限,不弹窗' },
@@ -446,7 +446,7 @@ export function Composer({
                       aria-label="切换 Provider"
                       title="切换 Provider"
                     >
-                      <Server className="pointer-events-none size-4 text-current" />
+                      <ProviderLogo providerId={currentProviderId} name={currentProviderName} className="size-4" />
                       <span className="min-w-0 max-w-[6rem] truncate">{currentProviderName}</span>
                       <ChevronDown className="pointer-events-none size-3.5 text-foreground-subtlest" />
                     </button>
@@ -476,10 +476,11 @@ export function Composer({
                                 type="button"
                                 onClick={() => handleProviderChange(p.id)}
                                 className={cn(
-                                  'flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-hover',
+                                  'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-hover',
                                   p.id === currentProviderId && 'bg-surface-hover'
                                 )}
                               >
+                                <ProviderLogo providerId={p.id} name={p.name} className="size-4 shrink-0" />
                                 <span className="flex min-w-0 flex-1 flex-col">
                                   <span className="truncate font-medium">{p.name || p.id}</span>
                                   <span className="truncate text-[11px] text-foreground-subtle">
