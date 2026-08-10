@@ -71,12 +71,11 @@ function DialogContent({
           <DialogPrimitive.Close data-slot="dialog-close" asChild>
             <Button
               variant="ghost"
-              className="absolute top-2 right-2"
+              className="absolute top-2 right-2 rounded-md text-foreground-subtle hover:text-foreground"
               size="icon-sm"
+              aria-label="关闭"
             >
-              <XIcon
-              />
-              <span className="sr-only">Close</span>
+              <XIcon className="size-4" />
             </Button>
           </DialogPrimitive.Close>
         )}

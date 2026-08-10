@@ -823,7 +823,7 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
           if (!open && !deleting) setDeleteTarget(null);
         }}
       >
-        <DialogContent showCloseButton={false}>
+        <DialogContent>
           <DialogHeader>
             <DialogTitle>删除项目</DialogTitle>
             <DialogDescription>
@@ -858,7 +858,7 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
           }
         }}
       >
-        <DialogContent showCloseButton={false}>
+        <DialogContent>
           <DialogHeader>
             <DialogTitle>更换目录</DialogTitle>
             <DialogDescription>

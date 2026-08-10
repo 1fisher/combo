@@ -2,12 +2,10 @@ import { CalendarClock, Clock, Sparkles, Zap } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogDescription,
 } from '../ui/dialog';
-import { Button } from '../ui/button';
 
 interface AutomationPanelProps {
   open: boolean;
@@ -35,13 +33,13 @@ const FEATURES = [
 export function AutomationPanel({ open, onOpenChange }: AutomationPanelProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-[16px]">
+          <DialogTitle className="flex items-center gap-2">
             <CalendarClock className="size-4 text-brand" />
             自动化
           </DialogTitle>
-          <DialogDescription className="text-[13px]">
+          <DialogDescription>
             设置自动化任务,让 combo 在指定时间或闲时自动完成工作。
           </DialogDescription>
         </DialogHeader>
@@ -68,11 +66,6 @@ export function AutomationPanel({ open, onOpenChange }: AutomationPanelProps) {
         <div className="rounded-lg border border-dashed border-border px-3 py-3 text-center text-[12px] text-foreground-subtlest">
           自动化功能即将推出,敬请期待
         </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            关闭
-          </Button>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

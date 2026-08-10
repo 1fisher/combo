@@ -1,11 +1,9 @@
 import {
   Dialog,
   DialogContent,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from '../ui/dialog';
-import { Button } from '../ui/button';
 
 interface HelpDialogProps {
   open: boolean;
@@ -45,9 +43,9 @@ const TIPS: { icon: string; title: string; desc: string }[] = [
 export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} className="sm:max-w-md">
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle className="text-[16px]">帮助</DialogTitle>
+          <DialogTitle>帮助</DialogTitle>
         </DialogHeader>
         <div className="flex flex-col gap-5">
           {/* 快捷键 */}
@@ -100,11 +98,6 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
             </div>
           </div>
         </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            关闭
-          </Button>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

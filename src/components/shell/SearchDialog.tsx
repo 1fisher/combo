@@ -169,13 +169,12 @@ export function SearchDialog({ open, onOpenChange, onNavigate }: SearchDialogPro
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        showCloseButton={false}
         className="gap-0 overflow-hidden p-0 sm:max-w-lg"
         onKeyDown={onKeyDown}
       >
         <DialogTitle className="sr-only">搜索</DialogTitle>
         {/* 搜索栏 */}
-        <div className="flex items-center gap-2.5 border-b border-border px-3 py-2.5">
+        <div className="flex items-center gap-2.5 border-b border-border py-2.5 pr-9 pl-3">
           <Search className="size-4 shrink-0 text-foreground-subtlest" />
           <input
             ref={inputRef}

@@ -484,7 +484,7 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
 
       {/* 撤销变更确认弹窗 */}
       <Dialog open={discardTarget !== null} onOpenChange={(v) => !v && setDiscardTarget(null)}>
-        <DialogContent showCloseButton={false} className="max-w-xs">
+        <DialogContent className="max-w-xs">
           <DialogHeader>
             <DialogTitle>撤销变更</DialogTitle>
             <DialogDescription>

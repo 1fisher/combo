@@ -34,7 +34,7 @@ export function SkillsPanel({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[80vh] flex-col gap-0 p-0 sm:max-w-lg">
         <DialogHeader className="border-b px-4 py-3">
-          <DialogTitle className="flex items-center gap-2 text-[15px]">
+          <DialogTitle className="flex items-center gap-2">
             <WandSparkles className="size-4 text-brand" />
             技能管理
           </DialogTitle>

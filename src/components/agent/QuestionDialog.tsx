@@ -39,7 +39,7 @@ export function QuestionDialog({
     <Dialog open>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle className="text-sm">agent 提问</DialogTitle>
+          <DialogTitle>agent 提问</DialogTitle>
         </DialogHeader>
         <div className="flex max-h-72 flex-col gap-4 overflow-auto">
           {batch.questions.map((q) => (

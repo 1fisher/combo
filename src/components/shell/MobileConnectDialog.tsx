@@ -4,7 +4,6 @@ import { Check, Copy, KeyRound, RefreshCw, Smartphone, Wifi } from 'lucide-react
 import {
   Dialog,
   DialogContent,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
   DialogDescription,
@@ -107,13 +106,13 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent showCloseButton={false} className="sm:max-w-sm">
+      <DialogContent className="sm:max-w-sm">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-[16px]">
+          <DialogTitle className="flex items-center gap-2">
             <Smartphone className="size-4 text-brand" />
             移动端远程控制
           </DialogTitle>
-          <DialogDescription className="text-[13px]">
+          <DialogDescription>
             扫描二维码,在手机上打开 combo 进行远程操作。每次生成独立访问令牌,校验通过后方可连接。
           </DialogDescription>
         </DialogHeader>
@@ -220,11 +219,6 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
             </div>
           )}
         </div>
-        <DialogFooter>
-          <Button variant="ghost" onClick={() => onOpenChange(false)}>
-            关闭
-          </Button>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   );
