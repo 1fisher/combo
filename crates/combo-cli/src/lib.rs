@@ -13,6 +13,7 @@ pub mod mcp;
 pub mod meta;
 pub mod providers;
 pub mod relay;
+pub mod request_log;
 pub mod serve;
 pub mod session;
 pub mod skills;

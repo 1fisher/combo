@@ -104,12 +104,16 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
                     id: "deepseek-v4-flash-free".into(),
                     name: Some("DeepSeek V4 Flash Free".into()),
                     context_window: Some(1000000),
+                    cost_per_1m_in: Some(0.0),
+                    cost_per_1m_out: Some(0.0),
                     ..Default::default()
                 },
                 ModelInfo {
                     id: "big-pickle".into(),
                     name: Some("Big Pickle".into()),
                     context_window: Some(200000),
+                    cost_per_1m_in: Some(0.0),
+                    cost_per_1m_out: Some(0.0),
                     ..Default::default()
                 },
             ],
@@ -137,18 +141,24 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
                     id: "glm-4.6".into(),
                     name: Some("GLM-4.6".into()),
                     context_window: Some(128000),
+                    cost_per_1m_in: Some(0.6),
+                    cost_per_1m_out: Some(2.2),
                     ..Default::default()
                 },
                 ModelInfo {
                     id: "glm-4.5".into(),
                     name: Some("GLM-4.5".into()),
                     context_window: Some(128000),
+                    cost_per_1m_in: Some(0.5),
+                    cost_per_1m_out: Some(2.0),
                     ..Default::default()
                 },
                 ModelInfo {
                     id: "glm-4.5-flash".into(),
                     name: Some("GLM-4.5 Flash".into()),
                     context_window: Some(128000),
+                    cost_per_1m_in: Some(0.1),
+                    cost_per_1m_out: Some(0.4),
                     ..Default::default()
                 },
             ],
@@ -166,12 +176,16 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
                     id: "deepseek-v4-flash".into(),
                     name: Some("DeepSeek V4 Flash".into()),
                     context_window: Some(262144),
+                    cost_per_1m_in: Some(0.27),
+                    cost_per_1m_out: Some(1.10),
                     ..Default::default()
                 },
                 ModelInfo {
                     id: "deepseek-chat".into(),
                     name: Some("DeepSeek Chat".into()),
                     context_window: Some(131072),
+                    cost_per_1m_in: Some(0.27),
+                    cost_per_1m_out: Some(1.10),
                     ..Default::default()
                 },
             ],
@@ -246,6 +260,28 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
         //     }],
         // },
     ]
+}
+
+/// 查找指定 provider+model 的定价(USD / 1M tokens)。
+/// 查找顺序:provider 的 models 列表 → 内置 providers → 返回 (0, 0)。
+pub fn get_model_pricing(provider: &ProviderInfo, model_id: &str) -> (f64, f64) {
+    if let Some(m) = provider.models.iter().find(|m| m.id == model_id) {
+        return (
+            m.cost_per_1m_in.unwrap_or(0.0),
+            m.cost_per_1m_out.unwrap_or(0.0),
+        );
+    }
+    for p in builtin_providers() {
+        if p.id == provider.id {
+            if let Some(m) = p.models.iter().find(|m| m.id == model_id) {
+                return (
+                    m.cost_per_1m_in.unwrap_or(0.0),
+                    m.cost_per_1m_out.unwrap_or(0.0),
+                );
+            }
+        }
+    }
+    (0.0, 0.0)
 }
 
 /// 从 combo 的 providers.json 读取 provider 列表(路径不存在返回空)。

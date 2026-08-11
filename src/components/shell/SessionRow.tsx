@@ -13,6 +13,17 @@ function formatTime(secs: number | undefined): string {
   return `${Math.floor(diff / 86_400_000)} 天前`;
 }
 
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
+function formatCost(cost: number): string {
+  if (cost < 0.01) return `$${cost.toFixed(4)}`;
+  return `$${cost.toFixed(2)}`;
+}
+
 interface SessionRowProps {
   session: Api.Session;
   isActive: boolean;
@@ -116,6 +127,14 @@ export function SessionRow({
             {showTime && (
               <span className="shrink-0 text-[11px] text-foreground-subtlest">
                 {formatTime(session.created_at)}
+              </span>
+            )}
+            {(session.prompt_tokens > 0 || session.completion_tokens > 0) && (
+              <span
+                className="shrink-0 rounded bg-surface-hover px-1 text-[10px] tabular-nums text-foreground-subtlest"
+                title={`输入 ${formatTokens(session.prompt_tokens)} / 输出 ${formatTokens(session.completion_tokens)}${session.cost > 0 ? ` / 花费 ${formatCost(session.cost)}` : ''}`}
+              >
+                {formatTokens(session.prompt_tokens + session.completion_tokens)}
               </span>
             )}
             <button

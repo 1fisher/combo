@@ -58,6 +58,12 @@ pub struct ConversationMeta {
     pub message_count: i64,
     pub created_at: i64,
     pub updated_at: i64,
+    /// 累计输入 token(provider 上报)。
+    pub prompt_tokens: i64,
+    /// 累计输出 token(provider 上报)。
+    pub completion_tokens: i64,
+    /// 累计花费(USD)。
+    pub cost: f64,
 }
 
 /// 单条消息的持久化记录(parts 为 JSON 字符串)。
@@ -118,7 +124,10 @@ impl ComboDb {
                 title         TEXT NOT NULL,
                 message_count INTEGER NOT NULL DEFAULT 0,
                 created_at    INTEGER NOT NULL,
-                updated_at    INTEGER NOT NULL
+                updated_at    INTEGER NOT NULL,
+                prompt_tokens      INTEGER NOT NULL DEFAULT 0,
+                completion_tokens  INTEGER NOT NULL DEFAULT 0,
+                cost               REAL    NOT NULL DEFAULT 0.0
             );
             CREATE INDEX IF NOT EXISTS idx_conv_ws ON conversations(workspace_id);
             CREATE TABLE IF NOT EXISTS messages (
@@ -144,6 +153,15 @@ impl ComboDb {
                 disabled_skills TEXT NOT NULL DEFAULT '[]'
             );",
         )?;
+        // 容错迁移:旧库可能缺少新增列,逐个尝试添加(已存在则忽略)。
+        let mig = [
+            "ALTER TABLE conversations ADD COLUMN prompt_tokens INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE conversations ADD COLUMN completion_tokens INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE conversations ADD COLUMN cost REAL NOT NULL DEFAULT 0.0",
+        ];
+        for sql in &mig {
+            let _ = conn.execute(sql, []);
+        }
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -293,8 +311,8 @@ impl ComboDb {
             .lock()
             .unwrap()
             .execute(
-                "INSERT INTO conversations (id, workspace_id, title, message_count, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                "INSERT INTO conversations (id, workspace_id, title, message_count, created_at, updated_at, prompt_tokens, completion_tokens, cost)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                  ON CONFLICT(id) DO UPDATE SET
                      title=excluded.title,
                      message_count=excluded.message_count,
@@ -305,7 +323,10 @@ impl ComboDb {
                     c.title,
                     c.message_count,
                     c.created_at,
-                    c.updated_at
+                    c.updated_at,
+                    c.prompt_tokens,
+                    c.completion_tokens,
+                    c.cost
                 ],
             )?;
         Ok(())
@@ -314,19 +335,11 @@ impl ComboDb {
     pub fn list_conversations(&self, workspace_id: &str) -> anyhow::Result<Vec<ConversationMeta>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, workspace_id, title, message_count, created_at, updated_at
+            "SELECT id, workspace_id, title, message_count, created_at, updated_at,
+                    prompt_tokens, completion_tokens, cost
              FROM conversations WHERE workspace_id=?1 ORDER BY updated_at DESC",
         )?;
-        let rows = stmt.query_map(params![workspace_id], |r| {
-            Ok(ConversationMeta {
-                id: r.get(0)?,
-                workspace_id: r.get(1)?,
-                title: r.get(2)?,
-                message_count: r.get(3)?,
-                created_at: r.get(4)?,
-                updated_at: r.get(5)?,
-            })
-        })?;
+        let rows = stmt.query_map(params![workspace_id], row_to_conv)?;
         let mut out = Vec::new();
         for row in rows {
             out.push(row?);
@@ -346,7 +359,8 @@ impl ComboDb {
         let conn = self.conn.lock().unwrap();
         let placeholders = workspace_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!(
-            "SELECT id, workspace_id, title, message_count, created_at, updated_at
+            "SELECT id, workspace_id, title, message_count, created_at, updated_at,
+                    prompt_tokens, completion_tokens, cost
              FROM conversations WHERE workspace_id IN ({placeholders})
              ORDER BY updated_at DESC"
         );
@@ -355,16 +369,7 @@ impl ComboDb {
             .map(|s| s as &dyn rusqlite::ToSql)
             .collect();
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(params.as_slice(), |r| {
-            Ok(ConversationMeta {
-                id: r.get(0)?,
-                workspace_id: r.get(1)?,
-                title: r.get(2)?,
-                message_count: r.get(3)?,
-                created_at: r.get(4)?,
-                updated_at: r.get(5)?,
-            })
-        })?;
+        let rows = stmt.query_map(params.as_slice(), row_to_conv)?;
         let mut out = Vec::new();
         for row in rows {
             out.push(row?);
@@ -395,6 +400,26 @@ impl ComboDb {
         self.conn.lock().unwrap().execute(
             "UPDATE conversations SET workspace_id=?1 WHERE workspace_id=?2",
             params![to_ws, from_ws],
+        )?;
+        Ok(())
+    }
+
+    /// 累加 token 用量与花费到会话(每次 run 结束后调用)。
+    pub fn add_usage(
+        &self,
+        session_id: &str,
+        prompt_tokens: i64,
+        completion_tokens: i64,
+        cost: f64,
+    ) -> anyhow::Result<()> {
+        self.conn.lock().unwrap().execute(
+            "UPDATE conversations SET
+                prompt_tokens = prompt_tokens + ?1,
+                completion_tokens = completion_tokens + ?2,
+                cost = cost + ?3,
+                updated_at = ?4
+             WHERE id = ?5",
+            params![prompt_tokens, completion_tokens, cost, unix_secs(), session_id],
         )?;
         Ok(())
     }
@@ -553,6 +578,20 @@ impl ComboDb {
     }
 }
 
+fn row_to_conv(r: &rusqlite::Row<'_>) -> rusqlite::Result<ConversationMeta> {
+    Ok(ConversationMeta {
+        id: r.get(0)?,
+        workspace_id: r.get(1)?,
+        title: r.get(2)?,
+        message_count: r.get(3)?,
+        created_at: r.get(4)?,
+        updated_at: r.get(5)?,
+        prompt_tokens: r.get::<_, Option<i64>>(6)?.unwrap_or(0),
+        completion_tokens: r.get::<_, Option<i64>>(7)?.unwrap_or(0),
+        cost: r.get::<_, Option<f64>>(8)?.unwrap_or(0.0),
+    })
+}
+
 fn row_to_token(r: &rusqlite::Row<'_>) -> rusqlite::Result<AccessToken> {
     Ok(AccessToken {
         token: r.get(0)?,
@@ -592,6 +631,9 @@ mod tests {
             message_count: 0,
             created_at: 1,
             updated_at: 2,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            cost: 0.0,
         }
     }
 

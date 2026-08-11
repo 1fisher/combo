@@ -407,10 +407,41 @@ async fn run_agent(
         .to_string();
 
     let cfg = state.cfg.lock().unwrap().clone();
+    let run_id = format!("legacy-{}", uuid::Uuid::new_v4());
+    crate::request_log::log_request(
+        "legacy",
+        "legacy",
+        &run_id,
+        &question,
+        &cfg.provider.id,
+        &cfg.model,
+        0,
+    );
     let answer = crate::agent::ask_answer(&cfg, &question, std::env::current_dir().ok())
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, friendly_error(&e)))?;
+        .map_err(|e| {
+            let msg = friendly_error(&e);
+            crate::request_log::log_response(
+                &run_id,
+                "legacy",
+                "error",
+                "",
+                Some(&msg),
+                None,
+                &[],
+            );
+            (StatusCode::INTERNAL_SERVER_ERROR, msg)
+        })?;
 
+    crate::request_log::log_response(
+        &run_id,
+        "legacy",
+        "end_turn",
+        &answer,
+        None,
+        None,
+        &[],
+    );
     Ok(Json(json!({ "ok": true, "answer": answer })))
 }
 
@@ -467,7 +498,21 @@ async fn run_agent_ws(
         .map(|m| m.path)
         .or_else(|| body.workspace_dir.as_deref().map(std::path::PathBuf::from));
 
-    // 3. 后台运行 agent,事件经广播流出
+    // 3. 记录请求日志(发送给 agent 的内容)
+    let provider_id = cfg.provider.id.clone();
+    let model_name = cfg.model.clone();
+    crate::request_log::log_request(
+        &ws_id,
+        &body.session_id,
+        &run_id,
+        &body.prompt,
+        &provider_id,
+        &model_name,
+        history.len(),
+    );
+
+    // 4. 后台运行 agent,事件经广播流出
+    let state2 = state.clone();
     tokio::spawn(async move {
         let session_id = body.session_id.clone();
         let prompt = body.prompt.clone();
@@ -485,12 +530,40 @@ async fn run_agent_ws(
         let mut sparts = StreamParts::default();
         let mut usage: Option<(u64, u64)> = None;
         let tx_ev = tx.clone();
+        // 收集工具调用摘要供响应日志使用
+        let mut tool_call_summaries: Vec<crate::request_log::ToolCallSummary> = Vec::new();
         let result =
             crate::agent::stream_run(&cfg, &prompt, &rig_history, workspace_dir, cancel_rx, |ev| {
             match ev {
-                RunEvent::TextDelta(t) => sparts.text_delta(&t),
-                RunEvent::ToolCall { id, name, input } => sparts.tool_call(&id, &name, &input),
+                RunEvent::TextDelta(t) => {
+                    crate::request_log::log_event(
+                        &run_id_for_task,
+                        &session_id,
+                        "text_delta",
+                        json!({ "delta": &t }),
+                    );
+                    sparts.text_delta(&t);
+                }
+                RunEvent::ToolCall { id, name, input } => {
+                    crate::request_log::log_event(
+                        &run_id_for_task,
+                        &session_id,
+                        "tool_call",
+                        json!({ "id": &id, "name": &name, "input": &input }),
+                    );
+                    tool_call_summaries.push(crate::request_log::ToolCallSummary {
+                        name: name.clone(),
+                        input: input.clone(),
+                    });
+                    sparts.tool_call(&id, &name, &input);
+                }
                 RunEvent::ToolResult { id, name, content } => {
+                    crate::request_log::log_event(
+                        &run_id_for_task,
+                        &session_id,
+                        "tool_result",
+                        json!({ "id": &id, "name": &name, "content_preview": content.chars().take(2000).collect::<String>() }),
+                    );
                     let msg = tool_result_message_json(&session_id, &id, &name, &content);
                     let _ = tx_ev.send(msg_env("created", msg));
                 }
@@ -536,6 +609,26 @@ async fn run_agent_ws(
             error.as_deref(),
             usage,
         ));
+
+        // 记录响应日志(agent 返回的内容)
+        crate::request_log::log_response(
+            &run_id2,
+            &session_id,
+            reason,
+            &text,
+            error.as_deref(),
+            usage,
+            &tool_call_summaries,
+        );
+
+        // 累加 token 用量与花费到会话
+        if let Some((input, output)) = usage {
+            let (pin, pout) =
+                crate::providers::get_model_pricing(&cfg.provider, &cfg.model);
+            let cost =
+                (input as f64 / 1_000_000.0) * pin + (output as f64 / 1_000_000.0) * pout;
+            let _ = state2.meta.db().add_usage(&session_id, input as i64, output as i64, cost);
+        }
     });
 
     Ok(Json(json!({ "ok": true, "run_id": run_id })))
@@ -988,6 +1081,7 @@ async fn list_providers(State(state): State<AppState>) -> Json<Value> {
     // 内置模型定义的 context_window 兜底表(按 provider+model id);opencode-zen
     // 配置条目没有内置定义,沿用内置 opencode 的模型信息
     let builtin_ctx = builtin_context_map();
+    let builtin_price = builtin_pricing_map();
 
     let arr: Vec<Value> = all
         .iter()
@@ -1003,12 +1097,21 @@ async fn list_providers(State(state): State<AppState>) -> Json<Value> {
                 "default_large_model_id": p.default_large_model_id,
                 "default_small_model_id": p.default_small_model_id,
                 "models": p.models.iter().map(|m| {
+                    let (builtin_pin, builtin_pout) = builtin_price
+                        .get(&p.id)
+                        .and_then(|map| map.get(&m.id))
+                        .copied()
+                        .unwrap_or((None, None));
+                    let pin = m.cost_per_1m_in.or(builtin_pin);
+                    let pout = m.cost_per_1m_out.or(builtin_pout);
                     json!({
                         "id": m.id,
                         "name": m.name.as_deref().unwrap_or(&m.id),
                         "context_window": m.context_window.or_else(|| {
                             builtin_ctx.get(&p.id).and_then(|map| map.get(&m.id)).copied()
                         }),
+                        "cost_per_1m_in": pin,
+                        "cost_per_1m_out": pout,
                     })
                 }).collect::<Vec<_>>(),
             })
@@ -1039,6 +1142,29 @@ fn builtin_context_map() -> HashMap<String, HashMap<String, i64>> {
             .models
             .iter()
             .filter_map(|m| m.context_window.map(|c| (m.id.clone(), c)))
+            .collect();
+        map.insert(p.id.clone(), models.clone());
+        if p.id == "opencode" {
+            map.entry("opencode-zen".into()).or_insert(models);
+        }
+    }
+    map
+}
+
+/// 内置模型定义的定价兜底表:provider id → (model id → (in, out))。
+/// 配置/缓存 providers 覆盖 models 列表时经常丢失定价字段,按此表回填。
+fn builtin_pricing_map() -> HashMap<String, HashMap<String, (Option<f64>, Option<f64>)>> {
+    let mut map: HashMap<String, HashMap<String, (Option<f64>, Option<f64>)>> = HashMap::new();
+    for p in providers::builtin_providers() {
+        let models: HashMap<String, (Option<f64>, Option<f64>)> = p
+            .models
+            .iter()
+            .map(|m| {
+                (
+                    m.id.clone(),
+                    (m.cost_per_1m_in, m.cost_per_1m_out),
+                )
+            })
             .collect();
         map.insert(p.id.clone(), models.clone());
         if p.id == "opencode" {

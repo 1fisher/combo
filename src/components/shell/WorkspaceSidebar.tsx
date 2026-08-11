@@ -704,6 +704,37 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
           )}
         </div>
       </div>
+      {/* 用量统计 */}
+      {(() => {
+        const totals = (activeSessions ?? []).reduce(
+          (acc, s) => ({
+            tokens: acc.tokens + (s.prompt_tokens ?? 0) + (s.completion_tokens ?? 0),
+            cost: acc.cost + (s.cost ?? 0),
+          }),
+          { tokens: 0, cost: 0 },
+        );
+        if (totals.tokens === 0) return null;
+        const fmtTokens = totals.tokens >= 1_000_000
+          ? `${(totals.tokens / 1_000_000).toFixed(1)}M`
+          : totals.tokens >= 1_000
+            ? `${(totals.tokens / 1_000).toFixed(1)}K`
+            : String(totals.tokens);
+        const fmtCost = totals.cost < 0.01
+          ? `$${totals.cost.toFixed(4)}`
+          : `$${totals.cost.toFixed(2)}`;
+        return (
+          <div className="flex items-center justify-between px-4 pb-1 text-[10px] tabular-nums text-foreground-subtlest">
+            <span title={`输入+输出 token 总计`}>
+              共 {fmtTokens} tokens
+            </span>
+            {totals.cost > 0 && (
+              <span title="累计花费(USD)">
+                {fmtCost}
+              </span>
+            )}
+          </div>
+        );
+      })()}
       {/* 底部用户区 */}
       <div className="flex min-w-0 items-center gap-2 p-4 pt-2">
         <button
