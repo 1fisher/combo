@@ -7,6 +7,7 @@
 
 use chrono::Local;
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::fs::{OpenOptions, create_dir_all};
 use std::io::Write;
 use std::path::PathBuf;
@@ -213,6 +214,141 @@ fn log_response_inner(
 pub struct ToolCallSummary {
     pub name: String,
     pub input: String,
+}
+
+/// 单个模型的聚合统计。
+#[derive(Clone, Debug, Default)]
+pub struct ModelStats {
+    pub provider: String,
+    pub model: String,
+    pub request_count: u64,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub cost: f64,
+}
+
+/// 单日的聚合统计(用于曲线图)。
+#[derive(Clone, Debug, Default)]
+pub struct DailyStats {
+    pub date: String,
+    pub prompt_tokens: u64,
+    pub completion_tokens: u64,
+    pub cost: f64,
+    pub request_count: u64,
+}
+
+/// 全量聚合统计(API 返回值)。
+#[derive(Clone, Debug, Default)]
+pub struct UsageStats {
+    pub total_prompt_tokens: u64,
+    pub total_completion_tokens: u64,
+    pub total_cost: f64,
+    pub total_requests: u64,
+    pub by_model: Vec<ModelStats>,
+    pub daily: Vec<DailyStats>,
+}
+
+/// 读取全部日志文件(从 30 天前至今),聚合返回用量统计。
+pub fn collect_stats() -> UsageStats {
+    let dir = log_dir();
+    let mut requests: HashMap<String, (String, String)> = HashMap::new();
+    let mut by_model_map: HashMap<String, ModelStats> = HashMap::new();
+    let mut daily_map: HashMap<String, DailyStats> = HashMap::new();
+    let mut stats = UsageStats::default();
+
+    // 枚举 30 天的日志文件
+    let today = Local::now().date_naive();
+    for i in 0..30u32 {
+        let date = today - chrono::Duration::days(i as i64);
+        let date_str = date.format("%Y-%m-%d").to_string();
+        let path = dir.join(format!("agent-{date_str}.log"));
+        let Ok(content) = std::fs::read_to_string(&path) else { continue };
+
+        for line in content.lines() {
+            let Ok(entry) = serde_json::from_str::<Value>(line) else { continue };
+            let ts = entry.get("ts").and_then(Value::as_str).unwrap_or("");
+            let entry_date = ts.get(..10).unwrap_or(&date_str).to_string();
+
+            match entry.get("type").and_then(Value::as_str) {
+                Some("request") => {
+                    let run_id = entry.get("run_id").and_then(Value::as_str).unwrap_or("").to_string();
+                    let provider = entry.get("provider").and_then(Value::as_str).unwrap_or("").to_string();
+                    let model = entry.get("model").and_then(Value::as_str).unwrap_or("").to_string();
+                    if !run_id.is_empty() {
+                        requests.insert(run_id, (provider, model));
+                    }
+                }
+                Some("response") => {
+                    let run_id = entry.get("run_id").and_then(Value::as_str).unwrap_or("").to_string();
+                    let (provider, model) = requests.get(&run_id)
+                        .cloned()
+                        .unwrap_or(("unknown".into(), "unknown".into()));
+                    let key = format!("{provider}/{model}");
+
+                    let input = entry.get("usage")
+                        .and_then(|u| u.get("input_tokens"))
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                    let output = entry.get("usage")
+                        .and_then(|u| u.get("output_tokens"))
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+
+                    // 计算费用
+                    let prov = crate::providers::ProviderInfo {
+                        id: provider.clone(),
+                        name: None,
+                        api_key: None,
+                        api_endpoint: None,
+                        provider_type: None,
+                        default_large_model_id: None,
+                        default_small_model_id: None,
+                        models: Vec::new(),
+                    };
+                    let (pin, pout) = crate::providers::get_model_pricing(&prov, &model);
+                    let cost = (input as f64 / 1_000_000.0) * pin
+                        + (output as f64 / 1_000_000.0) * pout;
+
+                    // 按模型聚合
+                    let ms = by_model_map.entry(key).or_insert_with(|| ModelStats {
+                        provider: provider.clone(),
+                        model: model.clone(),
+                        ..Default::default()
+                    });
+                    ms.request_count += 1;
+                    ms.prompt_tokens += input;
+                    ms.completion_tokens += output;
+                    ms.cost += cost;
+
+                    // 按日聚合
+                    let ds = daily_map.entry(entry_date.clone()).or_insert_with(|| DailyStats {
+                        date: entry_date.clone(),
+                        ..Default::default()
+                    });
+                    ds.prompt_tokens += input;
+                    ds.completion_tokens += output;
+                    ds.cost += cost;
+                    ds.request_count += 1;
+
+                    // 总计
+                    stats.total_prompt_tokens += input;
+                    stats.total_completion_tokens += output;
+                    stats.total_cost += cost;
+                    stats.total_requests += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    stats.by_model = by_model_map.into_values().collect();
+    stats.by_model.sort_by(|a, b| b.cost.partial_cmp(&a.cost).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut daily: Vec<DailyStats> = daily_map.into_values().collect();
+    daily.sort_by(|a, b| a.date.cmp(&b.date));
+    stats.daily = daily;
+
+    stats
 }
 
 #[cfg(test)]

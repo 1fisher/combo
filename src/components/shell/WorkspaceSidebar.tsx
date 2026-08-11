@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Archive,
+  BarChart3,
   CalendarClock,
   ChevronDown,
   ChevronRight,
@@ -44,6 +45,7 @@ import { DirectoryPicker } from './DirectoryPicker';
 import { SettingsDialog } from './SettingsDialog';
 import { SearchDialog } from './SearchDialog';
 import { AutomationPanel } from './AutomationPanel';
+import { UsageStatsDialog } from './UsageStatsDialog';
 // qrcode 依赖较大,首次打开二维码前不加载
 const MobileConnectDialog = lazy(() =>
   import('./MobileConnectDialog').then((m) => ({ default: m.MobileConnectDialog })),
@@ -230,6 +232,7 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [autoOpen, setAutoOpen] = useState(false);
+  const [statsOpen, setStatsOpen] = useState(false);
   const [mobileConnectOpen, setMobileConnectOpen] = useState(false);
   // 首次打开后才挂载,之后保持以保留关闭动画
   const [mobileConnectLoaded, setMobileConnectLoaded] = useState(false);
@@ -468,6 +471,15 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
           >
             <WandSparkles className="size-4 shrink-0" />
             <span className="min-w-0 flex-1 truncate text-[13px]">技能</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setStatsOpen(true)}
+            className="flex h-8 w-full shrink-0 cursor-pointer items-center gap-2 overflow-hidden rounded-lg pl-2.5 pr-2.5 text-left transition-colors hover:bg-surface-hover hover:text-foreground"
+            title="用量统计"
+          >
+            <BarChart3 className="size-4 shrink-0" />
+            <span className="min-w-0 flex-1 truncate text-[13px]">统计</span>
           </button>
         </div>
         {/* 视图切换 + 工具按钮 */}
@@ -803,6 +815,7 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
       <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} onNavigate={onNavigate} />
       <AutomationPanel open={autoOpen} onOpenChange={setAutoOpen} />
+      <UsageStatsDialog open={statsOpen} onOpenChange={setStatsOpen} />
       {mobileConnectLoaded && (
         <Suspense fallback={null}>
           <MobileConnectDialog open={mobileConnectOpen} onOpenChange={setMobileConnectOpen} />

@@ -531,3 +531,35 @@ export function getRelayStatus(): Promise<RelayStatus> {
   return apiRequest('/v1/relay/status');
 }
 
+// ---------- 用量统计 ----------
+
+export interface ModelUsageStats {
+  provider: string;
+  model: string;
+  request_count: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cost: number;
+}
+
+export interface DailyUsageStats {
+  date: string;
+  prompt_tokens: number;
+  completion_tokens: number;
+  cost: number;
+  request_count: number;
+}
+
+export interface UsageStats {
+  total_prompt_tokens: number;
+  total_completion_tokens: number;
+  total_cost: number;
+  total_requests: number;
+  by_model: ModelUsageStats[];
+  daily: DailyUsageStats[];
+}
+
+export function getUsageStats(): Promise<UsageStats> {
+  return apiRequest('/v1/stats/usage');
+}
+

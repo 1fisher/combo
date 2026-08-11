@@ -274,6 +274,7 @@ fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/v1/auth/token/revoke", delete(auth::revoke_token))
         // ---- skills / 终端 / 隧道 ----
         .route("/v1/skills", get(skills_api::list))
+        .route("/v1/stats/usage", get(usage_stats))
         .route("/v1/terminal", get(terminal::terminal_default))
         .route("/v1/workspaces/:id/terminal", get(terminal::terminal))
         .route("/v1/relay/start", post(relay::start_relay))
@@ -393,6 +394,32 @@ async fn health() -> Json<Value> {
 async fn control(State(state): State<AppState>) -> Json<Value> {
     state.shutdown.notify_one();
     Json(json!({ "ok": true, "message": "shutting down" }))
+}
+
+/// GET /v1/stats/usage — 返回用量统计(按模型、按日聚合,最近30天)。
+async fn usage_stats() -> Json<Value> {
+    let stats = crate::request_log::collect_stats();
+    Json(json!({
+        "total_prompt_tokens": stats.total_prompt_tokens,
+        "total_completion_tokens": stats.total_completion_tokens,
+        "total_cost": stats.total_cost,
+        "total_requests": stats.total_requests,
+        "by_model": stats.by_model.iter().map(|m| json!({
+            "provider": m.provider,
+            "model": m.model,
+            "request_count": m.request_count,
+            "prompt_tokens": m.prompt_tokens,
+            "completion_tokens": m.completion_tokens,
+            "cost": m.cost,
+        })).collect::<Vec<_>>(),
+        "daily": stats.daily.iter().map(|d| json!({
+            "date": d.date,
+            "prompt_tokens": d.prompt_tokens,
+            "completion_tokens": d.completion_tokens,
+            "cost": d.cost,
+            "request_count": d.request_count,
+        })).collect::<Vec<_>>(),
+    }))
 }
 
 /// 旧单轮问答接口(兼容)。

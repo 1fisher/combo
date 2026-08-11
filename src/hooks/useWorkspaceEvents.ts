@@ -48,6 +48,10 @@ export function useWorkspaceEvents(workspaceId: string | null) {
           return;
         }
         applyEvent(st, env);
+        // run 结束后刷新会话列表(token/cost 已更新)
+        if (env.type === 'run_complete') {
+          void qc.invalidateQueries({ queryKey: ['sessions', workspaceId] });
+        }
         // 收到 message 事件时按事件顺序串行持久化到后端 sqlite
         if (env.type === 'message') {
           const inner = env.payload as { type: string; payload: Api.Message };
