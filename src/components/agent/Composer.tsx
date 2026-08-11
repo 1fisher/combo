@@ -430,7 +430,7 @@ export function Composer({
   }
 
   return (
-    <div className="w-full shrink-0 px-4 pb-4 pt-2">
+    <div className="w-full shrink-0 px-4 pb-4 pt-12">
       <div className="w-full">
         <div className="w-full shrink-0 rounded-2xl bg-surface shadow-xl/5">
           <form
