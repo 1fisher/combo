@@ -313,6 +313,7 @@ fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         )
         .route("/v1/workspaces/:id/files/raw", get(fs::raw))
         .route("/v1/workspaces/:id/git/status", get(git::status))
+        .route("/v1/workspaces/:id/git/repos", get(git::repos))
         .route("/v1/workspaces/:id/git/diff", get(git::diff))
         .route("/v1/workspaces/:id/git/diff/staged", get(git::diff_staged))
         .route("/v1/workspaces/:id/git/diff/head", get(git::diff_head))

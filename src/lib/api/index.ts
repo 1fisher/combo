@@ -168,126 +168,162 @@ export function putFileContent(
   });
 }
 
-// Git 服务:combo-cli serve 本地端点,在 workspace 根目录执行 git 子命令
-export function getGitStatus(workspaceId: string): Promise<Api.GitStatus> {
-  return apiRequest(`/v1/workspaces/${workspaceId}/git/status`);
+// Git 服务:combo-cli serve 本地端点,在 workspace 根目录(或 `repo` 指定的一级子目录)执行 git 子命令
+export function getGitStatus(workspaceId: string, repo?: string): Promise<Api.GitStatus> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/status`, {
+    query: repo ? { repo } : undefined,
+  });
+}
+
+export function getGitRepos(workspaceId: string): Promise<Api.GitRepos> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/repos`);
 }
 
 export function getGitDiff(
   workspaceId: string,
-  path?: string
+  path?: string,
+  repo?: string
 ): Promise<Api.GitDiff> {
   return apiRequest(`/v1/workspaces/${workspaceId}/git/diff`, {
-    query: path ? { path } : undefined,
+    query: path || repo ? { ...(path ? { path } : {}), ...(repo ? { repo } : {}) } : undefined,
   });
 }
 
 export function getGitDiffStaged(
   workspaceId: string,
-  path?: string
+  path?: string,
+  repo?: string
 ): Promise<Api.GitDiff> {
   return apiRequest(`/v1/workspaces/${workspaceId}/git/diff/staged`, {
-    query: path ? { path } : undefined,
+    query: path || repo ? { ...(path ? { path } : {}), ...(repo ? { repo } : {}) } : undefined,
   });
 }
 
 export function getGitDiffHead(
   workspaceId: string,
-  path?: string
+  path?: string,
+  repo?: string
 ): Promise<Api.GitDiff> {
   return apiRequest(`/v1/workspaces/${workspaceId}/git/diff/head`, {
-    query: path ? { path } : undefined,
+    query: path || repo ? { ...(path ? { path } : {}), ...(repo ? { repo } : {}) } : undefined,
   });
 }
 
 export function getGitFileAtHead(
   workspaceId: string,
-  path: string
+  path: string,
+  repo?: string
 ): Promise<Api.GitFileAtHead> {
-  return apiRequest(`/v1/workspaces/${workspaceId}/git/file`, { query: { path } });
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/file`, {
+    query: { path, ...(repo ? { repo } : {}) },
+  });
 }
 
 export function gitStage(
   workspaceId: string,
-  paths: string[]
+  paths: string[],
+  repo?: string
 ): Promise<{ ok: boolean }> {
   return apiRequest(`/v1/workspaces/${workspaceId}/git/stage`, {
     method: 'POST',
-    body: { paths },
+    body: { paths, ...(repo ? { repo } : {}) },
   });
 }
 
 export function gitUnstage(
   workspaceId: string,
-  paths: string[]
+  paths: string[],
+  repo?: string
 ): Promise<{ ok: boolean }> {
   return apiRequest(`/v1/workspaces/${workspaceId}/git/unstage`, {
     method: 'POST',
-    body: { paths },
+    body: { paths, ...(repo ? { repo } : {}) },
   });
 }
 
 export function gitDiscard(
   workspaceId: string,
-  paths: string[]
+  paths: string[],
+  repo?: string
 ): Promise<{ ok: boolean }> {
   return apiRequest(`/v1/workspaces/${workspaceId}/git/discard`, {
     method: 'POST',
-    body: { paths },
+    body: { paths, ...(repo ? { repo } : {}) },
   });
 }
 
 export function gitCommit(
   workspaceId: string,
-  message: string
+  message: string,
+  repo?: string
 ): Promise<{ ok: boolean; output: string }> {
   return apiRequest(`/v1/workspaces/${workspaceId}/git/commit`, {
     method: 'POST',
-    body: { message },
+    body: { message, ...(repo ? { repo } : {}) },
   });
 }
 
-export function gitPush(workspaceId: string): Promise<{ ok: boolean; output: string }> {
-  return apiRequest(`/v1/workspaces/${workspaceId}/git/push`, { method: 'POST' });
+export function gitPush(workspaceId: string, repo?: string): Promise<{ ok: boolean; output: string }> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/push`, {
+    method: 'POST',
+    query: repo ? { repo } : undefined,
+  });
 }
 
-export function gitPull(workspaceId: string): Promise<{ ok: boolean; output: string }> {
-  return apiRequest(`/v1/workspaces/${workspaceId}/git/pull`, { method: 'POST' });
+export function gitPull(workspaceId: string, repo?: string): Promise<{ ok: boolean; output: string }> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/pull`, {
+    method: 'POST',
+    query: repo ? { repo } : undefined,
+  });
 }
 
-export function gitFetch(workspaceId: string): Promise<{ ok: boolean; output: string }> {
-  return apiRequest(`/v1/workspaces/${workspaceId}/git/fetch`, { method: 'POST' });
+export function gitFetch(workspaceId: string, repo?: string): Promise<{ ok: boolean; output: string }> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/fetch`, {
+    method: 'POST',
+    query: repo ? { repo } : undefined,
+  });
 }
 
 export function getGitBranchInfo(
-  workspaceId: string
+  workspaceId: string,
+  repo?: string
 ): Promise<Api.GitBranchInfo> {
-  return apiRequest(`/v1/workspaces/${workspaceId}/git/branch-info`);
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/branch-info`, {
+    query: repo ? { repo } : undefined,
+  });
 }
 
 export function getGitLog(
   workspaceId: string,
-  limit?: number
+  limit?: number,
+  repo?: string
 ): Promise<Api.GitLog> {
   return apiRequest(`/v1/workspaces/${workspaceId}/git/log`, {
-    query: limit !== undefined ? { limit: String(limit) } : undefined,
+    query: {
+      ...(limit !== undefined ? { limit: String(limit) } : {}),
+      ...(repo ? { repo } : {}),
+    },
   });
 }
 
 export function getGitCommitFiles(
   workspaceId: string,
-  hash: string
+  hash: string,
+  repo?: string
 ): Promise<{ files: Api.GitCommitFile[] }> {
-  return apiRequest(`/v1/workspaces/${workspaceId}/git/commit/files`, { query: { hash } });
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/commit/files`, {
+    query: { hash, ...(repo ? { repo } : {}) },
+  });
 }
 
 export function getGitCommitDiff(
   workspaceId: string,
   hash: string,
-  path?: string
+  path?: string,
+  repo?: string
 ): Promise<{ diff: string }> {
   return apiRequest(`/v1/workspaces/${workspaceId}/git/commit/diff`, {
-    query: path ? { hash, path } : { hash },
+    query: { hash, ...(path ? { path } : {}), ...(repo ? { repo } : {}) },
   });
 }
 

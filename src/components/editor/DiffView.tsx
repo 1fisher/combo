@@ -7,11 +7,13 @@ import { cn } from '../../lib/utils';
 interface Props {
   workspaceId: string;
   filePath: string;
+  /** 选中的 git 仓库(相对 workspace 根目录,空串表示根仓库) */
+  repo?: string;
   /** 传入则显示某个提交的 diff,否则显示工作区未提交的 diff */
   commitHash?: string;
 }
 
-export function DiffView({ workspaceId, filePath, commitHash }: Props) {
+export function DiffView({ workspaceId, filePath, repo, commitHash }: Props) {
   const [hunks, setHunks] = useState<UnifiedDiffHunk[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -20,8 +22,8 @@ export function DiffView({ workspaceId, filePath, commitHash }: Props) {
     setLoading(true);
     setHunks([]);
     const fetchDiff = commitHash
-      ? getGitCommitDiff(workspaceId, commitHash, filePath)
-      : getGitDiffHead(workspaceId, filePath);
+      ? getGitCommitDiff(workspaceId, commitHash, filePath, repo)
+      : getGitDiffHead(workspaceId, filePath, repo);
     fetchDiff
       .then(({ diff }) => {
         if (!cancelled) setHunks(parseUnifiedDiff(diff));
@@ -35,7 +37,7 @@ export function DiffView({ workspaceId, filePath, commitHash }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [workspaceId, filePath, commitHash]);
+  }, [workspaceId, filePath, commitHash, repo]);
 
   const fileName = filePath.split('/').pop() ?? filePath;
 

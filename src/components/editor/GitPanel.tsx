@@ -7,6 +7,7 @@ import {
   Download,
   FilePlus,
   FileText,
+  Folder,
   GitCommitHorizontal,
   MinusCircle,
   PencilLine,
@@ -16,6 +17,7 @@ import {
 } from 'lucide-react';
 import {
   getGitStatus,
+  getGitRepos,
   getGitBranchInfo,
   gitStage,
   gitUnstage,
@@ -96,6 +98,10 @@ const COMMIT_PREFIXES: CommitPrefix[] = [
 
 interface Props {
   workspaceId: string;
+  /** 当前选中的 git 仓库(相对 workspace 根目录的路径,空串表示根仓库) */
+  repo?: string;
+  /** 切换 git 仓库(空串切回根仓库) */
+  onRepoChange?: (repo: string) => void;
   /** 当前选中显示 diff 的文件路径 */
   selectedDiffPath: string | null;
   /** 点击文件行,在右侧显示 diff */
@@ -104,12 +110,16 @@ interface Props {
   onOpenFile: (path: string, name: string) => void;
 }
 
-export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile }: Props) {
+export function GitPanel({ workspaceId, repo = '', onRepoChange, selectedDiffPath, onShowDiff, onOpenFile }: Props) {
   const branch = useGitStore((s) => s.branch);
   const files = useGitStore((s) => s.files);
   const loading = useGitStore((s) => s.loading);
   const setGitData = useGitStore((s) => s.setGitData);
   const setLoading = useGitStore((s) => s.setLoading);
+
+  /** 工作区根目录及其一级子目录中的 git 仓库 */
+  const [repos, setRepos] = useState<Api.GitRepoStatus[]>([]);
+  const [repoMenuOpen, setRepoMenuOpen] = useState(false);
 
   const [staging, setStaging] = useState(false);
   const [commitMsg, setCommitMsg] = useState('');
@@ -127,9 +137,21 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
+      // 发现根目录 + 一级子目录中的 git 仓库;当前选中仓库不存在时自动回退到第一个
+      const { repos: found } = await getGitRepos(workspaceId);
+      setRepos(found);
+      const current = found.find((r) => r.path === repo) ?? found[0] ?? null;
+      if (!current) {
+        setGitData('', []);
+        setBranchInfo(null);
+        if (repo !== '') onRepoChange?.('');
+        return;
+      }
+      const repoPath = current.path;
+      if (repoPath !== repo) onRepoChange?.(repoPath);
       const [status, info] = await Promise.all([
-        getGitStatus(workspaceId),
-        getGitBranchInfo(workspaceId).catch(() => null),
+        getGitStatus(workspaceId, repoPath || undefined),
+        getGitBranchInfo(workspaceId, repoPath || undefined).catch(() => null),
       ]);
       setGitData(status.branch, status.files);
       if (info) setBranchInfo(info);
@@ -139,7 +161,7 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
     } finally {
       setLoading(false);
     }
-  }, [workspaceId, setGitData, setLoading]);
+  }, [workspaceId, repo, onRepoChange, setGitData, setLoading]);
 
   useEffect(() => {
     void refresh();
@@ -159,7 +181,7 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
   async function handleStage(filePath: string) {
     setStaging(true);
     try {
-      await gitStage(workspaceId, [filePath]);
+      await gitStage(workspaceId, [filePath], repo || undefined);
       await refresh();
     } catch {
       /* ignore */
@@ -171,7 +193,7 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
   async function handleUnstage(filePath: string) {
     setStaging(true);
     try {
-      await gitUnstage(workspaceId, [filePath]);
+      await gitUnstage(workspaceId, [filePath], repo || undefined);
       await refresh();
     } catch {
       /* ignore */
@@ -183,7 +205,7 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
   async function handleStageAll() {
     setStaging(true);
     try {
-      await gitStage(workspaceId, []);
+      await gitStage(workspaceId, [], repo || undefined);
       await refresh();
     } catch {
       /* ignore */
@@ -195,7 +217,7 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
   async function handleDiscard(filePath: string) {
     setStaging(true);
     try {
-      await gitDiscard(workspaceId, [filePath]);
+      await gitDiscard(workspaceId, [filePath], repo || undefined);
       await refresh();
     } catch {
       /* ignore */
@@ -210,7 +232,7 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
     setCommitError(null);
     const prefix = commitPrefix ? `${commitPrefix}: ` : '';
     try {
-      await gitCommit(workspaceId, `${prefix}${commitMsg.trim()}`);
+      await gitCommit(workspaceId, `${prefix}${commitMsg.trim()}`, repo || undefined);
       setCommitMsg('');
       await refresh();
     } catch (e) {
@@ -225,9 +247,9 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
     setRemoteBusy(op);
     setRemoteError(null);
     try {
-      if (op === 'push') await gitPush(workspaceId);
-      else if (op === 'pull') await gitPull(workspaceId);
-      else await gitFetch(workspaceId);
+      if (op === 'push') await gitPush(workspaceId, repo || undefined);
+      else if (op === 'pull') await gitPull(workspaceId, repo || undefined);
+      else await gitFetch(workspaceId, repo || undefined);
       await refresh();
     } catch (e) {
       setRemoteError(e instanceof Error ? e.message : String(e));
@@ -238,8 +260,48 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
 
   return (
     <div className="flex h-full flex-col">
-      {/* 头部:分支 + ahead/behind + 拉取/推送/获取 + 刷新 */}
+      {/* 头部:仓库选择(多仓库时) + 分支 + ahead/behind + 拉取/推送/获取 + 刷新 */}
       <div className="flex shrink-0 flex-col gap-1.5 border-b px-3 py-2">
+        {/* 多仓库切换:工作区根目录 + 一级子目录中的独立 git 仓库;
+            仅一个子仓库时也显示,便于确认当前查看的仓库 */}
+        {(repos.length > 1 || (repos.length === 1 && repo !== '')) && (
+          <div className="relative">
+            <button
+              onClick={() => setRepoMenuOpen((v) => !v)}
+              className="flex w-full items-center gap-1.5 rounded border border-border bg-background px-1.5 py-1 text-[10px] font-medium transition-colors hover:bg-accent"
+              title="选择 git 仓库"
+            >
+              <Folder className="h-3 w-3 shrink-0 text-primary/60" />
+              <span className="truncate">{repo ? repo : '根目录'}</span>
+              <ChevronDown className="ml-auto h-2.5 w-2.5 shrink-0 text-muted-foreground" />
+            </button>
+            {repoMenuOpen && (
+              <div className="absolute left-0 z-50 mt-1 max-h-48 w-full overflow-y-auto rounded-md border bg-popover p-1 shadow-md">
+                {repos.map((r) => (
+                  <button
+                    key={r.path}
+                    onClick={() => {
+                      onRepoChange?.(r.path);
+                      setRepoMenuOpen(false);
+                    }}
+                    className={cn(
+                      'flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-[10px] transition-colors hover:bg-accent',
+                      repo === r.path && 'bg-accent/50',
+                    )}
+                  >
+                    <GitCommitHorizontal className="h-3 w-3 shrink-0 text-muted-foreground" />
+                    <span className="truncate">{r.path ? r.path : '根目录'}</span>
+                    {r.files.length > 0 && (
+                      <span className="ml-auto shrink-0 text-[9px] text-muted-foreground/60">
+                        {r.files.length} 个变更
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
         <div className="flex items-center gap-2">
           <GitCommitHorizontal className="h-3.5 w-3.5 shrink-0 text-primary/60" />
           <span className="truncate font-mono text-xs text-foreground">{branch || '—'}</span>
@@ -319,7 +381,7 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
       <div className="min-h-0 flex-1 overflow-y-auto">
         {files.length === 0 && !loading && (
           <div className="px-3 py-4 text-center text-xs text-muted-foreground">
-            没有未提交的变更
+            {repos.length === 0 ? '未检测到 git 仓库' : '没有未提交的变更'}
           </div>
         )}
         {files.map((f) => {
@@ -349,9 +411,9 @@ export function GitPanel({ workspaceId, selectedDiffPath, onShowDiff, onOpenFile
                   <span className="truncate text-[10px] text-muted-foreground/60">{dir}</span>
                 )}
               </button>
-              {/* 打开文件编辑 */}
+              {/* 打开文件编辑:子仓库文件需拼上仓库路径,交给根目录文件服务 */}
               <button
-                onClick={() => onOpenFile(f.path, fileName)}
+                onClick={() => onOpenFile(repo ? `${repo}/${f.path}` : f.path, fileName)}
                 className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-60"
                 title="打开文件"
               >

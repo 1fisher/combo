@@ -275,3 +275,122 @@ async fn file_read_write_roundtrip() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+#[tokio::test]
+async fn git_repos_discovers_root_and_subdir_repos() {
+    use std::process::Command;
+
+    // 构造:workspace 根 + 一级子目录各一个独立 git 仓库,外加一个普通子目录
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    let sub = root.join("subrepo");
+    let plain = root.join("notrepo");
+    std::fs::create_dir_all(&sub).unwrap();
+    std::fs::create_dir_all(&plain).unwrap();
+    for d in [root.to_path_buf(), sub.clone()] {
+        let out = Command::new("git")
+            .arg("init")
+            .arg("-q")
+            .current_dir(&d)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git init 失败: {:?}", out);
+    }
+    // 让根仓库忽略子目录,避免根 status 把子目录列为 untracked
+    std::fs::write(root.join(".gitignore"), "subrepo/\nnotrepo/\n").unwrap();
+    std::fs::write(root.join("root.txt"), "x").unwrap();
+    std::fs::write(sub.join("sub.txt"), "y").unwrap();
+    std::fs::write(plain.join("plain.txt"), "z").unwrap();
+
+    let meta = Arc::new(MetaStore::new());
+    meta.insert(WorkspaceMeta {
+        id: "ws_git".into(),
+        path: root.to_path_buf(),
+        name: "git".into(),
+        backend_type: BackendType::ComboCli,
+    });
+    let state = AppState {
+        cfg: Arc::new(Mutex::new(cfg_no_key())),
+        shutdown: Arc::new(Notify::new()),
+        runs: Arc::new(RunState::default()),
+        meta,
+        browse_root: None,
+        relay: RelayManager::new(),
+        local_port: 0,
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let task = tokio::spawn(async move {
+        serve_listener(listener, state, Vec::new()).await.unwrap();
+    });
+    let base = format!("http://{addr}");
+    let client = reqwest::Client::new();
+
+    // 发现:根仓库 + 一级子目录仓库(普通目录不列出),根在前、子目录按名排序
+    let v: serde_json::Value = client
+        .get(format!("{base}/v1/workspaces/ws_git/git/repos"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let repos = v["repos"].as_array().unwrap().clone();
+    let paths: Vec<&str> = repos
+        .iter()
+        .map(|r| r["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(paths, vec!["", "subrepo"], "应发现根与一级子目录仓库: {repos:?}");
+
+    let root_repo = repos.iter().find(|r| r["path"].as_str().unwrap() == "").unwrap();
+    let root_files: Vec<&str> = root_repo["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().unwrap())
+        .collect();
+    assert!(root_files.contains(&"root.txt"), "根仓库应含 root.txt: {root_files:?}");
+
+    let sub_repo = repos.iter().find(|r| r["path"].as_str().unwrap() == "subrepo").unwrap();
+    assert!(!sub_repo["branch"].as_str().unwrap().is_empty());
+    assert_eq!(sub_repo["files"][0]["path"], "sub.txt");
+    assert_eq!(sub_repo["files"][0]["workTreeStatus"], "untracked");
+
+    // 子仓库 status:repo 参数定位到一级子目录
+    let v: serde_json::Value = client
+        .get(format!("{base}/v1/workspaces/ws_git/git/status?repo=subrepo"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(!v["branch"].as_str().unwrap().is_empty());
+    assert_eq!(v["files"][0]["path"], "sub.txt");
+
+    // 根仓库 status:不带 repo 参数保持原行为
+    let v: serde_json::Value = client
+        .get(format!("{base}/v1/workspaces/ws_git/git/status"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let root_files: Vec<&str> = v["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["path"].as_str().unwrap())
+        .collect();
+    assert!(root_files.contains(&"root.txt"), "根仓库应含 root.txt: {root_files:?}");
+
+    // 越界 repo 路径应被前缀校验拒绝
+    let resp = client
+        .get(format!("{base}/v1/workspaces/ws_git/git/status?repo=..%2F"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    task.abort();
+}

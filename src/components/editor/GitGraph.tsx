@@ -6,6 +6,8 @@ import { cn } from '../../lib/utils';
 
 interface Props {
   workspaceId: string;
+  /** 选中的 git 仓库(相对 workspace 根目录,空串表示根仓库) */
+  repo?: string;
   onShowCommitDiff: (hash: string, path: string) => void;
 }
 
@@ -185,7 +187,7 @@ export function buildRowLines(
   return { lines, cy };
 }
 
-export function GitGraph({ workspaceId, onShowCommitDiff }: Props) {
+export function GitGraph({ workspaceId, repo, onShowCommitDiff }: Props) {
   const [commits, setCommits] = useState<Api.GitCommitInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedHash, setExpandedHash] = useState<string | null>(null);
@@ -209,12 +211,12 @@ export function GitGraph({ workspaceId, onShowCommitDiff }: Props) {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    getGitLog(workspaceId, 50)
+    getGitLog(workspaceId, 50, repo)
       .then(({ commits }) => { if (!cancelled) setCommits(commits); })
       .catch(() => { if (!cancelled) setCommits([]); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [workspaceId]);
+  }, [workspaceId, repo]);
 
   const graphCommits = useMemo(() => computeLanes(commits), [commits]);
 
@@ -228,7 +230,7 @@ export function GitGraph({ workspaceId, onShowCommitDiff }: Props) {
     setCommitFiles([]);
     setFilesLoading(true);
     try {
-      const { files } = await getGitCommitFiles(workspaceId, hash);
+      const { files } = await getGitCommitFiles(workspaceId, hash, repo);
       setCommitFiles(files);
     } catch {
       setCommitFiles([]);

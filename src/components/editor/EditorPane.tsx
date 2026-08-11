@@ -56,6 +56,8 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
   const isMobile = useIsMobile();
   const [sidebarMode, setSidebarMode] = useState<'files' | 'git'>('files');
   const [gitSubView, setGitSubView] = useState<'changes' | 'history'>('changes');
+  /** 当前选中的 git 仓库(相对 workspace 根目录的路径,空串表示根仓库) */
+  const [activeGitRepo, setActiveGitRepo] = useState('');
   /** 移动端文件/Git 抽屉开关 */
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [diffPath, setDiffPath] = useState<string | null>(null);
@@ -72,6 +74,11 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
   useEffect(() => {
     setMdPreview(true);
   }, [activePath]);
+
+  // 切换工作区时重置选中的 git 仓库
+  useEffect(() => {
+    setActiveGitRepo('');
+  }, [workspaceId]);
 
   // 移动端:无打开文件时自动展开文件树抽屉,引导选择文件
   useEffect(() => {
@@ -226,6 +233,8 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
               {gitSubView === 'changes' ? (
                 <GitPanel
                   workspaceId={workspaceId}
+                  repo={activeGitRepo}
+                  onRepoChange={setActiveGitRepo}
                   selectedDiffPath={diffPath}
                   onShowDiff={handleShowDiff}
                   onOpenFile={handleOpenFile}
@@ -233,6 +242,7 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
               ) : (
                 <GitGraph
                   workspaceId={workspaceId}
+                  repo={activeGitRepo}
                   onShowCommitDiff={handleShowCommitDiff}
                 />
               )}
@@ -298,13 +308,14 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
           )}
           {showDiff ? (
             /* git 变更模式:右侧显示 diff */
-            <DiffView workspaceId={workspaceId} filePath={diffPath!} />
+            <DiffView workspaceId={workspaceId} filePath={diffPath!} repo={activeGitRepo} />
           ) : showCommitDiff ? (
             /* git 历史模式:右侧显示提交的文件 diff */
             <DiffView
               workspaceId={workspaceId}
               filePath={commitDiff!.path}
               commitHash={commitDiff!.hash}
+              repo={activeGitRepo}
             />
           ) : showGraphPlaceholder ? (
             /* git 历史模式:未选择文件时显示占位 */

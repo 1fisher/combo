@@ -17,21 +17,30 @@ use crate::serve::AppState;
 #[derive(Deserialize)]
 pub struct PathQuery {
     pub path: Option<String>,
+    pub repo: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct RepoQuery {
+    pub repo: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct StageBody {
     pub paths: Vec<String>,
+    pub repo: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct CommitBody {
     pub message: String,
+    pub repo: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct LogQuery {
     pub limit: Option<u32>,
+    pub repo: Option<String>,
 }
 
 /// 在 workspace 根目录运行 git 子命令,返回 stdout。
@@ -56,6 +65,21 @@ where
         });
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+/// 解析 git 工作目录:默认 workspace 根;传 `repo` 时定位到根下的一级子目录
+/// (经 `safe_join` 前缀校验,防止目录穿越)。
+fn resolve_git_dir(
+    state: &AppState,
+    id: &str,
+    repo: Option<&str>,
+) -> Result<std::path::PathBuf, Response> {
+    let root = resolve_root(state, id)?;
+    match repo {
+        Some(r) if !r.is_empty() => safe_join(&root, r)
+            .map_err(|e| error(StatusCode::BAD_REQUEST, &e.to_string())),
+        _ => Ok(root),
+    }
 }
 
 /// 将 git porcelain 单字符状态码转为可读字符串。
@@ -114,16 +138,79 @@ fn parse_porcelain(raw: &str) -> Vec<serde_json::Value> {
     entries
 }
 
-/// GET /v1/workspaces/{id}/git/status
-pub async fn status(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+/// 获取某个 git 仓库的分支与变更文件(rel 为相对 workspace 根的目录,空串表示根)。
+fn repo_status(root: &FsPath, rel: &str) -> Option<serde_json::Value> {
+    let dir = if rel.is_empty() {
+        root.to_path_buf()
+    } else {
+        root.join(rel)
+    };
+    let branch = git_output(&dir, ["rev-parse", "--abbrev-ref", "HEAD"])
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| "HEAD".to_string());
+    let raw = git_output(&dir, ["status", "--porcelain=v1", "-u"]).ok()?;
+    Some(json!({
+        "path": rel,
+        "branch": branch,
+        "files": parse_porcelain(&raw),
+    }))
+}
+
+/// GET /v1/workspaces/{id}/git/repos
+/// 发现 workspace 根目录及其一级子目录中的 git 仓库,返回各仓库的当前分支与变更文件。
+pub async fn repos(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     let root = match resolve_root(&state, &id) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
-    let branch = git_output(&root, ["rev-parse", "--abbrev-ref", "HEAD"])
+    let mut list: Vec<serde_json::Value> = Vec::new();
+    if root.join(".git").exists() {
+        if let Some(repo) = repo_status(&root, "") {
+            list.push(repo);
+        }
+    }
+    // 扫描一级子目录中的独立 git 仓库
+    let mut subdirs: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if name.starts_with('.') {
+                continue;
+            }
+            if path.join(".git").exists() {
+                subdirs.push(name.to_string());
+            }
+        }
+    }
+    subdirs.sort();
+    for name in subdirs {
+        if let Some(repo) = repo_status(&root, &name) {
+            list.push(repo);
+        }
+    }
+    ok_json(json!({ "repos": list }))
+}
+
+/// GET /v1/workspaces/{id}/git/status?repo=<可选>
+pub async fn status(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<RepoQuery>,
+) -> Response {
+    let dir = match resolve_git_dir(&state, &id, q.repo.as_deref()) {
+        Ok(d) => d,
+        Err(resp) => return resp,
+    };
+    let branch = git_output(&dir, ["rev-parse", "--abbrev-ref", "HEAD"])
         .map(|s| s.trim().to_string())
         .unwrap_or_else(|_| "HEAD".to_string());
-    let raw = match git_output(&root, ["status", "--porcelain=v1", "-u"]) {
+    let raw = match git_output(&dir, ["status", "--porcelain=v1", "-u"]) {
         Ok(s) => s,
         Err(msg) => return error(StatusCode::INTERNAL_SERVER_ERROR, &msg),
     };
@@ -137,8 +224,14 @@ enum DiffScope {
     Head,
 }
 
-fn diff_impl(state: &AppState, id: &str, path: &Option<String>, scope: DiffScope) -> Response {
-    let root = match resolve_root(state, id) {
+fn diff_impl(
+    state: &AppState,
+    id: &str,
+    repo: &Option<String>,
+    path: &Option<String>,
+    scope: DiffScope,
+) -> Response {
+    let root = match resolve_git_dir(state, id, repo.as_deref()) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -173,7 +266,7 @@ pub async fn diff(
     Path(id): Path<String>,
     Query(q): Query<PathQuery>,
 ) -> Response {
-    diff_impl(&state, &id, &q.path, DiffScope::WorkTree)
+    diff_impl(&state, &id, &q.repo, &q.path, DiffScope::WorkTree)
 }
 
 /// GET /v1/workspaces/{id}/git/diff/staged?path=<可选>
@@ -182,7 +275,7 @@ pub async fn diff_staged(
     Path(id): Path<String>,
     Query(q): Query<PathQuery>,
 ) -> Response {
-    diff_impl(&state, &id, &q.path, DiffScope::Staged)
+    diff_impl(&state, &id, &q.repo, &q.path, DiffScope::Staged)
 }
 
 /// GET /v1/workspaces/{id}/git/diff/head?path=<可选>
@@ -191,7 +284,7 @@ pub async fn diff_head(
     Path(id): Path<String>,
     Query(q): Query<PathQuery>,
 ) -> Response {
-    diff_impl(&state, &id, &q.path, DiffScope::Head)
+    diff_impl(&state, &id, &q.repo, &q.path, DiffScope::Head)
 }
 
 /// GET /v1/workspaces/{id}/git/file?path=<文件>
@@ -201,7 +294,7 @@ pub async fn file_at_head(
     Path(id): Path<String>,
     Query(q): Query<PathQuery>,
 ) -> Response {
-    let root = match resolve_root(&state, &id) {
+    let root = match resolve_git_dir(&state, &id, q.repo.as_deref()) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -232,7 +325,7 @@ pub async fn stage(
     Path(id): Path<String>,
     axum::extract::Json(body): axum::extract::Json<StageBody>,
 ) -> Response {
-    let root = match resolve_root(&state, &id) {
+    let root = match resolve_git_dir(&state, &id, body.repo.as_deref()) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -261,7 +354,7 @@ pub async fn unstage(
     Path(id): Path<String>,
     axum::extract::Json(body): axum::extract::Json<StageBody>,
 ) -> Response {
-    let root = match resolve_root(&state, &id) {
+    let root = match resolve_git_dir(&state, &id, body.repo.as_deref()) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -286,7 +379,7 @@ pub async fn discard(
     Path(id): Path<String>,
     axum::extract::Json(body): axum::extract::Json<StageBody>,
 ) -> Response {
-    let root = match resolve_root(&state, &id) {
+    let root = match resolve_git_dir(&state, &id, body.repo.as_deref()) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -337,7 +430,7 @@ pub async fn commit(
     Path(id): Path<String>,
     axum::extract::Json(body): axum::extract::Json<CommitBody>,
 ) -> Response {
-    let root = match resolve_root(&state, &id) {
+    let root = match resolve_git_dir(&state, &id, body.repo.as_deref()) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -358,7 +451,7 @@ pub async fn git_log(
     Path(id): Path<String>,
     Query(q): Query<LogQuery>,
 ) -> Response {
-    let root = match resolve_root(&state, &id) {
+    let root = match resolve_git_dir(&state, &id, q.repo.as_deref()) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -451,8 +544,12 @@ fn ahead_behind(root: &std::path::Path, branch: &str) -> (u32, u32) {
 
 /// POST /v1/workspaces/{id}/git/push
 /// 推送当前分支到远程。带 `--set-upstream` 以便首次推送自动关联。
-pub async fn push(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    let root = match resolve_root(&state, &id) {
+pub async fn push(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<RepoQuery>,
+) -> Response {
+    let root = match resolve_git_dir(&state, &id, q.repo.as_deref()) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -481,8 +578,12 @@ pub async fn push(State(state): State<AppState>, Path(id): Path<String>) -> Resp
 
 /// POST /v1/workspaces/{id}/git/pull
 /// 拉取并合并远程变更。
-pub async fn pull(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    let root = match resolve_root(&state, &id) {
+pub async fn pull(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<RepoQuery>,
+) -> Response {
+    let root = match resolve_git_dir(&state, &id, q.repo.as_deref()) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -494,8 +595,12 @@ pub async fn pull(State(state): State<AppState>, Path(id): Path<String>) -> Resp
 
 /// POST /v1/workspaces/{id}/git/fetch
 /// 获取远程变更(不合并)。
-pub async fn fetch(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    let root = match resolve_root(&state, &id) {
+pub async fn fetch(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<RepoQuery>,
+) -> Response {
+    let root = match resolve_git_dir(&state, &id, q.repo.as_deref()) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -507,8 +612,12 @@ pub async fn fetch(State(state): State<AppState>, Path(id): Path<String>) -> Res
 
 /// GET /v1/workspaces/{id}/git/branch-info
 /// 返回当前分支名、上游分支、领先/落后计数。
-pub async fn branch_info(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    let root = match resolve_root(&state, &id) {
+pub async fn branch_info(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<RepoQuery>,
+) -> Response {
+    let root = match resolve_git_dir(&state, &id, q.repo.as_deref()) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -537,6 +646,7 @@ pub async fn branch_info(State(state): State<AppState>, Path(id): Path<String>) 
 pub struct CommitQuery {
     pub hash: String,
     pub path: Option<String>,
+    pub repo: Option<String>,
 }
 
 /// GET /v1/workspaces/{id}/git/commit/files?hash=<commit>
@@ -546,7 +656,7 @@ pub async fn commit_files(
     Path(id): Path<String>,
     Query(q): Query<CommitQuery>,
 ) -> Response {
-    let root = match resolve_root(&state, &id) {
+    let root = match resolve_git_dir(&state, &id, q.repo.as_deref()) {
         Ok(r) => r,
         Err(resp) => return resp,
     };
@@ -610,7 +720,7 @@ pub async fn commit_diff(
     Path(id): Path<String>,
     Query(q): Query<CommitQuery>,
 ) -> Response {
-    let root = match resolve_root(&state, &id) {
+    let root = match resolve_git_dir(&state, &id, q.repo.as_deref()) {
         Ok(r) => r,
         Err(resp) => return resp,
     };

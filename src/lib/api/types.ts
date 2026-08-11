@@ -2032,6 +2032,17 @@ export namespace Api {
     files: GitStatusFile[];
   };
 
+  export type GitRepoStatus = {
+    /** 相对 workspace 根目录的路径;空串表示根目录本身 */
+    path: string;
+    branch: string;
+    files: GitStatusFile[];
+  };
+
+  export type GitRepos = {
+    repos: GitRepoStatus[];
+  };
+
   export type GitDiff = { diff: string };
 
   export type GitFileAtHead = { content: string };
