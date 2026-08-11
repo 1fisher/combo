@@ -30,6 +30,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'write',
   'edit',
   'multiedit',
+  'replace',
   'lsp_replace_symbol',
   'lsp_rename',
   'bash',

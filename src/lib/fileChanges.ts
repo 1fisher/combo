@@ -3,17 +3,19 @@ import type { MessageVM } from '../stores/agentStore';
 import type { Api } from './api/types';
 
 /** 涉及文件内容变更的工具名 */
-const FILE_WRITE_TOOLS = new Set(['write', 'edit', 'multiedit']);
+const FILE_WRITE_TOOLS = new Set(['write', 'edit', 'multiedit', 'replace']);
 
 export interface FileToolCall {
   id: string;
-  name: 'write' | 'edit' | 'multiedit';
+  name: 'write' | 'edit' | 'multiedit' | 'replace';
   path: string;
   /** write 工具的完整文件内容 */
   content?: string;
-  /** edit 工具的旧文本 / 新文本 */
+  /** edit/replace 工具的旧文本 / 新文本 */
   oldString?: string;
   newString?: string;
+  /** replace 工具是否替换所有匹配 */
+  replaceAll?: boolean;
   /** multiedit 工具的编辑列表 */
   edits?: Array<{ old_string: string; new_string: string }>;
   finished: boolean;
@@ -59,11 +61,12 @@ function parseToolCall(tc: Api.ToolCall): FileToolCall | null {
   if (tc.name === 'write') {
     return { ...base, content: typeof input.content === 'string' ? input.content : '' };
   }
-  if (tc.name === 'edit') {
+  if (tc.name === 'edit' || tc.name === 'replace') {
     return {
       ...base,
       oldString: typeof input.old_string === 'string' ? input.old_string : '',
       newString: typeof input.new_string === 'string' ? input.new_string : '',
+      replaceAll: tc.name === 'replace' ? input.replace_all === true : undefined,
     };
   }
   // multiedit
@@ -116,6 +119,13 @@ export function reconstructBefore(atAfter: string, toolCalls: FileToolCall[]): s
     }
     if (op.name === 'edit' && op.newString !== undefined && op.oldString !== undefined) {
       content = replaceFirst(content, op.newString, op.oldString);
+    } else if (op.name === 'replace' && op.newString !== undefined && op.oldString !== undefined) {
+      // replace_all=true 时反向替换所有匹配,否则只替换第一处
+      if (op.replaceAll) {
+        content = content.split(op.newString).join(op.oldString);
+      } else {
+        content = replaceFirst(content, op.newString, op.oldString);
+      }
     } else if (op.name === 'multiedit' && op.edits) {
       for (let j = op.edits.length - 1; j >= 0; j--) {
         content = replaceFirst(content, op.edits[j].new_string, op.edits[j].old_string);
@@ -139,8 +149,12 @@ export function reconstructAfter(toolCalls: FileToolCall[]): string {
   for (const op of toolCalls) {
     if (op.name === 'write' && op.content !== undefined) {
       content = op.content;
-    } else if (op.name === 'edit' && op.oldString !== undefined && op.newString !== undefined) {
-      content = replaceFirst(content, op.oldString, op.newString);
+    } else if ((op.name === 'edit' || op.name === 'replace') && op.oldString !== undefined && op.newString !== undefined) {
+      if (op.name === 'replace' && op.replaceAll) {
+        content = content.split(op.oldString).join(op.newString);
+      } else {
+        content = replaceFirst(content, op.oldString, op.newString);
+      }
     } else if (op.name === 'multiedit' && op.edits) {
       for (const e of op.edits) {
         content = replaceFirst(content, e.old_string, e.new_string);
@@ -200,7 +214,7 @@ export function diffFromToolInput(
   } catch {
     return null;
   }
-  if (toolName === 'edit') {
+  if (toolName === 'edit' || toolName === 'replace') {
     const oldStr = typeof input.old_string === 'string' ? input.old_string : '';
     const newStr = typeof input.new_string === 'string' ? input.new_string : '';
     return computeDiffLines(oldStr, newStr);
