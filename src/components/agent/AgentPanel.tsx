@@ -14,7 +14,7 @@ import { useSessions } from '../../hooks/useSessions';
 import { MessageList } from './MessageList';
 import { Composer } from './Composer';
 import { ChatEmptyState } from './ChatEmptyState';
-import { FileChangesPanel } from './FileChangesPanel';
+import { FileChangesPanel, type ChangeStatus } from './FileChangesPanel';
 import { extractFileToolCalls } from '../../lib/fileChanges';
 import { cn } from '../../lib/utils';
 
@@ -40,6 +40,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
   const [draft, setDraft] = useState('');
   const [wsMenuOpen, setWsMenuOpen] = useState(false);
   const [showChanges, setShowChanges] = useState(false);
+  const [changeStatuses, setChangeStatuses] = useState<Record<string, ChangeStatus>>({});
 
   // 切换到某会话时,若 store 里没有该会话的消息,从后端拉取历史灌入
   const { data: history, isLoading: historyLoading } = useSessionHistory(workspaceId, sessionId);
@@ -66,14 +67,22 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
   const waitingForHydrate = noMessages && !!history && history.length > 0;
   const historyFetching = noMessages && (historyLoading || waitingForHydrate);
 
-  const changedFileCount = useMemo(() => {
+  const changedFiles = useMemo(() => {
     const calls = extractFileToolCalls(messages);
-    return new Set(calls.map((c) => c.path)).size;
+    return new Set(calls.map((c) => c.path));
   }, [messages]);
+  const pendingCount = useMemo(() => {
+    let count = 0;
+    for (const p of changedFiles) {
+      if (changeStatuses[p] !== 'approved' && changeStatuses[p] !== 'rejected') count++;
+    }
+    return count;
+  }, [changedFiles, changeStatuses]);
 
-  // 切换会话时关闭变更面板
+  // 切换会话时关闭变更面板并重置审查状态
   useEffect(() => {
     setShowChanges(false);
+    setChangeStatuses({});
   }, [sessionId]);
   const ws = workspaces?.find((w) => w.id === workspaceId) ?? null;
   const wsName = ws ? (ws.name?.trim() ? ws.name : basename(ws.path)) : undefined;
@@ -202,13 +211,13 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
         </div>
       )}
       {/* 变更栏 */}
-      {changedFileCount > 0 && !showChanges && (
+      {pendingCount > 0 && !showChanges && (
         <button
           onClick={() => setShowChanges(true)}
           className="flex shrink-0 items-center gap-2 border-b border-border bg-surface/40 px-4 py-1.5 text-xs transition-colors hover:bg-surface-hover"
         >
           <FileEdit className="size-3.5 text-brand" />
-          <span className="text-muted-foreground">{changedFileCount} 个文件已变更</span>
+          <span className="text-muted-foreground">{pendingCount} 个文件待审查</span>
           <span className="ml-auto text-brand">审查变更</span>
         </button>
       )}
@@ -219,6 +228,8 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
             messages={messages}
             workspaceId={workspaceId}
             onClose={() => setShowChanges(false)}
+            statuses={changeStatuses}
+            onStatusesChange={setChangeStatuses}
           />
         ) : historyFetching ? (
           <div className="flex h-full items-center justify-center">

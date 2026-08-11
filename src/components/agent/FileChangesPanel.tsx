@@ -14,7 +14,7 @@ import {
 import { DiffView } from './DiffView';
 import { cn } from '../../lib/utils';
 
-type ChangeStatus = 'pending' | 'approved' | 'rejected';
+export type ChangeStatus = 'pending' | 'approved' | 'rejected';
 
 interface DiffEntry {
   lines: DiffLine[];
@@ -39,16 +39,18 @@ export function FileChangesPanel({
   messages,
   workspaceId,
   onClose,
+  statuses,
+  onStatusesChange,
 }: {
   messages: MessageVM[];
   workspaceId: string;
   onClose: () => void;
+  statuses: Record<string, ChangeStatus>;
+  onStatusesChange: React.Dispatch<React.SetStateAction<Record<string, ChangeStatus>>>;
 }) {
   const toolCalls = useMemo(() => extractFileToolCalls(messages), [messages]);
   const byPath = useMemo(() => groupByPath(toolCalls), [toolCalls]);
   const paths = useMemo(() => Array.from(byPath.keys()), [byPath]);
-
-  const [statuses, setStatuses] = useState<Record<string, ChangeStatus>>({});
   const [expandedPath, setExpandedPath] = useState<string | null>(null);
   const [diffs, setDiffs] = useState<Record<string, DiffEntry>>({});
   const [busy, setBusy] = useState<string | null>(null);
@@ -101,8 +103,8 @@ export function FileChangesPanel({
   }, [expandedPath, diffs, loadDiff]);
 
   const handleApprove = useCallback((path: string) => {
-    setStatuses((prev) => ({ ...prev, [path]: 'approved' }));
-  }, []);
+    onStatusesChange((prev) => ({ ...prev, [path]: 'approved' }));
+  }, [onStatusesChange]);
 
   const handleReject = useCallback(
     async (path: string) => {
@@ -111,7 +113,7 @@ export function FileChangesPanel({
       setBusy(path);
       try {
         await putFileContent(workspaceId, path, entry.before);
-        setStatuses((prev) => ({ ...prev, [path]: 'rejected' }));
+        onStatusesChange((prev) => ({ ...prev, [path]: 'rejected' }));
         // 重新加载 diff(revert 后应无差异)
         setDiffs((prev) => {
           const next = { ...prev };
@@ -125,16 +127,16 @@ export function FileChangesPanel({
         setBusy(null);
       }
     },
-    [diffs, workspaceId, loadDiff],
+    [diffs, workspaceId, loadDiff, onStatusesChange],
   );
 
   const handleApproveAll = useCallback(() => {
-    setStatuses((prev) => {
+    onStatusesChange((prev) => {
       const next = { ...prev };
       for (const p of paths) if (next[p] !== 'rejected') next[p] = 'approved';
       return next;
     });
-  }, [paths]);
+  }, [paths, onStatusesChange]);
 
   const handleRejectAll = useCallback(async () => {
     for (const p of paths) {
