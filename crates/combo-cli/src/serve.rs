@@ -456,26 +456,14 @@ async fn run_agent_ws(
         ));
 
         let rig_history = history_to_messages(&history);
-        let mut parts: Vec<Value> = Vec::new();
-        let mut text_buf = String::new();
+        let mut sparts = StreamParts::default();
         let mut usage: Option<(u64, u64)> = None;
         let tx_ev = tx.clone();
         let result =
             crate::agent::stream_run(&cfg, &prompt, &rig_history, workspace_dir, cancel_rx, |ev| {
             match ev {
-                RunEvent::TextDelta(t) => {
-                    text_buf.push_str(&t);
-                    // 更新唯一的 text part(而非每个 delta 各建一个)
-                    let text_val = text_part(&text_buf);
-                    if parts.last().and_then(|p| p.get("type")).and_then(Value::as_str) == Some("text") {
-                        parts.last_mut().unwrap()["data"] = text_val["data"].clone();
-                    } else {
-                        parts.push(text_val);
-                    }
-                }
-                RunEvent::ToolCall { id, name, input } => {
-                    parts.push(tool_call_part(&id, &name, &input));
-                }
+                RunEvent::TextDelta(t) => sparts.text_delta(&t),
+                RunEvent::ToolCall { id, name, input } => sparts.tool_call(&id, &name, &input),
                 RunEvent::ToolResult { id, name, content } => {
                     let msg = tool_result_message_json(&session_id, &id, &name, &content);
                     let _ = tx_ev.send(msg_env("created", msg));
@@ -488,7 +476,7 @@ async fn run_agent_ws(
                     &session_id,
                     &assistant_id,
                     &cfg,
-                    parts.clone(),
+                    sparts.parts.clone(),
                     created_at,
                 ),
             ));
@@ -503,10 +491,16 @@ async fn run_agent_ws(
                 ("error", Some(msg.clone()), msg)
             }
         };
-        parts.push(finish_part(reason, now_secs(), usage));
+        sparts.finish(reason, now_secs(), usage);
         let _ = tx.send(msg_env(
             "updated",
-            assistant_message_json(&session_id, &assistant_id, &cfg, parts, created_at),
+            assistant_message_json(
+                &session_id,
+                &assistant_id,
+                &cfg,
+                sparts.into_parts(),
+                created_at,
+            ),
         ));
         let _ = tx.send(run_complete_env(
             &session_id,
@@ -742,6 +736,44 @@ fn assistant_message_json(
         "created_at": created_at,
         "updated_at": now_secs(),
     })
+}
+
+/// 流式 assistant 消息的 parts 构建状态机。
+///
+/// 文本增量原地更新当前 text part;工具调用另起一行。工具调用后若模型
+/// 继续输出文本,从空缓冲新开一个 text part——若直接复用整次 run 的累积
+/// 缓冲,会把调用前的文本重复带入消息(前段文本重复显示)。
+#[derive(Default)]
+struct StreamParts {
+    parts: Vec<Value>,
+    /// 当前文本段缓冲(遇到工具调用后清空,使新文本段只含调用后的内容)
+    text_buf: String,
+}
+
+impl StreamParts {
+    fn text_delta(&mut self, t: &str) {
+        self.text_buf.push_str(t);
+        // 更新唯一的 text part(而非每个 delta 各建一个)
+        let text_val = text_part(&self.text_buf);
+        if self.parts.last().and_then(|p| p.get("type")).and_then(Value::as_str) == Some("text") {
+            self.parts.last_mut().unwrap()["data"] = text_val["data"].clone();
+        } else {
+            self.parts.push(text_val);
+        }
+    }
+
+    fn tool_call(&mut self, id: &str, name: &str, input: &str) {
+        self.parts.push(tool_call_part(id, name, input));
+        self.text_buf.clear();
+    }
+
+    fn finish(&mut self, reason: &str, time: i64, usage: Option<(u64, u64)>) {
+        self.parts.push(finish_part(reason, time, usage));
+    }
+
+    fn into_parts(self) -> Vec<Value> {
+        self.parts
+    }
 }
 
 /// 把 proxy 注入的历史消息([{ role, parts }])还原为 rig Message 列表。
@@ -1430,6 +1462,46 @@ mod tests {
         // 两个 tool_result 紧随其后
         assert!(matches!(&msgs[3], Message::User { .. }));
         assert!(matches!(&msgs[4], Message::User { .. }));
+    }
+
+    #[test]
+    fn stream_parts_does_not_duplicate_text_after_tool_call() {
+        // 模型先输出文本 → 调用工具 → 再输出文本:工具调用后的新文本段
+        // 只含调用后的内容,不能把调用前的文本重复带入(前段文本重复显示)。
+        let mut sp = StreamParts::default();
+        sp.text_delta("先看看当前时间");
+        sp.tool_call("t1", "bash", r#"{"cmd":"date"}"#);
+        sp.text_delta("现在是 13:34");
+        sp.text_delta(", 请确认无误");
+        sp.finish("end_turn", 1, None);
+        let parts = sp.into_parts();
+        let kinds: Vec<&str> = parts
+            .iter()
+            .map(|p| p.get("type").and_then(Value::as_str).unwrap_or(""))
+            .collect();
+        assert_eq!(kinds, vec!["text", "tool_call", "text", "finish"]);
+        let texts: Vec<&str> = parts
+            .iter()
+            .filter(|p| p.get("type").and_then(Value::as_str) == Some("text"))
+            .filter_map(|p| p["data"]["text"].as_str())
+            .collect();
+        assert_eq!(texts, vec!["先看看当前时间", "现在是 13:34, 请确认无误"]);
+    }
+
+    #[test]
+    fn stream_parts_updates_text_part_in_place() {
+        let mut sp = StreamParts::default();
+        sp.text_delta("a");
+        sp.text_delta("b");
+        assert_eq!(sp.parts.len(), 1);
+        assert_eq!(sp.parts[0]["data"]["text"], "ab");
+        // 连续工具调用后,文本缓冲已清空,后续文本新开 part 且只含新内容
+        sp.tool_call("t1", "bash", "{}");
+        sp.tool_call("t2", "bash", "{}");
+        assert_eq!(sp.parts.len(), 3);
+        sp.text_delta("c");
+        assert_eq!(sp.parts.len(), 4);
+        assert_eq!(sp.parts[3]["data"]["text"], "c");
     }
 
     #[test]
