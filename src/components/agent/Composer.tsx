@@ -10,6 +10,7 @@ import {
   Paperclip,
   Plus,
   Quote,
+  Search,
   ShieldAlert,
   Sparkles,
   Square,
@@ -143,6 +144,7 @@ export function Composer({
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [providerMenuOpen, setProviderMenuOpen] = useState(false);
   const [modelErr, setModelErr] = useState('');
+  const [modelSearch, setModelSearch] = useState('');
   // FlameWrap 原生(layoutsubtree)模式下外层 wrapper 无行内内容会塌陷为 0 高,
   // 需用输入框实际高度显式撑开;每帧渲染前同步测量,避免挂载时机导致高度缺失
   const boxRef = useRef<HTMLDivElement>(null);
@@ -232,7 +234,16 @@ export function Composer({
         });
       }
     }
-    return out;
+    // 按模型编号从大到小排序(如 glm-5.2 排在 glm-5 前面,无编号的排最后)
+    const versionOf = (s: string): number => {
+      const m = /\d+(?:\.\d+)*/.exec(s);
+      return m ? parseFloat(m[0]) : -1;
+    };
+    const modelVersion = (m: { id: string; name: string }): number => {
+      const v = versionOf(m.id);
+      return v >= 0 ? v : versionOf(m.name);
+    };
+    return out.sort((a, b) => modelVersion(b) - modelVersion(a));
   }, [providers]);
 
   // 当前 provider:优先 agent info,其次按当前模型反查,最后取第一个
@@ -291,6 +302,20 @@ export function Composer({
     }
     return out;
   }, [modelList]);
+
+  // 模型搜索:按模型 id/名称(忽略大小写)过滤,命中后分组内保持原有排序,空组剔除
+  const filteredModelGroups = useMemo(() => {
+    const q = modelSearch.trim().toLowerCase();
+    if (!q) return modelGroups;
+    const out: typeof modelGroups = [];
+    for (const g of modelGroups) {
+      const models = g.models.filter(
+        (m) => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q)
+      );
+      if (models.length) out.push({ ...g, models });
+    }
+    return out;
+  }, [modelGroups, modelSearch]);
 
   function handleModelChange(modelId: string, provider: string) {
     setModelMenuOpen(false);
@@ -656,6 +681,7 @@ export function Composer({
                     <button
                       type="button"
                       onClick={() => {
+                        if (!modelMenuOpen) setModelSearch('');
                         setModelMenuOpen((o) => !o);
                         setProviderMenuOpen(false);
                       }}
@@ -693,12 +719,35 @@ export function Composer({
                               </span>
                             )}
                           </div>
-                          {modelGroups.length === 0 ? (
+                          <div className="px-1 pb-1">
+                            <div className="flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2 py-1">
+                              <Search className="size-3.5 shrink-0 text-foreground-subtlest" />
+                              <input
+                                value={modelSearch}
+                                onChange={(e) => setModelSearch(e.target.value)}
+                                placeholder="搜索模型"
+                                className="w-full bg-transparent text-[13px] text-foreground outline-none placeholder:text-foreground-subtlest"
+                              />
+                              {modelSearch && (
+                                <button
+                                  type="button"
+                                  onClick={() => setModelSearch('')}
+                                  className="shrink-0 text-foreground-subtlest transition-colors hover:text-foreground"
+                                  aria-label="清空搜索"
+                                >
+                                  <X className="size-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          {filteredModelGroups.length === 0 ? (
                             <div className="px-2 py-2 text-[13px] text-foreground-subtle">
-                              暂无可用的模型。可在「设置」中配置 API Key 后拉取模型。
+                              {modelGroups.length === 0
+                                ? '暂无可用的模型。可在「设置」中配置 API Key 后拉取模型。'
+                                : '未找到匹配的模型。'}
                             </div>
                           ) : (
-                            modelGroups.map((g) => (
+                            filteredModelGroups.map((g) => (
                               <div key={g.providerId}>
                                 <div className="flex items-center gap-1.5 px-2 pt-1.5 pb-0.5 text-[11px] font-medium text-foreground-subtlest">
                                   <ProviderLogo
