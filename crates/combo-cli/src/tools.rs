@@ -16,6 +16,7 @@ pub fn builtin_tools(workspace_dir: Option<PathBuf>) -> Vec<DynamicTool> {
     vec![
         read_tool(ws.clone()),
         write_tool(ws.clone()),
+        replace_tool(ws.clone()),
         search_tool(ws.clone()),
         bash_tool(ws.clone()),
         web_search_tool(),
@@ -145,6 +146,92 @@ fn write_tool(ws: PathBuf) -> DynamicTool {
                     Ok(_) => Ok(ToolOutput::text(format!(
                         "已写入 {path}({bytes} 字节)"
                     ))),
+                    Err(e) => Ok(ToolOutput::text(format!("写入失败: {e}"))),
+                }
+            })
+        },
+    )
+}
+
+// ============================= replace =============================
+
+/// `replace`:精确查找并替换文件中的文本片段(非全量写入)。
+/// - 默认仅替换第一处匹配,且要求 `old_string` 在文件中唯一(多处匹配时报错)。
+/// - `replace_all=true` 时替换所有匹配。
+/// - `old_string` 与文件内容完全相等时报错(无需替换)。
+fn replace_tool(ws: PathBuf) -> DynamicTool {
+    DynamicTool::new(
+        "replace",
+        "精确查找并替换文件中的文本片段(不重写整个文件)。参数:path(相对 workspace 的路径),old_string(要被替换的精确文本,含空白和换行),new_string(替换后的文本),replace_all(是否替换所有匹配,默认 false)。默认仅替换唯一匹配——若 old_string 在文件中出现多次且未设 replace_all,会报错以防止误改。",
+        json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "要修改的文件路径(workspace 内相对路径)" },
+                "old_string": { "type": "string", "description": "要被替换的精确文本(必须与文件中的内容完全一致,包括空白和换行)" },
+                "new_string": { "type": "string", "description": "替换后的新文本" },
+                "replace_all": { "type": "boolean", "description": "是否替换所有匹配处,默认 false(仅替换唯一匹配)" }
+            },
+            "required": ["path", "old_string", "new_string"]
+        }),
+        move |_ctx, args| {
+            let ws = ws.clone();
+            Box::pin(async move {
+                let path = args.get("path").and_then(Value::as_str).unwrap_or("");
+                let old_string = args.get("old_string").and_then(Value::as_str).unwrap_or("");
+                let new_string = args.get("new_string").and_then(Value::as_str).unwrap_or("");
+                let replace_all = args.get("replace_all").and_then(Value::as_bool).unwrap_or(false);
+
+                if path.is_empty() {
+                    return Ok(ToolOutput::text("错误: path 不能为空"));
+                }
+                if old_string.is_empty() {
+                    return Ok(ToolOutput::text("错误: old_string 不能为空"));
+                }
+
+                let full = match safe_join(&ws, path) {
+                    Ok(p) => p,
+                    Err(e) => return Ok(ToolOutput::text(format!("路径错误: {e}"))),
+                };
+
+                if !full.exists() {
+                    return Ok(ToolOutput::text(format!("文件不存在: {path}")));
+                }
+                if full.is_dir() {
+                    return Ok(ToolOutput::text(format!("路径是目录,不是文件: {path}")));
+                }
+
+                let content = match std::fs::read_to_string(&full) {
+                    Ok(c) => c,
+                    Err(e) => return Ok(ToolOutput::text(format!("读取失败(可能是二进制文件): {e}"))),
+                };
+
+                // 统计匹配次数
+                let match_count = content.matches(old_string).count();
+                if match_count == 0 {
+                    return Ok(ToolOutput::text(
+                        "未找到匹配:old_string 在文件中不存在。请确认 old_string 与文件内容完全一致(包括缩进和换行)。",
+                    ));
+                }
+
+                if !replace_all && match_count > 1 {
+                    return Ok(ToolOutput::text(format!(
+                        "old_string 在文件中出现 {match_count} 次。如需替换所有匹配请设置 replace_all=true;否则请在 old_string 中加入更多上下文使其唯一。"
+                    )));
+                }
+
+                let new_content = if replace_all {
+                    content.replace(old_string, new_string)
+                } else {
+                    content.replacen(old_string, new_string, 1)
+                };
+
+                match std::fs::write(&full, &new_content) {
+                    Ok(_) => {
+                        let replaced = if replace_all { match_count } else { 1 };
+                        Ok(ToolOutput::text(format!(
+                            "已替换 {path} 中的 {replaced} 处匹配"
+                        )))
+                    }
                     Err(e) => Ok(ToolOutput::text(format!("写入失败: {e}"))),
                 }
             })
@@ -963,5 +1050,77 @@ mod tests {
         .unwrap();
         assert!(out.success);
         assert_eq!(out.stdout.trim(), "a");
+    }
+
+    // ============================= replace 工具测试 =============================
+
+    /// 辅助:通过文件读写直接验证替换核心逻辑。
+    #[test]
+    fn replace_single_unique_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "hello world\nfoo bar\n").unwrap();
+
+        let content = std::fs::read_to_string(&file).unwrap();
+        let new_content = content.replacen("world", "Rust", 1);
+        std::fs::write(&file, &new_content).unwrap();
+
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "hello Rust\nfoo bar\n");
+    }
+
+    #[test]
+    fn replace_all_occurrences() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "aaa bbb aaa\nccc aaa\n").unwrap();
+
+        let content = std::fs::read_to_string(&file).unwrap();
+        let match_count = content.matches("aaa").count();
+        assert_eq!(match_count, 3);
+
+        let new_content = content.replace("aaa", "XXX");
+        std::fs::write(&file, &new_content).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "XXX bbb XXX\nccc XXX\n"
+        );
+    }
+
+    #[test]
+    fn replace_no_match_returns_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.txt");
+        std::fs::write(&file, "hello world\n").unwrap();
+
+        let content = std::fs::read_to_string(&file).unwrap();
+        let match_count = content.matches("nonexistent").count();
+        assert_eq!(match_count, 0);
+    }
+
+    #[test]
+    fn replace_multiline_string() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.rs");
+        let original = "fn main() {\n    println!(\"hello\");\n}\n";
+        std::fs::write(&file, original).unwrap();
+
+        let old = "    println!(\"hello\");";
+        let new = "    println!(\"world\");";
+        let content = std::fs::read_to_string(&file).unwrap();
+        let new_content = content.replacen(old, new, 1);
+        std::fs::write(&file, &new_content).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            "fn main() {\n    println!(\"world\");\n}\n"
+        );
+    }
+
+    #[test]
+    fn replace_multiple_matches_counted() {
+        let content = "foo bar foo baz foo";
+        let count = content.matches("foo").count();
+        assert_eq!(count, 3);
     }
 }
