@@ -106,7 +106,7 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-sm">
+      <DialogContent className="sm:max-w-lg overflow-x-hidden">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Smartphone className="size-4 text-brand" />
@@ -175,8 +175,8 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
               <Wifi className="size-3.5" />
               访问地址
             </div>
-            <div className="flex items-center gap-1.5">
-              <code className="min-w-0 flex-1 truncate rounded-lg bg-surface-hover px-2.5 py-1.5 text-[12px] text-foreground">
+            <div className="flex items-start gap-1.5">
+              <code className="min-w-0 flex-1 break-all rounded-lg bg-surface-hover px-2.5 py-1.5 text-[12px] text-foreground">
                 {mobileUrl || '生成中…'}
               </code>
               <Button
@@ -185,7 +185,7 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
                 onClick={copyUrl}
                 aria-label="复制地址"
                 title="复制地址"
-                className="shrink-0"
+                className="mt-0.5 shrink-0"
                 disabled={!mobileUrl}
               >
                 {copied ? (
