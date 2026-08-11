@@ -3,7 +3,6 @@
 //! combo-cli 现在直接充当 combo 的完整后端(不再经 combo-proxy 反向代理):
 //! - `GET /v1/health`                       → 健康检查(`{"ok":true}`)
 //! - `POST /v1/control`                     → 优雅关闭(信号驱动)
-//! - `POST /v1/agent`                       → 单轮问答(旧接口)
 //! - `POST /v1/workspaces/{id}/agent`       → 发起一次 agent 运行
 //! - `POST /v1/workspaces/{id}/agent/sessions/{sid}/cancel` → 取消运行
 //! - `GET  /v1/workspaces/{id}/events`      → SSE 事件流(与 rune 双层信封一致)
@@ -219,8 +218,6 @@ fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         // ---- dispose:健康检查 / 优雅关闭 ----
         .route("/v1/health", get(health))
         .route("/v1/control", post(control))
-        // ---- 旧单轮接口 ----
-        .route("/v1/agent", post(run_agent))
         // ---- agent 运行 / SSE / 模型 ----
         .route(
             "/v1/workspaces/:id/agent",
@@ -420,56 +417,6 @@ async fn usage_stats() -> Json<Value> {
             "request_count": d.request_count,
         })).collect::<Vec<_>>(),
     }))
-}
-
-/// 旧单轮问答接口(兼容)。
-async fn run_agent(
-    State(state): State<AppState>,
-    Json(body): Json<Value>,
-) -> Result<Json<Value>, (StatusCode, String)> {
-    let question = body
-        .get("question")
-        .and_then(Value::as_str)
-        .ok_or_else(|| (StatusCode::BAD_REQUEST, "缺少 question 字段".into()))?
-        .to_string();
-
-    let cfg = state.cfg.lock().unwrap().clone();
-    let run_id = format!("legacy-{}", uuid::Uuid::new_v4());
-    crate::request_log::log_request(
-        "legacy",
-        "legacy",
-        &run_id,
-        &question,
-        &cfg.provider.id,
-        &cfg.model,
-        0,
-    );
-    let answer = crate::agent::ask_answer(&cfg, &question, std::env::current_dir().ok())
-        .await
-        .map_err(|e| {
-            let msg = friendly_error(&e);
-            crate::request_log::log_response(
-                &run_id,
-                "legacy",
-                "error",
-                "",
-                Some(&msg),
-                None,
-                &[],
-            );
-            (StatusCode::INTERNAL_SERVER_ERROR, msg)
-        })?;
-
-    crate::request_log::log_response(
-        &run_id,
-        "legacy",
-        "end_turn",
-        &answer,
-        None,
-        None,
-        &[],
-    );
-    Ok(Json(json!({ "ok": true, "answer": answer })))
 }
 
 /// POST /v1/workspaces/{id}/agent — 发起一次 agent 运行。

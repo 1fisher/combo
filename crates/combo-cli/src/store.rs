@@ -394,16 +394,6 @@ impl ComboDb {
         Ok(())
     }
 
-    /// workspace 重建后 id 变化时,把旧 id 下的会话镜像迁移到新 id。
-    #[allow(dead_code)] // 保留:workspace 别名合并等场景可用
-    pub fn move_conversations(&self, from_ws: &str, to_ws: &str) -> anyhow::Result<()> {
-        self.conn.lock().unwrap().execute(
-            "UPDATE conversations SET workspace_id=?1 WHERE workspace_id=?2",
-            params![to_ws, from_ws],
-        )?;
-        Ok(())
-    }
-
     /// 累加 token 用量与花费到会话(每次 run 结束后调用)。
     pub fn add_usage(
         &self,

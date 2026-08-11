@@ -493,11 +493,6 @@ export function listAccessTokens(): Promise<AccessToken[]> {
   return apiRequest('/v1/auth/tokens');
 }
 
-/** 校验令牌是否有效。 */
-export function verifyAccessToken(token: string): Promise<{ valid: boolean }> {
-  return apiRequest('/v1/auth/verify', { query: { token } });
-}
-
 /** 撤销令牌(按 token 或全部)。 */
 export function revokeAccessToken(token?: string, all = false): Promise<{ revoked: string }> {
   const query: Record<string, string> = {};

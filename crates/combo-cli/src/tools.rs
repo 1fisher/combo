@@ -21,8 +21,7 @@ pub fn builtin_tools(workspace_dir: Option<PathBuf>) -> Vec<DynamicTool> {
         grep_tool(ws.clone()),
         bash_tool(ws.clone()),
         web_search_tool(),
-        current_time_tool(),
-        current_date_tool(),
+        current_datetime_tool(),
     ]
 }
 
@@ -1203,11 +1202,11 @@ fn should_skip_dir(name: &str) -> bool {
 
 // ============================= 时间工具 =============================
 
-/// `current_time`:返回当前本地时间(时:分:秒)。
-fn current_time_tool() -> DynamicTool {
+/// `current_datetime`:返回当前本地日期和时间。
+fn current_datetime_tool() -> DynamicTool {
     DynamicTool::new(
-        "current_time",
-        "获取当前本地时间(HH:MM:SS)。当你需要知道现在几点时使用。",
+        "current_datetime",
+        "获取当前本地日期和时间(YYYY-MM-DD HH:MM:SS)。当你需要知道今天几号或现在几点时使用。",
         json!({
             "type": "object",
             "properties": {}
@@ -1215,27 +1214,8 @@ fn current_time_tool() -> DynamicTool {
         |_context, _args| {
             Box::pin(async move {
                 use chrono::Local;
-                let now = Local::now().format("%H:%M:%S").to_string();
-                Ok(ToolOutput::text(format!("当前时间:{now}")))
-            })
-        },
-    )
-}
-
-/// `current_date`:返回当前日期(年-月-日)。
-fn current_date_tool() -> DynamicTool {
-    DynamicTool::new(
-        "current_date",
-        "获取当前日期(YYYY-MM-DD)。当你需要知道今天几号时使用。",
-        json!({
-            "type": "object",
-            "properties": {}
-        }),
-        |_context, _args| {
-            Box::pin(async move {
-                use chrono::Local;
-                let date = Local::now().format("%Y-%m-%d").to_string();
-                Ok(ToolOutput::text(format!("当前日期:{date}")))
+                let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+                Ok(ToolOutput::text(format!("当前日期时间:{now}")))
             })
         },
     )
