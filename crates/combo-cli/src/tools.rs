@@ -1,12 +1,14 @@
-//! 内置工具:read / write / search / web_search + current_time / current_date。
+//! 内置工具:read / write / search / bash / web_search + current_time / current_date。
 //!
-//! read/write/search 需要 workspace 根目录(由 `builtin_tools` 传入);
+//! read/write/search/bash 需要 workspace 根目录(由 `builtin_tools` 传入);
 //! web_search 支持多搜索引擎(bing/ddg,默认 bing),无需 API key。
 
 use regex::Regex;
 use rig::tool::{DynamicTool, ToolOutput};
 use serde_json::{Value, json};
 use std::path::{Component, Path, PathBuf};
+use tokio::io::AsyncReadExt;
+use tokio::process::Command;
 
 /// 返回内置工具列表。
 pub fn builtin_tools(workspace_dir: Option<PathBuf>) -> Vec<DynamicTool> {
@@ -15,6 +17,7 @@ pub fn builtin_tools(workspace_dir: Option<PathBuf>) -> Vec<DynamicTool> {
         read_tool(ws.clone()),
         write_tool(ws.clone()),
         search_tool(ws.clone()),
+        bash_tool(ws.clone()),
         web_search_tool(),
         current_time_tool(),
         current_date_tool(),
@@ -290,6 +293,165 @@ fn search_tool(ws: PathBuf) -> DynamicTool {
             })
         },
     )
+}
+
+// ============================= bash =============================
+
+/// `bash`:在 workspace 根目录执行终端命令(shell 命令)。
+fn bash_tool(ws: PathBuf) -> DynamicTool {
+    DynamicTool::new(
+        "bash",
+        "在 workspace 根目录执行终端命令(shell 命令),返回标准输出与标准错误。参数:command(要执行的完整命令,支持管道/重定向/多命令),timeout(超时秒数,默认30,超时后进程会被终止)。注意:命令在 workspace 目录下运行,每次调用都是独立的新 shell,不保留上次的 cd 或环境变量。",
+        json!({
+            "type": "object",
+            "properties": {
+                "command": { "type": "string", "description": "要执行的完整 shell 命令" },
+                "timeout": { "type": "integer", "description": "超时秒数,默认 30,最大 300" }
+            },
+            "required": ["command"]
+        }),
+        move |_ctx, args| {
+            let ws = ws.clone();
+            Box::pin(async move {
+                let command = args.get("command").and_then(Value::as_str).unwrap_or("");
+                let timeout = args
+                    .get("timeout")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(30)
+                    .clamp(1, 300);
+
+                if command.trim().is_empty() {
+                    return Ok(ToolOutput::text("错误: command 不能为空"));
+                }
+
+                match run_bash_command(command, &ws, timeout).await {
+                    Ok(output) => {
+                        let mut out = format!("$ {command}\n");
+                        if !output.stdout.is_empty() {
+                            out.push_str(&output.stdout);
+                        }
+                        if !output.stderr.is_empty() {
+                            if !output.stdout.is_empty() {
+                                out.push_str("\n");
+                            }
+                            out.push_str(&output.stderr);
+                        }
+                        if output.timed_out {
+                            out.push_str(&format!(
+                                "\n⚠ 命令执行超时({timeout} 秒),已终止进程"
+                            ));
+                        } else if output.success {
+                            out.push_str("\n✅ 命令执行成功");
+                        } else {
+                            out.push_str(&format!(
+                                "\n❌ 命令执行失败(退出码 {})",
+                                output.code.unwrap_or(-1)
+                            ));
+                        }
+                        Ok(ToolOutput::text(out))
+                    }
+                    Err(e) => Ok(ToolOutput::text(format!("命令执行失败: {e}"))),
+                }
+            })
+        },
+    )
+}
+
+/// bash 执行结果。
+struct BashOutput {
+    stdout: String,
+    stderr: String,
+    success: bool,
+    code: Option<i32>,
+    timed_out: bool,
+}
+
+/// 实际执行命令:选择 shell(Unix 用 $SHELL 或 /bin/sh,Windows 用 cmd.exe),
+/// 在 `cwd` 目录下运行,合并捕获 stdout/stderr,超时后杀死进程树。
+async fn run_bash_command(
+    command: &str,
+    cwd: &Path,
+    timeout_secs: u64,
+) -> anyhow::Result<BashOutput> {
+    let mut cmd = if cfg!(target_os = "windows") {
+        let mut c = Command::new("cmd.exe");
+        c.arg("/C").arg(command);
+        c
+    } else {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_string());
+        let mut c = Command::new(&shell);
+        c.arg("-lc").arg(command); // login shell,保证 PATH 等已加载
+        c
+    };
+    cmd.current_dir(cwd);
+    for key in &["PATH", "HOME", "USER", "LANG", "LC_ALL", "LC_CTYPE"] {
+        if let Ok(val) = std::env::var(key) {
+            cmd.env(key, val);
+        }
+    }
+
+    let mut child = cmd
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .stdin(std::process::Stdio::null())
+        .spawn()?;
+
+    let mut stdout = child.stdout.take().expect("stdout 管道已请求");
+    let mut stderr = child.stderr.take().expect("stderr 管道已请求");
+    let read_stdout = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        let _ = (&mut stdout).read_to_end(&mut buf).await;
+        buf
+    });
+    let read_stderr = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        let _ = (&mut stderr).read_to_end(&mut buf).await;
+        buf
+    });
+
+    let timeout = std::time::Duration::from_secs(timeout_secs);
+    let status = match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(Ok(s)) => Some(s),
+        Ok(Err(e)) => return Err(e.into()),
+        Err(_) => {
+            // 超时:终止进程并回收,避免僵尸进程
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            None
+        }
+    };
+
+    let (stdout_bytes, stderr_bytes) = match tokio::join!(read_stdout, read_stderr) {
+        (Ok(a), Ok(b)) => (a, b),
+        _ => (Vec::new(), Vec::new()),
+    };
+
+    let timed_out = status.is_none();
+    let code = status.as_ref().and_then(|s| s.code());
+    let success = status.map(|s| s.success()).unwrap_or(false);
+
+    const MAX_OUTPUT: usize = 30_000;
+    let truncate = |bytes: Vec<u8>| -> String {
+        let s = String::from_utf8_lossy(&bytes).to_string();
+        if s.chars().count() > MAX_OUTPUT {
+            let cut = s
+                .char_indices()
+                .nth(MAX_OUTPUT)
+                .map(|(i, _)| i)
+                .unwrap_or(s.len());
+            format!("{}…(输出过长,已截断 {} 字符)", &s[..cut], s.chars().count() - MAX_OUTPUT)
+        } else {
+            s
+        }
+    };
+
+    Ok(BashOutput {
+        stdout: truncate(stdout_bytes),
+        stderr: truncate(stderr_bytes),
+        success,
+        code,
+        timed_out,
+    })
 }
 
 // ============================= web_search =============================
@@ -732,5 +894,74 @@ mod tests {
         assert_eq!(results[0].url, "https://rust-lang.org/zh-CN/");
         assert_eq!(results[0].snippet, "1 天前 · 生产环境中的 Rust 应用");
         assert_eq!(results[1].title, "Example Site");
+    }
+
+    // ============================= bash 工具测试 =============================
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bash_echo_success() {
+        let out = run_bash_command("echo hello", Path::new("/tmp"), 10)
+            .await
+            .unwrap();
+        assert!(out.success);
+        assert_eq!(out.code, Some(0));
+        assert!(out.stdout.contains("hello"));
+        assert!(!out.timed_out);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bash_nonzero_exit_code() {
+        let out = run_bash_command("exit 3", Path::new("/tmp"), 10)
+            .await
+            .unwrap();
+        assert!(!out.success);
+        assert_eq!(out.code, Some(3));
+        assert!(!out.timed_out);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bash_timeout_kills_process() {
+        let start = std::time::Instant::now();
+        let out = run_bash_command("sleep 30", Path::new("/tmp"), 1)
+            .await
+            .unwrap();
+        assert!(out.timed_out);
+        assert!(start.elapsed() < std::time::Duration::from_secs(10));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bash_runs_in_workspace_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = run_bash_command("pwd", dir.path(), 10).await.unwrap();
+        assert!(out.success);
+        assert!(out.stdout.trim().ends_with(dir.path().to_str().unwrap()));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bash_stderr_captured() {
+        let out = run_bash_command("echo err >&2", Path::new("/tmp"), 10)
+            .await
+            .unwrap();
+        assert!(out.success);
+        assert!(out.stderr.contains("err"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bash_pipeline_and_env() {
+        let out = run_bash_command(
+            "printf 'b\\na\\nc\\n' | sort | head -1",
+            Path::new("/tmp"),
+            10,
+        )
+        .await
+        .unwrap();
+        assert!(out.success);
+        assert_eq!(out.stdout.trim(), "a");
     }
 }
