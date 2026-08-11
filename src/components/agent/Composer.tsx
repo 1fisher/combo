@@ -53,26 +53,36 @@ const FLAME_OPTIONS = {
   scorch: 0.6,
 };
 
-/** 推理进行中给输入框点燃火焰特效;推理结束则直接渲染普通输入框(不挂载 WebGL,零开销)。
- *  火焰高度与颜色随 heat(0~1,由 token 输出速度映射)动态变化:越热火焰越高,颜色由蓝转红。 */
+/** 推理进行中给输入框点燃火焰特效;推理结束后保持挂载,heat 逐步衰减到 0,火焰的
+ *  真实参数(intensity/sparks/rim/ember/height/color)随之渐变收束、自然熄灭后再卸载
+ *  (不突然消失)。level 为热力包络:推理中保底亮度(heat=0 也有小火苗),结束后直接
+ *  跟随 heat 衰减到 0。颜色由蓝转红、火焰越高越亮 = token 输出越快。 */
 function FlameComposerBox({
+  alive,
   running,
   boxH,
   heat,
   children,
 }: {
+  alive: boolean;
   running?: boolean;
   boxH: number | undefined;
   heat: number;
   children: ReactNode;
 }) {
-  if (!running) return <>{children}</>;
+  if (!alive) return <>{children}</>;
+  const level = running ? 0.35 + 0.65 * heat : heat;
   return (
     <FlameWrap
       className="w-full"
       style={boxH ? { height: boxH } : undefined}
       {...FLAME_OPTIONS}
       height={Math.round(40 + heat * 100)}
+      intensity={FLAME_OPTIONS.intensity * level}
+      sparks={FLAME_OPTIONS.sparks * level}
+      ember={FLAME_OPTIONS.ember * level}
+      rim={FLAME_OPTIONS.rim * level}
+      smoke={FLAME_OPTIONS.smoke + (1 - level) * 0.8}
       color={[0.35 + heat * 0.65, 0.55 - heat * 0.3, 1 - heat * 0.8]}
     >
       {children}
@@ -143,13 +153,28 @@ export function Composer({
       setBoxH((prev) => (prev === h ? prev : h));
     }
   });
-  // 火焰热力:按 token 输出速度(文本/思考字符/秒)采样并平滑,0~1
+  // 火焰热力:按 token 输出速度(文本/思考字符/秒)采样并平滑,0~1。
+  // 推理结束不立即熄灭:heat 逐步衰减到 0,火焰参数(高度/颜色/亮度/火星)随之渐变
+  // 收束,完全熄灭后由 flameAlive 卸载特效,避免突然消失。
   const [flameHeat, setFlameHeat] = useState(0);
+  const [flameAlive, setFlameAlive] = useState(false);
   useEffect(() => {
-    if (!running) {
-      setFlameHeat(0);
+    if (running) {
+      setFlameAlive(true);
       return;
     }
+    if (!flameAlive) return;
+    // ≈0.83/s 的衰减速率,从满热到熄灭约 1.2s
+    const id = window.setInterval(() => {
+      setFlameHeat((h) => Math.max(h - 0.05, 0));
+    }, 60);
+    return () => window.clearInterval(id);
+  }, [running, flameAlive]);
+  useEffect(() => {
+    if (!running && flameAlive && flameHeat === 0) setFlameAlive(false);
+  }, [running, flameAlive, flameHeat]);
+  useEffect(() => {
+    if (!running) return;
     let lastLen = -1;
     let lastTime = performance.now();
     let ema = 0;
@@ -358,7 +383,7 @@ export function Composer({
               submit();
             }}
           >
-            <FlameComposerBox running={running} boxH={boxH} heat={flameHeat}>
+            <FlameComposerBox alive={flameAlive} running={running} boxH={boxH} heat={flameHeat}>
             <div
               ref={boxRef}
               className="relative flex flex-col gap-3 rounded-2xl border border-input-border bg-input p-3 transition-colors hover:border-input-border-hover focus-within:!border-input-border-focused focus-within:bg-input-focused"

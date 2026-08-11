@@ -565,6 +565,17 @@ export function createFlameWrap(
 
   let time = 0;
 
+  // 帧级平滑:height/color/intensity/fade 朝目标值指数渐变,避免 setOptions 时突变
+  const smooth = {
+    height: config.height,
+    intensity: config.intensity,
+    color: [config.color[0], config.color[1], config.color[2]] as [
+      number,
+      number,
+      number,
+    ],
+  };
+
   function render() {
     uploadContent();
     gl!.useProgram(program);
@@ -582,12 +593,12 @@ export function createFlameWrap(
     gl!.uniform1f(uniforms.uCorner, Math.max(config.radius, 0) * dpr);
     gl!.uniform3f(
       uniforms.uColor,
-      config.color[0],
-      config.color[1],
-      config.color[2],
+      smooth.color[0],
+      smooth.color[1],
+      smooth.color[2],
     );
-    gl!.uniform1f(uniforms.uIntensity, Math.max(config.intensity, 0));
-    gl!.uniform1f(uniforms.uHeight, Math.max(config.height, 24) * dpr);
+    gl!.uniform1f(uniforms.uIntensity, Math.max(smooth.intensity, 0));
+    gl!.uniform1f(uniforms.uHeight, Math.max(smooth.height, 24) * dpr);
     gl!.uniform1f(uniforms.uSpread, Math.max(config.spread, 8) * dpr);
     gl!.uniform1f(uniforms.uScale, Math.max(config.scale, 0.05));
     gl!.uniform1f(uniforms.uTurbulence, Math.max(config.turbulence, 0));
@@ -630,6 +641,15 @@ export function createFlameWrap(
     const delta = Math.min((now - lastTime) / 1000, 1 / 30);
     lastTime = now;
     if (!reducedMotion) time += delta * config.speed;
+    if (delta > 0) {
+      // 指数衰减逼近目标,rate=5 → 时间常数约 0.2s,渐变丝滑
+      const k = 1 - Math.exp(-delta * 5);
+      smooth.height += (config.height - smooth.height) * k;
+      smooth.intensity += (config.intensity - smooth.intensity) * k;
+      smooth.color[0] += (config.color[0] - smooth.color[0]) * k;
+      smooth.color[1] += (config.color[1] - smooth.color[1]) * k;
+      smooth.color[2] += (config.color[2] - smooth.color[2]) * k;
+    }
     render();
     if (reducedMotion && !contentDirty) {
       running = false;
