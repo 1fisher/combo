@@ -161,12 +161,20 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
             provider_type: Some("openai-compat".into()),
             default_large_model_id: Some("deepseek-chat".into()),
             default_small_model_id: Some("deepseek-chat".into()),
-            models: vec![ModelInfo {
-                id: "deepseek-chat".into(),
-                name: Some("DeepSeek Chat".into()),
-                context_window: Some(131072),
-                ..Default::default()
-            }],
+            models: vec![
+                ModelInfo {
+                    id: "deepseek-v4-flash".into(),
+                    name: Some("DeepSeek V4 Flash".into()),
+                    context_window: Some(262144),
+                    ..Default::default()
+                },
+                ModelInfo {
+                    id: "deepseek-chat".into(),
+                    name: Some("DeepSeek Chat".into()),
+                    context_window: Some(131072),
+                    ..Default::default()
+                },
+            ],
         },
         // ---- 以下 provider 暂未启用,后续需要时取消注释 ----
         // ProviderInfo {

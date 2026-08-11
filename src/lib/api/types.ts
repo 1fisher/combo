@@ -1913,6 +1913,8 @@ export namespace Api {
     time?: number;
     message?: string;
     details?: string;
+    /** 本次 run 的真实 token 用量(provider 上报;input 含全部历史) */
+    usage?: { input_tokens: number; output_tokens: number };
   };
 
   export type ContentPart =
@@ -2123,7 +2125,7 @@ export namespace Api {
     id: string;
     name?: string;
     type?: string;
-    models?: { id?: string; name?: string; [k: string]: unknown }[];
+    models?: { id?: string; name?: string; context_window?: number; [k: string]: unknown }[];
     /** 是否已配置 API Key(后端不回传明文,只给脱敏结果)。 */
     has_api_key?: boolean;
     /** 已配置 API Key 的脱敏展示,如 `sk-a****1234`。 */

@@ -245,6 +245,8 @@ pub enum RunEvent {
     ToolCall { id: String, name: String, input: String },
     /// 工具执行结果。
     ToolResult { id: String, name: String, content: String },
+    /// run 结束后的真实 token 用量(provider 上报;输入含全部历史)。
+    Usage { input: u64, output: u64 },
 }
 
 /// 流式运行一次 agent 对话(多轮,含工具调用与历史)。
@@ -311,6 +313,9 @@ where
 {
     let mut stream = agent.stream_chat(question, history.to_vec()).await;
     let mut out = String::new();
+    // 最后一次 completion 调用的 usage:每次调用都会重发全部历史,
+    // 因此最后一次的 input+output 即当前上下文窗口的消耗
+    let mut last_usage: Option<(u64, u64)> = None;
     // tool_call id → 工具名,供 ToolResult 上报时配对
     let mut tool_names: HashMap<String, String> = HashMap::new();
     loop {
@@ -366,8 +371,17 @@ where
                     content,
                 });
             }
+            MultiTurnStreamItem::CompletionCall(call) => {
+                // 零值 usage 是 rig 约定的"provider 未上报"哨兵
+                if call.usage.has_values() {
+                    last_usage = Some((call.usage.input_tokens, call.usage.output_tokens));
+                }
+            }
             _ => {}
         }
+    }
+    if let Some((input, output)) = last_usage {
+        on_event(RunEvent::Usage { input, output });
     }
     Ok(Some(out))
 }

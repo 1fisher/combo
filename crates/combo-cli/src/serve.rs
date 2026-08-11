@@ -457,6 +457,7 @@ async fn run_agent_ws(
         let rig_history = history_to_messages(&history);
         let mut parts: Vec<Value> = Vec::new();
         let mut text_buf = String::new();
+        let mut usage: Option<(u64, u64)> = None;
         let tx_ev = tx.clone();
         let result =
             crate::agent::stream_run(&cfg, &prompt, &rig_history, workspace_dir, cancel_rx, |ev| {
@@ -478,6 +479,7 @@ async fn run_agent_ws(
                     let msg = tool_result_message_json(&session_id, &id, &name, &content);
                     let _ = tx_ev.send(msg_env("created", msg));
                 }
+                RunEvent::Usage { input, output } => usage = Some((input, output)),
             }
             let _ = tx_ev.send(msg_env(
                 "updated",
@@ -500,7 +502,7 @@ async fn run_agent_ws(
                 ("error", Some(msg.clone()), msg)
             }
         };
-        parts.push(finish_part(reason, now_secs()));
+        parts.push(finish_part(reason, now_secs(), usage));
         let _ = tx.send(msg_env(
             "updated",
             assistant_message_json(&session_id, &assistant_id, &cfg, parts, created_at),
@@ -511,6 +513,7 @@ async fn run_agent_ws(
             &assistant_id,
             &text,
             error.as_deref(),
+            usage,
         ));
     });
 
@@ -628,8 +631,12 @@ fn tool_result_message_json(
     })
 }
 
-fn finish_part(reason: &str, time: i64) -> Value {
-    json!({ "type": "finish", "data": { "reason": reason, "time": time } })
+fn finish_part(reason: &str, time: i64, usage: Option<(u64, u64)>) -> Value {
+    let mut data = json!({ "reason": reason, "time": time });
+    if let Some((input, output)) = usage {
+        data["usage"] = json!({ "input_tokens": input, "output_tokens": output });
+    }
+    json!({ "type": "finish", "data": data })
 }
 
 /// 把运行错误转成对用户友好的中文提示;原始错误附在第二行便于排查。
@@ -687,6 +694,7 @@ fn run_complete_env(
     message_id: &str,
     text: &str,
     error: Option<&str>,
+    usage: Option<(u64, u64)>,
 ) -> Value {
     let mut payload = json!({
         "session_id": session_id,
@@ -696,6 +704,9 @@ fn run_complete_env(
     });
     if let Some(e) = error {
         payload["error"] = Value::String(e.to_string());
+    }
+    if let Some((input, output)) = usage {
+        payload["usage"] = json!({ "input_tokens": input, "output_tokens": output });
     }
     json!({ "type": "run_complete", "payload": { "type": "updated", "payload": payload } })
 }
@@ -867,7 +878,16 @@ async fn list_providers(State(state): State<AppState>) -> Json<Value> {
             if from_cfg.api_endpoint.is_some() { p.api_endpoint = from_cfg.api_endpoint; }
             if from_cfg.provider_type.is_some() { p.provider_type = from_cfg.provider_type; }
             if from_cfg.default_large_model_id.is_some() { p.default_large_model_id = from_cfg.default_large_model_id; }
-            if !from_cfg.models.is_empty() { p.models = from_cfg.models; }
+            // 合并而非替换:from_config 会用 default_large/small id 自动生成
+            // 裸模型(无 context_window/name),整体替换会丢掉内置定义里的
+            // 真实 context_window;这里只补配置里出现的新模型 id
+            if !from_cfg.models.is_empty() {
+                for cm in from_cfg.models {
+                    if !p.models.iter().any(|m| m.id == cm.id) {
+                        p.models.push(cm);
+                    }
+                }
+            }
         }
     }
 
@@ -906,6 +926,10 @@ async fn list_providers(State(state): State<AppState>) -> Json<Value> {
         all.insert(0, cfg.provider.clone());
     }
 
+    // 内置模型定义的 context_window 兜底表(按 provider+model id);opencode-zen
+    // 配置条目没有内置定义,沿用内置 opencode 的模型信息
+    let builtin_ctx = builtin_context_map();
+
     let arr: Vec<Value> = all
         .iter()
         .map(|p| {
@@ -923,6 +947,9 @@ async fn list_providers(State(state): State<AppState>) -> Json<Value> {
                     json!({
                         "id": m.id,
                         "name": m.name.as_deref().unwrap_or(&m.id),
+                        "context_window": m.context_window.or_else(|| {
+                            builtin_ctx.get(&p.id).and_then(|map| map.get(&m.id)).copied()
+                        }),
                     })
                 }).collect::<Vec<_>>(),
             })
@@ -940,6 +967,26 @@ fn mask_api_key(key: &str) -> String {
     let head: String = chars[..4].iter().collect();
     let tail: String = chars[chars.len() - 4..].iter().collect();
     format!("{head}****{tail}")
+}
+
+/// 内置模型定义的 context_window 兜底表:provider id → (model id → context_window)。
+/// 配置/缓存 providers 覆盖 models 列表时经常丢失该字段(如拉取模型缓存里全为
+/// null),按此表回填真实值;`opencode-zen` 配置条目无内置定义,沿用内置
+/// `opencode` 的模型信息。
+fn builtin_context_map() -> HashMap<String, HashMap<String, i64>> {
+    let mut map: HashMap<String, HashMap<String, i64>> = HashMap::new();
+    for p in providers::builtin_providers() {
+        let models: HashMap<String, i64> = p
+            .models
+            .iter()
+            .filter_map(|m| m.context_window.map(|c| (m.id.clone(), c)))
+            .collect();
+        map.insert(p.id.clone(), models.clone());
+        if p.id == "opencode" {
+            map.entry("opencode-zen".into()).or_insert(models);
+        }
+    }
+    map
 }
 
 // ---------- 远程模型拉取 / API Key 保存 ----------
@@ -1046,12 +1093,32 @@ async fn save_provider_key(
     Ok(Json(json!({ "ok": true, "provider": body.provider_id })))
 }
 
-/// GET /v1/workspaces/{id}/agent — 返回 agent 信息(含当前模型)。
+/// GET /v1/workspaces/{id}/agent — 返回 agent 信息(含当前模型与其 context_window)。
 async fn agent_info(State(state): State<AppState>) -> Json<Value> {
     let cfg = state.cfg.lock().unwrap().clone();
+
+    // 当前模型的 context_window:优先 provider 模型列表,其次内置定义兜底
+    let mut context_window: Option<i64> = None;
+    for m in &cfg.provider.models {
+        if m.id == cfg.model {
+            context_window = m.context_window;
+            break;
+        }
+    }
+    if context_window.is_none() {
+        context_window = builtin_context_map()
+            .get(&cfg.provider.id)
+            .and_then(|map| map.get(&cfg.model))
+            .copied();
+    }
+
+    let mut model = json!({ "id": cfg.model, "name": cfg.model });
+    if let Some(cw) = context_window {
+        model["context_window"] = json!(cw);
+    }
     Json(json!({
         "is_ready": true,
-        "model": { "id": cfg.model, "name": cfg.model },
+        "model": model,
         "model_cfg": { "model": cfg.model, "provider": cfg.provider.id },
     }))
 }
@@ -1370,6 +1437,28 @@ mod tests {
         assert_eq!(env["type"], "message");
         assert_eq!(env["payload"]["type"], "created");
         assert_eq!(env["payload"]["payload"]["id"], "x");
+    }
+
+    #[test]
+    fn finish_part_carries_real_usage_when_reported() {
+        // provider 上报 usage 时,finish part 的 data 内嵌 input/output tokens
+        let with_usage = finish_part("end_turn", 1, Some((128_000, 2048)));
+        assert_eq!(with_usage["type"], "finish");
+        assert_eq!(with_usage["data"]["usage"]["input_tokens"], 128_000);
+        assert_eq!(with_usage["data"]["usage"]["output_tokens"], 2048);
+        // 未上报时不出现 usage 字段(保持旧 wire 形状)
+        let without_usage = finish_part("cancelled", 1, None);
+        assert!(without_usage["data"].get("usage").is_none());
+    }
+
+    #[test]
+    fn run_complete_env_carries_usage_when_reported() {
+        let env = run_complete_env("s1", "r1", "m1", "hi", None, Some((100, 20)));
+        assert_eq!(env["type"], "run_complete");
+        assert_eq!(env["payload"]["payload"]["usage"]["input_tokens"], 100);
+        assert_eq!(env["payload"]["payload"]["usage"]["output_tokens"], 20);
+        let plain = run_complete_env("s1", "r1", "m1", "hi", Some("err"), None);
+        assert!(plain["payload"]["payload"].get("usage").is_none());
     }
 
     #[test]

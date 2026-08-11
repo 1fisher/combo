@@ -28,6 +28,7 @@ import { cn } from '../../lib/utils';
 import { AttachmentPicker } from './AttachmentPicker';
 import { ProviderLogo } from './ProviderLogo';
 import { FlameWrap } from '../canvasui/FlameWrap';
+import { DEFAULT_CONTEXT_WINDOW, formatTokenCount, getContextUsage } from '../../lib/tokens';
 
 /** 输入框的火焰特效参数(canvas-ui FlameWrap,参考组件默认值按输入框尺寸微调) */
 const FLAME_OPTIONS = {
@@ -211,7 +212,13 @@ export function Composer({
   // 扁平化 provider → model 列表
   const modelList = useMemo(() => {
     if (!providers) return [];
-    const out: { id: string; name: string; provider: string; providerName: string }[] = [];
+    const out: {
+      id: string;
+      name: string;
+      provider: string;
+      providerName: string;
+      contextWindow?: number;
+    }[] = [];
     for (const p of providers) {
       const pName = p.name ?? p.id;
       const models = Array.isArray(p.models) ? p.models : [];
@@ -221,6 +228,7 @@ export function Composer({
           name: m.name ?? m.id ?? '',
           provider: p.id,
           providerName: pName,
+          contextWindow: typeof m.context_window === 'number' ? m.context_window : undefined,
         });
       }
     }
@@ -243,6 +251,28 @@ export function Composer({
     [providers, currentProviderId]
   );
   const currentProviderName = (currentProvider?.name ?? currentProviderId) || '默认';
+
+  // 当前模型的上下文窗口上限:agent_info 优先(后端按当前模型解析真实值),
+  // 其次按模型 id 在 provider 列表查,最后用兜底值
+  const contextWindow = useMemo(() => {
+    const fromInfo =
+      typeof agentInfo?.model?.context_window === 'number'
+        ? agentInfo.model.context_window
+        : undefined;
+    if (fromInfo) return fromInfo;
+    const hit = modelList.find((m) => m.id === currentModelId);
+    return hit?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
+  }, [agentInfo, modelList, currentModelId]);
+
+  // 活跃会话的消息 → 上下文已用 token(真实 usage 优先,缺失时本地估算)
+  const activeRuntime = useAgentStore((s) =>
+    s.activeSessionId ? s.bySession[s.activeSessionId] : undefined
+  );
+  const contextUsed = useMemo(
+    () => (activeRuntime ? getContextUsage(activeRuntime.messages) : 0),
+    [activeRuntime]
+  );
+  const contextPct = Math.min(100, Math.round((contextUsed / contextWindow) * 100));
 
   // 全部 provider 的模型,按 provider 分组(可跨 provider 直接选模型)
   const modelGroups = useMemo(() => {
@@ -556,37 +586,6 @@ export function Composer({
                   )}
                 </div>
                 <div className="flex items-center gap-1.5">
-                  {/* 用量圆环 */}
-                  <span
-                    className="flex shrink-0 items-center justify-center"
-                    aria-label="剩余额度"
-                    title="剩余额度"
-                  >
-                    <svg aria-hidden className="size-3.5" viewBox="0 0 24 24" style={{ color: 'currentcolor' }}>
-                      <circle
-                        cx="12"
-                        cy="12"
-                        fill="none"
-                        opacity="0.25"
-                        r="10"
-                        stroke="currentColor"
-                        strokeWidth="4"
-                      />
-                      <circle
-                        cx="12"
-                        cy="12"
-                        fill="none"
-                        opacity="0.7"
-                        r="10"
-                        stroke="currentColor"
-                        strokeDasharray="62.83185307179586 62.83185307179586"
-                        strokeDashoffset="62.83185307179586"
-                        strokeLinecap="round"
-                        strokeWidth="4"
-                        style={{ transform: 'rotate(-90deg)', transformOrigin: 'center center' }}
-                      />
-                    </svg>
-                  </span>
                   {/* Provider 选择 */}
                   <div className="relative shrink-0">
                     <button
@@ -771,6 +770,40 @@ export function Composer({
                   )}
                 </div>
               </div>
+              {/* 上下文窗口用量统计:进度条 + 已用/上限(百分比只在悬停提示) */}
+              {contextUsed > 0 && (
+                <div
+                  className="flex items-center gap-2"
+                  aria-label="上下文窗口用量"
+                  title={`上下文用量:${contextPct}%`}
+                >
+                  <div className="h-0.5 min-w-0 flex-1 overflow-hidden rounded-full bg-surface-hover">
+                    <div
+                      className={cn(
+                        'h-full rounded-full transition-[width] duration-500',
+                        contextPct >= 95
+                          ? 'bg-red-500'
+                          : contextPct >= 80
+                            ? 'bg-amber-500'
+                            : 'bg-brand'
+                      )}
+                      style={{ width: `${contextPct}%` }}
+                    />
+                  </div>
+                  <span
+                    className={cn(
+                      'shrink-0 text-[10px] leading-none tabular-nums',
+                      contextPct >= 95
+                        ? 'text-red-500'
+                        : contextPct >= 80
+                          ? 'text-amber-500'
+                          : 'text-foreground-subtlest'
+                    )}
+                  >
+                    {formatTokenCount(contextUsed)} / {formatTokenCount(contextWindow)}
+                  </span>
+                </div>
+              )}
               {modelErr && (
                 <p className="px-1 text-xs text-destructive" role="alert">
                   {modelErr}
