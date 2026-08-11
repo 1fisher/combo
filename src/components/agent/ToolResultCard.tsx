@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, CheckCircle, XCircle, Terminal } from 'lucide-react';
+import { ChevronRight, CheckCircle, XCircle, Terminal } from 'lucide-react';
 import type { Api } from '../../lib/api/types';
 import { useAgentStore } from '../../stores/agentStore';
 import { countChanges, diffFromToolInput, type DiffLine } from '../../lib/fileChanges';
@@ -96,13 +96,9 @@ export function ToolResultCard({ result }: { result: Api.ToolResult }) {
       : `${name} 返回`;
 
   return (
-    <details className="rounded-md border bg-muted/20" open={isError || !!diffLines}>
+    <details className="group rounded-md border bg-muted/20" open={isError || !!diffLines}>
       <summary className="flex cursor-pointer items-center gap-2 px-3 py-1.5">
-        {expanded ? (
-          <ChevronDown className="size-3 text-muted-foreground" />
-        ) : (
-          <ChevronRight className="size-3 text-muted-foreground" />
-        )}
+        <ChevronRight className="size-3 text-muted-foreground transition-transform group-open:rotate-90" />
         {isError ? (
           <XCircle className="size-3.5 text-red-500" />
         ) : (
