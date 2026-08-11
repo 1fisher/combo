@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useLayoutEffect, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import {
   ArrowUp,
@@ -27,6 +27,58 @@ import type { Api } from '../../lib/api/types';
 import { cn } from '../../lib/utils';
 import { AttachmentPicker } from './AttachmentPicker';
 import { ProviderLogo } from './ProviderLogo';
+import { FlameWrap } from '../canvasui/FlameWrap';
+
+/** 输入框的火焰特效参数(canvas-ui FlameWrap,参考组件默认值按输入框尺寸微调) */
+const FLAME_OPTIONS = {
+  color: [0.35, 0.55, 1] as [number, number, number],
+  intensity: 0.8,
+  height: 48,
+  spread: 10,
+  radius: 16,
+  speed: 0.3,
+  scale: 0.8,
+  turbulence: 0.5,
+  turbulenceScale: 0.5,
+  turbulenceReach: 25,
+  sparks: 1.2,
+  sparkSize: 0.3,
+  sparkDensity: 0.8,
+  sparkSpeed: 0.8,
+  rim: 2,
+  melt: 3,
+  distortion: 6,
+  smoke: 0.5,
+  ember: 1.5,
+  scorch: 0.6,
+};
+
+/** 推理进行中给输入框点燃火焰特效;推理结束则直接渲染普通输入框(不挂载 WebGL,零开销)。
+ *  火焰高度与颜色随 heat(0~1,由 token 输出速度映射)动态变化:越热火焰越高,颜色由蓝转红。 */
+function FlameComposerBox({
+  running,
+  boxH,
+  heat,
+  children,
+}: {
+  running?: boolean;
+  boxH: number | undefined;
+  heat: number;
+  children: ReactNode;
+}) {
+  if (!running) return <>{children}</>;
+  return (
+    <FlameWrap
+      className="w-full"
+      style={boxH ? { height: boxH } : undefined}
+      {...FLAME_OPTIONS}
+      height={Math.round(40 + heat * 100)}
+      color={[0.35 + heat * 0.65, 0.55 - heat * 0.3, 1 - heat * 0.8]}
+    >
+      {children}
+    </FlameWrap>
+  );
+}
 
 const MODES: { id: AgentMode; label: string; desc: string }[] = [
   { id: 'yolo', label: '完全访问', desc: '自动放行全部权限,不弹窗' },
@@ -80,6 +132,53 @@ export function Composer({
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [providerMenuOpen, setProviderMenuOpen] = useState(false);
   const [modelErr, setModelErr] = useState('');
+  // FlameWrap 原生(layoutsubtree)模式下外层 wrapper 无行内内容会塌陷为 0 高,
+  // 需用输入框实际高度显式撑开;每帧渲染前同步测量,避免挂载时机导致高度缺失
+  const boxRef = useRef<HTMLDivElement>(null);
+  const [boxH, setBoxH] = useState<number | undefined>(undefined);
+  useLayoutEffect(() => {
+    const el = boxRef.current;
+    if (el) {
+      const h = el.offsetHeight;
+      setBoxH((prev) => (prev === h ? prev : h));
+    }
+  });
+  // 火焰热力:按 token 输出速度(文本/思考字符/秒)采样并平滑,0~1
+  const [flameHeat, setFlameHeat] = useState(0);
+  useEffect(() => {
+    if (!running) {
+      setFlameHeat(0);
+      return;
+    }
+    let lastLen = -1;
+    let lastTime = performance.now();
+    let ema = 0;
+    const tick = () => {
+      const st = useAgentStore.getState();
+      const rt = st.activeSessionId ? st.bySession[st.activeSessionId] : undefined;
+      let len = 0;
+      for (const m of rt?.messages ?? []) {
+        if (!m.streaming) continue;
+        for (const p of m.parts) {
+          if (p.type === 'text') len += p.data.text.length;
+          else if (p.type === 'reasoning') len += p.data.thinking.length;
+        }
+      }
+      const now = performance.now();
+      const dt = (now - lastTime) / 1000;
+      lastTime = now;
+      if (lastLen >= 0 && dt > 0) {
+        // 120 字符/秒 视为满速(≈峰值 token 输出),EMA 平滑过渡
+        const target = Math.min(Math.max((len - lastLen) / dt / 120, 0), 1);
+        ema = ema === 0 ? target : ema * 0.7 + target * 0.3;
+        setFlameHeat(ema);
+      }
+      lastLen = len;
+    };
+    tick();
+    const id = window.setInterval(tick, 400);
+    return () => window.clearInterval(id);
+  }, [running]);
   // 当前模型:优先从 agent info 获取,否则从 combo config 加载默认模型
   const configModel = wsConfig?.models?.large?.model ?? wsConfig?.models?.small?.model;
   const currentModelId = agentInfo?.model_cfg?.model ?? agentInfo?.model?.id ?? configModel ?? '';
@@ -259,7 +358,11 @@ export function Composer({
               submit();
             }}
           >
-            <div className="relative flex flex-col gap-3 rounded-2xl border border-input-border bg-input p-3 transition-colors hover:border-input-border-hover focus-within:!border-input-border-focused focus-within:bg-input-focused">
+            <FlameComposerBox running={running} boxH={boxH} heat={flameHeat}>
+            <div
+              ref={boxRef}
+              className="relative flex flex-col gap-3 rounded-2xl border border-input-border bg-input p-3 transition-colors hover:border-input-border-hover focus-within:!border-input-border-focused focus-within:bg-input-focused"
+            >
               {/* 附件 chips */}
               {(attachments.length > 0 || contextItems.length > 0) && (
                 <div className="flex flex-wrap items-center gap-1.5">
@@ -649,6 +752,7 @@ export function Composer({
                 </p>
               )}
             </div>
+            </FlameComposerBox>
           </form>
         </div>
       </div>
