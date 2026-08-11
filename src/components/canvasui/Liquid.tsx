@@ -25,6 +25,8 @@ export interface LiquidOptions {
   curl?: number;
   /** Radius of the pointer splat. */
   radius?: number;
+  /** 距指针起始点的位移小于该值(像素)时完全不产生特效;停顿后再次移动仍重新生效。 */
+  minMove?: number;
   /** Force multiplier applied on pointer movement. */
   force?: number;
   /** Strength of the color tint left by the flow. */
@@ -68,6 +70,7 @@ const DEFAULTS: Required<LiquidOptions> = {
   pressureIterations: 4,
   curl: 1.9,
   radius: 0.3,
+  minMove: 0,
   force: 1.1,
   intensity: 2,
   distortion: 0.4,
@@ -77,6 +80,9 @@ const DEFAULTS: Required<LiquidOptions> = {
 };
 
 const DT = 1 / 60;
+
+/** 指针停顿超过该时长后,重新进入未激活状态:新一轮移动的前 minMove 像素不产生特效。 */
+const RESTART_MS = 300;
 
 function srgbToLinear(value: number): number {
   return value <= 0.04045
@@ -821,19 +827,41 @@ export function createLiquid(
   }
   motionQuery.addEventListener("change", onMotionChange);
 
-  const pointers = new Map<number, { x: number; y: number }>();
+  const pointers = new Map<number, { x: number; y: number; ox: number; oy: number; armed: boolean; lastAt: number }>();
 
   function onPointerMove(event: PointerEvent) {
     if (reducedMotion) return;
     const rect = output.getBoundingClientRect();
     const px = event.clientX - rect.left;
     const py = event.clientY - rect.top;
-    const previous = pointers.get(event.pointerId);
-    pointers.set(event.pointerId, { x: px, y: py });
-    if (!previous) return;
-    const dx = (px - previous.x) * config.force;
-    const dy = -(py - previous.y) * config.force;
+    const now = performance.now();
+    const p = pointers.get(event.pointerId);
+    if (!p) {
+      // 首次落点:记为起点,特效未激活
+      pointers.set(event.pointerId, { x: px, y: py, ox: px, oy: py, armed: false, lastAt: now });
+      return;
+    }
+    if (now - p.lastAt > RESTART_MS) {
+      // 停顿后重新武装:新一轮移动的前 minMove 像素仍不产生特效
+      p.armed = false;
+      p.ox = px;
+      p.oy = py;
+    }
+    p.lastAt = now;
+    const dx = (px - p.x) * config.force;
+    const dy = -(py - p.y) * config.force;
+    if (!p.armed) {
+      // 未激活:距起点位移小于 minMove 时完全不产生特效,激活后连续喷射
+      if (Math.hypot(px - p.ox, py - p.oy) < config.minMove) {
+        p.x = px;
+        p.y = py;
+        return;
+      }
+      p.armed = true;
+    }
     queued.push([px / rect.width, 1 - py / rect.height, dx, dy]);
+    p.x = px;
+    p.y = py;
     start();
   }
 

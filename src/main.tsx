@@ -19,11 +19,12 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <Liquid
       className="h-dvh w-full"
       rainbow={false}
-      color={[0.55, 0.7, 0.95]}
+      color={[0.53, 0.81, 0.92]}
       intensity={0.08}
       densityDissipation={0.97}
       velocityDissipation={0.995}
       radius={0.35}
+      minMove={200}
       force={0.5}
       curl={2.2}
       blend={1.5}
