@@ -73,7 +73,14 @@ where
 pub struct AskConfig {
     pub provider: ProviderInfo,
     pub model: String,
+    /// 最终 preamble(用户 preamble + 按全局禁用过滤后的 skills 摘要)。
     pub preamble: String,
+    /// 用户原始 preamble(不含 skills 摘要),供按 workspace 过滤后重建。
+    pub base_preamble: String,
+    /// 技能搜索路径(重建 preamble 用)。
+    pub skills_paths: Vec<String>,
+    /// 全局禁用的 skill 名(配置文件 disabled_skills)。
+    pub disabled_skills: Vec<String>,
     pub tools: bool,
     pub mcp_command: Option<String>,
     pub mcp_url: Option<String>,
@@ -112,12 +119,32 @@ impl AskConfig {
             provider,
             model,
             preamble: format!("{}{}", r.preamble, skills),
+            base_preamble: r.preamble.clone(),
+            skills_paths: r.skills_paths.clone(),
+            disabled_skills: r.disabled_skills.clone(),
             tools: r.tools,
             mcp_command: r.mcp_command.clone(),
             mcp_url: r.mcp_url.clone(),
             explicit_api_key: r.api_key.clone(),
             explicit_base_url: r.base_url.clone(),
             mcp_servers,
+        }
+    }
+
+    /// 在全局禁用的基础上追加额外禁用的 skill,重建 preamble。
+    /// 供 serve 按 workspace 应用技能开关(全局 + 该 workspace 的禁用合并)。
+    pub fn with_disabled_skills(&self, extra: &[String]) -> Self {
+        let mut disabled = self.disabled_skills.clone();
+        for d in extra {
+            if !disabled.iter().any(|x| x == d) {
+                disabled.push(d.clone());
+            }
+        }
+        let skills = crate::skills::skills_preamble_with(&self.skills_paths, &disabled);
+        Self {
+            preamble: format!("{}{}", self.base_preamble, skills),
+            disabled_skills: disabled,
+            ..self.clone()
         }
     }
 

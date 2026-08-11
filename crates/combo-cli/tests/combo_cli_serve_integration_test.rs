@@ -32,6 +32,9 @@ fn cfg_no_key() -> AskConfig {
         },
         model: "test-model".into(),
         preamble: String::new(),
+        base_preamble: String::new(),
+        skills_paths: Vec::new(),
+        disabled_skills: Vec::new(),
         tools: false,
         mcp_command: None,
         mcp_url: None,
@@ -391,6 +394,65 @@ async fn git_repos_discovers_root_and_subdir_repos() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    task.abort();
+}
+
+#[tokio::test]
+async fn workspace_config_disabled_skills_roundtrip() {
+    let (base, task) = start_server().await;
+    let client = reqwest::Client::new();
+    let ws = "ws_cfg";
+
+    // 初始为空
+    let v: serde_json::Value = client
+        .get(format!("{base}/v1/workspaces/{ws}/config"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(v["options"]["disabled_skills"].as_array().unwrap().is_empty());
+
+    // 写入禁用列表
+    let resp = client
+        .post(format!("{base}/v1/workspaces/{ws}/config/set"))
+        .json(&serde_json::json!({
+            "key": "disabled_skills",
+            "value": ["skill-a", "skill-b"],
+            "scope": 1,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 读回
+    let v: serde_json::Value = client
+        .get(format!("{base}/v1/workspaces/{ws}/config"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    let disabled: Vec<&str> = v["options"]["disabled_skills"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s.as_str().unwrap())
+        .collect();
+    assert_eq!(disabled, vec!["skill-a", "skill-b"]);
+
+    // 非 disabled_skills key 仍走 stub 回显,不落库
+    let resp = client
+        .post(format!("{base}/v1/workspaces/{ws}/config/set"))
+        .json(&serde_json::json!({ "key": "something_else", "value": 42, "scope": 1 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
 
     task.abort();
 }

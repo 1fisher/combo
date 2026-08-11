@@ -260,7 +260,10 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
    `skills_paths`/`disabled_skills`(每 skill 一目录
    含 `SKILL.md`,frontmatter 的 description 解析后注入 preamble,
    `skills.rs::discover`,默认扫 combo 专属 `~/.config/combo/skills`、
-   项目 `.combo/skills`、通用 `~/.agents/skills` 三个目录)。
+   项目 `.combo/skills`、通用 `~/.agents/skills` 三个目录;
+   技能开关经 `GET/POST /v1/workspaces/{id}/config[/set]` 读写,per-workspace
+   的 disabled_skills 落 sqlite `workspace_config` 表,`run_agent_ws` 运行时
+   合并全局禁用后经 `AskConfig::with_disabled_skills` 重建 preamble)。
    provider 查找顺序:`config.providers` map →
    `~/.local/share/combo/providers.json` → 内置;配置未写
    `default_large_model_id` 时从 combo providers.json 合并默认模型。

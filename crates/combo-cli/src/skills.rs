@@ -53,12 +53,17 @@ fn expand_home(p: &str) -> PathBuf {
 
 /// 扫描配置的 skills 路径,返回按名称去重后的 skill 列表。
 pub fn discover(cfg: &ResolvedConfig) -> Result<Vec<Skill>> {
-    let paths: Vec<PathBuf> = if cfg.skills_paths.is_empty() {
+    discover_with(&cfg.skills_paths, &cfg.disabled_skills)
+}
+
+/// 用显式路径与禁用列表扫描(供运行时按 workspace 过滤后重建)。
+pub fn discover_with(skills_paths: &[String], disabled_skills: &[String]) -> Result<Vec<Skill>> {
+    let paths: Vec<PathBuf> = if skills_paths.is_empty() {
         default_skills_paths().iter().map(|s| expand_home(s)).collect()
     } else {
-        cfg.skills_paths.iter().map(|s| expand_home(s)).collect()
+        skills_paths.iter().map(|s| expand_home(s)).collect()
     };
-    let disabled: Vec<&str> = cfg.disabled_skills.iter().map(|s| s.as_str()).collect();
+    let disabled: Vec<&str> = disabled_skills.iter().map(|s| s.as_str()).collect();
 
     let mut found: Vec<Skill> = Vec::new();
     for dir in &paths {
@@ -114,7 +119,12 @@ fn extract_frontmatter(text: &str) -> Option<&str> {
 
 /// 生成注入 preamble 的 skills 摘要文本。
 pub fn skills_preamble(cfg: &ResolvedConfig) -> String {
-    let Ok(skills) = discover(cfg) else {
+    skills_preamble_with(&cfg.skills_paths, &cfg.disabled_skills)
+}
+
+/// 按显式路径与禁用列表生成 skills 摘要(供运行时按 workspace 过滤)。
+pub fn skills_preamble_with(skills_paths: &[String], disabled_skills: &[String]) -> String {
+    let Ok(skills) = discover_with(skills_paths, disabled_skills) else {
         return String::new();
     };
     if skills.is_empty() {
@@ -173,6 +183,23 @@ mod tests {
         assert!(paths[0].ends_with(".config/combo/skills"));
         assert!(paths[1].ends_with(".combo/skills"));
         assert!(paths[2].ends_with(".agents/skills"));
+    }
+
+    #[test]
+    fn discover_with_filters_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["skill-a", "skill-b"] {
+            std::fs::create_dir_all(dir.path().join(name)).unwrap();
+            std::fs::write(
+                dir.path().join(format!("{name}/SKILL.md")),
+                format!("---\nname: {name}\ndescription: {name}\n---\n# {name}"),
+            )
+            .unwrap();
+        }
+        let paths = vec![dir.path().to_string_lossy().to_string()];
+        let skills = discover_with(&paths, &["skill-a".into()]).unwrap();
+        assert_eq!(skills.len(), 1);
+        assert_eq!(skills[0].name, "skill-b");
     }
 
     #[test]

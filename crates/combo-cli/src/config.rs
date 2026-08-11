@@ -564,14 +564,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
             dir.path().join(".env"),
-            "# 注释行\nDEEPSEEK_API_KEY = \"sk-test-123\"\nexport ZAI_KEY='zai-val'\nFOO=$DEEPSEEK_API_KEY-suffix\nBASE=\"$ZAI_KEY${ZAI_KEY}\"\n",
+            "# 注释行\nCOMBO_TEST_DOTENV_A = \"sk-test-123\"\nexport ZAI_KEY='zai-val'\nFOO=$COMBO_TEST_DOTENV_A-suffix\nBASE=\"$ZAI_KEY${ZAI_KEY}\"\n",
         )
         .unwrap();
         std::env::set_var("KEEP_ME", "original");
 
         load_dotenv(&dir.path().join("combo-cli.toml"));
 
-        assert_eq!(std::env::var("DEEPSEEK_API_KEY").unwrap(), "sk-test-123");
+        assert_eq!(std::env::var("COMBO_TEST_DOTENV_A").unwrap(), "sk-test-123");
         assert_eq!(std::env::var("ZAI_KEY").unwrap(), "zai-val");
         assert_eq!(std::env::var("FOO").unwrap(), "sk-test-123-suffix");
         assert_eq!(std::env::var("BASE").unwrap(), "zai-valzai-val");
@@ -579,7 +579,7 @@ mod tests {
         assert!(std::env::var_os("KEEP_ME").is_some(), "已有环境变量不被覆盖");
 
         // 清理,避免污染其它测试
-        std::env::remove_var("DEEPSEEK_API_KEY");
+        std::env::remove_var("COMBO_TEST_DOTENV_A");
         std::env::remove_var("ZAI_KEY");
         std::env::remove_var("FOO");
         std::env::remove_var("BASE");

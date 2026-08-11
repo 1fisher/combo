@@ -138,6 +138,10 @@ impl ComboDb {
                 expires_at   INTEGER,
                 last_used_at INTEGER,
                 revoked      INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS workspace_config (
+                workspace_id    TEXT PRIMARY KEY,
+                disabled_skills TEXT NOT NULL DEFAULT '[]'
             );",
         )?;
         Ok(Self {
@@ -251,6 +255,34 @@ impl ComboDb {
                 "UPDATE workspaces SET backend=?1 WHERE id=?2",
                 params![backend, id],
             )?;
+        Ok(())
+    }
+
+    // ---------- workspace 配置(技能开关) ----------
+
+    /// 读取 workspace 禁用的 skill 名列表(JSON 数组;未设置时为空)。
+    pub fn get_disabled_skills(&self, workspace_id: &str) -> anyhow::Result<Vec<String>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt =
+            conn.prepare("SELECT disabled_skills FROM workspace_config WHERE workspace_id=?1")?;
+        let mut rows = stmt.query(params![workspace_id])?;
+        match rows.next()? {
+            Some(row) => {
+                let raw: String = row.get(0)?;
+                Ok(serde_json::from_str(&raw).unwrap_or_default())
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// 保存 workspace 禁用的 skill 名列表。
+    pub fn set_disabled_skills(&self, workspace_id: &str, skills: &[String]) -> anyhow::Result<()> {
+        let raw = serde_json::to_string(skills)?;
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO workspace_config (workspace_id, disabled_skills) VALUES (?1, ?2)
+             ON CONFLICT(workspace_id) DO UPDATE SET disabled_skills=?2",
+            params![workspace_id, raw],
+        )?;
         Ok(())
     }
 
@@ -710,5 +742,23 @@ mod tests {
         for t in db.list_tokens().unwrap() {
             assert!(t.revoked);
         }
+    }
+
+    #[test]
+    fn disabled_skills_default_empty_then_set_get() {
+        let db = ComboDb::in_memory();
+        // 未设置时返回空列表
+        assert!(db.get_disabled_skills("ws-1").unwrap().is_empty());
+
+        db.set_disabled_skills("ws-1", &["foo".into(), "bar".into()]).unwrap();
+        let got = db.get_disabled_skills("ws-1").unwrap();
+        assert_eq!(got, vec!["foo", "bar"]);
+
+        // 覆盖更新
+        db.set_disabled_skills("ws-1", &["baz".into()]).unwrap();
+        assert_eq!(db.get_disabled_skills("ws-1").unwrap(), vec!["baz"]);
+
+        // 不同 workspace 互不影响
+        assert!(db.get_disabled_skills("ws-2").unwrap().is_empty());
     }
 }

@@ -102,6 +102,9 @@ impl AppState {
             provider,
             model: "test-model".into(),
             preamble: String::new(),
+            base_preamble: String::new(),
+            skills_paths: Vec::new(),
+            disabled_skills: Vec::new(),
             tools: false,
             mcp_command: None,
             mcp_url: None,
@@ -334,12 +337,16 @@ fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .layer(cors)
 }
 
-/// GET /v1/workspaces/{id}/config — rune 兼容 stub。
-/// 返回技能配置与模型选择占位(前端按字段宽放解析)。
-async fn workspace_config_get() -> Json<Value> {
+/// GET /v1/workspaces/{id}/config — rune 兼容的配置读取。
+/// disabled_skills 从本地 sqlite 读取(技能开关持久化)。
+async fn workspace_config_get(
+    State(state): State<AppState>,
+    Path(ws_id): Path<String>,
+) -> Json<Value> {
+    let disabled = state.meta.db().get_disabled_skills(&ws_id).unwrap_or_default();
     Json(json!({
         "options": {
-            "disabled_skills": [],
+            "disabled_skills": disabled,
             "skills_paths": [],
         },
         "models": {},
@@ -347,9 +354,23 @@ async fn workspace_config_get() -> Json<Value> {
     }))
 }
 
-/// POST /v1/workspaces/{id}/config/set — rune 兼容 stub,接受并回显。
-/// combo 的技能开关等设置在 src 侧经 worker 请求(本仓库不落配置库)。
-async fn workspace_config_set(Json(body): Json<Value>) -> Json<Value> {
+/// POST /v1/workspaces/{id}/config/set — 配置写入。
+/// `disabled_skills`(技能开关)落库 sqlite,其余 key 保持 stub 回显。
+async fn workspace_config_set(
+    State(state): State<AppState>,
+    Path(ws_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Json<Value> {
+    if body.get("key").and_then(Value::as_str) == Some("disabled_skills") {
+        let skills: Vec<String> = body
+            .get("value")
+            .and_then(Value::as_array)
+            .map(|arr| arr.iter().filter_map(Value::as_str).map(String::from).collect())
+            .unwrap_or_default();
+        if let Err(e) = state.meta.db().set_disabled_skills(&ws_id, &skills) {
+            tracing::warn!("保存 disabled_skills 失败: {e}");
+        }
+    }
     Json(json!({ "ok": true, "key": body.get("key"), "value": body.get("value") }))
 }
 
@@ -414,7 +435,12 @@ async fn run_agent_ws(
     let cancel_rx = state.runs.cancel_tx(&body.session_id).subscribe();
 
     // 1. 回传用户消息(created),前端据此移除乐观插入的 local- 消息
-    let cfg = state.cfg.lock().unwrap().clone();
+    //    同时按该 workspace 的禁用技能重建 preamble(技能开关生效)。
+    let cfg = {
+        let base = state.cfg.lock().unwrap().clone();
+        let ws_disabled = state.meta.db().get_disabled_skills(&ws_id).unwrap_or_default();
+        base.with_disabled_skills(&ws_disabled)
+    };
     let user_msg = user_message_json(&body.session_id, &body.prompt, &cfg);
     let _ = tx.send(msg_env("created", user_msg));
 

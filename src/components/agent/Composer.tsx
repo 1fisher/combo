@@ -22,7 +22,7 @@ import { useAgentStore, type AgentMode } from '../../stores/agentStore';
 import { useContextStore, type ContextItem } from '../../stores/contextStore';
 import { useMention, type MentionResult } from '../../hooks/useMention';
 import { useFileIndex } from '../../hooks/useFileIndex';
-import { useSkills } from '../../hooks/useSkills';
+import { useSkills, useWorkspaceDisabledSkills } from '../../hooks/useSkills';
 import { useAgentInfo, useProviders, useSetModel, useWorkspaceConfig } from '../../hooks/useAgentModel';
 import type { Api } from '../../lib/api/types';
 import { cn } from '../../lib/utils';
@@ -352,6 +352,7 @@ export function Composer({
     useMention(value, areaRef, onChange);
   const { files: fileIndex } = useFileIndex(workspaceId);
   const { data: skillsData } = useSkills();
+  const { disabledSkills } = useWorkspaceDisabledSkills(workspaceId ?? null);
 
   const mentionResults: MentionResult[] = useMemo(() => {
     if (!mention) return [];
@@ -368,8 +369,9 @@ export function Composer({
           raw: f,
         }));
     }
-    // skill
+    // skill(禁用的不出现在候选中)
     return (skillsData ?? [])
+      .filter((s) => !disabledSkills.includes(s.name))
       .filter((s) => s.name.toLowerCase().includes(q))
       .slice(0, 10)
       .map((s) => ({
@@ -379,7 +381,7 @@ export function Composer({
         insertText: s.name,
         raw: s,
       }));
-  }, [mention, fileIndex, skillsData]);
+  }, [mention, fileIndex, skillsData, disabledSkills]);
 
   function handleMentionSelect(r: MentionResult) {
     const result = selectMention(r);
