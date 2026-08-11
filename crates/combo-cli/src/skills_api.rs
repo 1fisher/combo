@@ -1,4 +1,5 @@
-//! 技能列表服务:扫描本地技能目录,
+//! 技能列表服务:扫描本地技能目录(combo 专属 `~/.config/combo/skills`、
+//! 项目 `.combo/skills`、通用 `~/.agents/skills`),
 //! 读取每个技能子目录中的 `SKILL.md` frontmatter(name + description),
 //! 返回 JSON 列表供前端展示与开关。
 
@@ -7,16 +8,25 @@ use axum::http::{header, StatusCode};
 use axum::response::Response;
 use serde_json::json;
 use std::path::PathBuf;
-/// 技能目录:`~/.config/combo/skills/`
-fn skills_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("COMBO_SKILLS_DIR") {
-        return PathBuf::from(dir);
-    }
+/// 技能扫描目录:combo 专属 + 项目 `.combo/skills` + 通用 `~/.agents/skills`。
+/// 与 `skills::default_skills_paths` 的顺序一致(同名 skill 靠前的路径优先)。
+fn skills_dirs() -> Vec<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    let config_base = std::env::var("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(&home).join(".config"));
-    config_base.join("combo").join("skills")
+    let mut dirs = Vec::new();
+    // combo 专属目录(支持 COMBO_SKILLS_DIR 覆盖)
+    if let Ok(dir) = std::env::var("COMBO_SKILLS_DIR") {
+        dirs.push(PathBuf::from(dir));
+    } else {
+        let config_base = std::env::var("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from(&home).join(".config"));
+        dirs.push(config_base.join("combo").join("skills"));
+    }
+    // 项目 `.combo/skills`(相对当前目录)
+    dirs.push(PathBuf::from("./.combo/skills"));
+    // 通用技能目录(所有 agent 共享)
+    dirs.push(PathBuf::from(&home).join(".agents").join("skills"));
+    dirs
 }
 
 /// 从 `SKILL.md` 内容中解析 YAML frontmatter 的 `name` 和 `description`。
@@ -62,42 +72,45 @@ fn ok_json(value: serde_json::Value) -> Response {
 }
 
 /// GET /v1/skills
-/// 返回本地已安装的技能列表。
+/// 返回本地已安装的技能列表(合并所有扫描目录,同名 skill 靠前的目录优先)。
 pub async fn list() -> Response {
-    let dir = skills_dir();
-    let rd = match std::fs::read_dir(&dir) {
-        Ok(rd) => rd,
-        Err(_) => return ok_json(json!([])),
-    };
-
     let mut skills = Vec::new();
-    for entry in rd.flatten() {
-        let ft = match entry.file_type() {
-            Ok(ft) => ft,
-            Err(_) => continue,
+    let mut seen = std::collections::HashSet::new();
+    for dir in skills_dirs() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
         };
-        // 技能是子目录(含符号链接到实际技能仓库)
-        if !ft.is_dir() && !ft.is_symlink() {
-            continue;
-        }
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') {
-            continue;
-        }
-        let skill_md = entry.path().join("SKILL.md");
-        let (skill_name, description) = match std::fs::read_to_string(&skill_md) {
-            Ok(content) => {
-                let (n, d) = parse_frontmatter(&content);
-                (n.unwrap_or_else(|| name.clone()), d)
+        for entry in rd.flatten() {
+            let ft = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+            // 技能是子目录(含符号链接到实际技能仓库)
+            if !ft.is_dir() && !ft.is_symlink() {
+                continue;
             }
-            Err(_) => (name.clone(), None),
-        };
-        skills.push(json!({
-            "name": skill_name,
-            "dir_name": name,
-            "description": description.unwrap_or_default(),
-            "path": entry.path().to_string_lossy(),
-        }));
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') {
+                continue;
+            }
+            let skill_md = entry.path().join("SKILL.md");
+            let (skill_name, description) = match std::fs::read_to_string(&skill_md) {
+                Ok(content) => {
+                    let (n, d) = parse_frontmatter(&content);
+                    (n.unwrap_or_else(|| name.clone()), d)
+                }
+                Err(_) => (name.clone(), None),
+            };
+            if !seen.insert(skill_name.clone()) {
+                continue;
+            }
+            skills.push(json!({
+                "name": skill_name,
+                "dir_name": name,
+                "description": description.unwrap_or_default(),
+                "path": entry.path().to_string_lossy(),
+            }));
+        }
     }
 
     skills.sort_by(|a, b| {

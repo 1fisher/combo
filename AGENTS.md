@@ -91,7 +91,7 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
 | `COMBO_HOST` | serve 监听地址(默认 `127.0.0.1`)。域名部署时设 `0.0.0.0` 对外开放;命令行 `--host` 优先级更高。 |
 | `COMBO_CLI_BIN` | E2E 开关:设置后 Playwright spec 才运行(验证真实 agent 工作流)。 |
 | `COMBO_CONFIG_DIR` | combo-cli 配置文件目录(默认 `~/.config/combo`,文件 `combo-cli.toml`)。 |
-| `COMBO_SKILLS_DIR` | combo-cli 技能扫描目录(默认 `~/.config/combo/skills`)。 |
+| `COMBO_SKILLS_DIR` | 覆盖 combo 专属技能目录(默认 `~/.config/combo/skills`)。技能扫描共三个目录:combo 专属、项目 `.combo/skills`、通用 `~/.agents/skills`,同名 skill 靠前的路径优先。 |
 
 ## Architecture & data flow
 
@@ -259,7 +259,8 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
    `[lsp.<lang>]`(command/args/env,`lsp list` 检测可执行状态)、
    `skills_paths`/`disabled_skills`(每 skill 一目录
    含 `SKILL.md`,frontmatter 的 description 解析后注入 preamble,
-   `skills.rs::discover`,默认扫 `~/.config/combo/skills` 等)。
+   `skills.rs::discover`,默认扫 combo 专属 `~/.config/combo/skills`、
+   项目 `.combo/skills`、通用 `~/.agents/skills` 三个目录)。
    provider 查找顺序:`config.providers` map →
    `~/.local/share/combo/providers.json` → 内置;配置未写
    `default_large_model_id` 时从 combo providers.json 合并默认模型。

@@ -30,12 +30,14 @@ struct Frontmatter {
     hidden: Option<bool>,
 }
 
-/// 默认 skills 搜索路径。
+/// 默认 skills 搜索路径:combo 专属目录 > 项目 `.combo/skills` > 通用 `~/.agents/skills`。
+/// 同名 skill 靠前的路径优先。
 pub fn default_skills_paths() -> Vec<String> {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     vec![
         format!("{home}/.config/combo/skills"),
         "./.combo/skills".to_string(),
+        format!("{home}/.agents/skills"),
     ]
 }
 
@@ -162,6 +164,15 @@ mod tests {
         let f: Frontmatter = serde_yaml::from_str(fm).unwrap();
         assert_eq!(f.name.as_deref(), Some("foo"));
         assert_eq!(f.description.as_deref(), Some("做某事的 skill"));
+    }
+
+    #[test]
+    fn default_paths_include_all_dirs() {
+        let paths = default_skills_paths();
+        assert_eq!(paths.len(), 3);
+        assert!(paths[0].ends_with(".config/combo/skills"));
+        assert!(paths[1].ends_with(".combo/skills"));
+        assert!(paths[2].ends_with(".agents/skills"));
     }
 
     #[test]
