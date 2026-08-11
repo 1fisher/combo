@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
-import { MessageList, mergeToolResults } from './MessageList';
+import { MessageList, decideScrollBehavior, mergeToolResults } from './MessageList';
 import type { MessageVM } from '../../stores/agentStore';
 
 const msgs: MessageVM[] = [
@@ -38,6 +38,92 @@ describe('MessageList', () => {
           el?.tagName === 'P' && (el.textContent ?? '').includes('好的,开始。')
       )
     ).toBeTruthy();
+  });
+});
+
+describe('decideScrollBehavior', () => {
+  const base = {
+    len: 5,
+    firstChanged: false,
+    pinned: true,
+    now: 1000,
+    smoothUntil: 0,
+  };
+  const assistantMsg: MessageVM = {
+    id: 'a1',
+    role: 'assistant',
+    createdAt: 2,
+    updatedAt: 2,
+    streaming: true,
+    parts: [{ type: 'text', data: { text: 'hi' } }],
+  };
+  const userMsg: MessageVM = {
+    id: 'u1',
+    role: 'user',
+    createdAt: 1,
+    updatedAt: 1,
+    streaming: false,
+    parts: [{ type: 'text', data: { text: '你好' } }],
+  };
+  const toolCarrier: MessageVM = {
+    id: 't1',
+    role: 'user',
+    createdAt: 3,
+    updatedAt: 3,
+    streaming: false,
+    parts: [{ type: 'tool_result', data: { tool_call_id: 'tc1', name: 'bash', content: 'ok' } }],
+  };
+
+  it('ignores empty lists', () => {
+    expect(decideScrollBehavior({ ...base, len: 0, last: undefined })).toBeNull();
+  });
+
+  it('smooth-scrolls on user send', () => {
+    expect(decideScrollBehavior({ ...base, last: userMsg })).toEqual({
+      behavior: 'smooth',
+      reason: 'send',
+    });
+  });
+
+  it('does not treat tool_result carriers as sends', () => {
+    expect(decideScrollBehavior({ ...base, last: toolCarrier })).toEqual({
+      behavior: 'auto',
+    });
+  });
+
+  it('jumps to the end on session switch when idle', () => {
+    expect(
+      decideScrollBehavior({ ...base, firstChanged: true, pinned: false, last: assistantMsg }),
+    ).toEqual({ behavior: 'auto' });
+  });
+
+  it('keeps gliding when a session switch lands inside the smooth window', () => {
+    expect(
+      decideScrollBehavior({
+        ...base,
+        firstChanged: true,
+        smoothUntil: 2000,
+        last: assistantMsg,
+      }),
+    ).toEqual({ behavior: 'smooth', reason: 'stream' });
+  });
+
+  it('keeps smooth-following appends inside the window', () => {
+    expect(
+      decideScrollBehavior({ ...base, smoothUntil: 2000, last: assistantMsg }),
+    ).toEqual({ behavior: 'smooth', reason: 'stream' });
+  });
+
+  it('follows pinned content updates instantly', () => {
+    expect(decideScrollBehavior({ ...base, last: assistantMsg })).toEqual({
+      behavior: 'auto',
+    });
+  });
+
+  it('leaves the reader alone when not pinned', () => {
+    expect(
+      decideScrollBehavior({ ...base, pinned: false, last: assistantMsg }),
+    ).toBeNull();
   });
 });
 

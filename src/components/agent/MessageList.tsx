@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -6,6 +6,8 @@ import {
   MessageScrollerItem,
   MessageScrollerProvider,
   MessageScrollerViewport,
+  useMessageScroller,
+  useMessageScrollerScrollable,
 } from '../ui/message-scroller';
 import type { MessageVM } from '../../stores/agentStore';
 import { MessageItem } from './MessageItem';
@@ -49,6 +51,74 @@ export function mergeToolResults(messages: MessageVM[]): MessageVM[] {
   return out;
 }
 
+export type ScrollDecision =
+  | { behavior: 'smooth'; reason: 'send' | 'stream' }
+  | { behavior: 'auto' }
+  | null;
+
+export function decideScrollBehavior(args: {
+  len: number;
+  firstChanged: boolean;
+  last: MessageVM | undefined;
+  pinned: boolean;
+  now: number;
+  smoothUntil: number;
+}): ScrollDecision {
+  const { len, firstChanged, last, pinned, now, smoothUntil } = args;
+  if (len === 0) return null;
+  const isUserSend =
+    last?.role === 'user' && !last.parts.some((p) => p.type === 'tool_result');
+  if (isUserSend) return { behavior: 'smooth', reason: 'send' };
+  if (firstChanged) {
+    return now < smoothUntil
+      ? { behavior: 'smooth', reason: 'stream' }
+      : { behavior: 'auto' };
+  }
+  if (now < smoothUntil) return { behavior: 'smooth', reason: 'stream' };
+  if (pinned) return { behavior: 'auto' };
+  return null;
+}
+
+const SMOOTH_FOLLOW_MS = 800;
+
+function ScrollToBottomController({ messages }: { messages: MessageVM[] }) {
+  const { scrollToEnd } = useMessageScroller();
+  const { end } = useMessageScrollerScrollable();
+  const pinnedRef = useRef(true);
+  const prevFirstRef = useRef<string | null>(null);
+  const smoothUntilRef = useRef(0);
+
+  useLayoutEffect(() => {
+    const len = messages.length;
+    const firstId = messages[0]?.id ?? null;
+    const firstChanged = firstId !== null && firstId !== prevFirstRef.current;
+    prevFirstRef.current = firstId;
+    const now = performance.now();
+    const decision = decideScrollBehavior({
+      len,
+      firstChanged,
+      last: messages[len - 1],
+      pinned: pinnedRef.current,
+      now,
+      smoothUntil: smoothUntilRef.current,
+    });
+    if (decision?.behavior === 'smooth' && decision.reason === 'send') {
+      smoothUntilRef.current = now + SMOOTH_FOLLOW_MS;
+    }
+    if (decision) scrollToEnd({ behavior: decision.behavior });
+  }, [messages, scrollToEnd]);
+
+  useEffect(() => {
+    if (!end) {
+      pinnedRef.current = true;
+    } else if (performance.now() > smoothUntilRef.current) {
+      pinnedRef.current = false;
+    }
+  }, [end]);
+
+  return null;
+}
+
 export function MessageList({
   messages,
   workspaceId,
@@ -59,16 +129,15 @@ export function MessageList({
   // 合并工具结果,使 tool_call 与其 tool_result 同框展示
   const merged = useMemo(() => mergeToolResults(messages), [messages]);
   return (
-    <MessageScrollerProvider autoScroll scrollEdgeThreshold={80}>
+    <MessageScrollerProvider
+      scrollEdgeThreshold={80}
+      defaultScrollPosition={undefined}
+    >
       <MessageScroller>
         <MessageScrollerViewport>
           <MessageScrollerContent>
             {merged.map((m) => (
-              <MessageScrollerItem
-                key={m.id}
-                messageId={m.id}
-                scrollAnchor
-              >
+              <MessageScrollerItem key={m.id} messageId={m.id}>
                 <MessageItem vm={m} workspaceId={workspaceId} />
               </MessageScrollerItem>
             ))}
@@ -85,6 +154,7 @@ export function MessageList({
         </MessageScrollerViewport>
         <MessageScrollerButton />
       </MessageScroller>
+      <ScrollToBottomController messages={messages} />
     </MessageScrollerProvider>
   );
 }
