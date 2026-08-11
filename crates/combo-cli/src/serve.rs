@@ -634,6 +634,7 @@ fn finish_part(reason: &str, time: i64) -> Value {
 
 /// 把运行错误转成对用户友好的中文提示;原始错误附在第二行便于排查。
 /// 覆盖常见场景:余额不足(402)、密钥无效(401)、限流(429),其余原样返回。
+/// 服务商返回体若是 JSON,解析并提取其中的 message 展示,而非整段原始 JSON。
 fn friendly_error(e: &anyhow::Error) -> String {
     let raw = e.to_string();
     let low = raw.to_ascii_lowercase();
@@ -646,7 +647,33 @@ fn friendly_error(e: &anyhow::Error) -> String {
     } else {
         return raw;
     };
-    format!("{hint}\n原始错误:{raw}")
+    let detail = match extract_api_message(&raw) {
+        Some(m) => format!("服务商返回:{m}"),
+        None => format!("原始错误:{raw}"),
+    };
+    format!("{hint}\n{detail}")
+}
+
+/// 从 rig HttpError 的 `with message: <body>` 中提取服务商返回的 message 字段。
+/// 逐层深入 error 对象找 message,兼容 openai(`{"error":{"message":...}}`)、
+/// anthropic(`{"error":{"error":{"message":...}}}`)、opencode(`{"error":{"code":...,"message":...}}`)等结构;
+/// body 非 JSON 时返回 None。
+fn extract_api_message(raw: &str) -> Option<String> {
+    const MARKER: &str = "with message: ";
+    let idx = raw.find(MARKER)?;
+    let body = raw[idx + MARKER.len()..].trim();
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let mut cur = &v;
+    for _ in 0..4 {
+        if let Some(m) = cur.get("message").and_then(serde_json::Value::as_str) {
+            return Some(m.to_string());
+        }
+        match cur.get("error") {
+            Some(e) => cur = e,
+            None => break,
+        }
+    }
+    None
 }
 
 /// rune 双层信封:`{ type, payload: { type: created|updated|deleted, payload } }`。
@@ -1140,24 +1167,43 @@ mod tests {
     #[test]
     fn friendly_error_maps_common_status_codes() {
         let cases = [
+            // JSON 返回体:解析并展示服务商 message,不再贴原始 JSON
             (
                 "CompletionError: HttpError: Invalid status code 402 Payment Required with message: {\"error\":{\"message\":\"Insufficient Balance\"}}",
                 "余额不足",
+                Some("Insufficient Balance"),
             ),
+            (
+                "CompletionError: HttpError: Invalid status code 429 Too Many Requests with message: {\"error\":{\"code\":\"1310\",\"message\":\"您已达到每周/每月使用上限,限额将在 2026-08-11 16:45:24 重置。\"}}",
+                "限流",
+                Some("您已达到每周/每月使用上限"),
+            ),
+            // anthropic 双层 error 嵌套
+            (
+                "CompletionError: HttpError: Invalid status code 429 Too Many Requests with message: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"Rate limit reached for test\"}}",
+                "限流",
+                Some("Rate limit reached for test"),
+            ),
+            // 非 JSON 返回体:保留原始错误
             (
                 "CompletionError: HttpError: Invalid status code 401 Unauthorized with message: invalid api key",
                 "API 密钥无效",
+                None,
             ),
             (
                 "CompletionError: HttpError: Invalid status code 429 Too Many Requests with message: rate limit exceeded",
                 "限流",
+                None,
             ),
-            ("Connection refused (os error 61)", "Connection refused"),
+            ("Connection refused (os error 61)", "Connection refused", None),
         ];
-        for (raw, expect) in cases {
+        for (raw, expect, parsed) in cases {
             let msg = friendly_error(&anyhow::anyhow!("{raw}"));
             assert!(msg.contains(expect), "raw={raw} msg={msg}");
-            if msg != raw {
+            if let Some(p) = parsed {
+                assert!(msg.contains(p), "raw={raw} msg={msg}");
+                assert!(!msg.contains("原始错误"), "raw={raw} msg={msg}");
+            } else if msg != raw {
                 assert!(msg.contains("原始错误"), "raw={raw} msg={msg}");
             }
         }

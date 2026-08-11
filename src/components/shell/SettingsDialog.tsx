@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { CheckCircle2, ChevronDown, Loader2, Zap } from 'lucide-react';
+import { CheckCircle2, ChevronDown, Loader2, Trash2, Zap } from 'lucide-react';
 import { Button } from '../ui/button';
 import {
   Dialog,
@@ -296,6 +296,24 @@ function ProviderConfigSection({ open }: { open: boolean }) {
     }
   }
 
+  async function handleClearKey(providerId: string) {
+    const p = providers?.find((x) => x.id === providerId);
+    setStatusMsg((s) => ({ ...s, [providerId]: { ok: false, msg: '' } }));
+    try {
+      // 保存空 key 即清除(resolved_api_key 对空串返回 None,has_api_key 变 false)
+      await saveProviderKey.mutateAsync({
+        providerId,
+        apiKey: '',
+        providerType: p?.type,
+      });
+      setKeyInputs((prev) => ({ ...prev, [providerId]: '' }));
+      setStatusMsg((s) => ({ ...s, [providerId]: { ok: true, msg: '已清除 API Key' } }));
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setStatusMsg((s) => ({ ...s, [providerId]: { ok: false, msg } }));
+    }
+  }
+
   const list = providers ?? [];
   if (list.length === 0) return null;
 
@@ -358,6 +376,15 @@ function ProviderConfigSection({ open }: { open: boolean }) {
                       已配置 API Key:
                       <span className="font-mono text-foreground">{p.api_key_masked || '****'}</span>
                       <span className="text-foreground-subtlest">(输入新 Key 可覆盖)</span>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => handleClearKey(p.id)}
+                        className="ml-1 inline-flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[11px] text-destructive hover:bg-surface-hover disabled:opacity-50"
+                      >
+                        <Trash2 className="size-3" />
+                        清除
+                      </button>
                     </div>
                   )}
                   <div className="flex items-center gap-1">

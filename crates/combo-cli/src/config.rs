@@ -716,4 +716,19 @@ mod tests {
         // type 应保留
         assert_eq!(cfg2.providers.get("deepseek").unwrap().provider_type.as_deref(), Some("openai-compat"));
     }
+
+    #[test]
+    fn save_provider_key_empty_clears_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("combo-cli.toml");
+
+        save_provider_key(&path, "deepseek", "sk-test-123", None, None).unwrap();
+        // 清空 key:写入空串,解析后等价于未配置
+        save_provider_key(&path, "deepseek", "", None, None).unwrap();
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        let pc = cfg.providers.get("deepseek").unwrap();
+        assert_eq!(pc.api_key.as_deref(), Some(""));
+        let info = crate::providers::ProviderInfo::from_config("deepseek", pc);
+        assert_eq!(info.resolved_api_key(), None);
+    }
 }

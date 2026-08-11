@@ -11,6 +11,7 @@ import {
 } from '../../lib/connection';
 
 const fetchModelsMutate = vi.fn();
+const saveKeyMutate = vi.fn();
 
 vi.mock('../../hooks/useAgentModel', () => ({
   useProviders: () => ({
@@ -28,7 +29,7 @@ vi.mock('../../hooks/useAgentModel', () => ({
     ],
   }),
   useFetchModels: () => ({ mutateAsync: fetchModelsMutate, isPending: false }),
-  useSaveProviderKey: () => ({ mutateAsync: vi.fn().mockResolvedValue({ ok: true }), isPending: false }),
+  useSaveProviderKey: () => ({ mutateAsync: saveKeyMutate, isPending: false }),
 }));
 
 function renderWithProviders(ui: React.ReactElement) {
@@ -44,6 +45,8 @@ describe('SettingsDialog', () => {
   beforeEach(() => {
     fetchModelsMutate.mockReset();
     fetchModelsMutate.mockResolvedValue({ provider: 'opencode', models: [{ id: 'm1', name: 'M1' }] });
+    saveKeyMutate.mockReset();
+    saveKeyMutate.mockResolvedValue({ ok: true });
   });
 
   it('saves the proxy url override to localStorage', async () => {
@@ -93,6 +96,16 @@ describe('SettingsDialog', () => {
       expect.objectContaining({ providerId: 'opencode', apiKey: undefined })
     );
     expect(await screen.findByText('已拉取到 1 个模型(使用已保存的 Key)')).toBeTruthy();
+  });
+
+  it('clears configured api key via 清除 button', async () => {
+    renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: /OpenCode Zen/ }));
+    await userEvent.click(screen.getByRole('button', { name: '清除' }));
+    expect(saveKeyMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: 'opencode', apiKey: '' })
+    );
+    expect(await screen.findByText('已清除 API Key')).toBeTruthy();
   });
 
   it('disables fetch for provider without key and empty input', async () => {
