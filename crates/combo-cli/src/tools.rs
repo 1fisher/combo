@@ -18,6 +18,7 @@ pub fn builtin_tools(workspace_dir: Option<PathBuf>) -> Vec<DynamicTool> {
         write_tool(ws.clone()),
         replace_tool(ws.clone()),
         search_tool(ws.clone()),
+        grep_tool(ws.clone()),
         bash_tool(ws.clone()),
         web_search_tool(),
         current_time_tool(),
@@ -303,6 +304,9 @@ fn search_tool(ws: PathBuf) -> DynamicTool {
                 for entry in walkdir::WalkDir::new(&search_root)
                     .into_iter()
                     .filter_entry(|e| {
+                        if e.depth() == 0 {
+                            return true;
+                        }
                         if e.file_type().is_dir() {
                             let name = e.file_name().to_string_lossy();
                             return !should_skip_dir(&name);
@@ -380,6 +384,345 @@ fn search_tool(ws: PathBuf) -> DynamicTool {
             })
         },
     )
+}
+
+// ============================= grep =============================
+
+/// `grep`:在代码库中快速搜索文本或正则表达式,默认使用 ripgrep (rg)。
+/// rg 不可用时回退到内置 walkdir 搜索。
+fn grep_tool(ws: PathBuf) -> DynamicTool {
+    DynamicTool::new(
+        "grep",
+        "在代码库中快速搜索文本或正则表达式,默认使用 ripgrep (rg) 工具(速度极快,自动遵循 .gitignore 并跳过二进制/隐藏文件)。rg 未安装时自动回退为内置逐文件搜索。参数:pattern(搜索模式),path(搜索子目录,默认 workspace 根),include(文件名 glob 过滤,如 *.rs),exclude(排除的 glob,如 *.lock),literal(字面量搜索,默认 false),case_insensitive(大小写不敏感,默认 false),context(匹配行前后显示的上下文行数,默认 0),max_results(最大返回匹配数,默认 50)。",
+        json!({
+            "type": "object",
+            "properties": {
+                "pattern": { "type": "string", "description": "搜索模式(正则表达式或字面量文本)" },
+                "path": { "type": "string", "description": "搜索的子目录(workspace 内相对路径),默认 workspace 根" },
+                "include": { "type": "string", "description": "文件名 glob 过滤(如 *.rs),默认所有文件" },
+                "exclude": { "type": "string", "description": "排除的文件名 glob(如 *.lock、*.test.ts)" },
+                "literal": { "type": "boolean", "description": "将 pattern 视为字面量文本而非正则,默认 false" },
+                "case_insensitive": { "type": "boolean", "description": "大小写不敏感匹配,默认 false" },
+                "context": { "type": "integer", "description": "匹配行前后显示的上下文行数,默认 0(仅显示匹配行)" },
+                "max_results": { "type": "integer", "description": "最大返回匹配结果数,默认 50" }
+            },
+            "required": ["pattern"]
+        }),
+        move |_ctx, args| {
+            let ws = ws.clone();
+            Box::pin(async move {
+                let pattern = args.get("pattern").and_then(Value::as_str).unwrap_or("");
+                let sub_path = args.get("path").and_then(Value::as_str).unwrap_or(".");
+                let include = args.get("include").and_then(Value::as_str);
+                let exclude = args.get("exclude").and_then(Value::as_str);
+                let literal = args.get("literal").and_then(Value::as_bool).unwrap_or(false);
+                let case_insensitive = args
+                    .get("case_insensitive")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let context = args.get("context").and_then(Value::as_u64).unwrap_or(0) as usize;
+                let max_results = args
+                    .get("max_results")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(50) as usize;
+
+                if pattern.is_empty() {
+                    return Ok(ToolOutput::text("错误: pattern 不能为空"));
+                }
+
+                // 安全校验路径
+                if let Err(e) = safe_join(&ws, sub_path) {
+                    return Ok(ToolOutput::text(format!("路径错误: {e}")));
+                }
+
+                // 优先尝试 ripgrep
+                match run_ripgrep(
+                    pattern,
+                    sub_path,
+                    &ws,
+                    include,
+                    exclude,
+                    literal,
+                    case_insensitive,
+                    context,
+                    max_results,
+                )
+                .await
+                {
+                    Ok(Some(text)) => return Ok(ToolOutput::text(text)),
+                    Ok(None) => {} // rg 不可用,继续走回退
+                    Err(e) => return Ok(ToolOutput::text(format!("grep 执行错误: {e}"))),
+                }
+
+                // 回退:内置 walkdir 搜索
+                let results = fallback_search(
+                    &ws,
+                    sub_path,
+                    pattern,
+                    include,
+                    exclude,
+                    literal,
+                    case_insensitive,
+                    max_results,
+                );
+                if results.is_empty() {
+                    Ok(ToolOutput::text(format!(
+                        "未找到匹配 \"{pattern}\" 的结果"
+                    )))
+                } else {
+                    let count = results.len();
+                    let mut out =
+                        format!("找到 {count} 个匹配结果(内置搜索,ripgrep 未安装):\n\n");
+                    out.push_str(&results.join("\n"));
+                    if count >= max_results {
+                        out.push_str(&format!(
+                            "\n\n(结果过多,仅显示前 {max_results} 个)"
+                        ));
+                    }
+                    Ok(ToolOutput::text(out))
+                }
+            })
+        },
+    )
+}
+
+/// 执行 ripgrep 搜索。返回 `Ok(Some(text))` 表示 rg 已运行(无论有无匹配),
+/// 返回 `Ok(None)` 表示系统未安装 rg,返回 `Err` 表示 rg 执行出错。
+async fn run_ripgrep(
+    pattern: &str,
+    rel_path: &str,
+    cwd: &Path,
+    include: Option<&str>,
+    exclude: Option<&str>,
+    literal: bool,
+    case_insensitive: bool,
+    context: usize,
+    max_results: usize,
+) -> anyhow::Result<Option<String>> {
+    let mut cmd = Command::new("rg");
+    cmd.current_dir(cwd)
+        .arg("--line-number")
+        .arg("--no-heading")
+        .arg("--with-filename")
+        .arg("--color")
+        .arg("never")
+        .arg("--max-filesize")
+        .arg("1M");
+
+    // 每文件最多 max_results 个匹配,避免大文件刷屏
+    let per_file = max_results.min(200);
+    cmd.arg("-m").arg(per_file.to_string());
+
+    if literal {
+        cmd.arg("--fixed-strings");
+    }
+    if case_insensitive {
+        cmd.arg("--ignore-case");
+    }
+    if context > 0 {
+        cmd.arg("-C").arg(context.to_string());
+    }
+    if let Some(glob) = include {
+        cmd.arg("--glob").arg(glob);
+    }
+    if let Some(glob) = exclude {
+        cmd.arg("--glob").arg(format!("!{glob}"));
+    }
+
+    cmd.arg("--").arg(pattern).arg(rel_path);
+
+    cmd.stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .stdin(std::process::Stdio::null());
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e.into()),
+    };
+
+    let timeout = std::time::Duration::from_secs(30);
+    let status = match tokio::time::timeout(timeout, child.wait()).await {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => return Err(e.into()),
+        Err(_) => {
+            let _ = child.kill().await;
+            anyhow::bail!("grep 超时(30 秒)");
+        }
+    };
+
+    let mut stdout = String::new();
+    child
+        .stdout
+        .take()
+        .unwrap()
+        .read_to_string(&mut stdout)
+        .await?;
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .await?;
+
+    // rg 退出码:0 = 有匹配,1 = 无匹配,2 = 错误
+    if status.code() == Some(2) {
+        let msg = if stderr.is_empty() {
+            "ripgrep 执行出错".to_string()
+        } else {
+            stderr.trim().to_string()
+        };
+        anyhow::bail!("{msg}");
+    }
+
+    // 解析并截断输出
+    let context_multiplier = (1 + 2 * context).max(1);
+    let line_cap = max_results * context_multiplier;
+
+    let lines: Vec<&str> = stdout
+        .lines()
+        .filter(|l| !l.is_empty() && *l != "--")
+        .take(line_cap)
+        .collect();
+
+    let total_raw: usize = stdout
+        .lines()
+        .filter(|l| !l.is_empty() && *l != "--")
+        .count();
+    let truncated = total_raw > line_cap;
+    let shown = lines.len();
+
+    let text = if shown == 0 {
+        format!("未找到匹配 \"{pattern}\" 的结果")
+    } else {
+        let label = if context > 0 {
+            format!("找到 {shown} 行结果(含上下文,ripgrep)")
+        } else {
+            format!("找到 {shown} 个匹配(ripgrep)")
+        };
+        let mut out = format!("{label}\n\n");
+        out.push_str(&lines.join("\n"));
+        if truncated {
+            out.push_str(&format!("\n\n(结果过多,仅显示前 {shown} 行)"));
+        }
+        out
+    };
+
+    Ok(Some(text))
+}
+
+/// 内置 walkdir 搜索(rg 不可用时的回退)。
+fn fallback_search(
+    ws: &Path,
+    sub_path: &str,
+    pattern: &str,
+    include: Option<&str>,
+    exclude: Option<&str>,
+    literal: bool,
+    case_insensitive: bool,
+    max_results: usize,
+) -> Vec<String> {
+    let search_root = match safe_join(ws, sub_path) {
+        Ok(p) => p,
+        Err(_) => return Vec::new(),
+    };
+
+    if !search_root.exists() {
+        return Vec::new();
+    }
+
+    let re = {
+        let pat = if literal {
+            regex::escape(pattern)
+        } else {
+            pattern.to_string()
+        };
+        let pat = if case_insensitive {
+            format!("(?i){pat}")
+        } else {
+            pat
+        };
+        match Regex::new(&pat) {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        }
+    };
+
+    let include_pat = include.and_then(|g| glob::Pattern::new(g).ok());
+    let exclude_pat = exclude.and_then(|g| glob::Pattern::new(g).ok());
+
+    let mut results = Vec::new();
+    const MAX_FILE_SIZE: u64 = 1024 * 1024;
+
+    for entry in walkdir::WalkDir::new(&search_root)
+        .into_iter()
+        .filter_entry(|e| {
+            if e.depth() == 0 {
+                return true;
+            }
+            if e.file_type().is_dir() {
+                let name = e.file_name().to_string_lossy();
+                return !should_skip_dir(&name);
+            }
+            true
+        })
+        .filter_map(|e| e.ok())
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        if is_binary_ext(&name) {
+            continue;
+        }
+
+        if let Some(ref gp) = include_pat {
+            if !gp.matches(&name) {
+                continue;
+            }
+        }
+        if let Some(ref ep) = exclude_pat {
+            if ep.matches(&name) {
+                continue;
+            }
+        }
+
+        if entry
+            .metadata()
+            .map(|m| m.len() > MAX_FILE_SIZE)
+            .unwrap_or(true)
+        {
+            continue;
+        }
+
+        let fpath = entry.path();
+        let content = match std::fs::read_to_string(fpath) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let rel = fpath
+            .strip_prefix(ws)
+            .unwrap_or(fpath)
+            .to_string_lossy()
+            .to_string();
+
+        for (lineno, line) in content.lines().enumerate() {
+            if re.is_match(line) {
+                results.push(format!("{}:{}: {}", rel, lineno + 1, line.trim()));
+                if results.len() >= max_results {
+                    return results;
+                }
+            }
+        }
+    }
+
+    results
 }
 
 // ============================= bash =============================
@@ -1122,5 +1465,347 @@ mod tests {
         let content = "foo bar foo baz foo";
         let count = content.matches("foo").count();
         assert_eq!(count, 3);
+    }
+
+    // ============================= grep 工具测试 =============================
+
+    #[test]
+    fn fallback_search_finds_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        std::fs::write(ws.join("a.txt"), "hello world\nfoo bar\n").unwrap();
+        std::fs::write(ws.join("b.txt"), "world peace\n").unwrap();
+
+        let results = fallback_search(ws, ".", "world", None, None, false, false, 50);
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().any(|r| r.contains("a.txt")));
+        assert!(results.iter().any(|r| r.contains("b.txt")));
+    }
+
+    #[test]
+    fn fallback_search_literal_escapes_regex() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        std::fs::write(ws.join("test.rs"), "let x = a.b.c;\n").unwrap();
+
+        let results = fallback_search(ws, ".", "a.b.c", None, None, true, false, 50);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].contains("a.b.c"));
+    }
+
+    #[test]
+    fn fallback_search_case_insensitive() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        std::fs::write(ws.join("test.txt"), "Hello\nHELLO\nhello\n").unwrap();
+
+        let results = fallback_search(ws, ".", "hello", None, None, false, true, 50);
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn fallback_search_include_glob() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        std::fs::write(ws.join("a.rs"), "pattern here\n").unwrap();
+        std::fs::write(ws.join("b.txt"), "pattern here\n").unwrap();
+
+        let results = fallback_search(ws, ".", "pattern", Some("*.rs"), None, false, false, 50);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].contains("a.rs"));
+    }
+
+    #[test]
+    fn fallback_search_exclude_glob() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        std::fs::write(ws.join("a.rs"), "pattern here\n").unwrap();
+        std::fs::write(ws.join("b.lock"), "pattern here\n").unwrap();
+
+        let results =
+            fallback_search(ws, ".", "pattern", None, Some("*.lock"), false, false, 50);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].contains("a.rs"));
+    }
+
+    #[test]
+    fn fallback_search_max_results() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        std::fs::write(ws.join("test.txt"), "match\nmatch\nmatch\nmatch\nmatch\n").unwrap();
+
+        let results = fallback_search(ws, ".", "match", None, None, false, false, 3);
+        assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn fallback_search_subpath() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        std::fs::create_dir_all(ws.join("src")).unwrap();
+        std::fs::write(ws.join("src/main.rs"), "target here\n").unwrap();
+        std::fs::write(ws.join("other.txt"), "target here\n").unwrap();
+
+        let results = fallback_search(ws, "src", "target", None, None, false, false, 50);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].contains("src/main.rs"));
+    }
+
+    #[test]
+    fn fallback_search_no_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        std::fs::write(ws.join("test.txt"), "hello world\n").unwrap();
+
+        let results = fallback_search(ws, ".", "nonexistent", None, None, false, false, 50);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn fallback_search_skips_ignored_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        std::fs::create_dir_all(ws.join("target")).unwrap();
+        std::fs::create_dir_all(ws.join("src")).unwrap();
+        std::fs::write(ws.join("target/out.txt"), "secret\n").unwrap();
+        std::fs::write(ws.join("src/main.rs"), "secret\n").unwrap();
+
+        let results = fallback_search(ws, ".", "secret", None, None, false, false, 50);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].contains("src/main.rs"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_ripgrep_returns_none_when_not_installed() {
+        // 通过覆盖 PATH 为空来模拟 rg 不存在(如果系统装了 rg 也能测到 None)
+        // 注意:此测试仅验证 NotFound → None 的逻辑路径
+        // 如果 rg 恰好在测试环境可用且 PATH 不为空,此测试会被跳过(结果非 None)
+        let has_rg = which::which("rg").is_ok();
+        if has_rg {
+            return; // 系统有 rg,跳过此测试
+        }
+        let result = run_ripgrep(
+            "test",
+            ".",
+            Path::new("/tmp"),
+            None,
+            None,
+            false,
+            false,
+            0,
+            50,
+        )
+        .await
+        .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_ripgrep_searches_files() {
+        if which::which("rg").is_err() {
+            eprintln!("跳过:系统未安装 rg");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        std::fs::write(ws.join("a.rs"), "fn main() {}\nhello world\n").unwrap();
+        std::fs::write(ws.join("b.txt"), "hello planet\n").unwrap();
+
+        let result = run_ripgrep(
+            "hello",
+            ".",
+            ws,
+            None,
+            None,
+            false,
+            false,
+            0,
+            50,
+        )
+        .await
+        .unwrap()
+        .expect("rg 应该可用");
+
+        assert!(result.contains("a.rs"));
+        assert!(result.contains("b.txt"));
+        assert!(result.contains("hello world"));
+        assert!(result.contains("hello planet"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_ripgrep_literal_search() {
+        if which::which("rg").is_err() {
+            eprintln!("跳过:系统未安装 rg");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        // 字面量搜索 "." 不应被当作正则
+        std::fs::write(ws.join("test.rs"), "let x = a.b.c;\n").unwrap();
+
+        let result = run_ripgrep(
+            "a.b.c",
+            ".",
+            ws,
+            None,
+            None,
+            true,
+            false,
+            0,
+            50,
+        )
+        .await
+        .unwrap()
+        .expect("rg 应该可用");
+
+        assert!(result.contains("a.b.c"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_ripgrep_case_insensitive() {
+        if which::which("rg").is_err() {
+            eprintln!("跳过:系统未安装 rg");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        std::fs::write(ws.join("test.txt"), "Hello\nHELLO\nhello\n").unwrap();
+
+        let result = run_ripgrep(
+            "hello",
+            ".",
+            ws,
+            None,
+            None,
+            false,
+            true,
+            0,
+            50,
+        )
+        .await
+        .unwrap()
+        .expect("rg 应该可用");
+
+        // 应该匹配全部 3 行
+        assert!(result.contains("找到 3 个匹配"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_ripgrep_include_glob() {
+        if which::which("rg").is_err() {
+            eprintln!("跳过:系统未安装 rg");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        std::fs::write(ws.join("a.rs"), "pattern here\n").unwrap();
+        std::fs::write(ws.join("b.txt"), "pattern here\n").unwrap();
+
+        let result = run_ripgrep(
+            "pattern",
+            ".",
+            ws,
+            Some("*.rs"),
+            None,
+            false,
+            false,
+            0,
+            50,
+        )
+        .await
+        .unwrap()
+        .expect("rg 应该可用");
+
+        assert!(result.contains("a.rs"));
+        assert!(!result.contains("b.txt"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_ripgrep_context_lines() {
+        if which::which("rg").is_err() {
+            eprintln!("跳过:系统未安装 rg");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        std::fs::write(ws.join("test.txt"), "line1\nline2\nmatch\nline4\nline5\n").unwrap();
+
+        let result = run_ripgrep(
+            "match",
+            ".",
+            ws,
+            None,
+            None,
+            false,
+            false,
+            1, // 1 行上下文
+            50,
+        )
+        .await
+        .unwrap()
+        .expect("rg 应该可用");
+
+        // 应该包含上下文行
+        assert!(result.contains("line2") || result.contains("line4"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_ripgrep_no_match() {
+        if which::which("rg").is_err() {
+            eprintln!("跳过:系统未安装 rg");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let ws = dir.path();
+        std::fs::write(ws.join("test.txt"), "hello world\n").unwrap();
+
+        let result = run_ripgrep(
+            "nonexistent",
+            ".",
+            ws,
+            None,
+            None,
+            false,
+            false,
+            0,
+            50,
+        )
+        .await
+        .unwrap()
+        .expect("rg 应该可用");
+
+        assert!(result.contains("未找到匹配"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn run_ripgrep_invalid_regex_returns_error() {
+        if which::which("rg").is_err() {
+            eprintln!("跳过:系统未安装 rg");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+
+        let result = run_ripgrep(
+            "(unclosed",
+            ".",
+            dir.path(),
+            None,
+            None,
+            false,
+            false,
+            0,
+            50,
+        )
+        .await;
+
+        assert!(result.is_err());
     }
 }
