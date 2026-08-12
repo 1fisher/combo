@@ -178,6 +178,30 @@ impl AskConfig {
         }
     }
 
+    /// 按工作区目录加载 `AGENTS.md`(项目基础规则),并合并额外禁用的 skill,
+    /// 一次性重建 preamble = `base_preamble` + `AGENTS.md` + skills 摘要。
+    ///
+    /// `AGENTS.md` 缺失时仅提示初始化项目,不影响运行(详见 `agents_md::load_preamble`)。
+    pub fn with_workspace(
+        &self,
+        workspace_dir: Option<PathBuf>,
+        extra_disabled: &[String],
+    ) -> Self {
+        let mut disabled = self.disabled_skills.clone();
+        for d in extra_disabled {
+            if !disabled.iter().any(|x| x == d) {
+                disabled.push(d.clone());
+            }
+        }
+        let agents = crate::agents_md::load_preamble(workspace_dir.as_deref());
+        let skills = crate::skills::skills_preamble_with(&self.skills_paths, &disabled);
+        Self {
+            preamble: format!("{}{}{}", self.base_preamble, agents, skills),
+            disabled_skills: disabled,
+            ..self.clone()
+        }
+    }
+
     /// 解析最终 API key:CLI/配置显式值 > provider 定义(支持 $ENV)> opencode auth.json。
     pub fn api_key(&self) -> Result<String> {
         if let Some(k) = self.explicit_api_key.as_deref().filter(|k| !k.is_empty()) {
@@ -270,7 +294,9 @@ pub async fn ask_answer(
 
 /// 单轮问答:直接打印最终结果。
 pub async fn ask_with(cfg: &AskConfig, question: &str) -> Result<()> {
-    let answer = ask_answer(cfg, question, std::env::current_dir().ok()).await?;
+    // 加载当前目录的 AGENTS.md(项目基础规则)进 preamble。
+    let cfg = cfg.with_workspace(std::env::current_dir().ok(), &[]);
+    let answer = ask_answer(&cfg, question, std::env::current_dir().ok()).await?;
     println!("{answer}");
     Ok(())
 }
@@ -447,6 +473,8 @@ where
 
 /// 交互式多轮会话:读取 stdin,流式输出,消息持久化到 sqlite。
 pub async fn chat_loop(cfg: &AskConfig) -> Result<()> {
+    // 加载当前目录的 AGENTS.md(项目基础规则)进 preamble。
+    let cfg = cfg.with_workspace(std::env::current_dir().ok(), &[]);
     let model = cfg.model.clone();
     let builtin = if cfg.tools {
         crate::tools::builtin_tools(std::env::current_dir().ok())

@@ -2,6 +2,7 @@
 //! 会话/文件/auth/workspace 等模块。供 src-tauri 内嵌调用或外部集成。
 
 pub mod agent;
+pub mod agents_md;
 pub mod auth;
 pub mod config;
 pub mod db;

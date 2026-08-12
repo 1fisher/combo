@@ -440,18 +440,24 @@ async fn run_agent_ws(
     let tx = state.runs.broadcast(&ws_id);
     let cancel_rx = state.runs.cancel_tx(&body.session_id).subscribe();
 
-    // 1. 回传用户消息(created),前端据此移除乐观插入的 local- 消息
-    //    同时按该 workspace 的禁用技能重建 preamble(技能开关生效)。
+    // 1. 回传用户消息(created),前端据此移除乐观插入的 local- 消息。
+    //    workspace 根目录先解析,以便加载该项目的 AGENTS.md(项目基础规则)
+    //    并按该 workspace 的禁用技能重建 preamble(技能开关生效)。
+    let workspace_dir = state
+        .meta
+        .get(&ws_id)
+        .map(|m| m.path)
+        .or_else(|| body.workspace_dir.as_deref().map(std::path::PathBuf::from));
     let cfg = {
         let base = state.cfg.lock().unwrap().clone();
         let ws_disabled = state.meta.db().get_disabled_skills(&ws_id).unwrap_or_default();
-        base.with_disabled_skills(&ws_disabled)
+        base.with_workspace(workspace_dir.clone(), &ws_disabled)
     };
     let user_msg = user_message_json(&body.session_id, &body.prompt, &cfg);
     let _ = tx.send(msg_env("created", user_msg));
 
-    // 2. 会话历史与 workspace 根目录从本地 sqlite 解析(多轮上下文)。
-    //    body 里旧客户端注入的 history/workspace_dir 仅在 sqlite 无数据时兜底。
+    // 2. 会话历史从本地 sqlite 解析(多轮上下文)。
+    //    body 里旧客户端注入的 history 仅在 sqlite 无数据时兜底。
     let history: Vec<Value> = match &body.history {
         Some(h) if !h.is_empty() => h.clone(),
         _ => state
@@ -467,11 +473,6 @@ async fn run_agent_ws(
             })
             .collect(),
     };
-    let workspace_dir = state
-        .meta
-        .get(&ws_id)
-        .map(|m| m.path)
-        .or_else(|| body.workspace_dir.as_deref().map(std::path::PathBuf::from));
 
     // 3. 记录请求日志(发送给 agent 的内容)
     let provider_id = cfg.provider.id.clone();
