@@ -17,8 +17,8 @@ export function SkillsPanel({
   open: boolean;
   onOpenChange: (v: boolean) => void;
 }) {
-  const { data: skills, isLoading } = useSkills();
   const activeWorkspaceId = useActiveWorkspaceId();
+  const { data: skills, isLoading } = useSkills(activeWorkspaceId);
   const { isDisabled, toggle, toggling } = useWorkspaceDisabledSkills(
     activeWorkspaceId
   );

@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getWorkspaceConfig, listSkills, setConfigKey } from '../lib/api';
 
-export function useSkills() {
+export function useSkills(workspaceId?: string | null) {
   return useQuery({
-    queryKey: ['skills'],
-    queryFn: listSkills,
+    queryKey: ['skills', workspaceId ?? null],
+    queryFn: () => listSkills(workspaceId),
   });
 }
 

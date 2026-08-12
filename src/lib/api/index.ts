@@ -328,8 +328,12 @@ export function getGitCommitDiff(
 }
 
 // 技能:combo-cli serve 本地端点,扫描技能目录
-export function listSkills(): Promise<Api.Skill[]> {
-  return apiRequest('/v1/skills');
+// 传 workspace_id 时项目级技能按该 workspace 根目录扫描(.agents/skills 等),
+// 不传则回退到 serve 进程 CWD 相对路径(CLI 模式)。
+export function listSkills(workspaceId?: string | null): Promise<Api.Skill[]> {
+  return apiRequest('/v1/skills', {
+    ...(workspaceId ? { query: { workspace_id: workspaceId } } : {}),
+  });
 }
 
 // 服务器目录浏览:combo-cli serve 本地端点,供浏览器/移动端在远端打开服务器上的项目目录

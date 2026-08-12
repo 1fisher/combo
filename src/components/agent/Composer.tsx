@@ -413,7 +413,7 @@ export function Composer({
   const { mention, activeIndex, setActiveIndex, select: selectMention, handleKey: handleMentionKey } =
     useMention(value, areaRef, onChange);
   const { files: fileIndex } = useFileIndex(workspaceId);
-  const { data: skillsData } = useSkills();
+  const { data: skillsData } = useSkills(workspaceId);
   const { disabledSkills } = useWorkspaceDisabledSkills(workspaceId ?? null);
   const { sessions } = useSessions(workspaceId ?? null);
 
