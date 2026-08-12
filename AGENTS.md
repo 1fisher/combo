@@ -91,7 +91,7 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
 | `COMBO_HOST` | serve 监听地址(默认 `127.0.0.1`)。域名部署时设 `0.0.0.0` 对外开放;命令行 `--host` 优先级更高。 |
 | `COMBO_CLI_BIN` | E2E 开关:设置后 Playwright spec 才运行(验证真实 agent 工作流)。 |
 | `COMBO_CONFIG_DIR` | combo-cli 配置文件目录(默认 `~/.config/combo`,文件 `combo-cli.toml`)。 |
-| `COMBO_SKILLS_DIR` | 覆盖 combo 专属技能目录(默认 `~/.config/combo/skills`)。技能扫描共三个目录:combo 专属、项目 `.combo/skills`、通用 `~/.agents/skills`,同名 skill 靠前的路径优先。 |
+| `COMBO_SKILLS_DIR` | 覆盖 combo 专属技能目录(默认 `~/.config/combo/skills`)。技能扫描共四个目录,项目级优先:项目 `.combo/skills`、项目 `.agents/skills`、combo 专属、通用 `~/.agents/skills`,同名 skill 靠前的路径优先。 |
 
 ## Architecture & data flow
 
@@ -259,8 +259,9 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
    `[lsp.<lang>]`(command/args/env,`lsp list` 检测可执行状态)、
    `skills_paths`/`disabled_skills`(每 skill 一目录
    含 `SKILL.md`,frontmatter 的 description 解析后注入 preamble,
-   `skills.rs::discover`,默认扫 combo 专属 `~/.config/combo/skills`、
-   项目 `.combo/skills`、通用 `~/.agents/skills` 三个目录;
+   `skills.rs::discover`,默认扫 项目 `.combo/skills` → 项目
+   `.agents/skills` → combo 专属 `~/.config/combo/skills` →
+   通用 `~/.agents/skills` 四个目录,项目级优先;
    技能开关经 `GET/POST /v1/workspaces/{id}/config[/set]` 读写,per-workspace
    的 disabled_skills 落 sqlite `workspace_config` 表,`run_agent_ws` 运行时
    合并全局禁用后经 `AskConfig::with_disabled_skills` 重建 preamble)。

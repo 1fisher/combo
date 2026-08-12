@@ -491,7 +491,7 @@ pub fn write_default(path: &PathBuf, overwrite: bool) -> Result<()> {
 # args = ["--stdio"]
 
 # ========== skills(每个 skill 一个目录含 SKILL.md)==========
-# 默认扫描:combo 专属 ~/.config/combo/skills、项目 .combo/skills、通用 ~/.agents/skills
+# 默认扫描(项目级优先):项目 .combo/skills、项目 .agents/skills、combo 专属 ~/.config/combo/skills、通用 ~/.agents/skills
 # skills_paths = ["~/.config/combo/skills"]
 # disabled_skills = []
 

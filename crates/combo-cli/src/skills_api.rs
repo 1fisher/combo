@@ -1,5 +1,5 @@
-//! 技能列表服务:扫描本地技能目录(combo 专属 `~/.config/combo/skills`、
-//! 项目 `.combo/skills`、通用 `~/.agents/skills`),
+//! 技能列表服务:扫描本地技能目录(项目 `.combo/skills`、项目 `.agents/skills`、
+//! combo 专属 `~/.config/combo/skills`、通用 `~/.agents/skills`),
 //! 读取每个技能子目录中的 `SKILL.md` frontmatter(name + description),
 //! 返回 JSON 列表供前端展示与开关。
 
@@ -8,11 +8,16 @@ use axum::http::{header, StatusCode};
 use axum::response::Response;
 use serde_json::json;
 use std::path::PathBuf;
-/// 技能扫描目录:combo 专属 + 项目 `.combo/skills` + 通用 `~/.agents/skills`。
+/// 技能扫描目录:项目 `.combo/skills` + 项目 `.agents/skills` + combo 专属 + 通用
+/// `~/.agents/skills`。
 /// 与 `skills::default_skills_paths` 的顺序一致(同名 skill 靠前的路径优先)。
 fn skills_dirs() -> Vec<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     let mut dirs = Vec::new();
+    // 项目 `.combo/skills`(相对当前目录)
+    dirs.push(PathBuf::from("./.combo/skills"));
+    // 项目 `.agents/skills`(相对当前目录)
+    dirs.push(PathBuf::from("./.agents/skills"));
     // combo 专属目录(支持 COMBO_SKILLS_DIR 覆盖)
     if let Ok(dir) = std::env::var("COMBO_SKILLS_DIR") {
         dirs.push(PathBuf::from(dir));
@@ -22,8 +27,6 @@ fn skills_dirs() -> Vec<PathBuf> {
             .unwrap_or_else(|_| PathBuf::from(&home).join(".config"));
         dirs.push(config_base.join("combo").join("skills"));
     }
-    // 项目 `.combo/skills`(相对当前目录)
-    dirs.push(PathBuf::from("./.combo/skills"));
     // 通用技能目录(所有 agent 共享)
     dirs.push(PathBuf::from(&home).join(".agents").join("skills"));
     dirs

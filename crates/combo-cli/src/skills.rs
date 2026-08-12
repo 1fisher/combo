@@ -30,13 +30,15 @@ struct Frontmatter {
     hidden: Option<bool>,
 }
 
-/// 默认 skills 搜索路径:combo 专属目录 > 项目 `.combo/skills` > 通用 `~/.agents/skills`。
-/// 同名 skill 靠前的路径优先。
+/// 默认 skills 搜索路径:项目 `.combo/skills` > 项目 `.agents/skills` >
+/// combo 专属目录 > 通用 `~/.agents/skills`。同名 skill 靠前的路径优先,
+/// 项目级 skill 覆盖用户级。
 pub fn default_skills_paths() -> Vec<String> {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     vec![
-        format!("{home}/.config/combo/skills"),
         "./.combo/skills".to_string(),
+        "./.agents/skills".to_string(),
+        format!("{home}/.config/combo/skills"),
         format!("{home}/.agents/skills"),
     ]
 }
@@ -179,10 +181,12 @@ mod tests {
     #[test]
     fn default_paths_include_all_dirs() {
         let paths = default_skills_paths();
-        assert_eq!(paths.len(), 3);
-        assert!(paths[0].ends_with(".config/combo/skills"));
-        assert!(paths[1].ends_with(".combo/skills"));
-        assert!(paths[2].ends_with(".agents/skills"));
+        assert_eq!(paths.len(), 4);
+        // 项目级优先,用户级在后
+        assert_eq!(paths[0], "./.combo/skills");
+        assert_eq!(paths[1], "./.agents/skills");
+        assert!(paths[2].ends_with(".config/combo/skills"));
+        assert!(paths[3].ends_with("/.agents/skills"));
     }
 
     #[test]
