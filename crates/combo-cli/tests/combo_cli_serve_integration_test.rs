@@ -42,6 +42,7 @@ fn cfg_no_key() -> AskConfig {
         explicit_base_url: None,
         mcp_servers: Vec::new(),
         reasoning_effort: None,
+        lsp: std::collections::BTreeMap::new(),
     }
 }
 

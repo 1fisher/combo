@@ -6,14 +6,23 @@
 use regex::Regex;
 use rig::tool::{DynamicTool, ToolOutput};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 
+use crate::config::LspServerConfig;
+use crate::lsp::LspManager;
+
 /// 返回内置工具列表。
-pub fn builtin_tools(workspace_dir: Option<PathBuf>) -> Vec<DynamicTool> {
+/// `lsp` 配置了任意 server 时,额外注册 LSP 工具(diagnostics/definition/references/hover)。
+pub fn builtin_tools(
+    workspace_dir: Option<PathBuf>,
+    lsp: BTreeMap<String, LspServerConfig>,
+) -> Vec<DynamicTool> {
     let ws = workspace_dir.unwrap_or_else(|| PathBuf::from("."));
-    vec![
+    let mut tools: Vec<DynamicTool> = vec![
         read_tool(ws.clone()),
         write_tool(ws.clone()),
         replace_tool(ws.clone()),
@@ -22,7 +31,16 @@ pub fn builtin_tools(workspace_dir: Option<PathBuf>) -> Vec<DynamicTool> {
         bash_tool(ws.clone()),
         web_search_tool(),
         current_datetime_tool(),
-    ]
+    ];
+    // 配置了 LSP server 时注册代码导航工具,共享同一 LspManager(lazy 启动)。
+    let manager = Arc::new(LspManager::new(ws.clone(), lsp));
+    if manager.has_servers() {
+        tools.push(lsp_diagnostics_tool(ws.clone(), manager.clone()));
+        tools.push(lsp_definition_tool(ws.clone(), manager.clone()));
+        tools.push(lsp_references_tool(ws.clone(), manager.clone()));
+        tools.push(lsp_hover_tool(ws.clone(), manager));
+    }
+    tools
 }
 
 // ============================= read =============================
@@ -1219,6 +1237,163 @@ fn current_datetime_tool() -> DynamicTool {
             })
         },
     )
+}
+
+// ============================= LSP =============================
+
+/// 解析 path 参数为 workspace 内绝对路径。
+fn resolve_ws_path(ws: &Path, path: &str) -> Result<PathBuf, String> {
+    if path.is_empty() {
+        return Err("错误: path 不能为空".into());
+    }
+    safe_join(ws, path).map_err(|e| format!("路径错误: {e}"))
+}
+
+/// 取文件扩展名(小写,不含 `.`)。
+fn ext_of(path: &Path) -> String {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default()
+}
+
+/// `diagnostics`:获取文件的 LSP 诊断(错误/警告)。
+fn lsp_diagnostics_tool(ws: PathBuf, manager: Arc<LspManager>) -> DynamicTool {
+    DynamicTool::new(
+        "diagnostics",
+        "获取文件的代码诊断(编译错误、类型错误、警告等)。需要配置 LSP server([lsp])。参数:path(相对 workspace 的文件路径)。",
+        json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "要诊断的文件路径(workspace 内相对路径)" }
+            },
+            "required": ["path"]
+        }),
+        move |_ctx, args| {
+            let ws = ws.clone();
+            let manager = manager.clone();
+            Box::pin(async move {
+                let path = args.get("path").and_then(Value::as_str).unwrap_or("");
+                let full = match resolve_ws_path(&ws, path) {
+                    Ok(p) => p,
+                    Err(e) => return Ok(ToolOutput::text(e)),
+                };
+                let ext = ext_of(&full);
+                match manager.diagnostics(&full, &ext).await {
+                    Ok(s) => Ok(ToolOutput::text(s)),
+                    Err(e) => Ok(ToolOutput::text(format!("LSP 诊断失败: {e}"))),
+                }
+            })
+        },
+    )
+}
+
+/// `definition`:跳转到符号定义位置。
+fn lsp_definition_tool(ws: PathBuf, manager: Arc<LspManager>) -> DynamicTool {
+    DynamicTool::new(
+        "definition",
+        "跳转到符号的定义位置。需要配置 LSP server([lsp])。参数:path、line(1-based 行号)、column(1-based 列号)。",
+        json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "文件路径(workspace 内相对路径)" },
+                "line": { "type": "integer", "description": "行号(1-based)" },
+                "column": { "type": "integer", "description": "列号(1-based)" }
+            },
+            "required": ["path", "line", "column"]
+        }),
+        move |_ctx, args| {
+            let ws = ws.clone();
+            let manager = manager.clone();
+            Box::pin(async move {
+                let (full, line, col) = match parse_loc_args(&ws, &args) {
+                    Ok(v) => v,
+                    Err(e) => return Ok(ToolOutput::text(e)),
+                };
+                let ext = ext_of(&full);
+                match manager.definition(&full, &ext, line.saturating_sub(1), col.saturating_sub(1)).await {
+                    Ok(s) => Ok(ToolOutput::text(s)),
+                    Err(e) => Ok(ToolOutput::text(format!("LSP 定义查询失败: {e}"))),
+                }
+            })
+        },
+    )
+}
+
+/// `references`:查找符号的所有引用位置。
+fn lsp_references_tool(ws: PathBuf, manager: Arc<LspManager>) -> DynamicTool {
+    DynamicTool::new(
+        "references",
+        "查找符号的所有引用位置。需要配置 LSP server([lsp])。参数:path、line(1-based 行号)、column(1-based 列号)。",
+        json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "文件路径(workspace 内相对路径)" },
+                "line": { "type": "integer", "description": "行号(1-based)" },
+                "column": { "type": "integer", "description": "列号(1-based)" }
+            },
+            "required": ["path", "line", "column"]
+        }),
+        move |_ctx, args| {
+            let ws = ws.clone();
+            let manager = manager.clone();
+            Box::pin(async move {
+                let (full, line, col) = match parse_loc_args(&ws, &args) {
+                    Ok(v) => v,
+                    Err(e) => return Ok(ToolOutput::text(e)),
+                };
+                let ext = ext_of(&full);
+                match manager.references(&full, &ext, line.saturating_sub(1), col.saturating_sub(1)).await {
+                    Ok(s) => Ok(ToolOutput::text(s)),
+                    Err(e) => Ok(ToolOutput::text(format!("LSP 引用查询失败: {e}"))),
+                }
+            })
+        },
+    )
+}
+
+/// `hover`:获取符号的悬停文档(类型签名/文档)。
+fn lsp_hover_tool(ws: PathBuf, manager: Arc<LspManager>) -> DynamicTool {
+    DynamicTool::new(
+        "hover",
+        "获取符号的悬停信息(类型签名、文档)。需要配置 LSP server([lsp])。参数:path、line(1-based 行号)、column(1-based 列号)。",
+        json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "文件路径(workspace 内相对路径)" },
+                "line": { "type": "integer", "description": "行号(1-based)" },
+                "column": { "type": "integer", "description": "列号(1-based)" }
+            },
+            "required": ["path", "line", "column"]
+        }),
+        move |_ctx, args| {
+            let ws = ws.clone();
+            let manager = manager.clone();
+            Box::pin(async move {
+                let (full, line, col) = match parse_loc_args(&ws, &args) {
+                    Ok(v) => v,
+                    Err(e) => return Ok(ToolOutput::text(e)),
+                };
+                let ext = ext_of(&full);
+                match manager.hover(&full, &ext, line.saturating_sub(1), col.saturating_sub(1)).await {
+                    Ok(s) => Ok(ToolOutput::text(s)),
+                    Err(e) => Ok(ToolOutput::text(format!("LSP hover 失败: {e}"))),
+                }
+            })
+        },
+    )
+}
+
+/// 从工具参数解析 (绝对路径, line, column)。
+fn parse_loc_args(ws: &Path, args: &Value) -> Result<(PathBuf, u32, u32), String> {
+    let path = args.get("path").and_then(Value::as_str).unwrap_or("");
+    let full = resolve_ws_path(ws, path)?;
+    let line = args.get("line").and_then(Value::as_u64).unwrap_or(0) as u32;
+    let col = args.get("column").and_then(Value::as_u64).unwrap_or(0) as u32;
+    if line == 0 || col == 0 {
+        return Err("错误: line 和 column 必须是 ≥ 1 的正整数".into());
+    }
+    Ok((full, line, col))
 }
 
 #[cfg(test)]

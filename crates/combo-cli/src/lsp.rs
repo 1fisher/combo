@@ -1,14 +1,24 @@
-//! LSP 支持:配置 LSP server(command/args/env),
-//! 提供 `lsp list`(查看已配置 server 与可执行状态)。
+//! LSP 支持:实现 stdio JSON-RPC 客户端,连接配置的 LSP server,
+//! 提供 `lsp list`(查看已配置 server 与可执行状态)与代码诊断/定义/引用/hover 能力。
 //!
-//! combo-cli 本身不内嵌完整 LSP 客户端;本模块负责 server 配置、
-//! 可执行性检查与进程探测,供后续接入代码诊断等能力。
+//! - [`LspClient`]:单个 LSP server 子进程的 JSON-RPC 客户端(Content-Length 帧协议)。
+//! - [`LspManager`]:按文件扩展名路由到对应语言 server,lazy 启动并复用。
+//!
+//! combo-cli 的 LSP 工具(`diagnostics`/`definition`/`references`/`hover`)
+//! 通过 `LspManager` 暴露给 agent。
 
-use crate::config::ResolvedConfig;
+use crate::config::{LspServerConfig, ResolvedConfig};
 use anyhow::Result;
-use std::path::PathBuf;
+use serde_json::{json, Value};
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, ChildStdin, ChildStdout};
+use tokio::sync::{oneshot, Mutex};
 
-/// 一个 LSP server 的状态。
+/// 一个 LSP server 的状态(供 `lsp list` 展示)。
 #[allow(dead_code)]
 pub struct LspStatus {
     pub name: String,
@@ -50,14 +60,681 @@ fn find_executable(cmd: &str) -> Option<PathBuf> {
     None
 }
 
+// =========================== 扩展名 → 语言 ===========================
+
+/// 常见文件扩展名到语言标识的内置映射(与配置键 `[lsp.<lang>]` 对应)。
+pub fn ext_to_lang(ext: &str) -> Option<&'static str> {
+    let m = match ext {
+        "rs" => "rust",
+        "ts" | "tsx" | "mts" | "cts" => "typescript",
+        "js" | "jsx" | "mjs" | "cjs" => "javascript",
+        "py" => "python",
+        "go" => "go",
+        "java" => "java",
+        "kt" | "kts" => "kotlin",
+        "scala" => "scala",
+        "c" | "h" => "c",
+        "cpp" | "cc" | "cxx" | "hpp" | "hh" => "cpp",
+        "cs" => "csharp",
+        "rb" => "ruby",
+        "php" => "php",
+        "swift" => "swift",
+        "sh" | "bash" | "zsh" => "bash",
+        "lua" => "lua",
+        "dart" => "dart",
+        _ => return None,
+    };
+    Some(m)
+}
+
+// =========================== LspClient ===========================
+
+/// 单个 LSP server 子进程的 JSON-RPC 客户端。
+///
+/// 通过 stdio 通信:stdin 写请求/通知,stdout 读响应/通知。
+/// 使用 Content-Length 帧协议(每帧 `Content-Length: N\r\n\r\n{json}`)。
+pub struct LspClient {
+    /// 子进程 stdin(写帧时加锁,保证整帧顺序写入)。
+    stdin: Arc<Mutex<ChildStdin>>,
+    _child: Child,
+    next_id: AtomicU64,
+    /// 请求 id → oneshot,读循环收到 response 后回填。
+    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>,
+    /// 文件 URI → 最新诊断列表(server 主动 push,工具读取)。
+    diagnostics: Arc<Mutex<HashMap<String, Vec<Value>>>>,
+    /// 已完成 initialize 握手。
+    initialized: bool,
+}
+
+impl LspClient {
+    /// 启动子进程并完成 LSP initialize 握手。
+    pub async fn start(
+        command: &str,
+        args: &[String],
+        env: &BTreeMap<String, String>,
+        workspace_root: &Path,
+    ) -> Result<Self> {
+        let mut cmd = tokio::process::Command::new(command);
+        cmd.args(args);
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        cmd.stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            // stderr 透传到父进程,便于排查 server 问题
+            .stderr(std::process::Stdio::inherit())
+            .kill_on_drop(true);
+
+        let mut child = cmd.spawn().map_err(|e| {
+            anyhow::anyhow!("启动 LSP server `{command}` 失败: {e}(可在配置文件 [lsp] 检查路径)")
+        })?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("LSP server 无 stdin"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("LSP server 无 stdout"))?;
+
+        let pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let diagnostics: Arc<Mutex<HashMap<String, Vec<Value>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+
+        // 启动 stdout 读循环
+        tokio::spawn(read_loop(
+            BufReader::new(stdout),
+            pending.clone(),
+            diagnostics.clone(),
+        ));
+
+        let mut client = Self {
+            stdin: Arc::new(Mutex::new(stdin)),
+            _child: child,
+            next_id: AtomicU64::new(1),
+            pending,
+            diagnostics,
+            initialized: false,
+        };
+
+        client.initialize(workspace_root).await?;
+        Ok(client)
+    }
+
+    /// LSP initialize 握手 + initialized 通知。
+    async fn initialize(&mut self, workspace_root: &Path) -> Result<()> {
+        let root_uri = path_to_uri(workspace_root);
+        let params = json!({
+            "processId": std::process::id(),
+            "rootUri": root_uri,
+            "capabilities": {
+                "textDocument": {
+                    "publishDiagnostics": { "relatedInformation": true },
+                    "synchronization": { "didOpen": true, "didChange": true, "didSave": true }
+                },
+                "workspace": { "workspaceFolders": true }
+            },
+        });
+        let _res = self.request("initialize", params).await?;
+        self.notify_async("initialized", json!({})).await?;
+        self.initialized = true;
+        tracing::info!("LSP server 已就绪(workspace: {})", workspace_root.display());
+        Ok(())
+    }
+
+    /// 发送请求并等待响应。
+    async fn request(&self, method: &str, params: Value) -> Result<Value> {
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let (tx, rx) = oneshot::channel();
+        self.pending.lock().await.insert(id, tx);
+        let msg = json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params });
+        self.write_frame(&msg).await?;
+        let res = tokio::time::timeout(std::time::Duration::from_secs(30), rx)
+            .await
+            .map_err(|_| anyhow::anyhow!("LSP 请求 `{method}` 超时"))??;
+        if let Some(err) = res.get("error") {
+            anyhow::bail!("LSP 请求 `{method}` 错误: {err}");
+        }
+        Ok(res.get("result").cloned().unwrap_or(Value::Null))
+    }
+
+    /// 写一帧 JSON(Content-Length 头 + 正文)到 stdin。
+    async fn write_frame(&self, msg: &Value) -> Result<()> {
+        let body = serde_json::to_vec(msg)?;
+        let header = format!("Content-Length: {}\r\n\r\n", body.len());
+        let mut stdin = self.stdin.lock().await;
+        stdin.write_all(header.as_bytes()).await?;
+        stdin.write_all(&body).await?;
+        stdin.flush().await?;
+        Ok(())
+    }
+
+    /// textDocument/didOpen 通知。
+    pub async fn did_open(&self, abs_path: &Path, text: &str, language_id: &str) -> Result<()> {
+        let uri = path_to_uri(abs_path);
+        let params = json!({
+            "textDocument": {
+                "uri": uri,
+                "languageId": language_id,
+                "version": 1,
+                "text": text,
+            }
+        });
+        self.notify_async("textDocument/didOpen", params).await
+    }
+
+    /// 取回某文件最新诊断(server 通过 publishDiagnostics 主动 push)。
+    pub async fn get_diagnostics(&self, abs_path: &Path) -> Vec<Value> {
+        let uri = path_to_uri(abs_path);
+        self.diagnostics
+            .lock()
+            .await
+            .get(&uri)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// textDocument/definition → 位置列表。
+    pub async fn definition(&self, abs_path: &Path, line: u32, col: u32) -> Result<Vec<Value>> {
+        self.location_request("textDocument/definition", abs_path, line, col)
+            .await
+    }
+
+    /// textDocument/references → 位置列表。
+    pub async fn references(&self, abs_path: &Path, line: u32, col: u32) -> Result<Vec<Value>> {
+        let params = self.position_params(abs_path, line, col);
+        let mut params = params;
+        params["context"] = json!({ "includeDeclaration": true });
+        let res = self.request("textDocument/references", params).await?;
+        Ok(location_list(res))
+    }
+
+    /// textDocument/hover → 文本(Markdown/plain)。
+    pub async fn hover(&self, abs_path: &Path, line: u32, col: u32) -> Result<Option<String>> {
+        let params = self.position_params(abs_path, line, col);
+        let res = self.request("textDocument/hover", params).await?;
+        Ok(extract_hover_text(&res))
+    }
+
+    fn position_params(&self, abs_path: &Path, line: u32, col: u32) -> Value {
+        json!({
+            "textDocument": { "uri": path_to_uri(abs_path) },
+            "position": { "line": line, "character": col }
+        })
+    }
+
+    async fn location_request(
+        &self,
+        method: &str,
+        abs_path: &Path,
+        line: u32,
+        col: u32,
+    ) -> Result<Vec<Value>> {
+        let res = self.request(method, self.position_params(abs_path, line, col)).await?;
+        Ok(location_list(res))
+    }
+
+    async fn notify_async(&self, method: &str, params: Value) -> Result<()> {
+        let msg = json!({ "jsonrpc": "2.0", "method": method, "params": params });
+        self.write_frame(&msg).await
+    }
+}
+
+/// stdout 读循环:逐帧解析 JSON,按 id 分发 response,通知存入 diagnostics。
+async fn read_loop(
+    mut reader: BufReader<ChildStdout>,
+    pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>,
+    diagnostics: Arc<Mutex<HashMap<String, Vec<Value>>>>,
+) {
+    loop {
+        let mut content_len: Option<usize> = None;
+        let mut line = String::new();
+        // 读 header 直到空行
+        loop {
+            line.clear();
+            match reader.read_line(&mut line).await {
+                Ok(0) => return, // EOF
+                Ok(_) => {}
+                Err(_) => return,
+            }
+            let trimmed = line.trim_end_matches(['\r', '\n']);
+            if trimmed.is_empty() {
+                break; // header 结束
+            }
+            if let Some(v) = trimmed.strip_prefix("Content-Length:") {
+                content_len = v.trim().parse().ok();
+            }
+        }
+        let Some(len) = content_len else { continue };
+        let mut buf = vec![0u8; len];
+        if reader.read_exact(&mut buf).await.is_err() {
+            return;
+        }
+        let Ok(msg) = serde_json::from_slice::<Value>(&buf) else {
+            continue;
+        };
+
+        // response(id 匹配)
+        if let Some(id) = msg.get("id").and_then(Value::as_u64) {
+            if let Some(tx) = pending.lock().await.remove(&id) {
+                let _ = tx.send(msg);
+            }
+            continue;
+        }
+        // notification
+        if let Some(method) = msg.get("method").and_then(Value::as_str) {
+            if method == "textDocument/publishDiagnostics" {
+                if let Some(params) = msg.get("params") {
+                    let uri = params.get("uri").and_then(Value::as_str).map(String::from);
+                    let diags = params
+                        .get("diagnostics")
+                        .cloned()
+                        .unwrap_or(Value::Array(vec![]));
+                    let arr = match diags {
+                        Value::Array(a) => a,
+                        other => vec![other],
+                    };
+                    if let Some(uri) = uri {
+                        diagnostics.lock().await.insert(uri, arr);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// 绝对路径 → `file://` URI。
+fn path_to_uri(p: &Path) -> String {
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        std::env::current_dir().unwrap_or_default().join(p)
+    };
+    format!("file://{}", abs.display())
+}
+
+/// 把 definition/references 的响应归一为位置数组。
+fn location_list(res: Value) -> Vec<Value> {
+    match res {
+        Value::Null => vec![],
+        Value::Array(a) => a,
+        other => vec![other],
+    }
+}
+
+/// 从 hover 响应提取可读文本。
+fn extract_hover_text(res: &Value) -> Option<String> {
+    // res 本身是字符串时直接返回。
+    if let Some(s) = res.as_str() {
+        return Some(s.to_string());
+    }
+    let content = res.get("contents").or_else(|| res.get("value"))?;
+    match content {
+        Value::String(s) => Some(s.clone()),
+        Value::Object(_) => content
+            .get("value")
+            .and_then(Value::as_str)
+            .map(String::from),
+        Value::Array(a) => {
+            let parts: Vec<String> = a
+                .iter()
+                .filter_map(|v| v.get("value").and_then(Value::as_str).map(String::from))
+                .collect();
+            if parts.is_empty() {
+                None
+            } else {
+                Some(parts.join("\n\n"))
+            }
+        }
+        _ => None,
+    }
+}
+
+// =========================== LspManager ===========================
+
+/// 多语言 LSP 路由器。按文件扩展名找到配置的语言 server,lazy 启动并复用。
+///
+/// 生命周期绑定到所注册的 agent 工具:工具 drop → Arc 引用归零 → client drop → 子进程关闭。
+pub struct LspManager {
+    workspace_root: PathBuf,
+    configs: BTreeMap<String, LspServerConfig>,
+    clients: Mutex<HashMap<String, Arc<LspClient>>>,
+}
+
+impl LspManager {
+    pub fn new(workspace_root: PathBuf, configs: BTreeMap<String, LspServerConfig>) -> Self {
+        Self {
+            workspace_root,
+            configs,
+            clients: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// 是否配置了任意 LSP server(决定是否注册 LSP 工具)。
+    pub fn has_servers(&self) -> bool {
+        !self.configs.is_empty()
+    }
+
+    /// 按扩展名解析语言标识,并返回该语言是否已配置 server。
+    pub fn lang_for_ext(&self, ext: &str) -> Option<String> {
+        let lang = ext_to_lang(ext)?;
+        if self.configs.contains_key(lang) {
+            Some(lang.to_string())
+        } else {
+            None
+        }
+    }
+
+    /// 取得(必要时启动)某语言对应的 client。
+    async fn client_for(&self, lang: &str) -> Result<Arc<LspClient>> {
+        if let Some(c) = self.clients.lock().await.get(lang) {
+            return Ok(c.clone());
+        }
+        let cfg = self
+            .configs
+            .get(lang)
+            .ok_or_else(|| anyhow::anyhow!("语言 `{lang}` 未配置 LSP server"))?;
+        let args = cfg.args.clone().unwrap_or_default();
+        let env = cfg.env.clone().unwrap_or_default();
+        let client = LspClient::start(&cfg.command, &args, &env, &self.workspace_root).await?;
+        let arc = Arc::new(client);
+        self.clients.lock().await.insert(lang.to_string(), arc.clone());
+        Ok(arc)
+    }
+
+    /// 打开文件(若未打开)并等待诊断就绪。
+    ///
+    /// LSP server(如 rust-analyzer)首次加载项目可能先推送空诊断,
+    /// 分析完成后才推送实际诊断。因此等待策略:
+    /// 1. 轮询直到 diagnostics 中出现该文件 uri(最多 30s);
+    /// 2. 继续轮询直到诊断稳定(连续 3 次读取相同)或非空,最多再等 10s。
+    async fn ensure_opened(&self, client: &LspClient, abs_path: &Path, lang: &str) -> Result<()> {
+        let text = std::fs::read_to_string(abs_path)
+            .map_err(|e| anyhow::anyhow!("读取文件失败 {}: {e}", abs_path.display()))?;
+        client.did_open(abs_path, &text, lang).await?;
+        let uri = path_to_uri(abs_path);
+        let diags = client.diagnostics.clone();
+
+        // 1. 等待 uri 首次出现(server 已开始处理)。
+        for _ in 0..600 {
+            if diags.lock().await.contains_key(&uri) {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        // 2. 等待诊断稳定或非空(分析可能多次推送)。
+        let mut last_len: Option<usize> = None;
+        let mut stable = 0;
+        for _ in 0..200 {
+            let cur_len = diags
+                .lock()
+                .await
+                .get(&uri)
+                .map(|v| v.len())
+                .unwrap_or(0);
+            if cur_len > 0 {
+                break; // 有诊断即可返回
+            }
+            if Some(cur_len) == last_len {
+                stable += 1;
+                if stable >= 6 {
+                    break; // 连续 ~3s 稳定为空,视为无诊断
+                }
+            } else {
+                stable = 0;
+            }
+            last_len = Some(cur_len);
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+        Ok(())
+    }
+
+    /// 获取文件诊断(错误/警告)。返回人类可读的多行文本。
+    pub async fn diagnostics(&self, abs_path: &Path, ext: &str) -> Result<String> {
+        let lang = self
+            .lang_for_ext(ext)
+            .ok_or_else(|| anyhow::anyhow!("扩展名 `.{ext}` 无对应 LSP server"))?;
+        let client = self.client_for(&lang).await?;
+        self.ensure_opened(client.as_ref(), abs_path, &lang).await?;
+        let diags = client.get_diagnostics(abs_path).await;
+        Ok(format_diagnostics(&diags, abs_path))
+    }
+
+    /// 跳转定义,返回格式化位置列表。
+    pub async fn definition(&self, abs_path: &Path, ext: &str, line: u32, col: u32) -> Result<String> {
+        let lang = self
+            .lang_for_ext(ext)
+            .ok_or_else(|| anyhow::anyhow!("扩展名 `.{ext}` 无对应 LSP server"))?;
+        let client = self.client_for(&lang).await?;
+        self.ensure_opened(client.as_ref(), abs_path, &lang).await?;
+        let locs = client.definition(abs_path, line, col).await?;
+        Ok(format_locations(&locs))
+    }
+
+    /// 查找引用,返回格式化位置列表。
+    pub async fn references(&self, abs_path: &Path, ext: &str, line: u32, col: u32) -> Result<String> {
+        let lang = self
+            .lang_for_ext(ext)
+            .ok_or_else(|| anyhow::anyhow!("扩展名 `.{ext}` 无对应 LSP server"))?;
+        let client = self.client_for(&lang).await?;
+        self.ensure_opened(client.as_ref(), abs_path, &lang).await?;
+        let locs = client.references(abs_path, line, col).await?;
+        Ok(format_locations(&locs))
+    }
+
+    /// hover,返回文档文本。
+    pub async fn hover(&self, abs_path: &Path, ext: &str, line: u32, col: u32) -> Result<String> {
+        let lang = self
+            .lang_for_ext(ext)
+            .ok_or_else(|| anyhow::anyhow!("扩展名 `.{ext}` 无对应 LSP server"))?;
+        let client = self.client_for(&lang).await?;
+        self.ensure_opened(client.as_ref(), abs_path, &lang).await?;
+        let text = client.hover(abs_path, line, col).await?;
+        Ok(text.unwrap_or_else(|| "无 hover 信息".into()))
+    }
+}
+
+/// 把诊断数组格式化为可读文本。
+fn format_diagnostics(diags: &[Value], abs_path: &Path) -> String {
+    if diags.is_empty() {
+        return format!("{}: 无诊断(0 error/warning)", abs_path.display());
+    }
+    let mut out = String::new();
+    let mut errors = 0;
+    let mut warnings = 0;
+    for d in diags {
+        let severity = d.get("severity").and_then(Value::as_u64).unwrap_or(0);
+        let kind = match severity {
+            1 => {
+                errors += 1;
+                "error"
+            }
+            2 => {
+                warnings += 1;
+                "warning"
+            }
+            3 => "info",
+            4 => "hint",
+            _ => "?",
+        };
+        let msg = d.get("message").and_then(Value::as_str).unwrap_or("");
+        let line = d
+            .get("range")
+            .and_then(|r| r.get("start"))
+            .and_then(|s| s.get("line"))
+            .and_then(Value::as_u64)
+            .map(|n| n + 1)
+            .unwrap_or(0);
+        let col = d
+            .get("range")
+            .and_then(|r| r.get("start"))
+            .and_then(|s| s.get("character"))
+            .and_then(Value::as_u64)
+            .map(|n| n + 1)
+            .unwrap_or(0);
+        out.push_str(&format!("  [{kind}] {msg} ({}:{}:{})\n", abs_path.display(), line, col));
+    }
+    format!(
+        "{}:{} error, {} warning\n{}",
+        abs_path.display(),
+        errors,
+        warnings,
+        out.trim_end()
+    )
+}
+
+/// 把位置数组格式化为可读文本。
+fn format_locations(locs: &[Value]) -> String {
+    if locs.is_empty() {
+        return "无结果".into();
+    }
+    let mut out = String::new();
+    for loc in locs {
+        let uri = loc
+            .get("uri")
+            .or_else(|| loc.get("targetUri"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let path = uri_to_path(uri);
+        let (line, col) = loc
+            .get("range")
+            .or_else(|| loc.get("targetSelectionRange"))
+            .and_then(|r| r.get("start"))
+            .map(|s| {
+                (
+                    s.get("line").and_then(Value::as_u64).unwrap_or(0) + 1,
+                    s.get("character").and_then(Value::as_u64).unwrap_or(0) + 1,
+                )
+            })
+            .unwrap_or((0, 0));
+        out.push_str(&format!("  {}:{}:{}\n", path, line, col));
+    }
+    out.trim_end().to_string()
+}
+
+/// `file://` URI → 本地路径。
+fn uri_to_path(uri: &str) -> String {
+    uri.strip_prefix("file://").unwrap_or(uri).to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn finds_executable_on_path() {
-        // 一定存在且带斜杠的命令
         assert!(find_executable("/bin/ls").is_some());
         assert!(find_executable("/nonexistent/xyz").is_none());
+    }
+
+    #[test]
+    fn ext_to_lang_maps_common() {
+        assert_eq!(ext_to_lang("rs"), Some("rust"));
+        assert_eq!(ext_to_lang("py"), Some("python"));
+        assert_eq!(ext_to_lang("ts"), Some("typescript"));
+        assert_eq!(ext_to_lang("tsx"), Some("typescript"));
+        assert_eq!(ext_to_lang("unknown"), None);
+    }
+
+    #[test]
+    fn path_to_uri_absolute() {
+        let u = path_to_uri(Path::new("/tmp/x.rs"));
+        assert!(u.starts_with("file://"));
+        assert!(u.ends_with("/tmp/x.rs"));
+    }
+
+    #[test]
+    fn uri_to_path_inverse() {
+        let p = uri_to_path("file:///tmp/x.rs");
+        assert_eq!(p, "/tmp/x.rs");
+    }
+
+    #[test]
+    fn location_list_normalizes() {
+        let empty: Vec<Value> = location_list(Value::Null);
+        assert!(empty.is_empty());
+        let one = json!({"uri": "file:///a.rs"});
+        assert_eq!(location_list(one.clone()), vec![one]);
+        let arr = json!([{"uri": "file:///a.rs"}, {"uri": "file:///b.rs"}]);
+        assert_eq!(location_list(arr).len(), 2);
+    }
+
+    #[test]
+    fn format_diagnostics_empty_and_filled() {
+        let s = format_diagnostics(&[], Path::new("/x.rs"));
+        assert!(s.contains("无诊断"));
+        let d = json!([{
+            "severity": 1,
+            "message": "missing semicolon",
+            "range": { "start": { "line": 3, "character": 9 } }
+        }]);
+        let arr = d.as_array().unwrap();
+        let s = format_diagnostics(arr, Path::new("/x.rs"));
+        assert!(s.contains("1 error"));
+        assert!(s.contains("missing semicolon"));
+        assert!(s.contains("/x.rs:4:10"));
+    }
+
+    #[test]
+    fn format_locations_empty_and_filled() {
+        assert_eq!(format_locations(&[]), "无结果");
+        let locs = json!([{
+            "uri": "file:///a/b.rs",
+            "range": { "start": { "line": 5, "character": 2 } }
+        }]);
+        let arr = locs.as_array().unwrap();
+        let s = format_locations(arr);
+        assert!(s.contains("/a/b.rs:6:3"));
+    }
+
+    #[test]
+    fn extract_hover_variants() {
+        assert_eq!(extract_hover_text(&json!("plain")), Some("plain".into()));
+        let v = json!({ "contents": { "kind": "markdown", "value": "# h" } });
+        assert_eq!(extract_hover_text(&v), Some("# h".into()));
+        assert_eq!(extract_hover_text(&Value::Null), None);
+    }
+
+    /// 真实集成测试:用 rust-analyzer 验证 LSP 客户端能启动并返回诊断。
+    /// 需系统装有 rust-analyzer;用 `cargo test -p combo-cli -- --ignored lsp_real` 运行。
+    #[tokio::test]
+    #[ignore]
+    async fn lsp_real_rust_analyzer_diagnostics() {
+        let dir = tempfile::tempdir().unwrap();
+        // 故意写一个有错误的 Rust 文件
+        std::fs::write(
+            dir.path().join("bad.rs"),
+            "fn main() { let x: u32 = \"not a number\"; }\n",
+        )
+        .unwrap();
+        // 伪装成 cargo 项目(rust-analyzer 需要 Cargo.toml 才能完整分析)
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"bad\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::rename(dir.path().join("bad.rs"), dir.path().join("src/main.rs")).unwrap();
+
+        let mut configs = BTreeMap::new();
+        configs.insert(
+            "rust".into(),
+            LspServerConfig {
+                command: "rust-analyzer".into(),
+                args: None,
+                env: None,
+            },
+        );
+        let manager = LspManager::new(dir.path().to_path_buf(), configs);
+        let path = dir.path().join("src/main.rs");
+        let result = manager
+            .diagnostics(&path, "rs")
+            .await
+            .expect("LSP 诊断应成功");
+        eprintln!("诊断结果:\n{result}");
+        // rust-analyzer 应该报告了不匹配错误(具体文案因版本而异,断言非空即可)
+        assert!(!result.contains("无诊断"), "应检测到类型错误: {result}");
     }
 }

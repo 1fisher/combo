@@ -477,6 +477,11 @@ pub fn write_default(path: &PathBuf, overwrite: bool) -> Result<()> {
 # url = "http://127.0.0.1:3001/mcp"
 
 # ========== LSP server(可多个)==========
+# 配置后,agent 自动获得 diagnostics/definition/references/hover 工具。
+# 语言标识按扩展名自动匹配(rust→.rs,typescript→.ts/.tsx,python→.py,go→.go...)。
+# [lsp.rust]
+# command = "rust-analyzer"
+#
 # [lsp.typescript]
 # command = "typescript-language-server"
 # args = ["--stdio"]

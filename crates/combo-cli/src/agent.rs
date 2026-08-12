@@ -16,7 +16,7 @@ use rig::completion::{CompletionModel, GetTokenUsage, Message};
 use rig::prelude::AgentClientExt;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingChat, StreamingPrompt};
 use rig::tool::DynamicTool;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -119,6 +119,8 @@ pub struct AskConfig {
     pub mcp_servers: Vec<(String, Option<String>, Option<String>)>,
     /// 推理强度(nothink / high / max),通过 additional_params 注入请求体。
     pub reasoning_effort: Option<String>,
+    /// LSP server 配置(语言标识 → server 配置),供工具按语言路由。
+    pub lsp: BTreeMap<String, crate::config::LspServerConfig>,
 }
 
 impl AskConfig {
@@ -158,6 +160,7 @@ impl AskConfig {
             explicit_base_url: r.base_url.clone(),
             mcp_servers,
             reasoning_effort: r.reasoning_effort.clone(),
+            lsp: r.lsp.clone(),
         }
     }
 
@@ -254,7 +257,7 @@ pub async fn ask_answer(
     workspace_dir: Option<PathBuf>,
 ) -> Result<String> {
     let builtin = if cfg.tools {
-        crate::tools::builtin_tools(workspace_dir)
+        crate::tools::builtin_tools(workspace_dir, cfg.lsp.clone())
     } else {
         Vec::new()
     };
@@ -349,7 +352,7 @@ where
     F: FnMut(RunEvent),
 {
     let builtin = if cfg.tools {
-        crate::tools::builtin_tools(workspace_dir)
+        crate::tools::builtin_tools(workspace_dir, cfg.lsp.clone())
     } else {
         Vec::new()
     };
@@ -477,7 +480,7 @@ pub async fn chat_loop(cfg: &AskConfig) -> Result<()> {
     let cfg = cfg.with_workspace(std::env::current_dir().ok(), &[]);
     let model = cfg.model.clone();
     let builtin = if cfg.tools {
-        crate::tools::builtin_tools(std::env::current_dir().ok())
+        crate::tools::builtin_tools(std::env::current_dir().ok(), cfg.lsp.clone())
     } else {
         Vec::new()
     };

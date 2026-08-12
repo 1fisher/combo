@@ -82,6 +82,7 @@ fn fallback_cfg() -> combo_cli::agent::AskConfig {
         explicit_base_url: None,
         mcp_servers: Vec::new(),
         reasoning_effort: None,
+        lsp: std::collections::BTreeMap::new(),
     }
 }
 
