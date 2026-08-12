@@ -70,7 +70,7 @@ async fn start_server() -> (String, tokio::task::JoinHandle<()>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let task = tokio::spawn(async move {
-        serve_listener(listener, make_state(), Vec::new())
+        serve_listener(listener, make_state(), Vec::new(), None)
             .await
             .unwrap();
     });
@@ -325,7 +325,7 @@ async fn git_repos_discovers_root_and_subdir_repos() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let task = tokio::spawn(async move {
-        serve_listener(listener, state, Vec::new()).await.unwrap();
+        serve_listener(listener, state, Vec::new(), None).await.unwrap();
     });
     let base = format!("http://{addr}");
     let client = reqwest::Client::new();

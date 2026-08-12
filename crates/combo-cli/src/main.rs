@@ -67,6 +67,9 @@ enum Command {
         /// 监听地址
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
+        /// 前端静态资源目录(如 dist/),设置后同时提供 API + 前端页面
+        #[arg(long)]
+        static_dir: Option<std::path::PathBuf>,
     },
     /// 配置文件管理(显示路径/重新生成)
     Config {
@@ -175,8 +178,8 @@ async fn main() -> anyhow::Result<()> {
             SessionsAction::Show { id } => db::show_session(id)?,
             SessionsAction::Rm { id } => db::rm_session(id)?,
         },
-        Command::Serve { port, host } => {
-            serve::run(&cfg, host.clone(), *port).await?;
+        Command::Serve { port, host, static_dir } => {
+            serve::run(&cfg, host.clone(), *port, static_dir.clone()).await?;
         }
         Command::Config { action } => match action {
             ConfigAction::Path => config::print_path(&config_path)?,

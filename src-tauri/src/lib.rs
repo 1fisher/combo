@@ -144,7 +144,46 @@ async fn init_backend(app: &tauri::AppHandle) {
         }
     });
     // 长驻服务:combo-cli 与桌面端同进程,退出由桌面端进程回收;失败时仅记录
-    if let Err(e) = serve_listener(listener, state, origins).await {
+    // 静态资源目录:支持 tunnel-all 模式下通过隧道提供前端页面给远程中转服务器。
+    let static_dir = resolve_static_dir(app);
+    if let Some(ref dir) = static_dir {
+        eprintln!("combo 静态资源目录(tunnel-all): {}", dir.display());
+    }
+    if let Err(e) = serve_listener(listener, state, origins, static_dir).await {
         eprintln!("serve exited: {e:?}");
     }
+}
+
+/// 解析前端静态资源目录:
+/// 1. `COMBO_STATIC_DIR` 环境变量(优先级最高)
+/// 2. Tauri resource 目录下的 `dist/`(打包后的资源)
+/// 3. 开发模式:auto-detect(当前工作目录或上级目录下的 `dist/`)
+fn resolve_static_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    use tauri::Manager;
+
+    // 1. 环境变量
+    if let Ok(dir) = std::env::var("COMBO_STATIC_DIR") {
+        let path = std::path::PathBuf::from(dir);
+        if path.is_dir() {
+            return Some(path);
+        }
+    }
+
+    // 2. Tauri resource 目录(打包后的 production 模式)
+    if let Ok(resource_dir) = app.path().resource_dir() {
+        let dist = resource_dir.join("dist");
+        if dist.join("index.html").is_file() {
+            return Some(dist);
+        }
+    }
+
+    // 3. 开发模式:auto-detect
+    for candidate in ["./dist", "../dist", "../../dist"] {
+        let path = std::path::PathBuf::from(candidate);
+        if path.join("index.html").is_file() {
+            return Some(path);
+        }
+    }
+
+    None
 }

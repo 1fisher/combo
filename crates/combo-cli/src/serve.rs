@@ -166,7 +166,12 @@ struct AgentReq {
     workspace_dir: Option<String>,
 }
 
-pub async fn run(cfg: &agent::AskConfig, host: String, port: u16) -> Result<()> {
+pub async fn run(
+    cfg: &agent::AskConfig,
+    host: String,
+    port: u16,
+    static_dir: Option<PathBuf>,
+) -> Result<()> {
     let mut state = AppState::new(cfg.clone())?;
     let listener = tokio::net::TcpListener::bind(format!("{host}:{port}")).await?;
     let actual = listener.local_addr()?;
@@ -174,17 +179,25 @@ pub async fn run(cfg: &agent::AskConfig, host: String, port: u16) -> Result<()> 
     // 机器可读端口输出(供外部脚本解析)
     println!("COMBO_CLI_PORT={}", actual.port());
     println!("combo-cli serve 已启动:http://{actual}");
-    serve_listener(listener, state, Vec::new()).await
+    if let Some(ref dir) = static_dir {
+        println!("combo-cli 静态资源:{}", dir.display());
+    }
+    serve_listener(listener, state, Vec::new(), static_dir).await
 }
 
 /// 在指定 listener 上提供服务(可内嵌调用,如 Tauri 直接托管)。
 /// 优雅关闭:调用方对 `state.shutdown.notify_one()` 后服务退出。
+///
+/// `static_dir`: 前端静态资源目录(如 `dist/`)。设置后 serve 同时提供
+/// API(`/v1/*`)和前端页面(SPA fallback 到 index.html),可用于
+/// tunnel-all 模式下中转服务器全量代理到桌面端。
 pub async fn serve_listener(
     listener: tokio::net::TcpListener,
     state: AppState,
     allowed_origins: Vec<String>,
+    static_dir: Option<PathBuf>,
 ) -> Result<()> {
-    let app = build_router(state.clone(), allowed_origins);
+    let app = build_router(state.clone(), allowed_origins, static_dir);
     // 注入 ConnectInfo<SocketAddr> 供鉴权中间件判断请求来源是否回环。
     let shutdown_handle = state.shutdown.clone();
     axum::serve(
@@ -199,8 +212,12 @@ pub async fn serve_listener(
     Ok(())
 }
 
-/// 构建 serve router(combo 全部 REST/WS 端点 + CORS + 令牌鉴权)。
-fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
+/// 构建 serve router(combo 全部 REST/WS 端点 + CORS + 令牌鉴权 + 可选静态前端)。
+fn build_router(
+    state: AppState,
+    allowed_origins: Vec<String>,
+    static_dir: Option<PathBuf>,
+) -> Router {
     let cors = if allowed_origins.is_empty() {
         CorsLayer::permissive()
     } else {
@@ -216,7 +233,7 @@ fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
             .allow_methods(Any)
             .allow_headers(Any)
     };
-    Router::new()
+    let api_router = Router::new()
         // ---- dispose:健康检查 / 优雅关闭 ----
         .route("/v1/health", get(health))
         .route("/v1/control", post(control))
@@ -333,8 +350,94 @@ fn build_router(state: AppState, allowed_origins: Vec<String>) -> Router {
         .route("/v1/workspaces/:id/git/commit/files", get(git::commit_files))
         .route("/v1/workspaces/:id/git/commit/diff", get(git::commit_diff))
         .layer(from_fn_with_state(state.clone(), auth::require_token))
-        .with_state(state)
-        .layer(cors)
+        .with_state(state);
+
+    // 静态前端(SPA):不受鉴权中间件保护(前端资源为公开内容)。
+    // 配置 static_dir 后,非 /v1/ 请求走静态文件服务,找不到时 fallback 到 index.html。
+    let app = match static_dir {
+        Some(dir) => {
+            let dir_clone = dir.clone();
+            Router::new()
+                .merge(api_router)
+                .fallback(move |req: axum::extract::Request| {
+                    let dir = dir_clone.clone();
+                    async move { serve_static_file(&dir, req).await }
+                })
+        }
+        None => api_router,
+    };
+
+    app.layer(cors)
+}
+
+/// 静态文件服务 + SPA fallback(index.html)。
+///
+/// 查找顺序:精确文件 → 目录下 index.html → SPA index.html → 404。
+async fn serve_static_file(root: &std::path::Path, req: axum::extract::Request) -> Response {
+    use axum::response::IntoResponse;
+
+    let path = req.uri().path();
+    // 安全:禁止路径穿越(../)
+    let clean = path.trim_start_matches('/');
+    let candidate = root.join(clean);
+
+    // 尝试直接读取文件
+    if candidate.is_file() {
+        return send_file(&candidate).await;
+    }
+
+    // 尝试目录下的 index.html
+    let index_in_dir = candidate.join("index.html");
+    if index_in_dir.is_file() {
+        return send_file(&index_in_dir).await;
+    }
+
+    // SPA fallback:index.html(前端路由由 React Router 处理)
+    let spa = root.join("index.html");
+    if spa.is_file() {
+        return send_file(&spa).await;
+    }
+
+    (StatusCode::NOT_FOUND, "Not Found").into_response()
+}
+
+async fn send_file(path: &std::path::Path) -> Response {
+    use axum::body::Body;
+    use axum::response::IntoResponse;
+    match tokio::fs::read(path).await {
+        Ok(data) => {
+            let mime = mime_for(path);
+            Response::builder()
+                .header(header::CONTENT_TYPE, HeaderValue::from_static(mime))
+                .body(Body::from(data))
+                .unwrap()
+        }
+        Err(_) => (StatusCode::NOT_FOUND, "Not Found").into_response(),
+    }
+}
+
+fn mime_for(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "html" => "text/html; charset=utf-8",
+        "js" | "mjs" => "application/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "json" => "application/json; charset=utf-8",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "ico" => "image/x-icon",
+        "woff" => "font/woff",
+        "woff2" => "font/woff2",
+        "wasm" => "application/wasm",
+        _ => "application/octet-stream",
+    }
 }
 
 /// GET /v1/workspaces/{id}/config — rune 兼容的配置读取。
@@ -1816,5 +1919,58 @@ mod tests {
         assert_eq!(mask_api_key("sk-abcdefghijkl1234"), "sk-a****1234");
         assert_eq!(mask_api_key("short"), "****");
         assert_eq!(mask_api_key(""), "****");
+    }
+
+    #[test]
+    fn mime_for_known_extensions() {
+        assert_eq!(mime_for(std::path::Path::new("index.html")), "text/html; charset=utf-8");
+        assert_eq!(mime_for(std::path::Path::new("app.js")), "application/javascript; charset=utf-8");
+        assert_eq!(mime_for(std::path::Path::new("style.css")), "text/css; charset=utf-8");
+        assert_eq!(mime_for(std::path::Path::new("data.json")), "application/json; charset=utf-8");
+        assert_eq!(mime_for(std::path::Path::new("logo.svg")), "image/svg+xml");
+        assert_eq!(mime_for(std::path::Path::new("icon.png")), "image/png");
+        assert_eq!(mime_for(std::path::Path::new("font.woff2")), "font/woff2");
+        assert_eq!(mime_for(std::path::Path::new("app.wasm")), "application/wasm");
+        assert_eq!(mime_for(std::path::Path::new("file.xyz")), "application/octet-stream");
+        assert_eq!(mime_for(std::path::Path::new("noext")), "application/octet-stream");
+    }
+
+    #[tokio::test]
+    async fn serve_static_file_reads_existing_file() {
+        let dir = std::env::temp_dir();
+        let test_file = dir.join("combo_test_static.txt");
+        tokio::fs::write(&test_file, "hello world").await.unwrap();
+
+        let resp = send_file(&test_file).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        // 清理
+        let _ = tokio::fs::remove_file(&test_file).await;
+    }
+
+    #[tokio::test]
+    async fn serve_static_file_404_for_missing() {
+        let resp = send_file(std::path::Path::new("/nonexistent/combo/file.txt")).await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn serve_static_file_spa_fallback() {
+        // 创建临时目录,内含 index.html
+        let dir = std::env::temp_dir().join("combo_spa_test");
+        tokio::fs::create_dir_all(&dir).await.unwrap();
+        tokio::fs::write(dir.join("index.html"), "<!DOCTYPE html><html>SPA</html>")
+            .await
+            .unwrap();
+
+        // 请求不存在的路径 → SPA fallback 到 index.html
+        let req = axum::extract::Request::builder()
+            .uri("/some/deep/route")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        let resp = serve_static_file(&dir, req).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // 清理
+        let _ = tokio::fs::remove_dir_all(&dir).await;
     }
 }

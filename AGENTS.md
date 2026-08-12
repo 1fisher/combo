@@ -347,3 +347,19 @@ health 都走同一 base,跨域由 CORS 放开。
   局域网)。配置域名后手机扫码即可通过公网/域名访问,无需额外设置后端地址。
   serve 监听地址可通过 `COMBO_HOST` 环境变量(或 `serve --host` 参数)指定,域名
   部署时设 `0.0.0.0`。
+- **中转服务器(combo-relay)与 tunnel-all 模式**:combo-relay 是独立部署的中转服务器,
+  桌面端通过 WebSocket 反向隧道(`wss://relay/v1/relay/tunnel?token=`)连出。
+  两种部署模式:
+  1. **静态托管模式**(`--static-dir dist/`):中转服务器直接提供前端页面,
+     `/v1/*` API 通过隧道转发到桌面端 combo-cli serve。
+  2. **tunnel-all 模式**(默认,无 `--static-dir`):**所有请求**(含前端 HTML/JS/CSS)
+     通过隧道转发到桌面端。桌面端需以 `--static-dir` 启动 combo-cli serve
+     (或在 Tauri 应用中自动检测 dist/)。此模式下:
+     - 令牌查找:`Authorization Bearer` → `?token=` → `combo.token` cookie → 单隧道自动选用
+     - 浏览器首次访问带 `?token=xxx` 时中转设置 `combo.token` cookie,
+       后续加载 JS/CSS 等静态资源自动携带 cookie 关联隧道
+     - 无隧道连接时返回「等待桌面端连接」HTML 页面(3 秒自动刷新)
+  - combo-cli serve 的 `--static-dir` 参数(或 `COMBO_STATIC_DIR` 环境变量)启用
+    前端静态服务 + SPA fallback(index.html)。非 `/v1/` 路径走静态文件,
+    不受鉴权中间件保护(前端资源为公开内容)。Tauri 应用在 `init_backend` 中
+    自动检测 dist/(`COMBO_STATIC_DIR` → Tauri resource_dir → 开发模式 auto-detect)。

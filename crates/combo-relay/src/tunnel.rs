@@ -27,6 +27,36 @@ pub struct RelayState {
     pub tunnels: Arc<DashMap<String, TunnelHandle>>,
 }
 
+impl RelayState {
+    /// 返回当前已连接的唯一一个隧道 token(用于 tunnel-all 单隧道模式)。
+    /// 当恰好只有一条隧道时返回它;多条或无隧道时返回 None。
+    pub fn single_tunnel_token(&self) -> Option<String> {
+        if self.tunnels.len() == 1 {
+            self.tunnels.iter().next().map(|e| e.key().clone())
+        } else {
+            None
+        }
+    }
+
+    /// 是否有隧道在线。
+    pub fn has_tunnel(&self) -> bool {
+        !self.tunnels.is_empty()
+    }
+
+    /// 解析请求的目标隧道 token:
+    /// 1. Authorization Bearer / ?token= / cookie → 精确匹配
+    /// 2. 单隧道模式:自动选用唯一隧道
+    pub fn resolve_token(&self, req: &Request) -> Option<String> {
+        if let Some(t) = extract_token(req) {
+            if self.tunnels.contains_key(&t) {
+                return Some(t);
+            }
+        }
+        // 单隧道模式:浏览器加载静态资源(无 Authorization header)时自动选用
+        self.single_tunnel_token()
+    }
+}
+
 /// 一条已建立的隧道(桌面客户端的 WebSocket 连接)。
 pub struct TunnelHandle {
     /// 向桌面客户端 WebSocket 发送消息的通道。
@@ -330,7 +360,231 @@ pub async fn tunnel_forward(
     })
 }
 
-/// 从请求中提取访问令牌。
+/// HTTP 转发(tunnel-all 模式):使用 resolve_token(支持 cookie + 单隧道回退)。
+///
+/// 与 `tunnel_forward` 的区别:
+/// - 支持从 cookie 中提取令牌(浏览器加载静态资源时自动携带)
+/// - 单隧道模式下自动选用唯一已连接的隧道(无需在请求中显式携带令牌)
+/// - 无隧道连接时返回「等待桌面端连接」的 HTML 页面
+pub async fn tunnel_forward_all(
+    State(state): State<RelayState>,
+    req: Request,
+) -> Response {
+    // 检查 URL 中是否有 ?token=xxx(需要在响应中设置 cookie)
+    let token_from_url = req
+        .uri()
+        .query()
+        .map(|q| q.contains("token="))
+        .unwrap_or(false);
+
+    let token = match state.resolve_token(&req) {
+        Some(t) => t,
+        None => {
+            // 无隧道连接:返回等待页面(HTML 请求)或错误(API 请求)
+            let wants_html = req
+                .headers()
+                .get(header::ACCEPT)
+                .and_then(|v| v.to_str().ok())
+                .map(|v| v.contains("text/html"))
+                .unwrap_or(false);
+            if wants_html || req.uri().path() == "/" {
+                return waiting_page();
+            }
+            return (
+                StatusCode::BAD_GATEWAY,
+                "{\"message\":\"桌面客户端未连接\"}",
+            )
+                .into_response();
+        }
+    };
+
+    // 如果令牌来自 URL,记录下来用于设置 cookie
+    let cookie_token = if token_from_url { Some(token.clone()) } else { None };
+
+    // 查找隧道
+    let handle = match state.tunnels.get(&token) {
+        Some(h) => h,
+        None => {
+            return (
+                StatusCode::BAD_GATEWAY,
+                "{\"message\":\"桌面客户端未连接\"}",
+            )
+                .into_response();
+        }
+    };
+
+    // 分配请求 ID
+    let id = uuid::Uuid::new_v4().to_string();
+
+    // 创建响应通道
+    let (headers_tx, headers_rx) = oneshot::channel();
+    let (body_tx, body_rx) = mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(64);
+
+    handle.pending.insert(
+        id.clone(),
+        PendingResponse {
+            headers_tx: std::sync::Mutex::new(Some(headers_tx)),
+            body_tx: body_tx.clone(),
+        },
+    );
+
+    // 构造隧道请求消息
+    let (parts, body) = req.into_parts();
+    let body_bytes = axum::body::to_bytes(body, 1024 * 1024 * 16).await;
+    let body_b64 = match body_bytes {
+        Ok(b) if !b.is_empty() => {
+            Some(base64::engine::general_purpose::STANDARD.encode(&b))
+        }
+        _ => None,
+    };
+
+    let mut headers_map = HashMap::new();
+    for (k, v) in parts.headers.iter() {
+        if let Ok(s) = v.to_str() {
+            headers_map.insert(k.as_str().to_string(), s.to_string());
+        }
+    }
+
+    let tunnel_req = TunnelMsg::Request {
+        id: id.clone(),
+        method: parts.method.to_string(),
+        path: parts.uri.path().to_string(),
+        query: parts.uri.query().unwrap_or("").to_string(),
+        headers: headers_map,
+        body: body_b64,
+    };
+
+    // 发送到桌面客户端
+    if handle.tx.send(tunnel_req).is_err() {
+        drop(handle);
+        return (
+            StatusCode::BAD_GATEWAY,
+            "{\"message\":\"隧道已断开\"}",
+        )
+            .into_response();
+    }
+
+    drop(handle);
+
+    // 等待响应头
+    let (status, resp_headers) = match headers_rx.await {
+        Ok(v) => v,
+        Err(_) => {
+            return (
+                StatusCode::GATEWAY_TIMEOUT,
+                "{\"message\":\"等待桌面客户端响应超时\"}",
+            )
+                .into_response();
+        }
+    };
+
+    // 构建 axum 响应
+    let stream = tokio_stream::wrappers::ReceiverStream::new(body_rx);
+    let body = Body::from_stream(stream);
+
+    let mut response = Response::builder()
+        .status(StatusCode::from_u16(status).unwrap_or(StatusCode::OK));
+    for (k, v) in &resp_headers {
+        let lower = k.to_lowercase();
+        if lower == "transfer-encoding" || lower == "content-length" {
+            continue;
+        }
+        if let Ok(name) = axum::http::HeaderName::from_bytes(k.as_bytes()) {
+            if let Ok(val) = axum::http::HeaderValue::from_str(v) {
+                response = response.header(name, val);
+            }
+        }
+    }
+
+    // 令牌来自 URL 时设置 cookie,后续静态资源请求自动携带
+    if let Some(tok) = cookie_token {
+        let cookie_val = format!(
+            "combo.token={}; Path=/; Max-Age=604800; SameSite=Lax",
+            tok
+        );
+        if let Ok(val) = axum::http::HeaderValue::from_str(&cookie_val) {
+            response = response.header("set-cookie", val);
+        }
+    }
+
+    drop(body_tx);
+
+    response.body(body).unwrap_or_else(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "{\"message\":\"响应构建失败\"}",
+        )
+            .into_response()
+    })
+}
+
+/// 「等待桌面端连接」HTML 页面:隧道未建立时给浏览器看的友好提示。
+///
+/// 页面每 3 秒自动刷新,桌面端连接后即可正常加载。
+pub fn waiting_page() -> Response {
+    let html = r##"<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>combo — 等待桌面端连接</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       background:#0a0a0b;color:#e4e4e7;display:flex;align-items:center;
+       justify-content:center;min-height:100vh}
+  .card{text-align:center;max-width:420px;padding:48px 32px}
+  .icon{width:56px;height:56px;margin:0 auto 24px;border-radius:16px;
+        background:rgba(99,102,241,.15);display:flex;align-items:center;
+        justify-content:center;animation:pulse 2s ease-in-out infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+  h1{font-size:20px;font-weight:600;margin-bottom:8px}
+  p{font-size:14px;color:#a1a1aa;line-height:1.6}
+  code{background:rgba(255,255,255,.08);padding:2px 6px;border-radius:4px;
+       font-size:13px;color:#d4d4d8}
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="icon">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#818cf8"
+         stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83
+               M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+    </svg>
+  </div>
+  <h1>等待桌面端连接</h1>
+  <p>中转服务器已就绪,正在等待桌面客户端建立隧道连接。<br>
+     请在桌面端打开「移动端远程控制」生成连接。<br>
+     页面将在连接建立后自动刷新。</p>
+</div>
+<script>setTimeout(()=>location.reload(),3000);</script>
+</body>
+</html>"##;
+    Response::builder()
+        .status(StatusCode::SERVICE_UNAVAILABLE)
+        .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+        .header(header::REFRESH, "3")
+        .body(Body::from(html))
+        .unwrap()
+}
+
+/// 如果 URL 中含 `?token=xxx`,在响应中设置 cookie(供后续静态资源请求使用)。
+///
+/// 在 tunnel-all 模式下,浏览器首次访问带 token 的 URL 后,
+/// 后续加载 JS/CSS 等静态资源不再携带 Authorization header,
+/// 需通过 cookie 关联到正确的隧道。
+pub fn token_cookie_headers(req: &Request) -> Option<[(axum::http::HeaderName, axum::http::HeaderValue); 1]> {
+    let token = extract_token(req)?;
+    let cookie_val = format!(
+        "combo.token={}; Path=/; Max-Age=604800; SameSite=Lax",
+        token
+    );
+    let val = axum::http::HeaderValue::from_str(&cookie_val).ok()?;
+    Some([(axum::http::HeaderName::from_static("set-cookie"), val)])
+}
+///
+/// 查找顺序:Authorization Bearer header → ?token= query → combo.token cookie。
 fn extract_token(req: &Request) -> Option<String> {
     // 优先:Authorization: Bearer <token>
     if let Some(auth) = req.headers().get(header::AUTHORIZATION) {
@@ -345,6 +599,17 @@ fn extract_token(req: &Request) -> Option<String> {
         for pair in query.split('&') {
             if let Some(rest) = pair.strip_prefix("token=") {
                 return Some(rest.to_string());
+            }
+        }
+    }
+    // 回退:combo.token cookie(浏览器加载静态资源时自动携带)
+    if let Some(cookie) = req.headers().get(header::COOKIE) {
+        if let Ok(s) = cookie.to_str() {
+            for kv in s.split(';') {
+                let kv = kv.trim();
+                if let Some(rest) = kv.strip_prefix("combo.token=") {
+                    return Some(rest.to_string());
+                }
             }
         }
     }
@@ -550,4 +815,147 @@ pub async fn tunnel_status_handler(
             .to_string(),
         ))
         .unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_request_with_headers(
+        headers: &[(&str, &str)],
+        uri: &str,
+    ) -> Request {
+        let mut builder = Request::builder().uri(uri);
+        for (k, v) in headers {
+            builder = builder.header(*k, *v);
+        }
+        builder.body(axum::body::Body::empty()).unwrap()
+    }
+
+    #[test]
+    fn extract_token_from_authorization() {
+        let req = make_request_with_headers(
+            &[("authorization", "Bearer abc123")],
+            "/v1/health",
+        );
+        assert_eq!(extract_token(&req), Some("abc123".to_string()));
+    }
+
+    #[test]
+    fn extract_token_from_query() {
+        let req = make_request_with_headers(&[], "/v1/health?token=xyz789");
+        assert_eq!(extract_token(&req), Some("xyz789".to_string()));
+    }
+
+    #[test]
+    fn extract_token_from_cookie() {
+        let req = make_request_with_headers(
+            &[("cookie", "other=val; combo.token=cookie_tok; foo=bar")],
+            "/assets/index.js",
+        );
+        assert_eq!(extract_token(&req), Some("cookie_tok".to_string()));
+    }
+
+    #[test]
+    fn extract_token_none_when_missing() {
+        let req = make_request_with_headers(&[], "/v1/health");
+        assert_eq!(extract_token(&req), None);
+    }
+
+    #[test]
+    fn extract_token_authorization_priority() {
+        // Authorization header 应优先于 query 和 cookie
+        let req = make_request_with_headers(
+            &[
+                ("authorization", "Bearer from_header"),
+                ("cookie", "combo.token=from_cookie"),
+            ],
+            "/v1/health?token=from_query",
+        );
+        assert_eq!(extract_token(&req), Some("from_header".to_string()));
+    }
+
+    #[test]
+    fn single_tunnel_token_returns_one() {
+        let state = RelayState::default();
+        let (tx, _rx) = mpsc::unbounded_channel::<TunnelMsg>();
+        let pending = Arc::new(DashMap::new());
+        let pending_ws = Arc::new(DashMap::new());
+        state.tunnels.insert(
+            "tok1".to_string(),
+            TunnelHandle {
+                tx,
+                pending,
+                pending_ws,
+            },
+        );
+        assert_eq!(state.single_tunnel_token(), Some("tok1".to_string()));
+    }
+
+    #[test]
+    fn single_tunnel_token_none_when_multiple() {
+        let state = RelayState::default();
+        let (tx1, _rx1) = mpsc::unbounded_channel::<TunnelMsg>();
+        let (tx2, _rx2) = mpsc::unbounded_channel::<TunnelMsg>();
+        let make_handle = || TunnelHandle {
+            tx: mpsc::unbounded_channel().0,
+            pending: Arc::new(DashMap::new()),
+            pending_ws: Arc::new(DashMap::new()),
+        };
+        state.tunnels.insert("tok1".to_string(), make_handle());
+        state.tunnels.insert("tok2".to_string(), make_handle());
+        let _ = (tx1, tx2);
+        assert_eq!(state.single_tunnel_token(), None);
+    }
+
+    #[test]
+    fn resolve_token_falls_back_to_single_tunnel() {
+        let state = RelayState::default();
+        let make_handle = || TunnelHandle {
+            tx: mpsc::unbounded_channel().0,
+            pending: Arc::new(DashMap::new()),
+            pending_ws: Arc::new(DashMap::new()),
+        };
+        state.tunnels.insert("only_token".to_string(), make_handle());
+
+        // 无令牌请求 → 单隧道回退
+        let req = make_request_with_headers(&[], "/index.html");
+        assert_eq!(
+            state.resolve_token(&req),
+            Some("only_token".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_token_none_when_no_tunnel() {
+        let state = RelayState::default();
+        let req = make_request_with_headers(&[], "/index.html");
+        assert_eq!(state.resolve_token(&req), None);
+    }
+
+    #[test]
+    fn token_cookie_headers_set_when_token_in_url() {
+        let req = make_request_with_headers(&[], "/?token=abc123");
+        let headers = token_cookie_headers(&req);
+        assert!(headers.is_some());
+        let [(name, val)] = headers.unwrap();
+        assert_eq!(name, "set-cookie");
+        assert!(val.to_str().unwrap().contains("combo.token=abc123"));
+    }
+
+    #[test]
+    fn token_cookie_headers_none_when_no_token() {
+        let req = make_request_with_headers(&[], "/");
+        assert!(token_cookie_headers(&req).is_none());
+    }
+
+    #[test]
+    fn waiting_page_returns_html() {
+        let resp = waiting_page();
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            resp.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/html; charset=utf-8"
+        );
+    }
 }
