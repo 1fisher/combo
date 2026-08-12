@@ -758,6 +758,8 @@ fn friendly_error(e: &anyhow::Error) -> String {
         "API 密钥无效或已过期:请在「设置」中检查当前 provider 的 API Key。"
     } else if low.contains("429") || low.contains("rate limit") || low.contains("too many requests") {
         "请求过于频繁(限流):请稍等片刻再试。"
+    } else if low.contains("maxturnserror") || low.contains("reached max turns limit") {
+        "已达单次任务最大轮数上限:任务较为复杂,agent 在本轮工具调用次数过多。可在新会话中继续,或拆分为更小的子任务。"
     } else {
         return raw;
     };
