@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 
-export type TriggerType = 'file' | 'skill' | null;
+export type TriggerType = 'file' | 'skill' | 'command' | 'conversation' | null;
 
 export interface MentionState {
   type: TriggerType;
@@ -38,7 +38,7 @@ export function useMention(
     const pos = el.selectionStart;
     const text = value.slice(0, pos);
 
-    // 从光标往前找最近的 @ 或 $,中间不能有空格/换行
+    // 从光标往前找最近的 @ / $ / / / #,中间不能有空格/换行
     let triggerChar: TriggerType = null;
     let at = -1;
     for (let i = text.length - 1; i >= 0; i--) {
@@ -51,6 +51,16 @@ export function useMention(
       }
       if (ch === '$' && (i === 0 || /[\s\n]/.test(text[i - 1]))) {
         triggerChar = 'skill';
+        at = i;
+        break;
+      }
+      if (ch === '/' && (i === 0 || /[\s\n]/.test(text[i - 1]))) {
+        triggerChar = 'command';
+        at = i;
+        break;
+      }
+      if (ch === '#' && (i === 0 || /[\s\n]/.test(text[i - 1]))) {
+        triggerChar = 'conversation';
         at = i;
         break;
       }
@@ -100,6 +110,8 @@ export function useMention(
    * 选择一个结果:
    * - file 类型: 移除 textarea 中的 `@query` 文本,返回附件信息供调用方添加 chip
    * - skill 类型: 在 textarea 中将 `$query` 替换为 `$skillname `
+   * - command 类型: 在 textarea 中将 `/query` 替换为 `/command `
+   * - conversation 类型: 在 textarea 中将 `#query` 替换为 `#title `
    * 返回 MentionResult 供调用方决定后续行为。
    */
   const select = useCallback(
@@ -125,8 +137,13 @@ export function useMention(
         return ret;
       }
 
-      // skill: 替换为 $skillname
-      const trigger = '$';
+      // skill / command / conversation: 替换为 $name / /name / #name
+      const triggerMap: Record<string, string> = {
+        skill: '$',
+        command: '/',
+        conversation: '#',
+      };
+      const trigger = triggerMap[mention.type ?? 'skill'] ?? '$';
       const insert = `${trigger}${result.insertText} `;
       const newValue = value.slice(0, mention.startIndex) + insert + value.slice(pos);
       onChange(newValue);

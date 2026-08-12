@@ -23,6 +23,7 @@ import { useContextStore, type ContextItem } from '../../stores/contextStore';
 import { useMention, type MentionResult } from '../../hooks/useMention';
 import { useFileIndex } from '../../hooks/useFileIndex';
 import { useSkills, useWorkspaceDisabledSkills } from '../../hooks/useSkills';
+import { useSessions } from '../../hooks/useSessions';
 import { useAgentInfo, useProviders, useSetModel, useWorkspaceConfig } from '../../hooks/useAgentModel';
 import type { Api } from '../../lib/api/types';
 import { cn } from '../../lib/utils';
@@ -104,6 +105,14 @@ const THOUGHT_LEVELS = [
   { id: 'high', label: '高' },
   { id: 'max', label: '最高' },
 ] as const;
+
+const SLASH_COMMANDS = [
+  { id: 'clear', label: '/clear', description: '清空当前对话上下文' },
+  { id: 'new', label: '/new', description: '开始新的任务' },
+  { id: 'summary', label: '/summary', description: '总结当前对话内容' },
+  { id: 'review', label: '/review', description: '审查代码变更' },
+  { id: 'tests', label: '/tests', description: '运行项目测试' },
+];
 
 export function Composer({
   workspaceId,
@@ -353,6 +362,7 @@ export function Composer({
   const { files: fileIndex } = useFileIndex(workspaceId);
   const { data: skillsData } = useSkills();
   const { disabledSkills } = useWorkspaceDisabledSkills(workspaceId ?? null);
+  const { sessions } = useSessions(workspaceId ?? null);
 
   const mentionResults: MentionResult[] = useMemo(() => {
     if (!mention) return [];
@@ -369,19 +379,42 @@ export function Composer({
           raw: f,
         }));
     }
-    // skill(禁用的不出现在候选中)
-    return (skillsData ?? [])
-      .filter((s) => !disabledSkills.includes(s.name))
-      .filter((s) => s.name.toLowerCase().includes(q))
+    if (mention.type === 'skill') {
+      // skill(禁用的不出现在候选中)
+      return (skillsData ?? [])
+        .filter((s) => !disabledSkills.includes(s.name))
+        .filter((s) => s.name.toLowerCase().includes(q))
+        .slice(0, 10)
+        .map((s) => ({
+          id: s.dir_name,
+          label: s.name,
+          description: s.description,
+          insertText: s.name,
+          raw: s,
+        }));
+    }
+    if (mention.type === 'command') {
+      return SLASH_COMMANDS.filter((c) => c.label.toLowerCase().includes(q) || c.description.toLowerCase().includes(q))
+        .slice(0, 10)
+        .map((c) => ({
+          id: c.id,
+          label: c.label,
+          description: c.description,
+          insertText: c.id,
+        }));
+    }
+    // conversation: 同工作区其他会话
+    return (sessions ?? [])
+      .filter((s) => s.title.toLowerCase().includes(q))
       .slice(0, 10)
       .map((s) => ({
-        id: s.dir_name,
-        label: s.name,
-        description: s.description,
-        insertText: s.name,
+        id: s.id,
+        label: s.title,
+        description: `${s.message_count} 条消息`,
+        insertText: s.title,
         raw: s,
       }));
-  }, [mention, fileIndex, skillsData, disabledSkills]);
+  }, [mention, fileIndex, skillsData, disabledSkills, sessions]);
 
   function handleMentionSelect(r: MentionResult) {
     const result = selectMention(r);
@@ -867,7 +900,7 @@ export function Composer({
       </div>
       {mention && mentionResults.length > 0 && createPortal(
         <MentionPopover
-          type={mention.type as 'file' | 'skill'}
+          type={mention.type as 'file' | 'skill' | 'command' | 'conversation'}
           results={mentionResults}
           activeIndex={activeIndex}
           setActiveIndex={setActiveIndex}
@@ -900,7 +933,7 @@ function MentionPopover({
   onPositionChange,
   popoverPos,
 }: {
-  type: 'file' | 'skill';
+  type: 'file' | 'skill' | 'command' | 'conversation';
   results: MentionResult[];
   activeIndex: number;
   setActiveIndex: (i: number) => void;
@@ -935,7 +968,7 @@ function MentionPopover({
       style={{ left: popoverPos.left, bottom: popoverPos.bottom, width: popoverPos.width }}
     >
       <div className="px-2 py-1 text-xs font-medium text-foreground-subtlest">
-        {type === 'file' ? '提及文件' : '使用技能'}
+        {type === 'file' ? '提及文件' : type === 'skill' ? '使用技能' : type === 'command' ? '使用命令' : '关联对话'}
       </div>
       {results.map((r, i) => (
         <button
@@ -950,8 +983,12 @@ function MentionPopover({
         >
           {type === 'file' ? (
             <FileText className="size-3.5 shrink-0 text-muted-foreground" />
-          ) : (
+          ) : type === 'skill' ? (
             <Sparkles className="size-3.5 shrink-0 text-brand" />
+          ) : type === 'command' ? (
+            <Zap className="size-3.5 shrink-0 text-warning" />
+          ) : (
+            <Brain className="size-3.5 shrink-0 text-foreground-subtle" />
           )}
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="truncate font-medium">{r.label}</span>
