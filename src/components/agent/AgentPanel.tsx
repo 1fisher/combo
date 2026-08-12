@@ -210,17 +210,6 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
           发送失败:{postError}
         </div>
       )}
-      {/* 变更栏 */}
-      {pendingCount > 0 && !showChanges && (
-        <button
-          onClick={() => setShowChanges(true)}
-          className="flex shrink-0 items-center gap-2 border-b border-border bg-surface/40 px-4 py-1.5 text-xs transition-colors hover:bg-surface-hover"
-        >
-          <FileEdit className="size-3.5 text-brand" />
-          <span className="text-muted-foreground">{pendingCount} 个文件待审查</span>
-          <span className="ml-auto text-brand">审查变更</span>
-        </button>
-      )}
       {/* 时间线 / 变更面板 */}
       <div className={cn('min-h-0 flex-1', showChanges ? 'overflow-hidden' : 'overflow-y-auto')}>
         {showChanges && workspaceId ? (
@@ -289,6 +278,17 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
               </div>
             )}
           </div>
+        )}
+        {/* 变更栏 */}
+        {pendingCount > 0 && !showChanges && (
+          <button
+            onClick={() => setShowChanges(true)}
+            className="mx-4 mb-2 flex items-center gap-2 rounded-xl border border-border bg-surface/40 px-3 py-1.5 text-xs transition-colors hover:bg-surface-hover"
+          >
+            <FileEdit className="size-3.5 text-brand" />
+            <span className="text-muted-foreground">{pendingCount} 个文件待审查</span>
+            <span className="ml-auto text-brand">审查变更</span>
+          </button>
         )}
         <Composer
           workspaceName={wsName}
