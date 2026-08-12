@@ -18,7 +18,7 @@ import { useAgentStore } from '../stores/agentStore';
  */
 const recentlyCreated = new Set<string>();
 /** 标记后 5 秒内不被 stale-guard 清除(足够 sessions 列表 refetch 完成) */
-function markCreated(id: string) {
+export function markCreated(id: string) {
   recentlyCreated.add(id);
   setTimeout(() => recentlyCreated.delete(id), 5000);
 }

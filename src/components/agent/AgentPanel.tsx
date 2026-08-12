@@ -240,6 +240,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
           </div>
         ) : messages.length === 0 ? (
           <ChatEmptyState
+            hasSession={!!sessionId}
             onPickTemplate={(p) => {
               setDraft(p);
             }}

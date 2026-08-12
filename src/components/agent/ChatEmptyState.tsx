@@ -24,8 +24,10 @@ const TEMPLATES: { icon: typeof Moon; title: string; desc: string; prompt: strin
 /** 空会话首页:问候语 + 订阅横幅 + 任务模板 */
 export function ChatEmptyState({
   onPickTemplate,
+  hasSession = false,
 }: {
   onPickTemplate: (prompt: string) => void;
+  hasSession?: boolean;
 }) {
   return (
     <div className="flex min-h-full flex-col items-center justify-center gap-6 px-4 py-10 text-foreground">
@@ -51,11 +53,12 @@ export function ChatEmptyState({
           </svg>
         </div>
         <p className="relative z-10 w-full px-4 text-center text-3xl font-medium max-md:text-xl">
-          下午好呀，接下来交给我吧
+          {hasSession ? '新任务已创建，输入消息开始对话' : '下午好呀，接下来交给我吧'}
         </p>
       </div>
       {/* 订阅横幅 + 模板卡片 */}
       <div className="mt-6 flex w-full max-w-2xl flex-col gap-3">
+        {!hasSession && (
         <div className="flex items-center justify-between">
           <div className="flex min-w-0 items-center gap-1 text-[13px] text-foreground-subtle opacity-80">
             <span className="flex size-8 shrink-0 items-center justify-center">
@@ -73,6 +76,7 @@ export function ChatEmptyState({
             <X className="size-4" />
           </button>
         </div>
+        )}
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           {TEMPLATES.map((t) => (
             <button

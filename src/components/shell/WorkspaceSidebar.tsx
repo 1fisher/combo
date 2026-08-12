@@ -31,13 +31,15 @@ import {
   DialogTitle,
 } from '../ui/dialog';
 import { cn } from '../../lib/utils';
+import { useQueryClient } from '@tanstack/react-query';
 import { useWorkspaces } from '../../hooks/useWorkspaces';
-import { useSessions } from '../../hooks/useSessions';
+import { useSessions, markCreated } from '../../hooks/useSessions';
 import { useActiveWorkspaceId } from '../../hooks/useActiveWorkspaceId';
 import { useAgentStore } from '../../stores/agentStore';
 import { useConnectionStore } from '../../stores/connectionStore';
 import { isTauri } from '../../lib/connection';
 import { confirmDialog } from '../../lib/confirm';
+import { createSession as createSessionApi } from '../../lib/api';
 import { ConversationList } from './ConversationList';
 import { SessionRow } from './SessionRow';
 import { SkillsPanel } from './SkillsPanel';
@@ -209,9 +211,11 @@ function WorkspaceGroup({
 }
 
 export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
+  const qc = useQueryClient();
   const { workspaces, isLoading, create, rename, changePath, remove } = useWorkspaces();
   const active = useActiveWorkspaceId();
   const setActive = useAgentStore((s) => s.setActiveWorkspace);
+  const setActiveSessionId = useAgentStore((s) => s.setActiveSessionId);
   const connStatus = useConnectionStore((s) => s.status);
   const {
     sessions: activeSessions,
@@ -319,14 +323,29 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
 
   async function onNewTask() {
     setSidebarError(null);
-    if (!active) {
-      setSidebarError('请先在「项目」分区添加/选择一个项目');
+    // active 可能在首屏渲染(useActiveWorkspaceId 的 auto-select effect 尚未执行)时为 null
+    // 此处兜底:若 workspaces 已加载,直接用第一个项目创建会话
+    let wsId = active;
+    if (!wsId && workspaces?.length) {
+      wsId = workspaces[0].id;
+      setActive(wsId);
+    }
+    if (!wsId) {
+      setSidebarError('请先在「项目」分区添加一个项目');
       return;
     }
     const base = `会话 ${(activeSessions?.length ?? 0) + 1}`;
     try {
-      const s = await createSessionIn(base);
-      void activateSession(s.id);
+      if (wsId === active) {
+        const s = await createSessionIn(base);
+        void activateSession(s.id);
+      } else {
+        // active 为 null 时走原生 API,手动管理状态
+        const s = await createSessionApi(wsId, base);
+        markCreated(s.id);
+        setActiveSessionId(s.id);
+        qc.invalidateQueries({ queryKey: ['sessions', wsId] });
+      }
       onNavigate?.();
     } catch (e) {
       setSidebarError(e instanceof Error ? e.message : String(e));
@@ -595,6 +614,19 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
         </div>
         {/* 分区列表 */}
         <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-2 pt-3">
+          {sidebarError && (
+            <div className="flex items-start gap-2 rounded-lg bg-destructive/10 px-2.5 py-1.5 text-xs text-destructive">
+              <span className="flex-1">{sidebarError}</span>
+              <button
+                type="button"
+                onClick={() => setSidebarError(null)}
+                className="shrink-0 text-destructive/70 hover:text-destructive"
+                aria-label="关闭"
+              >
+                ✕
+              </button>
+            </div>
+          )}
           {tab === 'project' ? (
             <>
               <Section
@@ -707,11 +739,6 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
           {!isLoading && tab === 'grouped' && workspaces?.length === 0 && (
             <div className="px-3 py-2 text-[13px] leading-relaxed text-foreground-subtle">
               还没有项目,切换到「项目」视图添加。
-            </div>
-          )}
-          {sidebarError && (
-            <div className="mx-2 rounded-lg bg-destructive/10 px-2.5 py-1.5 text-xs text-destructive">
-              {sidebarError}
             </div>
           )}
         </div>
