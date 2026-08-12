@@ -24,12 +24,34 @@ use std::sync::Arc;
 ///
 /// `client` 来自具体 provider;MCP 连接需要 ToolServerHandle 才能注册工具,
 /// 所以先建 ToolServer(带内置工具),MCP 连接后 agent 用该 handle。
+/// 将推理强度映射为 additional_params JSON(合并进请求体,各 provider 取所需字段)。
+/// - `nothink`:关闭思考(enable_thinking=false / thinking disabled)
+/// - `high`/`max`:开启思考并设 reasoning_effort
+fn reasoning_additional_params(effort: &str) -> serde_json::Value {
+    match effort {
+        "nothink" => serde_json::json!({
+            "enable_thinking": false,
+            "thinking": {"type": "disabled"}
+        }),
+        "high" => serde_json::json!({
+            "enable_thinking": true,
+            "reasoning_effort": "high"
+        }),
+        "max" => serde_json::json!({
+            "enable_thinking": true,
+            "reasoning_effort": "max"
+        }),
+        _ => serde_json::json!({}),
+    }
+}
+
 async fn build_agent<C>(
     client: C,
     model: &str,
     preamble: &str,
     builtin: Vec<DynamicTool>,
     mcp_specs: Vec<(String, Option<String>, Option<String>)>,
+    reasoning_effort: Option<&str>,
 ) -> Result<(
     Agent<C::CompletionModel>,
     Option<McpConnection>,
@@ -57,12 +79,17 @@ where
     // 3. agent 通过 tool_server_handle 共享工具
     // rig 默认 max_turns=1(仅一轮),开启工具后需要多轮才能完成工具调用循环;
     // 设为 30 允许 agent 进行多轮工具调用与推理。
-    let agent = client
+    let builder = client
         .agent(model)
         .preamble(preamble)
         .tool_server_handle(handle)
-        .default_max_turns(30)
-        .build();
+        .default_max_turns(30);
+    let agent = match reasoning_effort {
+        Some(effort) if !effort.is_empty() => {
+            builder.additional_params(reasoning_additional_params(effort)).build()
+        }
+        _ => builder.build(),
+    };
 
     Ok((agent, mcp_conn))
 }
@@ -90,6 +117,8 @@ pub struct AskConfig {
     pub explicit_base_url: Option<String>,
     /// 配置文件中的 MCP server 列表((name, command, url))。
     pub mcp_servers: Vec<(String, Option<String>, Option<String>)>,
+    /// 推理强度(nothink / high / max),通过 additional_params 注入请求体。
+    pub reasoning_effort: Option<String>,
 }
 
 impl AskConfig {
@@ -128,6 +157,7 @@ impl AskConfig {
             explicit_api_key: r.api_key.clone(),
             explicit_base_url: r.base_url.clone(),
             mcp_servers,
+            reasoning_effort: r.reasoning_effort.clone(),
         }
     }
 
@@ -206,18 +236,19 @@ pub async fn ask_answer(
     };
     let mcp = cfg.mcp_specs();
     let ptype = cfg.provider.provider_type.as_deref().unwrap_or("openai");
+    let effort = cfg.reasoning_effort.as_deref();
 
     match ptype {
         "anthropic" => {
             let client = rig::providers::anthropic::Client::from_env()?;
             let (agent, _mcp) =
-                build_agent(client, &cfg.model, &cfg.preamble, builtin, mcp).await?;
+                build_agent(client, &cfg.model, &cfg.preamble, builtin, mcp, effort).await?;
             ask_one(&agent, question).await
         }
         "google" => {
             let client = rig::providers::gemini::Client::from_env()?;
             let (agent, _mcp) =
-                build_agent(client, &cfg.model, &cfg.preamble, builtin, mcp).await?;
+                build_agent(client, &cfg.model, &cfg.preamble, builtin, mcp, effort).await?;
             ask_one(&agent, question).await
         }
         // openai / openai-compat / 其它一律走 OpenAI 兼容协议
@@ -231,7 +262,7 @@ pub async fn ask_answer(
                 .build()
                 .map_err(|e| anyhow::anyhow!("创建 client 失败: {e}"))?;
             let (agent, _mcp) =
-                build_agent(client, &cfg.model, &cfg.preamble, builtin, mcp).await?;
+                build_agent(client, &cfg.model, &cfg.preamble, builtin, mcp, effort).await?;
             ask_one(&agent, question).await
         }
     }
@@ -298,15 +329,16 @@ where
     };
     let mcp = cfg.mcp_specs();
     let ptype = cfg.provider.provider_type.clone().unwrap_or_else(|| "openai".into());
+    let effort = cfg.reasoning_effort.as_deref();
     match ptype.as_str() {
         "anthropic" => {
             let client = rig::providers::anthropic::Client::from_env()?;
-            let (agent, _mcp) = build_agent(client, &cfg.model, &cfg.preamble, builtin, mcp).await?;
+            let (agent, _mcp) = build_agent(client, &cfg.model, &cfg.preamble, builtin, mcp, effort).await?;
             stream_one(&agent, question, history, &mut cancel, &mut on_event).await
         }
         "google" => {
             let client = rig::providers::gemini::Client::from_env()?;
-            let (agent, _mcp) = build_agent(client, &cfg.model, &cfg.preamble, builtin, mcp).await?;
+            let (agent, _mcp) = build_agent(client, &cfg.model, &cfg.preamble, builtin, mcp, effort).await?;
             stream_one(&agent, question, history, &mut cancel, &mut on_event).await
         }
         // openai / openai-compat / 其它一律走 OpenAI 兼容协议
@@ -319,7 +351,7 @@ where
             let client = builder
                 .build()
                 .map_err(|e| anyhow::anyhow!("创建 client 失败: {e}"))?;
-            let (agent, _mcp) = build_agent(client, &cfg.model, &cfg.preamble, builtin, mcp).await?;
+            let (agent, _mcp) = build_agent(client, &cfg.model, &cfg.preamble, builtin, mcp, effort).await?;
             stream_one(&agent, question, history, &mut cancel, &mut on_event).await
         }
     }
@@ -425,6 +457,7 @@ pub async fn chat_loop(cfg: &AskConfig) -> Result<()> {
     let preamble = cfg.preamble.clone();
     let provider_id = cfg.provider.id.clone();
     let ptype = cfg.provider.provider_type.clone().unwrap_or_else(|| "openai".into());
+    let effort = cfg.reasoning_effort.as_deref();
 
     // 新建一个会话
     let db = db::CliDb::open(&db::default_db_path())?;
@@ -436,12 +469,12 @@ pub async fn chat_loop(cfg: &AskConfig) -> Result<()> {
     let (agent, mcp_conn): (Box<dyn AnyAgent>, Option<McpConnection>) = match ptype.as_str() {
         "anthropic" => {
             let client = rig::providers::anthropic::Client::from_env()?;
-            let (a, m) = build_agent(client, &model, &preamble, builtin, mcp_cfg).await?;
+            let (a, m) = build_agent(client, &model, &preamble, builtin, mcp_cfg, effort).await?;
             (Box::new(Arc::new(a)), m)
         }
         "google" => {
             let client = rig::providers::gemini::Client::from_env()?;
-            let (a, m) = build_agent(client, &model, &preamble, builtin, mcp_cfg).await?;
+            let (a, m) = build_agent(client, &model, &preamble, builtin, mcp_cfg, effort).await?;
             (Box::new(Arc::new(a)), m)
         }
         _ => {
@@ -453,7 +486,7 @@ pub async fn chat_loop(cfg: &AskConfig) -> Result<()> {
             let client = builder
                 .build()
                 .map_err(|e| anyhow::anyhow!("创建 client 失败: {e}"))?;
-            let (a, m) = build_agent(client, &model, &preamble, builtin, mcp_cfg).await?;
+            let (a, m) = build_agent(client, &model, &preamble, builtin, mcp_cfg, effort).await?;
             (Box::new(Arc::new(a)), m)
         }
     };

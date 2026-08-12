@@ -110,6 +110,7 @@ impl AppState {
             explicit_api_key: None,
             explicit_base_url: None,
             mcp_servers: Vec::new(),
+            reasoning_effort: None,
         };
         Self {
             cfg: Arc::new(Mutex::new(cfg)),
@@ -1292,6 +1293,7 @@ struct ConfigModelReq {
 struct ConfigModelRef {
     model: Option<String>,
     provider: Option<String>,
+    reasoning_effort: Option<String>,
 }
 
 async fn config_model(
@@ -1320,6 +1322,9 @@ async fn config_model(
             if !model_id.is_empty() {
                 cfg.model = model_id.clone();
             }
+        }
+        if let Some(effort) = &m.reasoning_effort {
+            cfg.reasoning_effort = if effort.is_empty() { None } else { Some(effort.clone()) };
         }
     }
     *state.cfg.lock().unwrap() = cfg.clone();

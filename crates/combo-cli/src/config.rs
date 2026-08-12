@@ -299,6 +299,7 @@ impl AppConfig {
             lsp: self.lsp.clone(),
             skills_paths: self.skills_paths.clone(),
             disabled_skills: self.disabled_skills.clone(),
+            reasoning_effort: None,
         }
     }
 }
@@ -553,6 +554,8 @@ pub struct ResolvedConfig {
     pub lsp: BTreeMap<String, LspServerConfig>,
     pub skills_paths: Vec<String>,
     pub disabled_skills: Vec<String>,
+    /// 推理强度(nothink / high / max);serve 运行时由前端切换写入。
+    pub reasoning_effort: Option<String>,
 }
 
 #[cfg(test)]

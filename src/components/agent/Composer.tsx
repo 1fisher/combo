@@ -101,7 +101,7 @@ const MODES: { id: AgentMode; label: string; desc: string }[] = [
 ];
 
 const THOUGHT_LEVELS = [
-  { id: 'nothink', label: '不思考' },
+  { id: 'nothink', label: '无思考' },
   { id: 'high', label: '高' },
   { id: 'max', label: '最高' },
 ] as const;
@@ -143,7 +143,7 @@ export function Composer({
   const contextItems = useContextStore((s) => s.items);
   const removeContextItem = useContextStore((s) => s.removeItem);
   const clearContextItems = useContextStore((s) => s.clear);
-  const thought = THOUGHT_LEVELS[1];
+  const [thoughtMenuOpen, setThoughtMenuOpen] = useState(false);
 
   // agent / model 选择
   const { data: agentInfo } = useAgentInfo(workspaceId);
@@ -288,6 +288,10 @@ export function Composer({
   );
   const currentProviderName = (currentProvider?.name ?? currentProviderId) || '默认';
 
+  // 当前思考强度:优先本地持久化,默认「高」
+  const currentThoughtId = storedModel?.reasoningEffort ?? 'high';
+  const thought = THOUGHT_LEVELS.find((t) => t.id === currentThoughtId) ?? THOUGHT_LEVELS[1];
+
   // 当前模型的上下文窗口上限:agent_info 优先(后端按当前模型解析真实值),
   // 其次按模型 id 在 provider 列表查,最后用兜底值
   const contextWindow = useMemo(() => {
@@ -372,6 +376,30 @@ export function Composer({
     }
     setModel.mutate(
       { model: { model: defaultModel, provider: providerId } },
+      {
+        onError: (e) => setModelErr(e instanceof Error ? e.message : '切换失败,请稍后重试'),
+      }
+    );
+  }
+
+  function handleThoughtChange(effortId: string) {
+    setThoughtMenuOpen(false);
+    if (effortId === currentThoughtId) return;
+    if (workspaceId) {
+      useAgentStore.getState().setModelSelection(workspaceId, {
+        model: currentModelId,
+        provider: currentProviderId,
+        reasoningEffort: effortId,
+      });
+    }
+    setModel.mutate(
+      {
+        model: {
+          model: currentModelId,
+          provider: currentProviderId,
+          reasoning_effort: effortId,
+        },
+      },
       {
         onError: (e) => setModelErr(e instanceof Error ? e.message : '切换失败,请稍后重试'),
       }
@@ -678,6 +706,7 @@ export function Composer({
                       onClick={() => {
                         setProviderMenuOpen((o) => !o);
                         setModelMenuOpen(false);
+                        setThoughtMenuOpen(false);
                       }}
                       className="flex h-7 w-fit items-center justify-between gap-1 rounded-lg px-1.5 py-1.5 text-[13px] whitespace-nowrap text-foreground-subtle transition-colors hover:bg-surface-hover hover:text-foreground"
                       aria-label="切换 Provider"
@@ -744,6 +773,7 @@ export function Composer({
                         if (!modelMenuOpen) setModelSearch('');
                         setModelMenuOpen((o) => !o);
                         setProviderMenuOpen(false);
+                        setThoughtMenuOpen(false);
                       }}
                       className={cn(
                         'flex h-7 w-fit items-center justify-between gap-1 rounded-lg px-1.5 py-1.5 text-[13px] whitespace-nowrap transition-colors hover:bg-surface-hover',
@@ -843,14 +873,54 @@ export function Composer({
                     )}
                   </div>
                   {/* 思考等级 */}
-                  <span
-                    className="flex h-7 shrink-0 w-fit items-center justify-between gap-1 rounded-lg px-1.5 py-1.5 text-[13px] whitespace-nowrap text-foreground-subtle"
-                    title="思考等级"
-                  >
-                    <Brain className="pointer-events-none size-4 text-current" />
-                    <span className="whitespace-nowrap">{thought.label}</span>
-                    <ChevronDown className="pointer-events-none size-3.5 text-foreground-subtlest" />
-                  </span>
+                  <div className="relative shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setThoughtMenuOpen((o) => !o);
+                        setModelMenuOpen(false);
+                        setProviderMenuOpen(false);
+                      }}
+                      className="flex h-7 w-fit items-center justify-between gap-1 rounded-lg px-1.5 py-1.5 text-[13px] whitespace-nowrap transition-colors hover:bg-surface-hover text-foreground-subtle hover:text-foreground"
+                      aria-label="思考等级"
+                      title="思考等级"
+                    >
+                      <Brain className="pointer-events-none size-4 text-current" />
+                      <span className="whitespace-nowrap">{thought.label}</span>
+                      <ChevronDown className="pointer-events-none size-3.5 text-foreground-subtlest" />
+                    </button>
+                    {thoughtMenuOpen && (
+                      <>
+                        <div
+                          className="fixed inset-0 z-40"
+                          onClick={() => setThoughtMenuOpen(false)}
+                        />
+                        <div className="absolute bottom-full right-0 z-50 mb-2 w-40 rounded-xl border border-border bg-popover p-1.5 shadow-xl">
+                          <div className="px-2 py-1 text-xs font-medium text-foreground-subtlest">
+                            思考等级
+                          </div>
+                          {THOUGHT_LEVELS.map((t) => (
+                            <button
+                              key={t.id}
+                              type="button"
+                              onClick={() => handleThoughtChange(t.id)}
+                              className={cn(
+                                'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-hover',
+                                t.id === currentThoughtId && 'bg-surface-hover'
+                              )}
+                            >
+                              <span className="min-w-0 flex-1 truncate font-medium">
+                                {t.label}
+                              </span>
+                              {t.id === currentThoughtId && (
+                                <Check className="size-3.5 shrink-0 text-brand" />
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
                   {/* 发送 / 停止 */}
                   {running ? (
                     <Button

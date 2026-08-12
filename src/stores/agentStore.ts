@@ -40,6 +40,8 @@ export const WRITE_TOOL_NAMES = new Set([
 export interface ModelSelection {
   model: string;
   provider: string;
+  /** 推理强度: nothink / high / max */
+  reasoningEffort?: string;
 }
 
 interface AgentState {

@@ -231,6 +231,7 @@ mod tests {
             lsp: Default::default(),
             skills_paths: vec![dir.path().to_string_lossy().to_string()],
             disabled_skills: vec![],
+            reasoning_effort: None,
         };
         let skills = discover(&cfg).unwrap();
         assert_eq!(skills.len(), 2);
