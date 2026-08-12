@@ -36,6 +36,12 @@ export const WRITE_TOOL_NAMES = new Set([
   'bash',
 ]);
 
+/** 用户选中的模型(workspaceId → { model, provider }),持久化到 localStorage */
+export interface ModelSelection {
+  model: string;
+  provider: string;
+}
+
 interface AgentState {
   activeWorkspaceId: string | null;
   /** 上次选中项目的路径(后端重启后 ID 可能变化,用路径做恢复) */
@@ -46,6 +52,10 @@ interface AgentState {
   setActiveSessionId: (id: string | null) => void;
   agentMode: AgentMode;
   setAgentMode: (mode: AgentMode) => void;
+  /** 每个 workspace 用户手动选中的模型,跨重启保留 */
+  modelSelections: Record<string, ModelSelection>;
+  setModelSelection: (workspaceId: string, sel: ModelSelection) => void;
+  clearModelSelection: (workspaceId: string) => void;
 
   bySession: Record<string, SessionRuntime>;
   permissionQueue: Api.PermissionRequest[];
@@ -85,6 +95,16 @@ export const useAgentStore = create<AgentState>()(
   setLastWorkspacePath: (path) => set({ lastWorkspacePath: path }),
   agentMode: 'yolo' as AgentMode,
   setAgentMode: (mode) => set({ agentMode: mode }),
+  modelSelections: {},
+  setModelSelection: (workspaceId, sel) =>
+    set((st) => ({
+      modelSelections: { ...st.modelSelections, [workspaceId]: sel },
+    })),
+  clearModelSelection: (workspaceId) =>
+    set((st) => {
+      const { [workspaceId]: _drop, ...rest } = st.modelSelections;
+      return { modelSelections: rest };
+    }),
   activeSessionId: null,
   setActiveSessionId: (id) => set({ activeSessionId: id }),
 
@@ -234,6 +254,7 @@ export const useAgentStore = create<AgentState>()(
         lastWorkspacePath: s.lastWorkspacePath,
         activeSessionId: s.activeSessionId,
         agentMode: s.agentMode,
+        modelSelections: s.modelSelections,
       }),
     }
   )

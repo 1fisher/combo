@@ -216,9 +216,13 @@ export function Composer({
     const id = window.setInterval(tick, 400);
     return () => window.clearInterval(id);
   }, [running]);
-  // 当前模型:优先从 agent info 获取,否则从 combo config 加载默认模型
+  // 当前模型:优先使用用户手动选中的(持久化),其次从 agent info 获取,否则从 config 加载默认
+  const storedModel = useAgentStore((s) =>
+    workspaceId ? s.modelSelections[workspaceId] : undefined
+  );
   const configModel = wsConfig?.models?.large?.model ?? wsConfig?.models?.small?.model;
-  const currentModelId = agentInfo?.model_cfg?.model ?? agentInfo?.model?.id ?? configModel ?? '';
+  const currentModelId =
+    storedModel?.model ?? agentInfo?.model_cfg?.model ?? agentInfo?.model?.id ?? configModel ?? '';
 
   // 扁平化 provider → model 列表
   const modelList = useMemo(() => {
@@ -255,8 +259,9 @@ export function Composer({
     return out.sort((a, b) => modelVersion(b) - modelVersion(a));
   }, [providers]);
 
-  // 当前 provider:优先 agent info,其次按当前模型反查,最后取第一个
+  // 当前 provider:优先用户手动选中,其次 agent info,然后按当前模型反查,最后取第一个
   const currentProviderId = useMemo(() => {
+    if (storedModel?.provider) return storedModel.provider;
     const fromInfo = agentInfo?.model_cfg?.provider;
     if (fromInfo) return fromInfo;
     if (currentModelId) {
@@ -264,7 +269,18 @@ export function Composer({
       if (hit) return hit.provider;
     }
     return providers?.[0]?.id ?? '';
-  }, [agentInfo, currentModelId, modelList, providers]);
+  }, [storedModel, agentInfo, currentModelId, modelList, providers]);
+
+  // 后端模型仅存内存,重启后会回退到默认。当本地有持久化的用户选择且与后端不一致时,
+  // 自动把用户选中的模型同步到后端,保证 agent 实际使用正确的模型。
+  useEffect(() => {
+    if (!workspaceId || !storedModel || !agentInfo || setModel.isPending) return;
+    const backendModel = agentInfo.model_cfg?.model;
+    const backendProvider = agentInfo.model_cfg?.provider;
+    if (storedModel.model !== backendModel || storedModel.provider !== backendProvider) {
+      setModel.mutate({ model: { model: storedModel.model, provider: storedModel.provider } });
+    }
+  }, [workspaceId, storedModel, agentInfo, setModel]);
 
   const currentProvider = useMemo(
     () => providers?.find((p) => p.id === currentProviderId),
@@ -329,6 +345,9 @@ export function Composer({
   function handleModelChange(modelId: string, provider: string) {
     setModelMenuOpen(false);
     setModelErr('');
+    if (workspaceId) {
+      useAgentStore.getState().setModelSelection(workspaceId, { model: modelId, provider });
+    }
     setModel.mutate(
       { model: { model: modelId, provider } },
       {
@@ -345,6 +364,12 @@ export function Composer({
     // 切换 provider 时自动选用其默认大模型(未配置则取第一个模型)
     const defaultModel = (p?.default_large_model_id ?? models[0]?.id) ?? '';
     setModelErr('');
+    if (workspaceId && defaultModel) {
+      useAgentStore.getState().setModelSelection(workspaceId, {
+        model: defaultModel,
+        provider: providerId,
+      });
+    }
     setModel.mutate(
       { model: { model: defaultModel, provider: providerId } },
       {
