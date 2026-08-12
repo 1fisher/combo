@@ -198,6 +198,57 @@ export function countChanges(lines: DiffLine[]): { additions: number; deletions:
   return { additions, deletions };
 }
 
+/** 可折叠的 diff 区段 */
+export interface DiffSection {
+  type: 'lines' | 'skip';
+  lines: DiffLine[];
+  /** type === 'skip' 时,被折叠的行数 */
+  skipCount?: number;
+}
+
+/**
+ * 将 diff 行分组：仅保留变更行附近 contextSize 行上下文，
+ * 其余连续 context 行折叠为 skip 区段。
+ */
+export function groupDiffWithContext(lines: DiffLine[], contextSize = 3): DiffSection[] {
+  const changeIdx: number[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].type === 'add' || lines[i].type === 'remove') {
+      changeIdx.push(i);
+    }
+  }
+
+  if (changeIdx.length === 0) {
+    return [{ type: 'skip', lines, skipCount: lines.length }];
+  }
+
+  // 计算需要显示的行索引范围，合并重叠区间
+  const showRanges: Array<[number, number]> = [];
+  for (const idx of changeIdx) {
+    const start = Math.max(0, idx - contextSize);
+    const end = Math.min(lines.length - 1, idx + contextSize);
+    if (showRanges.length > 0 && start <= showRanges[showRanges.length - 1][1] + 1) {
+      showRanges[showRanges.length - 1][1] = Math.max(showRanges[showRanges.length - 1][1], end);
+    } else {
+      showRanges.push([start, end]);
+    }
+  }
+
+  const sections: DiffSection[] = [];
+  let pos = 0;
+  for (const [start, end] of showRanges) {
+    if (start > pos) {
+      sections.push({ type: 'skip', lines: lines.slice(pos, start), skipCount: start - pos });
+    }
+    sections.push({ type: 'lines', lines: lines.slice(start, end + 1) });
+    pos = end + 1;
+  }
+  if (pos < lines.length) {
+    sections.push({ type: 'skip', lines: lines.slice(pos), skipCount: lines.length - pos });
+  }
+  return sections;
+}
+
 /**
  * 从工具调用原始输入 JSON 计算 diff 行。
  * - edit: 比较 old_string → new_string

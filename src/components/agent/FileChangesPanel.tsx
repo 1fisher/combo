@@ -21,6 +21,8 @@ interface DiffEntry {
   additions: number;
   deletions: number;
   before: string;
+  /** 变更后的完整文件内容（暂存态），审批时写入磁盘 */
+  after: string;
   loading: boolean;
   error: string | null;
 }
@@ -61,7 +63,7 @@ export function FileChangesPanel({
       if (!calls) return;
       setDiffs((prev) => ({
         ...prev,
-        [path]: { lines: [], additions: 0, deletions: 0, before: '', loading: true, error: null },
+        [path]: { lines: [], additions: 0, deletions: 0, before: '', after: '', loading: true, error: null },
       }));
       try {
         let after: string;
@@ -76,7 +78,7 @@ export function FileChangesPanel({
         const { additions, deletions } = countChanges(lines);
         setDiffs((prev) => ({
           ...prev,
-          [path]: { lines, additions, deletions, before, loading: false, error: null },
+          [path]: { lines, additions, deletions, before, after, loading: false, error: null },
         }));
       } catch (e) {
         setDiffs((prev) => ({
@@ -86,6 +88,7 @@ export function FileChangesPanel({
             additions: 0,
             deletions: 0,
             before: '',
+            after: '',
             loading: false,
             error: e instanceof Error ? e.message : String(e),
           },
@@ -102,9 +105,32 @@ export function FileChangesPanel({
     }
   }, [expandedPath, diffs, loadDiff]);
 
-  const handleApprove = useCallback((path: string) => {
-    onStatusesChange((prev) => ({ ...prev, [path]: 'approved' }));
-  }, [onStatusesChange]);
+  // 面板打开时自动为所有文件加载 diff（暂存）
+  useEffect(() => {
+    for (const p of paths) {
+      if (!diffs[p]) void loadDiff(p);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paths.length]);
+
+  const handleApprove = useCallback(
+    async (path: string) => {
+      const entry = diffs[path];
+      // 将暂存的变更内容写入磁盘
+      if (entry && !entry.loading && entry.after) {
+        setBusy(path);
+        try {
+          await putFileContent(workspaceId, path, entry.after);
+        } catch (e) {
+          console.error('写入变更失败', e);
+        } finally {
+          setBusy(null);
+        }
+      }
+      onStatusesChange((prev) => ({ ...prev, [path]: 'approved' }));
+    },
+    [diffs, workspaceId, onStatusesChange],
+  );
 
   const handleReject = useCallback(
     async (path: string) => {
@@ -112,9 +138,9 @@ export function FileChangesPanel({
       if (!entry || entry.loading) return;
       setBusy(path);
       try {
+        // 撤销：将原始内容写回磁盘，不保留变更
         await putFileContent(workspaceId, path, entry.before);
         onStatusesChange((prev) => ({ ...prev, [path]: 'rejected' }));
-        // 重新加载 diff(revert 后应无差异)
         setDiffs((prev) => {
           const next = { ...prev };
           delete next[path];
@@ -130,13 +156,13 @@ export function FileChangesPanel({
     [diffs, workspaceId, loadDiff, onStatusesChange],
   );
 
-  const handleApproveAll = useCallback(() => {
-    onStatusesChange((prev) => {
-      const next = { ...prev };
-      for (const p of paths) if (next[p] !== 'rejected') next[p] = 'approved';
-      return next;
-    });
-  }, [paths, onStatusesChange]);
+  const handleApproveAll = useCallback(async () => {
+    for (const p of paths) {
+      if (statuses[p] === 'rejected') continue;
+      if (!diffs[p]) await loadDiff(p);
+      await handleApprove(p);
+    }
+  }, [paths, statuses, diffs, loadDiff, handleApprove]);
 
   const handleRejectAll = useCallback(async () => {
     for (const p of paths) {
@@ -238,12 +264,16 @@ export function FileChangesPanel({
                     {status === 'pending' ? (
                       <>
                         <button
-                          onClick={() => handleApprove(path)}
+                          onClick={() => void handleApprove(path)}
                           disabled={busy === path}
                           className="flex items-center gap-1 rounded-md border border-border px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-green-500/40 hover:text-green-500 disabled:opacity-50"
-                          title="批准变更"
+                          title="批准并写入文件"
                         >
-                          <Check className="size-3" />
+                          {busy === path ? (
+                            <Loader2 className="size-3 animate-spin" />
+                          ) : (
+                            <Check className="size-3" />
+                          )}
                           批准
                         </button>
                         <button

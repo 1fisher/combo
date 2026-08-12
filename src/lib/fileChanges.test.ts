@@ -7,6 +7,7 @@ import {
   computeDiffLines,
   countChanges,
   diffFromToolInput,
+  groupDiffWithContext,
 } from './fileChanges';
 import type { MessageVM } from '../stores/agentStore';
 import type { Api } from './api/types';
@@ -244,5 +245,56 @@ describe('diffFromToolInput', () => {
 
   it('returns null for invalid JSON', () => {
     expect(diffFromToolInput('edit', '{bad')).toBeNull();
+  });
+});
+
+describe('groupDiffWithContext', () => {
+  it('returns single skip when no changes', () => {
+    const lines = computeDiffLines('same\ncontent', 'same\ncontent');
+    const sections = groupDiffWithContext(lines, 3);
+    expect(sections).toHaveLength(1);
+    expect(sections[0].type).toBe('skip');
+  });
+
+  it('shows changes with surrounding context', () => {
+    // 10-line file, change on line 5
+    const before = 'l1\nl2\nl3\nl4\nold\nl6\nl7\nl8\nl9\nl10';
+    const after = 'l1\nl2\nl3\nl4\nnew\nl6\nl7\nl8\nl9\nl10';
+    const lines = computeDiffLines(before, after);
+    const sections = groupDiffWithContext(lines, 2);
+    // Expect: skip(lines 1-2), lines(context l3,l4,remove old,add new,l6,l7), skip(lines 8-10)
+    const skipSections = sections.filter((s) => s.type === 'skip');
+    const lineSections = sections.filter((s) => s.type === 'lines');
+    expect(skipSections.length).toBe(2);
+    expect(lineSections.length).toBe(1);
+    // First skip: 2 context lines before the context window
+    expect(skipSections[0].skipCount).toBe(2);
+    // Last skip: remaining lines after the context window
+    expect(skipSections[1].skipCount).toBe(3);
+    // Lines section should contain the change
+    const changes = lineSections[0].lines;
+    expect(changes.some((l) => l.type === 'remove' && l.content === 'old')).toBe(true);
+    expect(changes.some((l) => l.type === 'add' && l.content === 'new')).toBe(true);
+  });
+
+  it('merges adjacent change ranges', () => {
+    const before = 'l1\nold1\nl3\nold2\nl5';
+    const after = 'l1\nnew1\nl3\nnew2\nl5';
+    const lines = computeDiffLines(before, after);
+    const sections = groupDiffWithContext(lines, 2);
+    // With context=2, both changes fall within one merged range
+    const lineSections = sections.filter((s) => s.type === 'lines');
+    expect(lineSections).toHaveLength(1);
+  });
+
+  it('respects context size of 0', () => {
+    const before = 'l1\nl2\nold\nl4\nl5';
+    const after = 'l1\nl2\nnew\nl4\nl5';
+    const lines = computeDiffLines(before, after);
+    const sections = groupDiffWithContext(lines, 0);
+    const lineSections = sections.filter((s) => s.type === 'lines');
+    // Only the change line, no context
+    expect(lineSections).toHaveLength(1);
+    expect(lineSections[0].lines.every((l) => l.type !== 'context')).toBe(true);
   });
 });
