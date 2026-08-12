@@ -30,7 +30,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../ui/dialog';
-import { cn } from '../../lib/utils';
+import { cn, usageColor } from '../../lib/utils';
 import { useQueryClient } from '@tanstack/react-query';
 import { useWorkspaces } from '../../hooks/useWorkspaces';
 import { useSessions, markCreated } from '../../hooks/useSessions';
@@ -763,7 +763,10 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
           : `$${totals.cost.toFixed(2)}`;
         return (
           <div className="flex items-center justify-between px-4 pb-1 text-[10px] tabular-nums text-foreground-subtlest">
-            <span title={`输入+输出 token 总计`}>
+            <span
+              title={`输入+输出 token 总计`}
+              style={{ color: usageColor(totals.tokens / 100_000_000) }}
+            >
               共 {fmtTokens} tokens
             </span>
             {totals.cost > 0 && (

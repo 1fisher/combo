@@ -26,7 +26,7 @@ import { useSkills, useWorkspaceDisabledSkills } from '../../hooks/useSkills';
 import { useSessions } from '../../hooks/useSessions';
 import { useAgentInfo, useProviders, useSetModel, useWorkspaceConfig } from '../../hooks/useAgentModel';
 import type { Api } from '../../lib/api/types';
-import { cn } from '../../lib/utils';
+import { cn, usageColor } from '../../lib/utils';
 import { AttachmentPicker } from './AttachmentPicker';
 import { ProviderLogo } from './ProviderLogo';
 import { FlameWrap } from '../canvasui/FlameWrap';
@@ -313,6 +313,12 @@ export function Composer({
     [activeRuntime]
   );
   const contextPct = Math.min(100, Math.round((contextUsed / contextWindow) * 100));
+
+  // 当前会话的调用次数(assistant 消息数 ≈ API 调用次数)
+  const callCount = useMemo(
+    () => (activeRuntime ? activeRuntime.messages.filter((m) => m.role === 'assistant').length : 0),
+    [activeRuntime],
+  );
 
   // 全部 provider 的模型,按 provider 分组(可跨 provider 直接选模型)
   const modelGroups = useMemo(() => {
@@ -949,37 +955,34 @@ export function Composer({
                   )}
                 </div>
               </div>
-              {/* 上下文窗口用量统计:进度条 + 已用/上限(百分比只在悬停提示) */}
+              {/* 上下文窗口用量统计:进度条 + 已用/上限 + 调用次数(颜色随用量从绿渐变到红) */}
               {contextUsed > 0 && (
                 <div
                   className="flex items-center gap-2"
                   aria-label="上下文窗口用量"
-                  title={`上下文用量:${contextPct}%`}
+                  title={`上下文用量:${contextPct}%  ·  调用 ${callCount} 次`}
                 >
                   <div className="h-0.5 min-w-0 flex-1 overflow-hidden rounded-full bg-surface-hover">
                     <div
-                      className={cn(
-                        'h-full rounded-full transition-[width] duration-500',
-                        contextPct >= 95
-                          ? 'bg-red-500'
-                          : contextPct >= 80
-                            ? 'bg-amber-500'
-                            : 'bg-brand'
-                      )}
-                      style={{ width: `${contextPct}%` }}
+                      className="h-full rounded-full transition-[width] duration-500"
+                      style={{
+                        width: `${contextPct}%`,
+                        backgroundColor: usageColor(contextPct / 100),
+                      }}
                     />
                   </div>
                   <span
-                    className={cn(
-                      'shrink-0 text-[10px] leading-none tabular-nums',
-                      contextPct >= 95
-                        ? 'text-red-500'
-                        : contextPct >= 80
-                          ? 'text-amber-500'
-                          : 'text-foreground-subtlest'
-                    )}
+                    className="shrink-0 text-[10px] leading-none tabular-nums"
+                    style={{ color: usageColor(contextPct / 100) }}
                   >
                     {formatTokenCount(contextUsed)} / {formatTokenCount(contextWindow)}
+                  </span>
+                  <span
+                    className="shrink-0 text-[10px] leading-none tabular-nums"
+                    style={{ color: usageColor(callCount / 100) }}
+                    title={`调用次数:${callCount}`}
+                  >
+                    {callCount} 次
                   </span>
                 </div>
               )}
