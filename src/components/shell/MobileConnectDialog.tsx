@@ -81,21 +81,34 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
     void generateToken();
   }, [open, generateToken]);
 
-  // 轮询本地 /v1/relay/status 检查隧道 WebSocket 实际连接状态。
-  // startRelayTunnel 的 POST 返回只代表 task 已 spawn,不代表 WSS 已连通。
+  // 轮询本地 combo-cli 的隧道状态,实际连接后显示二维码。
+  // 兼容旧版二进制(无 connected 字段):task running + 等待 3s 后视为已连接。
   useEffect(() => {
     if (!open || !tokenInfo) return;
     let cancelled = false;
+    const startTime = Date.now();
     const poll = async () => {
       while (!cancelled) {
         try {
           const st = await getRelayStatus();
+          // 新版二进制:connected === true 表示 WSS 实际连通
           if (st.connected) {
             if (!cancelled) setTunnelConnected(true);
             return;
           }
+          // 旧版二进制无 connected 字段(undefined):
+          // task 已 running 且过了 3s 宽限期 → 视为已连接
+          if (st.connected === undefined && st.running && Date.now() - startTime > 3000) {
+            if (!cancelled) setTunnelConnected(true);
+            return;
+          }
         } catch {
-          // 忽略轮询错误,继续重试
+          // 忽略
+        }
+        // 超时兜底:15s 后强制显示,避免永久阻塞
+        if (Date.now() - startTime > 15000) {
+          if (!cancelled) setTunnelConnected(true);
+          return;
         }
         await new Promise((r) => setTimeout(r, 1000));
       }
