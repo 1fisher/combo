@@ -521,6 +521,15 @@ async fn run_agent_ws(
                     );
                     sparts.text_delta(&t);
                 }
+                RunEvent::ReasoningDelta(r) => {
+                    crate::request_log::log_event(
+                        &run_id_for_task,
+                        &session_id,
+                        "reasoning_delta",
+                        json!({ "delta": &r }),
+                    );
+                    sparts.reasoning_delta(&r);
+                }
                 RunEvent::ToolCall { id, name, input } => {
                     crate::request_log::log_event(
                         &run_id_for_task,
@@ -692,6 +701,13 @@ fn text_part(text: &str) -> Value {
     json!({ "type": "text", "data": { "text": text } })
 }
 
+fn reasoning_part(thinking: &str) -> Value {
+    json!({
+        "type": "reasoning",
+        "data": { "thinking": thinking, "signature": "" },
+    })
+}
+
 fn tool_call_part(id: &str, name: &str, input: &str) -> Value {
     json!({
         "type": "tool_call",
@@ -844,6 +860,9 @@ struct StreamParts {
     parts: Vec<Value>,
     /// 当前文本段缓冲(遇到工具调用后清空,使新文本段只含调用后的内容)
     text_buf: String,
+    /// 推理过程缓冲(thinking 增量,DeepSeek 思考模式;与文本不同,跨工具调用不重置,
+    /// 因为 reasoning_content 需要原样回传,见 history_to_messages 的推理合并逻辑)
+    reasoning_buf: String,
 }
 
 impl StreamParts {
@@ -855,6 +874,21 @@ impl StreamParts {
             self.parts.last_mut().unwrap()["data"] = text_val["data"].clone();
         } else {
             self.parts.push(text_val);
+        }
+    }
+
+    fn reasoning_delta(&mut self, r: &str) {
+        self.reasoning_buf.push_str(r);
+        // 更新唯一的 reasoning part(同理不逐 delta 建 part);推理总在文本之前到达,置顶展示
+        let val = reasoning_part(&self.reasoning_buf);
+        if let Some(pos) = self
+            .parts
+            .iter()
+            .position(|p| p.get("type").and_then(Value::as_str) == Some("reasoning"))
+        {
+            self.parts[pos]["data"] = val["data"].clone();
+        } else {
+            self.parts.insert(0, val);
         }
     }
 
@@ -885,6 +919,10 @@ impl StreamParts {
 /// assistant(text) → assistant(tool_calls) → assistant(text) 的序列,
 /// OpenAI 兼容 provider 报 400("tool_calls must be followed by tool messages"),
 /// 导致同一会话的跟进消息失败(UI 表现为 agent 无响应)。
+///
+/// 含 reasoning part 的 assistant 消息整体合并为一条(推理+文本+工具调用),
+/// 使推理内容经 rig 序列化为请求的 `reasoning_content` 字段原样回传——
+/// DeepSeek 思考模式要求多轮历史带回首轮 reasoning,否则跟进消息 400。
 fn history_to_messages(history: &[Value]) -> Vec<Message> {
     // 预扫描:收集有 tool_result 配对的 tool_call_id
     let mut answered: HashSet<String> = HashSet::new();
@@ -941,8 +979,13 @@ fn history_to_messages(history: &[Value]) -> Vec<Message> {
             }
             continue;
         }
-        // assistant 消息:文本合并为一条(置于 tool_call 前),tool_call 合并为一条
+        // assistant 消息:文本合并为一条(置于 tool_call 前),tool_call 合并为一条。
+        // 若有推理过程(thinking)part,则整条 wire 消息合并为一条 rig Message:
+        // rig 的 openai 转换会把 Reasoning content 序列化为请求里的
+        // `reasoning_content` 字段——DeepSeek 思考模式要求多轮历史原样回传该字段,
+        // 否则 400("The reasoning_content in the thinking mode must be passed back")。
         let mut texts: Vec<String> = Vec::new();
+        let mut reasoning_text = String::new();
         let mut calls: Vec<AssistantContent> = Vec::new();
         for p in parts {
             let ptype = p.get("type").and_then(Value::as_str).unwrap_or("");
@@ -951,6 +994,15 @@ fn history_to_messages(history: &[Value]) -> Vec<Message> {
                 "text" => {
                     let t = data.get("text").and_then(Value::as_str).unwrap_or("");
                     texts.push(t.to_string());
+                }
+                "reasoning" => {
+                    let t = data.get("thinking").and_then(Value::as_str).unwrap_or("");
+                    if !t.is_empty() {
+                        if !reasoning_text.is_empty() {
+                            reasoning_text.push('\n');
+                        }
+                        reasoning_text.push_str(t);
+                    }
                 }
                 "tool_call" => {
                     let id = data.get("id").and_then(Value::as_str).unwrap_or("").to_string();
@@ -970,14 +1022,30 @@ fn history_to_messages(history: &[Value]) -> Vec<Message> {
                 _ => {}
             }
         }
-        if !texts.is_empty() {
-            out.push(Message::assistant(texts.join("\n")));
-        }
-        if !calls.is_empty() {
-            // calls 非空由上面的分支保证,unwrap 安全
+        if reasoning_text.is_empty() {
+            if !texts.is_empty() {
+                out.push(Message::assistant(texts.join("\n")));
+            }
+            if !calls.is_empty() {
+                // calls 非空由上面的分支保证,unwrap 安全
+                out.push(Message::Assistant {
+                    id: None,
+                    content: OneOrMany::many(calls).expect("calls 非空"),
+                });
+            }
+        } else {
+            // 推理+文本+工具调用合并为一条 assistant 消息(与 rig 的 openai 转换
+            // 一致:reasoning→reasoning_content、text→content、calls→tool_calls),
+            // 保持与原始回合相同的 wire 结构,避免拆成多条时 reasoning 重复/丢失。
+            let mut content: Vec<AssistantContent> = Vec::new();
+            content.push(AssistantContent::reasoning(&reasoning_text));
+            if !texts.is_empty() {
+                content.push(AssistantContent::text(texts.join("\n")));
+            }
+            content.extend(calls);
             out.push(Message::Assistant {
                 id: None,
-                content: OneOrMany::many(calls).expect("calls 非空"),
+                content: OneOrMany::many(content).expect("reasoning 非空,集合必然非空"),
             });
         }
     }
@@ -1395,6 +1463,80 @@ mod tests {
             }
             _ => panic!("expected user tool_result message"),
         }
+    }
+
+    #[test]
+    fn history_to_messages_echoes_reasoning_content() {
+        // DeepSeek 思考模式:assistant 消息带 reasoning part,多轮历史重建时必须
+        // 原样回传(rig 会序列化成请求的 `reasoning_content` 字段),且推理+文本+
+        // 工具调用合并为一条 assistant 消息,与原始回合的 wire 结构一致。
+        let history = vec![
+            json!({ "role": "user", "parts": [part("text", r#"{"text":"推理一下"}"#)] }),
+            json!({
+                "role": "assistant",
+                "parts": [
+                    part("reasoning", r#"{"thinking":"先分析条件","signature":""}"#),
+                    part("text", r#"{"text":"结论是 A"}"#),
+                    part("tool_call", r#"{"id":"r1","name":"bash","input":"{\"command\":\"ls\"}"}"#),
+                    part("text", r#"{"text":"补充:执行完毕"}"#),
+                ],
+            }),
+            json!({
+                "role": "user",
+                "parts": [part("tool_result", r#"{"tool_call_id":"r1","content":"src"}"#)],
+            }),
+            json!({ "role": "user", "parts": [part("text", r#"{"text":"继续"}"#)] }),
+        ];
+        let msgs = history_to_messages(&history);
+        assert_eq!(msgs.len(), 4);
+        // user text
+        assert!(matches!(&msgs[0], Message::User { .. }));
+        // assistant:推理+文本+工具调用合并为一条,推理内容被带回
+        match &msgs[1] {
+            Message::Assistant { id, content } => {
+                assert!(id.is_none());
+                let mut saw_reasoning = false;
+                let mut saw_text = false;
+                let mut saw_tool_call = false;
+                for c in content.iter() {
+                    match c {
+                        AssistantContent::Reasoning(r) => {
+                            assert_eq!(r.display_text(), "先分析条件");
+                            saw_reasoning = true;
+                        }
+                        AssistantContent::Text(t) => {
+                            assert_eq!(t.text, "结论是 A\n补充:执行完毕");
+                            saw_text = true;
+                        }
+                        AssistantContent::ToolCall(tc) => {
+                            assert_eq!(tc.function.name, "bash");
+                            saw_tool_call = true;
+                        }
+                        _ => panic!("unexpected assistant content"),
+                    }
+                }
+                assert!(saw_reasoning && saw_text && saw_tool_call);
+            }
+            _ => panic!("expected merged assistant message"),
+        }
+        // tool_result
+        assert!(matches!(&msgs[2], Message::User { .. }));
+        // user text
+        assert!(matches!(&msgs[3], Message::User { .. }));
+    }
+
+    #[test]
+    fn stream_parts_keeps_single_reasoning_part_at_front() {
+        let mut sp = StreamParts::default();
+        sp.reasoning_delta("先分析");
+        sp.reasoning_delta("条件");
+        sp.text_delta("结论");
+        let parts = sp.into_parts();
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0]["type"], "reasoning");
+        assert_eq!(parts[0]["data"]["thinking"], "先分析条件");
+        assert_eq!(parts[1]["type"], "text");
+        assert_eq!(parts[1]["data"]["text"], "结论");
     }
 
     #[test]

@@ -328,6 +328,8 @@ where
 pub enum RunEvent {
     /// 文本增量。
     TextDelta(String),
+    /// 推理过程增量(thinking/reasoning_content,DeepSeek 思考模式等)。
+    ReasoningDelta(String),
     /// 完整工具调用(rig 已执行并自动回填结果)。
     ToolCall { id: String, name: String, input: String },
     /// 工具执行结果。
@@ -421,6 +423,21 @@ where
             MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Text(t)) => {
                 out.push_str(&t.text);
                 on_event(RunEvent::TextDelta(t.text));
+            }
+            MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ReasoningDelta {
+                reasoning,
+                ..
+            }) => {
+                on_event(RunEvent::ReasoningDelta(reasoning));
+            }
+            MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Reasoning(
+                reasoning,
+            )) => {
+                // 部分 provider 一次性下发完整 reasoning 块而非增量
+                let display = reasoning.display_text();
+                if !display.is_empty() {
+                    on_event(RunEvent::ReasoningDelta(display));
+                }
             }
             MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::ToolCall {
                 tool_call,
