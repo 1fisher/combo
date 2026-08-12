@@ -11,6 +11,7 @@ use base64::Engine;
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
@@ -102,13 +103,13 @@ pub struct TunnelClientConfig {
 }
 
 /// 启动隧道客户端(阻塞运行,含自动重连)。
-pub async fn run_tunnel_client(config: TunnelClientConfig) {
+pub async fn run_tunnel_client(config: TunnelClientConfig, connected: Arc<AtomicBool>) {
     let mut backoff = Duration::from_secs(1);
     let max_backoff = Duration::from_secs(30);
 
     loop {
         println!("COMBO_TUNNEL_CONNECT={}", config.relay_url);
-        match connect_and_serve(&config).await {
+        match connect_and_serve(&config, &connected).await {
             Ok(()) => {
                 eprintln!("COMBO_TUNNEL_DISCONNECTED=正常关闭");
                 backoff = Duration::from_secs(1);
@@ -117,15 +118,20 @@ pub async fn run_tunnel_client(config: TunnelClientConfig) {
                 eprintln!("COMBO_TUNNEL_ERROR={e}");
             }
         }
+        connected.store(false, Ordering::Relaxed);
         eprintln!("COMBO_TUNNEL_RECONNECT={}s", backoff.as_secs());
         tokio::time::sleep(backoff).await;
         backoff = (backoff * 2).min(max_backoff);
     }
 }
 
-async fn connect_and_serve(config: &TunnelClientConfig) -> anyhow::Result<()> {
+async fn connect_and_serve(
+    config: &TunnelClientConfig,
+    connected: &AtomicBool,
+) -> anyhow::Result<()> {
     let ws_url = format!("{}?token={}", config.relay_url, config.token);
     let (ws_stream, _response) = tokio_tungstenite::connect_async(&ws_url).await?;
+    connected.store(true, Ordering::Relaxed);
     println!("COMBO_TUNNEL_CONNECTED=1");
 
     let (mut ws_sink, mut ws_stream_rx) = ws_stream.split();

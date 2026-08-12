@@ -1,7 +1,10 @@
 pub mod protocol;
 pub mod tunnel;
 
-pub use tunnel::{is_ws_upgrade, tunnel_forward, ws_proxy_handler, ws_tunnel_handler, RelayState};
+pub use tunnel::{
+    is_ws_upgrade, tunnel_forward, tunnel_status_handler, ws_proxy_handler, ws_tunnel_handler,
+    RelayState,
+};
 
 use axum::body::Body;
 use axum::extract::ws::WebSocketUpgrade;
@@ -17,9 +20,10 @@ use tower_http::cors::{Any, CorsLayer};
 ///
 /// 路由优先级:
 /// 1. `GET /v1/relay/tunnel?token=xxx` — WebSocket 升级(桌面客户端建立隧道)
-/// 2. `GET /v1/health` — 健康检查
-/// 3. `/v1/*` — 通过隧道转发到桌面客户端
-/// 4. `/*` — 静态前端(如果配置了 `static_dir`)
+/// 2. `GET /v1/relay/status?token=xxx` — 中转级隧道状态(不经过隧道,供移动端检查)
+/// 3. `GET /v1/health` — 健康检查
+/// 4. `/v1/*` — 通过隧道转发到桌面客户端
+/// 5. `/*` — 静态前端(如果配置了 `static_dir`)
 pub fn build_router(
     state: RelayState,
     static_dir: Option<PathBuf>,
@@ -42,6 +46,7 @@ pub fn build_router(
 
     Router::new()
         .route("/v1/relay/tunnel", get(ws_tunnel_handler))
+        .route("/v1/relay/status", get(tunnel_status_handler))
         .route("/v1/health", get(health))
         .fallback(move |State(state): State<RelayState>, req: Request| {
             fallback(state, static_dir_val.clone(), req)

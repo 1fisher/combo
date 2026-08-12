@@ -9,20 +9,26 @@ use crate::tunnel::{run_tunnel_client, TunnelClientConfig};
 use axum::extract::State;
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
 /// 隧道状态(AppState 共享)。
-#[derive(Default)]
 pub struct RelayManager {
     task: Mutex<Option<JoinHandle<()>>>,
     config: Mutex<Option<TunnelClientConfig>>,
+    /// WebSocket 是否实际已连接(区分"task 存活"与"隧道连通")。
+    connected: Arc<AtomicBool>,
 }
 
 impl RelayManager {
     pub fn new() -> Arc<Self> {
-        Arc::new(Self::default())
+        Arc::new(Self {
+            task: Mutex::new(None),
+            config: Mutex::new(None),
+            connected: Arc::new(AtomicBool::new(false)),
+        })
     }
 
     pub async fn start(&self, url: String, token: String, local_proxy_url: String) {
@@ -31,6 +37,7 @@ impl RelayManager {
         if let Some(old) = task_guard.take() {
             old.abort();
         }
+        self.connected.store(false, Ordering::Relaxed);
 
         let config = TunnelClientConfig {
             relay_url: url,
@@ -38,9 +45,10 @@ impl RelayManager {
             local_proxy_url,
         };
         let config_clone = config.clone();
+        let connected_flag = self.connected.clone();
 
         *task_guard = Some(tokio::spawn(async move {
-            run_tunnel_client(config).await;
+            run_tunnel_client(config, connected_flag).await;
         }));
 
         let mut cfg_guard = self.config.lock().await;
@@ -52,13 +60,20 @@ impl RelayManager {
         if let Some(old) = task_guard.take() {
             old.abort();
         }
+        self.connected.store(false, Ordering::Relaxed);
         let mut cfg_guard = self.config.lock().await;
         *cfg_guard = None;
     }
 
+    /// task 是否存活(不代表 WebSocket 已连通)。
     pub async fn is_running(&self) -> bool {
         let guard = self.task.lock().await;
         guard.as_ref().is_some_and(|h| !h.is_finished())
+    }
+
+    /// WebSocket 是否实际已连接到中转服务器。
+    pub fn is_connected(&self) -> bool {
+        self.connected.load(Ordering::Relaxed)
     }
 }
 
@@ -73,6 +88,7 @@ pub struct StartRelayBody {
 #[derive(Serialize)]
 pub struct RelayStatus {
     pub running: bool,
+    pub connected: bool,
 }
 
 pub async fn start_relay(
@@ -84,14 +100,20 @@ pub async fn start_relay(
         .local_proxy_url
         .unwrap_or_else(|| format!("http://127.0.0.1:{}", state.local_port));
     state.relay.start(body.url, body.token, local).await;
-    Json(RelayStatus { running: true })
+    Json(RelayStatus {
+        running: true,
+        connected: false,
+    })
 }
 
 pub async fn stop_relay(
     State(state): State<crate::serve::AppState>,
 ) -> Json<RelayStatus> {
     state.relay.stop().await;
-    Json(RelayStatus { running: false })
+    Json(RelayStatus {
+        running: false,
+        connected: false,
+    })
 }
 
 pub async fn relay_status(
@@ -99,5 +121,6 @@ pub async fn relay_status(
 ) -> Json<RelayStatus> {
     Json(RelayStatus {
         running: state.relay.is_running().await,
+        connected: state.relay.is_connected(),
     })
 }

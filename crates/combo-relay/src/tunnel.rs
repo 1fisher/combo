@@ -524,3 +524,30 @@ async fn ws_bridge(
 
     pending_ws.remove(&id);
 }
+
+/// 中转级隧道状态:检查指定 token 是否有已连接的隧道。
+///
+/// 路由: `GET /v1/relay/status?token=<access_token>`
+/// 此端点由中转服务器直接处理(不经过隧道转发),供移动端验证隧道连通性。
+pub async fn tunnel_status_handler(
+    State(state): State<RelayState>,
+    req: Request,
+) -> Response {
+    let token = extract_token(&req);
+    let connected = match token {
+        Some(ref t) => state.tunnels.contains_key(t),
+        None => false,
+    };
+    let active_tunnels = state.tunnels.len();
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            serde_json::json!({
+                "connected": connected,
+                "active_tunnels": active_tunnels,
+            })
+            .to_string(),
+        ))
+        .unwrap()
+}

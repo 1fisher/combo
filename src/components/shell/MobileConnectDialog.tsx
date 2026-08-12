@@ -11,7 +11,13 @@ import {
 import { Button } from '../ui/button';
 import { cn } from '../../lib/utils';
 import { getExternalUrl, getEffectiveExternalUrl } from '../../lib/connection';
-import { createAccessToken, revokeAccessToken, startRelayTunnel, type CreatedToken } from '../../lib/api';
+import {
+  createAccessToken,
+  revokeAccessToken,
+  startRelayTunnel,
+  getRelayStatus,
+  type CreatedToken,
+} from '../../lib/api';
 
 interface MobileConnectDialogProps {
   open: boolean;
@@ -40,6 +46,7 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
 
   const generateToken = useCallback(async () => {
     setLoading(true);
+    setTunnelConnected(false);
     try {
       // 刷新时先撤销上一枚令牌,避免令牌堆积
       if (tokenRef.current) {
@@ -53,9 +60,8 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
       const wsUrl = getEffectiveExternalUrl()
         .replace(/^http/, 'ws') // https→wss, http→ws
         .replace(/\/$/, '') + '/v1/relay/tunnel';
-      void startRelayTunnel(wsUrl, t.token)
-        .then(() => setTunnelConnected(true))
-        .catch(() => setTunnelConnected(false));
+      await startRelayTunnel(wsUrl, t.token).catch(() => {});
+      // 不在此处设置 tunnelConnected — 由下方轮询 /v1/relay/status 验证实际连接状态
     } catch {
       tokenRef.current = null;
       setTokenInfo(null);
@@ -74,6 +80,29 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
     }
     void generateToken();
   }, [open, generateToken]);
+
+  // 轮询本地 /v1/relay/status 检查隧道 WebSocket 实际连接状态。
+  // startRelayTunnel 的 POST 返回只代表 task 已 spawn,不代表 WSS 已连通。
+  useEffect(() => {
+    if (!open || !tokenInfo) return;
+    let cancelled = false;
+    const poll = async () => {
+      while (!cancelled) {
+        try {
+          const st = await getRelayStatus();
+          if (st.connected) {
+            if (!cancelled) setTunnelConnected(true);
+            return;
+          }
+        } catch {
+          // 忽略轮询错误,继续重试
+        }
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    };
+    void poll();
+    return () => { cancelled = true; };
+  }, [open, tokenInfo]);
 
   useEffect(() => {
     if (!open || !mobileUrl) {
@@ -120,7 +149,7 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
         <div className="flex flex-col items-center gap-4">
           {/* QR 码 */}
           <div className="rounded-2xl border border-border bg-white p-3">
-            {qrDataUrl ? (
+            {qrDataUrl && tunnelConnected ? (
               <img
                 src={qrDataUrl}
                 alt="移动端访问二维码"
@@ -130,7 +159,7 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
               />
             ) : (
               <div className="flex size-52 items-center justify-center text-[13px] text-foreground-subtle">
-                {loading ? '生成中…' : '等待令牌'}
+                {loading ? '生成中…' : tunnelConnected ? '等待令牌' : '隧道连接中…'}
               </div>
             )}
           </div>
@@ -165,7 +194,7 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
                   tunnelConnected ? 'bg-success' : 'bg-warning animate-pulse',
                 )}
               />
-              {tunnelConnected ? '隧道已连接,可扫码访问' : '隧道连接中…'}
+              {tunnelConnected ? '隧道已连接,可扫码访问' : '隧道连接中,请稍候…'}
             </span>
           </div>
 
