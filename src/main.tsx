@@ -24,7 +24,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       densityDissipation={0.97}
       velocityDissipation={0.995}
       radius={0.35}
-      minMove={200}
+      minVelocity={1.5}
       force={0.5}
       curl={2.2}
       blend={1.5}

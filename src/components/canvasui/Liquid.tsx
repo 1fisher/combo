@@ -25,8 +25,8 @@ export interface LiquidOptions {
   curl?: number;
   /** Radius of the pointer splat. */
   radius?: number;
-  /** 距指针起始点的位移小于该值(像素)时完全不产生特效;停顿后再次移动仍重新生效。 */
-  minMove?: number;
+  /** 触发特效所需的最小指针速率(像素/毫秒)。正常移动速度低于该值不产生特效,快速晃动超过该值时激活;激活后在指针停顿前持续喷射。 */
+  minVelocity?: number;
   /** Force multiplier applied on pointer movement. */
   force?: number;
   /** Strength of the color tint left by the flow. */
@@ -70,7 +70,7 @@ const DEFAULTS: Required<LiquidOptions> = {
   pressureIterations: 4,
   curl: 1.9,
   radius: 0.3,
-  minMove: 0,
+  minVelocity: 1.5,
   force: 1.1,
   intensity: 2,
   distortion: 0.4,
@@ -81,8 +81,11 @@ const DEFAULTS: Required<LiquidOptions> = {
 
 const DT = 1 / 60;
 
-/** 指针停顿超过该时长后,重新进入未激活状态:新一轮移动的前 minMove 像素不产生特效。 */
+/** 指针停顿超过该时长后,重新进入未激活状态:需要再次加速超过 minVelocity 才会产生特效。 */
 const RESTART_MS = 300;
+
+/** 速度平滑系数(指数移动平均),值越大越平滑,避免单帧跳变误触发。 */
+const SPEED_SMOOTHING = 0.5;
 
 function srgbToLinear(value: number): number {
   return value <= 0.04045
@@ -827,7 +830,7 @@ export function createLiquid(
   }
   motionQuery.addEventListener("change", onMotionChange);
 
-  const pointers = new Map<number, { x: number; y: number; ox: number; oy: number; armed: boolean; lastAt: number }>();
+  const pointers = new Map<number, { x: number; y: number; armed: boolean; lastAt: number; speed: number }>();
 
   function onPointerMove(event: PointerEvent) {
     if (reducedMotion) return;
@@ -837,28 +840,31 @@ export function createLiquid(
     const now = performance.now();
     const p = pointers.get(event.pointerId);
     if (!p) {
-      // 首次落点:记为起点,特效未激活
-      pointers.set(event.pointerId, { x: px, y: py, ox: px, oy: py, armed: false, lastAt: now });
+      pointers.set(event.pointerId, { x: px, y: py, armed: false, lastAt: now, speed: 0 });
       return;
     }
-    if (now - p.lastAt > RESTART_MS) {
-      // 停顿后重新武装:新一轮移动的前 minMove 像素仍不产生特效
+    const dt = now - p.lastAt;
+    if (dt > RESTART_MS) {
+      // 停顿后重新进入未激活状态:速度归零,需要再次加速才能激活
       p.armed = false;
-      p.ox = px;
-      p.oy = py;
+      p.speed = 0;
     }
     p.lastAt = now;
-    const dx = (px - p.x) * config.force;
-    const dy = -(py - p.y) * config.force;
+    const dist = Math.hypot(px - p.x, py - p.y);
+    const instantSpeed = dt > 0 ? dist / dt : 0;
+    // 速度平滑(指数移动平均),避免单帧跳变误触发
+    p.speed = p.speed * SPEED_SMOOTHING + instantSpeed * (1 - SPEED_SMOOTHING);
     if (!p.armed) {
-      // 未激活:距起点位移小于 minMove 时完全不产生特效,激活后连续喷射
-      if (Math.hypot(px - p.ox, py - p.oy) < config.minMove) {
+      // 未激活:速率低于 minVelocity 时不产生特效,加速超过阈值后激活
+      if (p.speed < config.minVelocity) {
         p.x = px;
         p.y = py;
         return;
       }
       p.armed = true;
     }
+    const dx = (px - p.x) * config.force;
+    const dy = -(py - p.y) * config.force;
     queued.push([px / rect.width, 1 - py / rect.height, dx, dy]);
     p.x = px;
     p.y = py;
