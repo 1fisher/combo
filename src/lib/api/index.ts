@@ -519,7 +519,8 @@ export interface RelayStatus {
  * @param token 访问令牌
  */
 export function startRelayTunnel(wsUrl: string, token: string): Promise<RelayStatus> {
-  return apiRequest('/v1/relay/start', { method: 'POST', body: { url: wsUrl, token } });
+  // 后端 test_connection 同步等待最多 5s,给 15s 总超时余量
+  return apiRequest('/v1/relay/start', { method: 'POST', body: { url: wsUrl, token }, timeoutMs: 15000 });
 }
 
 /** 停止隧道。 */
