@@ -136,13 +136,15 @@ export const useAgentStore = create<AgentState>()(
         updatedAt: toMs(m.updated_at),
         streaming: hasFinish ? false : true,
       };
-      // 新消息抵达时,更早的消息都已结束流式(同一时刻只有一条在流)
+      // 新消息抵达时,更早的消息都已结束流式(同一时刻只有一条在流)。
+      // 仅对流式中的消息做解构更新(保留其余消息的对象引用),
+      // 让 React.memo(MessageItem) 在流式期间跳过未变化消息的重渲染。
       const messages =
         idx >= 0
           ? rt.messages.map((x, i) =>
-              i === idx ? vm : { ...x, streaming: false }
+              i === idx ? vm : x.streaming ? { ...x, streaming: false } : x
             )
-          : [...rt.messages.map((x) => ({ ...x, streaming: false })), vm];
+          : [...rt.messages.map((x) => (x.streaming ? { ...x, streaming: false } : x)), vm];
       return { bySession: { ...st.bySession, [sessionId]: { ...rt, messages } } };
     }),
 

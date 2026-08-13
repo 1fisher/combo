@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Check, CircleAlert } from 'lucide-react';
 import {
   Message,
@@ -30,7 +31,9 @@ const REASON_LABELS: Record<string, string> = {
   content_filter: '内容过滤',
 };
 
-export function MessageItem({
+// memo:流式更新时 store 只更新正在流式的那条消息对象引用,
+// 其余消息 vm 引用不变,直接跳过重渲染(markdown 渲染开销大)
+export const MessageItem = memo(function MessageItem({
   vm,
   workspaceId,
 }: {
@@ -191,4 +194,4 @@ export function MessageItem({
       </MessageContent>
     </Message>
   );
-}
+});

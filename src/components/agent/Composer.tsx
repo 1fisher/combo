@@ -159,6 +159,9 @@ export function Composer({
   const boxRef = useRef<HTMLDivElement>(null);
   const [boxH, setBoxH] = useState<number | undefined>(undefined);
   useLayoutEffect(() => {
+    // 火焰未挂载时跳过测量:输入框打字会触发频繁重渲染,
+    // 每次都读 offsetHeight 会强制同步布局(reflow),是中文输入卡顿的来源之一
+    if (!flameAlive) return;
     const el = boxRef.current;
     if (el) {
       const h = el.offsetHeight;

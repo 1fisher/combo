@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import {
   MessageScroller,
   MessageScrollerButton,
@@ -119,7 +119,9 @@ function ScrollToBottomController({ messages }: { messages: MessageVM[] }) {
   return null;
 }
 
-export function MessageList({
+// memo:输入框打字时 AgentPanel 随 draft 重渲染,messages 引用不变时
+// 跳过整棵消息列表(含 ReactMarkdown)的重渲染,避免消息多时输入卡顿
+export const MessageList = memo(function MessageList({
   messages,
   workspaceId,
 }: {
@@ -157,4 +159,4 @@ export function MessageList({
       <ScrollToBottomController messages={messages} />
     </MessageScrollerProvider>
   );
-}
+});
