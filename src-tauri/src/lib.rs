@@ -93,6 +93,10 @@ async fn init_backend(app: &tauri::AppHandle) {
     use std::net::SocketAddr;
     use tokio::net::TcpListener;
 
+    // 初始化 tracing:打包后看不到 stderr,日志写到文件方便诊断。
+    // 开发模式(终端运行)时 stderr 仍有输出。
+    init_tracing();
+
     let cfg = match load_cfg() {
         Ok(cfg) => cfg,
         Err(e) => {
@@ -193,4 +197,48 @@ fn resolve_static_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     }
 
     None
+}
+
+/// 初始化 tracing 日志:打包后写文件到 combo 数据目录的 logs/ 下,
+/// 开发模式(stderr 可见)时也输出到终端。
+fn init_tracing() {
+    use tracing_subscriber::{fmt, EnvFilter, prelude::*};
+
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("combo_cli=info,tower_http=warn,info"));
+
+    // 尝试日志文件路径:COMBO_DATA_DIR/logs/combo-desktop.log
+    let log_dir = std::env::var("COMBO_DATA_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::data_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("combo")
+        })
+        .join("logs");
+
+    let _ = std::fs::create_dir_all(&log_dir);
+
+    let layers: Vec<Box<dyn tracing_subscriber::Layer<_> + Send + Sync>> =
+        match std::fs::File::create(log_dir.join("combo-desktop.log")) {
+            Ok(file) => {
+                let file_layer = fmt::layer()
+                    .with_writer(file)
+                    .with_ansi(false)
+                    .with_target(false);
+                vec![Box::new(file_layer)]
+            }
+            Err(_) => vec![],
+        };
+
+    // stderr 层(开发模式)
+    let stderr_layer = fmt::layer()
+        .with_writer(std::io::stderr)
+        .with_target(false);
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(layers)
+        .with(stderr_layer)
+        .init();
 }

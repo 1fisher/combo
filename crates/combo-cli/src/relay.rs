@@ -133,13 +133,12 @@ pub async fn start_relay(
     State(state): State<crate::serve::AppState>,
     Json(body): Json<StartRelayBody>,
 ) -> Json<RelayStatus> {
-    // local_proxy_url 未指定时使用 AppState 中的本地端口
     let local = body
         .local_proxy_url
         .unwrap_or_else(|| format!("http://127.0.0.1:{}", state.local_port));
 
-    // 先同步试连一次(5s 超时),确保 WebSocket 能建立。
-    // 这样 API 响应中直接包含成功/失败结果,不依赖后续轮询。
+    tracing::info!("[relay] start_relay 收到请求: url={}", body.url);
+
     let test_config = TunnelClientConfig {
         relay_url: body.url.clone(),
         token: body.token.clone(),
@@ -147,7 +146,7 @@ pub async fn start_relay(
     };
     match test_connection(&test_config).await {
         Ok(()) => {
-            // 试连成功,启动后台重连循环
+            tracing::info!("[relay] 试连成功,启动后台隧道循环");
             state.relay.start(body.url, body.token, local).await;
             Json(RelayStatus {
                 running: true,
@@ -156,7 +155,7 @@ pub async fn start_relay(
             })
         }
         Err(e) => {
-            // 试连失败,不启动后台任务,直接返回错误
+            tracing::error!("[relay] 试连失败: {e}");
             Json(RelayStatus {
                 running: false,
                 connected: false,

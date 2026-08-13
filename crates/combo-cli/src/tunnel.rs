@@ -12,7 +12,7 @@ use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Once};
 use std::time::Duration;
 use tokio::sync::{mpsc, Mutex};
 use tokio_tungstenite::tungstenite::Message;
@@ -102,9 +102,25 @@ pub struct TunnelClientConfig {
     pub local_proxy_url: String,
 }
 
+/// 确保 rustls crypto provider 被安装。
+/// rustls 0.23 不再自动安装默认 crypto provider,
+/// 未安装时 TLS 连接会 panic("no process-level CryptoProvider available")。
+/// 在 Tauri 内嵌模式下 tokio-tungstenite 可能是第一个使用 rustls 的组件,
+/// 此时 crypto provider 尚未安装 → panic → axum worker 崩溃 → 前端 "network error"。
+static CRYPTO_PROVIDER_INIT: Once = Once::new();
+fn ensure_crypto_provider() {
+    CRYPTO_PROVIDER_INIT.call_once(|| {
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .ok();
+    });
+}
+
 /// 仅测试 WebSocket 连接能否建立(不启动 serve 循环)。
 /// 供 start_relay 同步试连,失败时立即把具体错误返回给前端。
 pub async fn test_connection(config: &TunnelClientConfig) -> Result<(), String> {
+    ensure_crypto_provider();
+
     let normalized = config.relay_url.trim();
     let ws_base = if normalized.to_ascii_lowercase().starts_with("https://") {
         format!("wss://{}", &normalized[8..])
@@ -114,15 +130,25 @@ pub async fn test_connection(config: &TunnelClientConfig) -> Result<(), String> 
         normalized.to_string()
     };
     let ws_url = format!("{}?token={}", ws_base, config.token);
-    match tokio::time::timeout(
+    tracing::info!("[tunnel] test_connection 开始: {}", ws_base);
+    let result = tokio::time::timeout(
         Duration::from_secs(5),
         tokio_tungstenite::connect_async(&ws_url),
     )
-    .await
-    {
-        Ok(Ok(_)) => Ok(()),
-        Ok(Err(e)) => Err(format!("{e}")),
-        Err(_) => Err(format!("连接中转服务器超时(5s):{ws_base}")),
+    .await;
+    match result {
+        Ok(Ok(_)) => {
+            tracing::info!("[tunnel] test_connection 成功: {}", ws_base);
+            Ok(())
+        }
+        Ok(Err(e)) => {
+            tracing::error!("[tunnel] test_connection 失败: {e}");
+            Err(format!("{e}"))
+        }
+        Err(_) => {
+            tracing::error!("[tunnel] test_connection 超时(5s): {}", ws_base);
+            Err(format!("连接中转服务器超时(5s):{ws_base}"))
+        }
     }
 }
 
@@ -164,6 +190,7 @@ async fn connect_and_serve(
     config: &TunnelClientConfig,
     connected: &AtomicBool,
 ) -> anyhow::Result<()> {
+    ensure_crypto_provider();
     // 归一化 scheme:Https:// → wss://, https:// → wss://, Http:// → ws://
     // 防御性处理前端传入的大小写不一致
     let normalized = config.relay_url.trim();

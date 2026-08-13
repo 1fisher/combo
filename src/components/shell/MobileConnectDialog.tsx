@@ -64,7 +64,8 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
       // 后端 start_relay 会同步等待初始连接结果(最多 6s)。
       // 直接用返回值判断,不再依赖后续轮询。
       const relayResult = await startRelayTunnel(wsUrl, t.token).catch((e) => {
-        throw new Error(`启动隧道失败: ${e?.message ?? e}`);
+        const msg = e?.message ?? String(e);
+        throw new Error(`启动隧道失败(HTTP ${e?.status ?? '?'}): ${msg}`);
       });
       if (relayResult.connected) {
         setTunnelConnected(true);
