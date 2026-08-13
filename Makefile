@@ -39,7 +39,7 @@ dmg: ## 打包 macOS DMG 安装镜像 (仅 DMG, 跳过 .app 独立包)
 	npx tauri build --bundles dmg
 	@echo ""
 	@echo "✓ DMG 打包完成:"
-	@find src-tauri/target/release/bundle/dmg -name '*.dmg' -exec ls -lh {} \;
+	@find target/release/bundle/dmg -name '*.dmg' -exec ls -lh {} \;
 
 tsc: ## TypeScript 类型检查 (tsc -b)
 	npm run tsc
