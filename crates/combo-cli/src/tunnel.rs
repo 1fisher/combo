@@ -103,7 +103,14 @@ pub struct TunnelClientConfig {
 }
 
 /// 启动隧道客户端(阻塞运行,含自动重连)。
-pub async fn run_tunnel_client(config: TunnelClientConfig, connected: Arc<AtomicBool>) {
+///
+/// `last_error` 用于将最近一次连接错误透传给前端(RelayStatus.error),
+/// 便于在 UI 上显示具体原因(TLS 失败 / DNS 解析 / 连接拒绝等)。
+pub async fn run_tunnel_client(
+    config: TunnelClientConfig,
+    connected: Arc<AtomicBool>,
+    last_error: Arc<std::sync::Mutex<Option<String>>>,
+) {
     let mut backoff = Duration::from_secs(1);
     let max_backoff = Duration::from_secs(30);
 
@@ -115,7 +122,11 @@ pub async fn run_tunnel_client(config: TunnelClientConfig, connected: Arc<Atomic
                 backoff = Duration::from_secs(1);
             }
             Err(e) => {
-                eprintln!("COMBO_TUNNEL_ERROR={e}");
+                let msg = format!("{e}");
+                eprintln!("COMBO_TUNNEL_ERROR={msg}");
+                if let Ok(mut guard) = last_error.lock() {
+                    *guard = Some(msg);
+                }
             }
         }
         connected.store(false, Ordering::Relaxed);

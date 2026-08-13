@@ -510,6 +510,7 @@ export function revokeAccessToken(token?: string, all = false): Promise<{ revoke
 export interface RelayStatus {
   running: boolean;
   connected: boolean;
+  error?: string;
 }
 
 /**

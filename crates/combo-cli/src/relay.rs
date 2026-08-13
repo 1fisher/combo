@@ -20,6 +20,9 @@ pub struct RelayManager {
     config: Mutex<Option<TunnelClientConfig>>,
     /// WebSocket 是否实际已连接(区分"task 存活"与"隧道连通")。
     connected: Arc<AtomicBool>,
+    /// 最近一次连接错误(透传到 RelayStatus.error 供前端显示)。
+    /// 连接成功时清空。
+    last_error: Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl RelayManager {
@@ -28,6 +31,7 @@ impl RelayManager {
             task: Mutex::new(None),
             config: Mutex::new(None),
             connected: Arc::new(AtomicBool::new(false)),
+            last_error: Arc::new(std::sync::Mutex::new(None)),
         })
     }
 
@@ -38,6 +42,9 @@ impl RelayManager {
             old.abort();
         }
         self.connected.store(false, Ordering::Relaxed);
+        if let Ok(mut guard) = self.last_error.lock() {
+            *guard = None;
+        }
 
         let config = TunnelClientConfig {
             relay_url: url,
@@ -46,9 +53,10 @@ impl RelayManager {
         };
         let config_clone = config.clone();
         let connected_flag = self.connected.clone();
+        let last_error = self.last_error.clone();
 
         *task_guard = Some(tokio::spawn(async move {
-            run_tunnel_client(config, connected_flag).await;
+            run_tunnel_client(config, connected_flag, last_error).await;
         }));
 
         let mut cfg_guard = self.config.lock().await;
@@ -61,6 +69,9 @@ impl RelayManager {
             old.abort();
         }
         self.connected.store(false, Ordering::Relaxed);
+        if let Ok(mut guard) = self.last_error.lock() {
+            *guard = None;
+        }
         let mut cfg_guard = self.config.lock().await;
         *cfg_guard = None;
     }
@@ -74,6 +85,11 @@ impl RelayManager {
     /// WebSocket 是否实际已连接到中转服务器。
     pub fn is_connected(&self) -> bool {
         self.connected.load(Ordering::Relaxed)
+    }
+
+    /// 最近一次连接错误(连接成功后为 None)。
+    pub fn last_error(&self) -> Option<String> {
+        self.last_error.lock().ok().and_then(|g| g.clone())
     }
 }
 
@@ -89,6 +105,8 @@ pub struct StartRelayBody {
 pub struct RelayStatus {
     pub running: bool,
     pub connected: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 pub async fn start_relay(
@@ -103,6 +121,7 @@ pub async fn start_relay(
     Json(RelayStatus {
         running: true,
         connected: false,
+        error: None,
     })
 }
 
@@ -113,6 +132,7 @@ pub async fn stop_relay(
     Json(RelayStatus {
         running: false,
         connected: false,
+        error: None,
     })
 }
 
@@ -122,5 +142,6 @@ pub async fn relay_status(
     Json(RelayStatus {
         running: state.relay.is_running().await,
         connected: state.relay.is_connected(),
+        error: state.relay.last_error(),
     })
 }

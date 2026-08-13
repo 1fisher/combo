@@ -105,6 +105,14 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
             if (!cancelled) setTunnelConnected(true);
             return;
           }
+          // 后端报出了具体错误(如 TLS 失败 / DNS 解析 / 连接拒绝)→ 立即显示
+          if (st.error) {
+            if (!cancelled) {
+              setTunnelConnected(false);
+              setTunnelError(st.error);
+            }
+            return;
+          }
           // 旧版二进制无 connected 字段(undefined):
           // task 已 running 且过了 3s 宽限期 → 视为已连接
           if (st.connected === undefined && st.running && Date.now() - startTime > 3000) {
