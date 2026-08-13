@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { FileEdit, Folder, Loader2, CircleAlert } from 'lucide-react';
 import { randomUUID } from '../../lib/clientId';
 import { useAgentStore } from '../../stores/agentStore';
@@ -13,6 +13,7 @@ import { useWorkspaces } from '../../hooks/useWorkspaces';
 import { useSessions } from '../../hooks/useSessions';
 import { MessageList } from './MessageList';
 import { Composer } from './Composer';
+import { ComboOverlay, settleCombo } from './ComboOverlay';
 import { ChatEmptyState } from './ChatEmptyState';
 import { FileChangesPanel, type ChangeStatus } from './FileChangesPanel';
 import { TodoList } from './TodoList';
@@ -45,6 +46,12 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
   const [wsMenuOpen, setWsMenuOpen] = useState(false);
   const [showChanges, setShowChanges] = useState(false);
   const [changeStatuses, setChangeStatuses] = useState<Record<string, ChangeStatus>>({});
+  // 连击(combo)计数:连续快速回复时累加,超时/切会话归零
+  const [combo, setCombo] = useState(0);
+  // 本轮发送时刻(pending 期间等待首 token);settledIds 记录已结算的 assistant 消息,
+  // 防止快速连发时把「上一轮仍在流式的旧消息」误判为本轮回复
+  const pendingRef = useRef<{ sid: string; sentAt: number } | null>(null);
+  const settledIdsRef = useRef<Set<string>>(new Set());
 
   // 切换到某会话时,若 store 里没有该会话的消息,从后端拉取历史灌入
   const { data: history, isLoading: historyLoading } = useSessionHistory(workspaceId, sessionId);
@@ -57,6 +64,19 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
 
   const messages = rt?.messages ?? [];
   const running = rt?.run?.status === 'running' && messages.some((m) => m.streaming);
+
+  // 每轮「发送 → 收到首个 assistant token」耗时 <2s → combo+1;超时归零
+  useEffect(() => {
+    const pending = pendingRef.current;
+    if (!pending || pending.sid !== sessionId) return;
+    const first = messages.find(
+      (m) => m.role === 'assistant' && m.streaming && !settledIdsRef.current.has(m.id)
+    );
+    if (!first) return;
+    settledIdsRef.current.add(first.id);
+    const dt = Date.now() - pending.sentAt;
+    setCombo((c) => settleCombo(c, dt));
+  }, [messages, sessionId]);
   // [stream-debug] 每次 render 的运行状态(仅在有会话时打日志)
   if (sessionId) {
     console.debug(
@@ -83,10 +103,13 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
     return count;
   }, [changedFiles, changeStatuses]);
 
-  // 切换会话时关闭变更面板并重置审查状态
+  // 切换会话时关闭变更面板并重置审查状态;连击计数归零
   useEffect(() => {
     setShowChanges(false);
     setChangeStatuses({});
+    setCombo(0);
+    pendingRef.current = null;
+    settledIdsRef.current.clear();
   }, [sessionId]);
 
   // 所有变更都已处理(批准/撤销)时，自动关闭审查视图
@@ -163,6 +186,8 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
       await sendAgentMessage(workspaceId, { sessionId: sid!, runId, prompt: sendPrompt, attachments });
       console.debug(`[agent] 发送成功 markRun running sid="${sid}" runId="${runId}"`);
       st.markRun(sid!, runId, 'running');
+      // 记录本轮发送时刻,用于连击(combo)判定
+      pendingRef.current = { sid: sid!, sentAt: Date.now() };
     } catch (e) {
       const err = e as { status?: number; message?: string };
       // 后端重启后会话丢失(404):若是复用的旧会话则自动重建后重试一次
@@ -187,6 +212,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
           setQueued(sid, true);
           await sendAgentMessage(workspaceId, { sessionId: sid, runId: retryRunId, prompt: sendPrompt, attachments });
           st.markRun(sid, retryRunId, 'running');
+          pendingRef.current = { sid, sentAt: Date.now() };
           return;
         } catch (e2) {
           await discardCreatedSession(createdSid);
@@ -249,6 +275,8 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
           <MessageList messages={messages} workspaceId={workspaceId ?? undefined} />
         )}
       </div>
+      {/* 连击特效层(会话区中央,拳皇连招风) */}
+      <ComboOverlay combo={combo} />
       {/* 输入区 */}
       <div className="relative z-20 w-full shrink-0">
         {rt?.run?.status === 'done' && rt?.run?.error && (
