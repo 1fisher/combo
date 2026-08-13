@@ -3,16 +3,28 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { FileExplorer } from './FileExplorer';
 
-vi.mock('../../lib/api', () => ({
-  listFiles: vi.fn(async (_w: string, path: string) =>
-    path === ''
-      ? [
-          { name: 'src', path: 'src', type: 'dir', size: 0 },
-          { name: 'README.md', path: 'README.md', type: 'file', size: 10 },
-        ]
-      : [{ name: 'main.ts', path: 'src/main.ts', type: 'file', size: 5 }]
-  ),
-}));
+vi.mock('../../lib/api', () => {
+  const allEntries = [
+    { name: 'src', path: 'src', type: 'dir' as const, size: 0 },
+    { name: 'README.md', path: 'README.md', type: 'file' as const, size: 10 },
+    { name: 'main.ts', path: 'src/main.ts', type: 'file' as const, size: 5 },
+  ];
+  return {
+    listFiles: vi.fn(async (_w: string, path: string) =>
+      path === ''
+        ? [
+            { name: 'src', path: 'src', type: 'dir' as const, size: 0 },
+            { name: 'README.md', path: 'README.md', type: 'file' as const, size: 10 },
+          ]
+        : [{ name: 'main.ts', path: 'src/main.ts', type: 'file' as const, size: 5 }]
+    ),
+    searchFiles: vi.fn(async (_w: string, params: { q: string }) => {
+      if (params.q === '.') return allEntries;
+      const q = params.q.toLowerCase();
+      return allEntries.filter((f) => f.name.toLowerCase().includes(q));
+    }),
+  };
+});
 
 describe('FileExplorer', () => {
   it('renders root entries, expands dirs lazily, and opens files', async () => {

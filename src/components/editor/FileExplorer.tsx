@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import {
   ChevronRight,
   CaseSensitive,
-  Regex,
   WholeWord,
   FileText,
   Folder,
+  FolderInput,
   FolderOpen,
   Loader2,
   MessageSquarePlus,
@@ -13,7 +13,7 @@ import {
   Search,
   X,
 } from 'lucide-react';
-import { listFiles } from '../../lib/api';
+import { listFiles, searchFiles } from '../../lib/api';
 import type { Api } from '../../lib/api/types';
 import { cn } from '../../lib/utils';
 import { useContextStore } from '../../stores/contextStore';
@@ -31,56 +31,13 @@ interface SearchOptions {
   wholeWord: boolean;
 }
 
-/** 需要跳过的目录名,加快递归搜索速度 */
-const SKIP_DIRS = new Set([
-  'node_modules',
-  '.git',
-  'target',
-  'dist',
-  'build',
-  '.next',
-  '.nuxt',
-  '__pycache__',
-  '.venv',
-  'venv',
-  '.cache',
-  '.turbo',
-  'coverage',
-  '.idea',
-  '.vscode',
-]);
-
-/** 搜索结果上限,避免超大仓库卡顿 */
+/** 搜索结果上限(与后端一致),用于截断提示 */
 const MAX_RESULTS = 500;
 
 /** 从文件名中提取扩展名(小写,不含点) */
 function getExt(name: string): string {
   const idx = name.lastIndexOf('.');
   return idx > 0 ? name.slice(idx + 1).toLowerCase() : '';
-}
-
-/** 构建 name 匹配函数 */
-function buildMatcher(
-  query: string,
-  opts: SearchOptions,
-): ((name: string) => boolean) | null {
-  if (!query) return null;
-  const flags = opts.caseSensitive ? '' : 'i';
-  let pattern: string;
-  if (opts.useRegex) {
-    pattern = query;
-  } else {
-    pattern = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  }
-  if (opts.wholeWord) {
-    pattern = `(?:^|[^\\w])(${pattern})(?:[^\\w]|$)`;
-  }
-  try {
-    const re = new RegExp(pattern, flags);
-    return (name: string) => re.test(name);
-  } catch {
-    return null;
-  }
 }
 
 /** 解析扩展名过滤输入,返回小写扩展名集合(不含点) */
@@ -114,6 +71,7 @@ export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [extFilter, setExtFilter] = useState('');
+  const [searchDir, setSearchDir] = useState('');
   const [searchOpts, setSearchOpts] = useState<SearchOptions>({
     useRegex: false,
     caseSensitive: false,
@@ -129,6 +87,7 @@ export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
     setResults(null);
     setSearchQuery('');
     setDebouncedQuery('');
+    setSearchDir('');
     void load('');
     // 切换项目时重新加载根目录
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -142,7 +101,7 @@ export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
 
   const isSearching = debouncedQuery.trim().length > 0 || extFilter.trim().length > 0;
 
-  // 执行递归搜索
+  // 使用后端搜索(ripgrep --files + walkdir 回退)
   useEffect(() => {
     if (!isSearching) {
       setResults(null);
@@ -151,60 +110,29 @@ export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
     }
     const cancelId = ++searchCancelRef.current;
     setSearching(true);
-    const matcher = buildMatcher(debouncedQuery, searchOpts);
-    const extSet = parseExtensions(extFilter);
+
+    // 只有扩展名过滤时用通配符匹配全部,再客户端过滤
+    const queryText = debouncedQuery.trim();
+    const q = queryText || '.';
+    const useRegex = queryText ? searchOpts.useRegex : true;
 
     void (async () => {
-      const found: SearchResult[] = [];
-      const queue: string[] = [''];
-      const visited = new Set<string>(['']);
-
       try {
-        while (queue.length > 0 && found.length < MAX_RESULTS) {
-          if (cancelId !== searchCancelRef.current) return;
-          const dir = queue.shift()!;
-          let entries: Api.FileEntry[];
-          try {
-            entries = await listFiles(workspaceId, dir);
-          } catch {
-            continue;
-          }
-          if (cancelId !== searchCancelRef.current) return;
-
-          for (const e of entries) {
-            if (cancelId !== searchCancelRef.current) return;
-            const isDir = e.type === 'dir';
-
-            if (isDir) {
-              if (SKIP_DIRS.has(e.name)) continue;
-              // 目录名匹配
-              if (matcher && matcher(e.name)) {
-                found.push({ name: e.name, path: e.path, type: e.type });
-              }
-              if (!visited.has(e.path)) {
-                visited.add(e.path);
-                queue.push(e.path);
-              }
-            } else {
-              // 扩展名过滤
-              if (extSet) {
-                const ext = getExt(e.name);
-                if (!extSet.has(ext)) continue;
-              }
-              // 文件名匹配
-              if (matcher) {
-                if (matcher(e.name)) {
-                  found.push({ name: e.name, path: e.path, type: e.type });
-                }
-              } else {
-                // 只有扩展名过滤,没有文件名搜索
-                found.push({ name: e.name, path: e.path, type: e.type });
-              }
-            }
-          }
-        }
+        const entries = await searchFiles(workspaceId, {
+          q,
+          path: searchDir || undefined,
+          regex: useRegex,
+          caseSensitive: searchOpts.caseSensitive,
+          wholeWord: queryText ? searchOpts.wholeWord : false,
+        });
         if (cancelId !== searchCancelRef.current) return;
-        setResults(found);
+
+        // 客户端扩展名过滤(后端不支持 ext 参数)
+        const extSet = parseExtensions(extFilter);
+        const filtered = extSet
+          ? entries.filter((e) => e.type === 'dir' || extSet.has(getExt(e.name)))
+          : entries;
+        setResults(filtered);
       } catch (e) {
         if (cancelId !== searchCancelRef.current) return;
         onError(e instanceof Error ? e.message : String(e));
@@ -213,7 +141,7 @@ export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
         if (cancelId === searchCancelRef.current) setSearching(false);
       }
     })();
-  }, [debouncedQuery, extFilter, searchOpts, workspaceId, isSearching, onError]);
+  }, [debouncedQuery, extFilter, searchDir, searchOpts, workspaceId, isSearching, onError]);
 
   async function load(dir: string) {
     try {
@@ -264,6 +192,7 @@ export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
   function clearSearch() {
     setSearchQuery('');
     setExtFilter('');
+    setSearchDir('');
   }
 
   function renderDir(dir: string, depth: number) {
@@ -434,7 +363,6 @@ export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
             onClick={() => setSearchOpts((s) => ({ ...s, useRegex: !s.useRegex }))}
             title="正则表达式"
             label=".*"
-            icon={<Regex className="size-3.5" />}
           />
           {/* 区分大小写 */}
           <SearchToggle
@@ -458,7 +386,7 @@ export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
               placeholder="ts,tsx"
               className="h-6 w-16 rounded border border-input-border bg-background px-1.5 text-[11px] outline-none placeholder:text-foreground-subtlest focus-visible:border-input-border-focused"
             />
-            {(searchQuery || extFilter) && (
+            {(searchQuery || extFilter || searchDir) && (
               <button
                 onClick={clearSearch}
                 className="text-muted-foreground hover:text-foreground"
@@ -469,6 +397,16 @@ export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
               </button>
             )}
           </div>
+        </div>
+        {/* 搜索目录范围 */}
+        <div className="flex items-center gap-1">
+          <FolderInput className="size-3 shrink-0 text-muted-foreground/70" />
+          <input
+            value={searchDir}
+            onChange={(e) => setSearchDir(e.target.value)}
+            placeholder="搜索目录(留空搜索全部)"
+            className="h-6 w-full rounded border border-input-border bg-background px-1.5 text-[11px] outline-none placeholder:text-foreground-subtlest focus-visible:border-input-border-focused"
+          />
         </div>
       </div>
 
@@ -501,7 +439,7 @@ function SearchToggle({
   onClick: () => void;
   title: string;
   label?: string;
-  icon: React.ReactNode;
+  icon?: React.ReactNode;
 }) {
   return (
     <button

@@ -343,6 +343,10 @@ fn build_router(
             get(fs::read).put(fs::write),
         )
         .route("/v1/workspaces/:id/files/raw", get(fs::raw))
+        .route(
+            "/v1/workspaces/:id/files/search",
+            get(fs::search),
+        )
         .route("/v1/workspaces/:id/git/status", get(git::status))
         .route("/v1/workspaces/:id/git/repos", get(git::repos))
         .route("/v1/workspaces/:id/git/diff", get(git::diff))

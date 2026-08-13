@@ -168,6 +168,24 @@ export function putFileContent(
   });
 }
 
+export function searchFiles(
+  workspaceId: string,
+  params: {
+    q: string;
+    path?: string;
+    regex?: boolean;
+    caseSensitive?: boolean;
+    wholeWord?: boolean;
+  },
+): Promise<Api.FileEntry[]> {
+  const query: Record<string, string> = { q: params.q };
+  if (params.path) query.path = params.path;
+  if (params.regex) query.regex = 'true';
+  if (params.caseSensitive) query.case_sensitive = 'true';
+  if (params.wholeWord) query.whole_word = 'true';
+  return apiRequest(`/v1/workspaces/${workspaceId}/files/search`, { query });
+}
+
 // Git 服务:combo-cli serve 本地端点,在 workspace 根目录(或 `repo` 指定的一级子目录)执行 git 子命令
 export function getGitStatus(workspaceId: string, repo?: string): Promise<Api.GitStatus> {
   return apiRequest(`/v1/workspaces/${workspaceId}/git/status`, {

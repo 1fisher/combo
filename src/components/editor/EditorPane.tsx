@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type PointerEvent } from 'react';
 import { Eye, Folder, GitBranch, History, PanelLeft, Pencil, X } from 'lucide-react';
 import { getFileContent, getGitFileAtHead, putFileContent } from '../../lib/api';
 import { useEditorStore, type FileKind } from '../../stores/editorStore';
@@ -17,6 +17,10 @@ import { MarkdownPreview } from './MarkdownPreview';
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg', '.ico']);
 const MD_EXTS = new Set(['.md', '.markdown', '.mdx']);
+
+/** 文件/Git 侧边栏宽度限制 */
+const FILE_SIDEBAR_MIN = 180;
+const FILE_SIDEBAR_DEFAULT = 240;
 
 function isMarkdown(name: string): boolean {
   const lower = name.toLowerCase();
@@ -67,6 +71,27 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
   const [loadError, setLoadError] = useState<string | null>(null);
   /** markdown 文件是否处于预览模式 */
   const [mdPreview, setMdPreview] = useState(true);
+
+  /** 文件/Git 侧边栏宽度(桌面端可拖拽) */
+  const [fileSidebarW, setFileSidebarW] = useState(FILE_SIDEBAR_DEFAULT);
+  const fileDragRef = useRef<{ startX: number; startW: number } | null>(null);
+
+  function onFileHandleDown(e: PointerEvent<HTMLDivElement>) {
+    fileDragRef.current = { startX: e.clientX, startW: fileSidebarW };
+    const onMove = (ev: globalThis.PointerEvent) => {
+      if (!fileDragRef.current) return;
+      const d = ev.clientX - fileDragRef.current.startX;
+      const max = Math.round(window.innerWidth * 0.4);
+      setFileSidebarW(Math.min(max, Math.max(FILE_SIDEBAR_MIN, fileDragRef.current.startW + d)));
+    };
+    const onUp = () => {
+      fileDragRef.current = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }
 
   const active = openFiles.find((f) => f.path === activePath) ?? null;
 
@@ -287,7 +312,23 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
             </>
           )
         ) : (
-          <div className="flex w-[240px] shrink-0 flex-col border-r">{sidebarBody}</div>
+          <>
+            <div
+              className="flex shrink-0 flex-col border-r"
+              style={{ width: fileSidebarW }}
+            >
+              {sidebarBody}
+            </div>
+            {/* 调整文件/Git 面板宽度 */}
+            <div
+              role="separator"
+              tabIndex={0}
+              aria-orientation="vertical"
+              aria-label="调整文件面板宽度"
+              onPointerDown={onFileHandleDown}
+              className="group/file-handle relative z-10 my-6 flex w-px shrink-0 cursor-ew-resize touch-none items-center justify-center bg-transparent outline-none transition-colors hover:bg-border-hover/60 focus-visible:bg-border-hover/60"
+            />
+          </>
         )}
 
         {/* 编辑器 / Diff / Graph 区 */}

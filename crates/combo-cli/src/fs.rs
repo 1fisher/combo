@@ -8,8 +8,9 @@ use axum::extract::{Path, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::Response;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::path::{Component, Path as FsPath, PathBuf};
+use tokio::process::Command as TokioCommand;
 
 use crate::serve::AppState;
 
@@ -347,4 +348,255 @@ pub async fn write(
             error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
         }
     }
+}
+
+// ============================= 文件搜索 =============================
+
+/// 搜索时应跳过的目录名(加快递归速度)。
+fn is_skip_dir(name: &str) -> bool {
+    if name.starts_with('.') {
+        return true;
+    }
+    matches!(
+        name,
+        "node_modules"
+            | "target"
+            | "dist"
+            | "build"
+            | "__pycache__"
+            | "venv"
+            | ".venv"
+            | ".next"
+            | ".nuxt"
+            | ".cache"
+            | ".turbo"
+            | "coverage"
+            | ".idea"
+            | ".vscode"
+            | "vendor"
+            | "Pods"
+    )
+}
+
+/// 搜索结果上限。
+const MAX_SEARCH_RESULTS: usize = 500;
+
+#[derive(Deserialize)]
+pub struct SearchQuery {
+    pub q: Option<String>,
+    pub path: Option<String>,
+    pub regex: Option<bool>,
+    pub case_sensitive: Option<bool>,
+    pub whole_word: Option<bool>,
+}
+
+/// 构建文件名匹配正则;query 为空返回 None(不过滤,列出全部)。
+fn build_search_matcher(
+    query: &str,
+    use_regex: bool,
+    case_sensitive: bool,
+    whole_word: bool,
+) -> Result<Option<regex::Regex>, regex::Error> {
+    if query.trim().is_empty() {
+        return Ok(None);
+    }
+    let pattern = if use_regex {
+        query.to_string()
+    } else {
+        regex::escape(query)
+    };
+    let pattern = if whole_word {
+        format!(r"(?:^|[^\w])({})(?:[^\w]|$)", pattern)
+    } else {
+        pattern
+    };
+    let case_flag = if case_sensitive { "" } else { "(?i)" };
+    regex::Regex::new(&format!("{case_flag}{pattern}")).map(Some)
+}
+
+/// 运行 `rg --files`,返回相对搜索目录的文件路径列表。
+/// rg 不可用时返回 Err。
+async fn run_rg_files(dir: &FsPath) -> Result<Vec<String>, ()> {
+    let mut cmd = TokioCommand::new("rg");
+    cmd.current_dir(dir)
+        .arg("--files")
+        .arg("--color")
+        .arg("never")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .stdin(std::process::Stdio::null());
+
+    let output = tokio::time::timeout(std::time::Duration::from_secs(10), cmd.output()).await;
+    match output {
+        Ok(Ok(out)) => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            Ok(text
+                .lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect())
+        }
+        _ => Err(()),
+    }
+}
+
+/// 从 rg --files 输出构建搜索结果(文件 + 匹配的目录)。
+fn build_search_entries(
+    lines: &[String],
+    rel_prefix: &str,
+    matcher: Option<&regex::Regex>,
+) -> Vec<Value> {
+    let mut files: Vec<Value> = Vec::new();
+    let mut dirs: Vec<Value> = Vec::new();
+    let mut seen_dirs = std::collections::HashSet::new();
+
+    for line in lines {
+        if files.len() + dirs.len() >= MAX_SEARCH_RESULTS {
+            break;
+        }
+        // 跳过隐藏文件
+        let basename = line.rsplit_once('/').map(|(_, n)| n).unwrap_or(line);
+        if basename.starts_with('.') {
+            continue;
+        }
+        let full_path = if rel_prefix.is_empty() {
+            line.clone()
+        } else {
+            format!("{rel_prefix}/{line}")
+        };
+
+        if matcher.map_or(true, |m| m.is_match(basename)) {
+            files.push(json!({
+                "name": basename,
+                "path": full_path,
+                "type": "file",
+            }));
+        }
+
+        // 收集匹配的父目录
+        if let Some(m) = matcher {
+            let mut parent = line.as_str();
+            while let Some((dirpath, _)) = parent.rsplit_once('/') {
+                if seen_dirs.insert(dirpath.to_string()) {
+                    let dir_name = dirpath.rsplit_once('/').map(|(_, n)| n).unwrap_or(dirpath);
+                    if m.is_match(dir_name) {
+                        let full_dir = if rel_prefix.is_empty() {
+                            dirpath.to_string()
+                        } else {
+                            format!("{rel_prefix}/{dirpath}")
+                        };
+                        dirs.push(json!({
+                            "name": dir_name,
+                            "path": full_dir,
+                            "type": "dir",
+                        }));
+                    }
+                }
+                parent = dirpath;
+            }
+        }
+    }
+
+    // 目录在前,文件在后
+    dirs.extend(files);
+    dirs
+}
+
+/// walkdir 回退搜索(rg 不可用时)。
+fn walkdir_search(
+    search_dir: &FsPath,
+    rel_prefix: &str,
+    matcher: Option<&regex::Regex>,
+) -> Vec<Value> {
+    let mut entries: Vec<Value> = Vec::new();
+
+    for entry in walkdir::WalkDir::new(search_dir)
+        .into_iter()
+        .filter_entry(|e| {
+            if e.depth() == 0 {
+                return true;
+            }
+            if e.file_type().is_dir() {
+                let name = e.file_name().to_string_lossy();
+                return !is_skip_dir(&name);
+            }
+            true
+        })
+        .filter_map(|e| e.ok())
+    {
+        if entries.len() >= MAX_SEARCH_RESULTS {
+            break;
+        }
+        if entry.depth() == 0 {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') {
+            continue;
+        }
+        let rel = entry
+            .path()
+            .strip_prefix(search_dir)
+            .unwrap_or(entry.path());
+        let full_path = if rel_prefix.is_empty() {
+            rel.to_string_lossy().to_string()
+        } else {
+            format!("{rel_prefix}/{}", rel.to_string_lossy())
+        };
+        if !matcher.map_or(true, |m| m.is_match(&name)) {
+            continue;
+        }
+        let is_dir = entry.file_type().is_dir();
+        entries.push(json!({
+            "name": name,
+            "path": full_path,
+            "type": if is_dir { "dir" } else { "file" },
+        }));
+    }
+
+    entries.sort_by(|a, b| {
+        let ta = a["type"].as_str().unwrap_or("file");
+        let tb = b["type"].as_str().unwrap_or("file");
+        ta.cmp(tb)
+            .then_with(|| a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or("")))
+    });
+    entries
+}
+
+/// GET /v1/workspaces/{id}/files/search?q=<pattern>&path=<dir>&regex=true&case_sensitive=false
+/// 使用 ripgrep --files 快速列出文件,再按文件名过滤;rg 不可用时回退 walkdir。
+pub async fn search(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<SearchQuery>,
+) -> Response {
+    let root = match resolve_root(&state, &id) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+    let query = q.q.unwrap_or_default();
+    let rel_path = q.path.unwrap_or_default();
+    let use_regex = q.regex.unwrap_or(false);
+    let case_sensitive = q.case_sensitive.unwrap_or(false);
+    let whole_word = q.whole_word.unwrap_or(false);
+
+    let search_dir = match safe_join(&root, &rel_path) {
+        Ok(d) => d,
+        Err(e) => return error(StatusCode::BAD_REQUEST, &e.to_string()),
+    };
+    if !search_dir.is_dir() {
+        return error(StatusCode::BAD_REQUEST, "搜索路径不是目录");
+    }
+
+    let matcher = match build_search_matcher(&query, use_regex, case_sensitive, whole_word) {
+        Ok(m) => m,
+        Err(_) => return error(StatusCode::BAD_REQUEST, "无效的正则表达式"),
+    };
+
+    let entries = match run_rg_files(&search_dir).await {
+        Ok(lines) => build_search_entries(&lines, &rel_path, matcher.as_ref()),
+        Err(_) => walkdir_search(&search_dir, &rel_path, matcher.as_ref()),
+    };
+
+    ok_json(json!(entries))
 }
