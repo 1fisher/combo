@@ -20,6 +20,7 @@ use crate::fs;
 use crate::git;
 use crate::host;
 use crate::meta::MetaStore;
+use crate::question::QuestionRegistry;
 use crate::providers::{self, ProviderInfo};
 use crate::relay::{self, RelayManager};
 use crate::session;
@@ -63,6 +64,8 @@ pub struct AppState {
     pub relay: Arc<RelayManager>,
     /// 本地监听端口(隧道转发目标)。
     pub local_port: u16,
+    /// question 工具的待回答注册表(batch_id → 等待中的 tool 调用)。
+    pub questions: Arc<QuestionRegistry>,
 }
 
 impl AppState {
@@ -81,6 +84,7 @@ impl AppState {
                 .map(PathBuf::from),
             relay: RelayManager::new(),
             local_port: 0,
+            questions: QuestionRegistry::new(),
         })
     }
 
@@ -121,6 +125,7 @@ impl AppState {
             browse_root,
             relay: RelayManager::new(),
             local_port: 0,
+            questions: QuestionRegistry::new(),
         }
     }
 }
@@ -483,10 +488,22 @@ async fn permission_grant() -> Json<Value> {
     Json(json!({ "ok": true }))
 }
 
-/// POST /v1/workspaces/{id}/questions/answer — rune 兼容 stub。
-/// combo-cli 无人工确认流程,恒返回成功。
-async fn question_answer() -> Json<Value> {
-    Json(json!({ "ok": true }))
+/// POST /v1/workspaces/{id}/questions/answer — 接收用户对 question 工具的回答。
+/// 通过 `QuestionRegistry` 按 batch_id 唤醒等待中的 agent 工具调用。
+async fn question_answer(
+    State(state): State<AppState>,
+    Json(answer): Json<Value>,
+) -> Json<Value> {
+    let batch_id = answer
+        .get("batch_request_id")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if batch_id.is_empty() {
+        return Json(json!({ "ok": false, "error": "缺少 batch_request_id" }));
+    }
+    let resolved = state.questions.resolve(&batch_id, answer);
+    Json(json!({ "ok": resolved }))
 }
 
 async fn health() -> Json<Value> {
@@ -612,8 +629,15 @@ async fn run_agent_ws(
         let tx_ev = tx.clone();
         // 收集工具调用摘要供响应日志使用
         let mut tool_call_summaries: Vec<crate::request_log::ToolCallSummary> = Vec::new();
+        // question 工具:需要 broadcast tx、registry 和 cancel 信号
+        let extra_tools = vec![crate::question::question_tool(
+            session_id.clone(),
+            tx.clone(),
+            state2.questions.clone(),
+            cancel_rx.clone(),
+        )];
         let result =
-            crate::agent::stream_run(&cfg, &prompt, &rig_history, workspace_dir, cancel_rx, |ev| {
+            crate::agent::stream_run(&cfg, &prompt, &rig_history, workspace_dir, cancel_rx, extra_tools, |ev| {
             match ev {
                 RunEvent::TextDelta(t) => {
                     crate::request_log::log_event(

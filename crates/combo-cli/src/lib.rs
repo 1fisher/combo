@@ -13,6 +13,7 @@ pub mod lsp;
 pub mod mcp;
 pub mod meta;
 pub mod providers;
+pub mod question;
 pub mod relay;
 pub mod request_log;
 pub mod serve;

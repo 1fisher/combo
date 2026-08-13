@@ -1996,6 +1996,8 @@ export namespace Api {
   export type QuestionAnswer = {
     batch_request_id: string;
     responses: QuestionResponse[];
+    /** 用户选择"让 agent 自行决定"时为 true */
+    skipped?: boolean;
   };
 
   // 文件服务(combo-cli serve 本地端点,swagger 无此定义)

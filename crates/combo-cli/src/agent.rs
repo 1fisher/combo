@@ -349,16 +349,18 @@ pub async fn stream_run<F>(
     history: &[Message],
     workspace_dir: Option<PathBuf>,
     mut cancel: tokio::sync::watch::Receiver<bool>,
+    extra_tools: Vec<DynamicTool>,
     mut on_event: F,
 ) -> Result<Option<String>>
 where
     F: FnMut(RunEvent),
 {
-    let builtin = if cfg.tools {
+    let mut builtin = if cfg.tools {
         crate::tools::builtin_tools(workspace_dir, cfg.lsp.clone())
     } else {
         Vec::new()
     };
+    builtin.extend(extra_tools);
     let mcp = cfg.mcp_specs();
     let ptype = cfg.provider.provider_type.clone().unwrap_or_else(|| "openai".into());
     let effort = cfg.reasoning_effort.as_deref();

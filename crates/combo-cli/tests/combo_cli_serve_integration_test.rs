@@ -62,6 +62,7 @@ fn make_state() -> AppState {
         browse_root: None,
         relay: RelayManager::new(),
         local_port: 0,
+        questions: combo_cli::question::QuestionRegistry::new(),
     }
 }
 
@@ -321,6 +322,7 @@ async fn git_repos_discovers_root_and_subdir_repos() {
         browse_root: None,
         relay: RelayManager::new(),
         local_port: 0,
+        questions: combo_cli::question::QuestionRegistry::new(),
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -455,6 +457,46 @@ async fn workspace_config_disabled_skills_roundtrip() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+
+    task.abort();
+}
+
+#[tokio::test]
+async fn question_answer_unknown_batch_returns_false() {
+    let (base, task) = start_server().await;
+    let client = reqwest::Client::new();
+
+    // 不存在的 batch_id → ok: false
+    let resp = client
+        .post(format!("{base}/v1/workspaces/ws_x/questions/answer"))
+        .json(&serde_json::json!({
+            "batch_request_id": "nonexistent-batch",
+            "responses": [],
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(v["ok"], false);
+
+    task.abort();
+}
+
+#[tokio::test]
+async fn question_answer_missing_batch_id_returns_false() {
+    let (base, task) = start_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{base}/v1/workspaces/ws_x/questions/answer"))
+        .json(&serde_json::json!({ "responses": [] }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(v["ok"], false);
 
     task.abort();
 }
