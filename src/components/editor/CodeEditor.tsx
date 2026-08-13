@@ -168,8 +168,11 @@ export function CodeEditor({
         if (iconMap[name!]) {
           btn.innerHTML = iconMap[name!];
           btn.setAttribute('title', btn.textContent || name || '');
+          // 导航按钮(next/prev/select)去掉外边框,仅保留图标
+          const isNav = name === 'next' || name === 'prev' || name === 'select';
           (btn as HTMLElement).style.cssText =
-            'display:inline-flex;align-items:center;justify-content:center;padding:2px 4px;';
+            'display:inline-flex;align-items:center;justify-content:center;padding:2px 4px;' +
+            (isNav ? 'border:none;background:transparent;color:inherit;' : '');
         }
       });
 
@@ -213,16 +216,28 @@ export function CodeEditor({
         }
       });
 
-      // 隐藏选项 checkbox,由外层 label 点击触发(label 点击会 toggle checkbox)
+      // 隐藏选项 checkbox,由外层 label 点击触发;选中时 label 显示外边框
       panel.querySelectorAll('label input[type=checkbox]').forEach((cb) => {
         const style = cb as HTMLInputElement;
         style.style.cssText =
           'position:absolute;opacity:0;pointer-events:none;width:0;height:0;';
-        style.closest('label')!.style.cssText =
-          'display:inline-flex;align-items:center;gap:2px;margin:0 .4em 0 0;cursor:pointer;user-select:none;';
+        const label = style.closest('label')!;
+        label.style.cssText =
+          'display:inline-flex;align-items:center;gap:2px;margin:0 .4em 0 0;cursor:pointer;user-select:none;' +
+          'border:1px solid transparent;border-radius:3px;padding:1px 3px;';
+        const updateActive = () => {
+          label.style.borderColor = style.checked
+            ? 'rgba(94, 234, 212, 0.8)'
+            : 'transparent';
+          label.style.backgroundColor = style.checked
+            ? 'rgba(94, 234, 212, 0.12)'
+            : 'transparent';
+        };
+        style.addEventListener('change', updateActive);
+        updateActive();
       });
 
-      // 参考 VS Code 重排元素顺序:输入框 → 选项(aA/.*/ab)→ 导航(prev/next/all)→ 替换 → 关闭
+      // 参考 VS Code 重排元素顺序:折叠按钮 → 输入框 → 选项 → 导航 → 替换区(默认折叠)→ 关闭
       const searchInput = panel.querySelector('input[name=search]');
       const labels = Array.from(panel.querySelectorAll('label'));
       const navButtons = panel.querySelectorAll('button[name="next"], button[name="prev"], button[name="select"]');
@@ -231,16 +246,50 @@ export function CodeEditor({
       const replaceField = panel.querySelector('input[name="replace"]');
       const brEl = Array.from(panel.children).find((el) => el.tagName === 'BR');
 
+      // 折叠切换按钮:搜索框前的 > / v 图标,展开/收起替换区
+      const replaceArea = document.createElement('span');
+      replaceArea.style.cssText =
+        'display:none;width:100%;' +
+        'align-items:center;gap:4px;' +
+        'margin:.2em 0 0;';
+      if (replaceField) {
+        // 替换框与搜索框左对齐并占满整行
+        (replaceField as HTMLInputElement).style.flex = '1';
+        (replaceField as HTMLInputElement).style.marginLeft = '0';
+        replaceArea.appendChild(replaceField);
+      }
+      if (replaceBtns[0]) replaceArea.appendChild(replaceBtns[0]);
+      if (replaceBtns[1]) replaceArea.appendChild(replaceBtns[1]);
+      if (brEl) brEl.remove();
+
+      const toggleBtn = document.createElement('button');
+      toggleBtn.type = 'button';
+      toggleBtn.className = 'cm-button cm-replace-toggle';
+      toggleBtn.title = '切换替换';
+      // 默认右箭头 >,展开后向下 v
+      const chevronRight =
+        '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>';
+      const chevronDown =
+        '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
+      toggleBtn.innerHTML = chevronRight;
+      toggleBtn.style.cssText =
+        'display:inline-flex;align-items:center;justify-content:center;' +
+        'padding:2px 3px;margin:0 .2em 0 0;background:none;border:none;' +
+        'color:inherit;cursor:pointer;font-size:0;';
+      let expanded = false;
+      toggleBtn.addEventListener('click', () => {
+        expanded = !expanded;
+        replaceArea.style.display = expanded ? 'flex' : 'none';
+        toggleBtn.innerHTML = expanded ? chevronDown : chevronRight;
+      });
+
       const ordered = [
+        toggleBtn,
         searchInput,
         ...labels, // aA → .* → ab(匹配 DOM 顺序:case, regexp, word)
         navButtons[1], // prev
         navButtons[0], // next
         navButtons[2], // all
-        brEl,
-        replaceField,
-        replaceBtns[0],
-        replaceBtns[1],
         closeBtn,
       ].filter(Boolean) as Element[];
 
@@ -248,6 +297,8 @@ export function CodeEditor({
       for (const el of ordered) {
         panel.appendChild(el);
       }
+      // 替换区(默认折叠)附加到面板末尾
+      panel.appendChild(replaceArea);
     }
 
     const observer = new MutationObserver(() => restylePanel());
