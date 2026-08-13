@@ -62,6 +62,17 @@ export function applyEvent(s: Store, env: EventEnvelope): void {
       s.dismissQuestionBatch(p.batch_id);
       break;
     }
+    case 'todo_update': {
+      const inner = env.payload as { type: string; payload: unknown };
+      if (inner.type === 'updated') {
+        const p = inner.payload as { session_id: string; todos: Api.TodoItem[] };
+        s.setTodos(p.session_id, p.todos);
+      } else if (inner.type === 'deleted') {
+        const p = inner.payload as { session_id: string };
+        s.clearTodos(p.session_id);
+      }
+      break;
+    }
     default:
       console.debug(
         `[${ts()}][dispatch] 未处理事件 type="${env.type}"`

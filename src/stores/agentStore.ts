@@ -62,6 +62,8 @@ interface AgentState {
   bySession: Record<string, SessionRuntime>;
   permissionQueue: Api.PermissionRequest[];
   questionQueue: Api.QuestionRequest[];
+  /** 每个 session 的任务列表(todo_write 工具推送,实时更新) */
+  todos: Record<string, Api.TodoItem[]>;
 
   upsertMessage: (sessionId: string, m: Api.Message) => void;
   removeOptimisticMessages: (sessionId: string) => void;
@@ -78,6 +80,8 @@ interface AgentState {
   resolvePermission: (toolCallId: string) => void;
   enqueueQuestionBatch: (b: Api.QuestionRequest) => void;
   dismissQuestionBatch: (batchId: string) => void;
+  setTodos: (sessionId: string, todos: Api.TodoItem[]) => void;
+  clearTodos: (sessionId: string) => void;
   clearSessionRuntime: (sessionId: string) => void;
 }
 
@@ -113,6 +117,7 @@ export const useAgentStore = create<AgentState>()(
   bySession: {},
   permissionQueue: [],
   questionQueue: [],
+  todos: {},
 
   upsertMessage: (sessionId, m) =>
     set((st) => {
@@ -242,6 +247,13 @@ export const useAgentStore = create<AgentState>()(
   enqueueQuestionBatch: (b) => set((st) => ({ questionQueue: [...st.questionQueue, b] })),
   dismissQuestionBatch: (batchId) =>
     set((st) => ({ questionQueue: st.questionQueue.filter((b) => b.id !== batchId) })),
+  setTodos: (sessionId, todos) =>
+    set((st) => ({ todos: { ...st.todos, [sessionId]: todos } })),
+  clearTodos: (sessionId) =>
+    set((st) => {
+      const { [sessionId]: _drop, ...rest } = st.todos;
+      return { todos: rest };
+    }),
   clearSessionRuntime: (sessionId) =>
     set((st) => {
       const { [sessionId]: _drop, ...rest } = st.bySession;

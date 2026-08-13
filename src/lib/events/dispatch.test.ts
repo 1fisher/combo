@@ -8,6 +8,7 @@ describe('applyEvent', () => {
       bySession: {},
       permissionQueue: [],
       questionQueue: [],
+      todos: {},
     })
   );
 
@@ -109,6 +110,34 @@ describe('applyEvent', () => {
       payload: { type: 'updated', payload: { batch_id: 'q1' } },
     });
     expect(useAgentStore.getState().questionQueue).toEqual([]);
+  });
+
+  it('sets and clears todos via todo_update events', () => {
+    const s = useAgentStore.getState();
+    applyEvent(s, {
+      type: 'todo_update',
+      payload: {
+        type: 'updated',
+        payload: {
+          session_id: 's1',
+          todos: [
+            { content: '任务一', status: 'completed' },
+            { content: '任务二', status: 'in_progress', active_form: '正在处理任务二' },
+            { content: '任务三', status: 'pending' },
+          ],
+        },
+      },
+    });
+    const after = useAgentStore.getState();
+    expect(after.todos['s1']).toHaveLength(3);
+    expect(after.todos['s1'][0].status).toBe('completed');
+    expect(after.todos['s1'][1].active_form).toBe('正在处理任务二');
+
+    applyEvent(s, {
+      type: 'todo_update',
+      payload: { type: 'deleted', payload: { session_id: 's1' } },
+    });
+    expect(useAgentStore.getState().todos['s1']).toBeUndefined();
   });
 
   it('removes optimistic local- messages when real user text message arrives', () => {

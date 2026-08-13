@@ -22,6 +22,7 @@ pub mod skills;
 pub mod skills_api;
 pub mod store;
 pub mod terminal;
+pub mod todo;
 pub mod tools;
 pub mod tunnel;
 pub mod workspace;

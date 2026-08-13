@@ -21,6 +21,7 @@ use crate::git;
 use crate::host;
 use crate::meta::MetaStore;
 use crate::question::QuestionRegistry;
+use crate::todo::TodoStore;
 use crate::providers::{self, ProviderInfo};
 use crate::relay::{self, RelayManager};
 use crate::session;
@@ -66,6 +67,8 @@ pub struct AppState {
     pub local_port: u16,
     /// question 工具的待回答注册表(batch_id → 等待中的 tool 调用)。
     pub questions: Arc<QuestionRegistry>,
+    /// todo 工具的任务列表存储(session_id → 任务列表)。
+    pub todos: Arc<TodoStore>,
 }
 
 impl AppState {
@@ -85,6 +88,7 @@ impl AppState {
             relay: RelayManager::new(),
             local_port: 0,
             questions: QuestionRegistry::new(),
+            todos: TodoStore::new(),
         })
     }
 
@@ -126,6 +130,7 @@ impl AppState {
             relay: RelayManager::new(),
             local_port: 0,
             questions: QuestionRegistry::new(),
+            todos: TodoStore::new(),
         }
     }
 }
@@ -630,12 +635,19 @@ async fn run_agent_ws(
         // 收集工具调用摘要供响应日志使用
         let mut tool_call_summaries: Vec<crate::request_log::ToolCallSummary> = Vec::new();
         // question 工具:需要 broadcast tx、registry 和 cancel 信号
-        let extra_tools = vec![crate::question::question_tool(
-            session_id.clone(),
-            tx.clone(),
-            state2.questions.clone(),
-            cancel_rx.clone(),
-        )];
+        let extra_tools = vec![
+            crate::question::question_tool(
+                session_id.clone(),
+                tx.clone(),
+                state2.questions.clone(),
+                cancel_rx.clone(),
+            ),
+            crate::todo::todo_write_tool(
+                session_id.clone(),
+                tx.clone(),
+                state2.todos.clone(),
+            ),
+        ];
         let result =
             crate::agent::stream_run(&cfg, &prompt, &rig_history, workspace_dir, cancel_rx, extra_tools, |ev| {
             match ev {

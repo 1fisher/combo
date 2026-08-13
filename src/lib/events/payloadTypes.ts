@@ -13,6 +13,7 @@ export const PAYLOAD_TYPES = [
   'update_available',
   'question_batch_request',
   'question_batch_notification',
+  'todo_update',
 ] as const;
 export type PayloadType = (typeof PAYLOAD_TYPES)[number];
 

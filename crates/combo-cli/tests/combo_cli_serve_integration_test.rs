@@ -63,6 +63,7 @@ fn make_state() -> AppState {
         relay: RelayManager::new(),
         local_port: 0,
         questions: combo_cli::question::QuestionRegistry::new(),
+        todos: combo_cli::todo::TodoStore::new(),
     }
 }
 
@@ -323,6 +324,7 @@ async fn git_repos_discovers_root_and_subdir_repos() {
         relay: RelayManager::new(),
         local_port: 0,
         questions: combo_cli::question::QuestionRegistry::new(),
+        todos: combo_cli::todo::TodoStore::new(),
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

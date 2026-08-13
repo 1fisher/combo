@@ -15,6 +15,7 @@ import { MessageList } from './MessageList';
 import { Composer } from './Composer';
 import { ChatEmptyState } from './ChatEmptyState';
 import { FileChangesPanel, type ChangeStatus } from './FileChangesPanel';
+import { TodoList } from './TodoList';
 import { extractFileToolCalls } from '../../lib/fileChanges';
 import { cn } from '../../lib/utils';
 
@@ -34,6 +35,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
   const { create: createSessionIn, activate: activateSession, remove: removeSession } = useSessions(workspaceId);
 
   const rt = useAgentStore((s) => (sessionId ? s.bySession[sessionId] : undefined));
+  const todos = useAgentStore((s) => (sessionId ? s.todos[sessionId] : undefined) ?? []);
   const hydrateMessages = useAgentStore((s) => s.hydrateMessages);
   const setQueued = useAgentStore((s) => s.setQueued);
   const [postError, setPostError] = useState<string | null>(null);
@@ -290,6 +292,8 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
             <span className="ml-auto text-brand">审查变更</span>
           </button>
         )}
+        {/* 任务列表 */}
+        {sessionId && todos.length > 0 && <TodoList todos={todos} />}
         <Composer
           workspaceName={wsName}
           workspaceId={workspaceId ?? undefined}

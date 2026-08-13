@@ -2000,6 +2000,14 @@ export namespace Api {
     skipped?: boolean;
   };
 
+  // Todo 工具(agent 管理的任务列表,经 todo_update SSE 事件推送)
+  export type TodoStatus = 'pending' | 'in_progress' | 'completed';
+  export type TodoItem = {
+    content: string;
+    status: TodoStatus;
+    active_form?: string;
+  };
+
   // 文件服务(combo-cli serve 本地端点,swagger 无此定义)
   export type FileEntryType = 'dir' | 'file';
   export type FileEntry = {
