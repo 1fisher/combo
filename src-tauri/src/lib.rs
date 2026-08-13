@@ -25,13 +25,27 @@ fn get_proxy_port(state: tauri::State<ProxyPort>) -> Option<u16> {
     *state.0.lock().unwrap()
 }
 
+/// 在系统默认浏览器中打开外部链接(前端对超链接 cmd/ctrl+click 时调用)。
+/// 仅放行 http/https/mailto,避免 IPC 被用于打开任意协议。
+#[tauri::command]
+fn open_url(url: String) {
+    let trimmed = url.trim();
+    if !(trimmed.starts_with("http://")
+        || trimmed.starts_with("https://")
+        || trimmed.starts_with("mailto:"))
+    {
+        return;
+    }
+    let _ = open::that(trimmed);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(ProxyPort::default())
-        .invoke_handler(tauri::generate_handler![get_proxy_port])
+        .invoke_handler(tauri::generate_handler![get_proxy_port, open_url])
         .setup(|app| {
             // 调试:COMBO_DEVTOOLS=1 时自动打开 WebView 开发者工具
             if std::env::var("COMBO_DEVTOOLS").is_ok() {

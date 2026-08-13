@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { cn } from '../../lib/utils';
+import { openExternal } from '../../lib/openExternal';
 import 'highlight.js/styles/github-dark.css';
 
 /** 递归提取 React 节点树中的纯文本(用于代码块复制按钮) */
@@ -107,6 +108,23 @@ export function Markdown({
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[[rehypeHighlight, { detect: true, ignoreMissing: true }]]}
         components={{
+          a({ href, children }) {
+            return (
+              <a
+                href={href}
+                onClick={(e) => {
+                  // 阻止默认跳转(避免在 webview/当前标签页内导航),
+                  // 仅 cmd(Mac)/ctrl(Windows)+click 时在系统默认浏览器打开
+                  e.preventDefault();
+                  if (e.metaKey || e.ctrlKey) {
+                    void openExternal(href ?? '');
+                  }
+                }}
+              >
+                {children}
+              </a>
+            );
+          },
           pre({ children }) {
             const codeEl = children as React.ReactElement<{
               className?: string;
