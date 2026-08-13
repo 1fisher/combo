@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SettingsDialog } from './SettingsDialog';
+import { useAgentStore } from '../../stores/agentStore';
 import {
   clearExternalUrl,
   clearProxyUrlOverride,
@@ -25,7 +26,16 @@ vi.mock('../../hooks/useAgentModel', () => ({
         models: [{ id: 'deepseek-v4-flash-free', name: 'deepseek-v4-flash-free' }],
       },
       { id: 'zhipu', name: 'Zhipu', type: 'openai', has_api_key: true, models: [] },
-      { id: 'deepseek', name: 'DeepSeek', type: 'openai', has_api_key: false, models: [] },
+      {
+        id: 'deepseek',
+        name: 'DeepSeek',
+        type: 'openai',
+        has_api_key: false,
+        models: [
+          { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash', context_window: 262144 },
+          { id: 'deepseek-chat', name: 'DeepSeek Chat' },
+        ],
+      },
     ],
   }),
   useFetchModels: () => ({ mutateAsync: fetchModelsMutate, isPending: false }),
@@ -113,5 +123,25 @@ describe('SettingsDialog', () => {
     await userEvent.click(screen.getByRole('button', { name: /DeepSeek/ }));
     const fetchBtn = screen.getAllByRole('button', { name: '拉取模型' })[0] as HTMLButtonElement;
     expect(fetchBtn.disabled).toBe(true);
+  });
+
+  it('切换 Provider 后上下文窗口保存到新 provider 的模型,不残留旧模型', async () => {
+    renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
+    // 默认选中第一个 provider(opencode)的模型
+    const providerSel = screen.getByLabelText('选择 Provider');
+    const modelSel = screen.getByLabelText('选择模型');
+    expect((providerSel as HTMLSelectElement).value).toBe('opencode');
+    expect((modelSel as HTMLSelectElement).value).toBe('deepseek-v4-flash-free');
+    // 切到 DeepSeek:模型应联动为新 provider 的默认/首个模型
+    await userEvent.selectOptions(providerSel, 'deepseek');
+    expect((modelSel as HTMLSelectElement).value).toBe('deepseek-v4-flash');
+    // 设置 1M 并保存
+    await userEvent.click(screen.getByRole('button', { name: '1M' }));
+    await userEvent.click(screen.getByRole('button', { name: '保存' }));
+    // 只写入当前模型,旧模型(deepseek-v4-flash-free)不受影响
+    expect(useAgentStore.getState().contextOverrides).toEqual({
+      'deepseek-v4-flash': 1_048_576,
+    });
+    useAgentStore.getState().clearContextOverride('deepseek-v4-flash');
   });
 });

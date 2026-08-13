@@ -25,6 +25,8 @@ describe('agentStore 选中持久化', () => {
       bySession: {},
       permissionQueue: [],
       questionQueue: [],
+      modelSelections: {},
+      contextOverrides: {},
     });
   });
 
@@ -44,6 +46,24 @@ describe('agentStore 选中持久化', () => {
     useAgentStore.getState().setActiveWorkspace('w2');
     expect(useAgentStore.getState().activeWorkspaceId).toBe('w2');
     expect(useAgentStore.getState().activeSessionId).toBeNull();
+  });
+
+  it('手动上下文窗口覆盖按模型 id 持久化并可清除', () => {
+    useAgentStore.getState().setContextOverride('deepseek-v4', 131_072);
+    useAgentStore.getState().setContextOverride('glm-5', 262_144);
+    expect(useAgentStore.getState().contextOverrides).toEqual({
+      'deepseek-v4': 131_072,
+      'glm-5': 262_144,
+    });
+    // 写入 localStorage
+    const saved = JSON.parse(localStorage.getItem('combo.agent')!) as {
+      state: { contextOverrides: Record<string, number> };
+    };
+    expect(saved.state.contextOverrides['deepseek-v4']).toBe(131_072);
+    // 清除单个模型
+    useAgentStore.getState().clearContextOverride('deepseek-v4');
+    expect(useAgentStore.getState().contextOverrides['deepseek-v4']).toBeUndefined();
+    expect(useAgentStore.getState().contextOverrides['glm-5']).toBe(262_144);
   });
 
   it('SSE 实时状态(消息/队列)不入库', () => {

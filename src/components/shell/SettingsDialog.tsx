@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { CheckCircle2, ChevronDown, Loader2, Trash2, Zap } from 'lucide-react';
 import { Button } from '../ui/button';
 import {
@@ -21,6 +21,8 @@ import {
 } from '../../lib/connection';
 import { useUpdater } from '../../hooks/useUpdater';
 import { useFetchModels, useProviders, useSaveProviderKey } from '../../hooks/useAgentModel';
+import { useAgentStore } from '../../stores/agentStore';
+import { formatTokenCount } from '../../lib/tokens';
 import { useQueryClient } from '@tanstack/react-query';
 
 interface SettingsDialogProps {
@@ -41,6 +43,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [hasDomain, setHasDomain] = useState(false);
   const updater = useUpdater();
   const [appVersion, setAppVersion] = useState('');
+  // 上下文窗口区块的提交句柄(与域名/代理一样,点「保存」才生效)
+  const ctxSectionRef = useRef<{ commit: () => void }>(null);
 
   useEffect(() => {
     if (open && isTauri()) {
@@ -71,6 +75,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
       clearProxyUrlOverride();
     }
     setExternalUrl(domainInput.trim());
+    ctxSectionRef.current?.commit();
     onOpenChange(false);
   }
 
@@ -93,6 +98,9 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
         <div className="flex flex-col gap-4">
           {/* 模型 Provider 配置 */}
           <ProviderConfigSection open={open} />
+
+          {/* 手动上下文窗口 */}
+          <ContextWindowSection open={open} ref={ctxSectionRef} />
 
           {/* 外部访问域名 */}
           <div className="flex flex-col gap-2">
@@ -438,3 +446,192 @@ function ProviderConfigSection({ open }: { open: boolean }) {
     </div>
   );
 }
+
+// ---------- 上下文窗口设置区 ----------
+
+const CONTEXT_QUICK = [
+  { label: '128k', value: 131_072 },
+  { label: '200k', value: 204_800 },
+  { label: '256k', value: 262_144 },
+  { label: '1M', value: 1_048_576 },
+];
+
+/** 取 provider 的默认大模型 id,未配置则取第一个模型 */
+function defaultModelOf(p: {
+  default_large_model_id?: string;
+  models?: { id?: string }[];
+} | undefined): string {
+  if (!p) return '';
+  const models = Array.isArray(p.models) ? p.models : [];
+  return p.default_large_model_id && models.some((m) => m.id === p.default_large_model_id)
+    ? p.default_large_model_id
+    : (models[0]?.id ?? '');
+}
+
+/**
+ * 按模型手动设置上下文窗口上限(token 数),存 agentStore contextOverrides
+ * (key = 模型 id,localStorage 持久化,按模型全局生效),Composer 用量统计优先使用。
+ * 输入留空 + 保存 = 清除该模型的覆盖值;未修改任何字段时点保存不生效。
+ */
+const ContextWindowSection = forwardRef<
+  { commit: () => void },
+  { open: boolean }
+>(function ContextWindowSection({ open }, ref) {
+  const { data: providers } = useProviders(null);
+  const contextOverrides = useAgentStore((s) => s.contextOverrides);
+  const setContextOverride = useAgentStore((s) => s.setContextOverride);
+  const clearContextOverride = useAgentStore((s) => s.clearContextOverride);
+
+  const [providerId, setProviderId] = useState('');
+  const [modelId, setModelId] = useState('');
+  const [tokenInput, setTokenInput] = useState('');
+  // 用户是否改动过输入(区分「没改」与「主动清空」,避免误清除已有配置)
+  const dirtyRef = useRef(false);
+
+  // 打开时初始化:默认选中第一个 provider 及其默认/首个模型,回填已有覆盖值。
+  // providerId 非空说明已初始化过(providers 异步加载完成后),不再覆盖用户选择。
+  useEffect(() => {
+    if (!open || providerId) return;
+    const p = (providers ?? [])[0];
+    if (!p) return;
+    const defaultModel = defaultModelOf(p);
+    setProviderId(p.id);
+    setModelId(defaultModel);
+    const v = contextOverrides[defaultModel];
+    setTokenInput(v != null ? String(v) : '');
+    dirtyRef.current = false;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, providers, providerId]);
+
+  // 切换 provider/model 时回填该模型的覆盖值(不标记 dirty)
+  useEffect(() => {
+    if (!modelId) return;
+    const v = contextOverrides[modelId];
+    setTokenInput(v != null ? String(v) : '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providerId, modelId]);
+
+  const provider = providers?.find((p) => p.id === providerId);
+  const models = (provider && Array.isArray(provider.models) ? provider.models : []) as {
+    id?: string;
+    name?: string;
+    context_window?: number;
+  }[];
+  const model = models.find((m) => m.id === modelId);
+  const defaultWindow = typeof model?.context_window === 'number' ? model.context_window : undefined;
+  const hasOverride = !!modelId && contextOverrides[modelId] != null;
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      commit() {
+        if (!modelId || !dirtyRef.current) return;
+        dirtyRef.current = false;
+        const n = Number(tokenInput.trim());
+        if (tokenInput.trim() === '' || !Number.isFinite(n) || n <= 0) {
+          clearContextOverride(modelId);
+          return;
+        }
+        setContextOverride(modelId, Math.round(n));
+      },
+    }),
+    [modelId, tokenInput, setContextOverride, clearContextOverride],
+  );
+
+  if (!providers?.length) return null;
+
+  const selectCls =
+    'h-9 w-full rounded-lg border border-input-border bg-background px-2.5 text-[13px] text-foreground outline-none [color-scheme:dark] focus-visible:border-input-border-focused';
+
+  return (
+    <div className="flex flex-col gap-2">
+      <label className="text-[13px] font-medium text-foreground">上下文窗口(手动)</label>
+      <div className="grid grid-cols-2 gap-1.5">
+        <select
+          value={providerId}
+          onChange={(e) => {
+            const pid = e.target.value;
+            setProviderId(pid);
+            // 切换 Provider 时同步重置模型为新 provider 的默认/首个模型,
+            // 否则 modelId 残留旧值,模型下拉显示与实际保存的模型不一致(覆盖错模型)
+            setModelId(defaultModelOf(providers?.find((p) => p.id === pid)));
+            dirtyRef.current = true;
+          }}
+          className={selectCls}
+          aria-label="选择 Provider"
+        >
+          {providers.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name ?? p.id}
+            </option>
+          ))}
+        </select>
+        <select
+          value={modelId}
+          onChange={(e) => {
+            setModelId(e.target.value);
+            dirtyRef.current = true;
+          }}
+          className={selectCls}
+          aria-label="选择模型"
+        >
+          {models.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.name ?? m.id}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <input
+          type="number"
+          min={1}
+          step={1024}
+          value={tokenInput}
+          onChange={(e) => {
+            setTokenInput(e.target.value);
+            dirtyRef.current = true;
+          }}
+          placeholder="token 数,留空 = 恢复默认"
+          className="h-9 min-w-0 flex-1 rounded-lg border border-input-border bg-background px-2.5 font-mono text-[13px] text-foreground outline-none placeholder:text-foreground-subtlest focus-visible:border-input-border-focused [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
+        />
+        {hasOverride && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 shrink-0 text-[12px]"
+            onClick={() => {
+              setTokenInput('');
+              dirtyRef.current = true;
+            }}
+          >
+            清除
+          </Button>
+        )}
+      </div>      <div className="flex flex-wrap items-center gap-1.5">
+        {CONTEXT_QUICK.map((q) => (
+          <button
+            key={q.label}
+            type="button"
+            onClick={() => {
+              setTokenInput(String(q.value));
+              dirtyRef.current = true;
+            }}
+            className="rounded border border-input-border bg-background px-2 py-0.5 text-[11px] text-foreground-subtle transition-colors hover:bg-surface-hover"
+          >
+            {q.label}
+          </button>
+        ))}
+        {defaultWindow && (
+          <span className="text-[11px] text-foreground-subtlest">
+            默认 {formatTokenCount(defaultWindow)}
+          </span>
+        )}
+      </div>
+      <div className="text-[12px] text-foreground-subtle">
+        按模型全局生效(与 Provider 无关):同一模型即使挂在多个 Provider 下也只
+        存一份,优先于后端上报值;输入框留空并保存即恢复默认。
+      </div>
+    </div>
+  );
+});
