@@ -151,7 +151,6 @@ export function Composer({
   const { data: wsConfig } = useWorkspaceConfig(workspaceId);
   const setModel = useSetModel(workspaceId);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
-  const [providerMenuOpen, setProviderMenuOpen] = useState(false);
   const [modelErr, setModelErr] = useState('');
   const [modelSearch, setModelSearch] = useState('');
   // FlameWrap 原生(layoutsubtree)模式下外层 wrapper 无行内内容会塌陷为 0 高,
@@ -289,7 +288,6 @@ export function Composer({
     () => providers?.find((p) => p.id === currentProviderId),
     [providers, currentProviderId]
   );
-  const currentProviderName = (currentProvider?.name ?? currentProviderId) || '默认';
 
   // 当前思考强度:优先本地持久化,默认「高」
   const currentThoughtId = storedModel?.reasoningEffort ?? 'high';
@@ -371,28 +369,6 @@ export function Composer({
     }
     setModel.mutate(
       { model: { model: modelId, provider } },
-      {
-        onError: (e) => setModelErr(e instanceof Error ? e.message : '切换失败,请稍后重试'),
-      }
-    );
-  }
-
-  function handleProviderChange(providerId: string) {
-    setProviderMenuOpen(false);
-    if (providerId === currentProviderId) return;
-    const p = providers?.find((x) => x.id === providerId);
-    const models = p && Array.isArray(p.models) ? p.models : [];
-    // 切换 provider 时自动选用其默认大模型(未配置则取第一个模型)
-    const defaultModel = (p?.default_large_model_id ?? models[0]?.id) ?? '';
-    setModelErr('');
-    if (workspaceId && defaultModel) {
-      useAgentStore.getState().setModelSelection(workspaceId, {
-        model: defaultModel,
-        provider: providerId,
-      });
-    }
-    setModel.mutate(
-      { model: { model: defaultModel, provider: providerId } },
       {
         onError: (e) => setModelErr(e instanceof Error ? e.message : '切换失败,请稍后重试'),
       }
@@ -716,72 +692,6 @@ export function Composer({
                   )}
                 </div>
                 <div className="flex items-center gap-1.5">
-                  {/* Provider 选择 */}
-                  <div className="relative shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setProviderMenuOpen((o) => !o);
-                        setModelMenuOpen(false);
-                        setThoughtMenuOpen(false);
-                      }}
-                      className="flex h-7 w-fit items-center justify-between gap-1 rounded-lg px-1.5 py-1.5 text-[13px] whitespace-nowrap text-foreground-subtle transition-colors hover:bg-surface-hover hover:text-foreground"
-                      aria-label="切换 Provider"
-                      title="切换 Provider"
-                    >
-                      <ProviderLogo providerId={currentProviderId} name={currentProviderName} className="size-4" />
-                      <span className="min-w-0 max-w-[6rem] truncate">{currentProviderName}</span>
-                      <ChevronDown className="pointer-events-none size-3.5 text-foreground-subtlest" />
-                    </button>
-                    {providerMenuOpen && (
-                      <>
-                        <div
-                          className="fixed inset-0 z-40"
-                          onClick={() => setProviderMenuOpen(false)}
-                        />
-                        <div className="absolute bottom-full right-0 z-50 mb-2 max-h-80 w-64 overflow-y-auto rounded-xl border border-border bg-popover p-1.5 shadow-xl">
-                          <div className="flex items-center justify-between px-2 py-1 text-xs font-medium text-foreground-subtlest">
-                            <span>Provider</span>
-                            {currentProviderId && (
-                              <span className="truncate text-[11px] text-foreground-subtle">
-                                当前: {currentProviderName}
-                              </span>
-                            )}
-                          </div>
-                          {!providers?.length ? (
-                            <div className="px-2 py-2 text-[13px] text-foreground-subtle">
-                              暂无可用的 Provider。请在设置中配置。
-                            </div>
-                          ) : (
-                            providers.map((p) => (
-                              <button
-                                key={p.id}
-                                type="button"
-                                onClick={() => handleProviderChange(p.id)}
-                                className={cn(
-                                  'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-hover',
-                                  p.id === currentProviderId && 'bg-surface-hover'
-                                )}
-                              >
-                                <ProviderLogo providerId={p.id} name={p.name} className="size-4 shrink-0" />
-                                <span className="flex min-w-0 flex-1 flex-col">
-                                  <span className="truncate font-medium">{p.name || p.id}</span>
-                                  <span className="truncate text-[11px] text-foreground-subtle">
-                                    {p.has_api_key
-                                      ? `${(p.models ?? []).length} 个模型`
-                                      : '未配置 API Key'}
-                                  </span>
-                                </span>
-                                {p.id === currentProviderId && (
-                                  <Check className="size-3.5 shrink-0 text-brand" />
-                                )}
-                              </button>
-                            ))
-                          )}
-                        </div>
-                      </>
-                    )}
-                  </div>
                   {/* 模型选择 */}
                   <div className="relative shrink-0">
                     <button
@@ -789,7 +699,6 @@ export function Composer({
                       onClick={() => {
                         if (!modelMenuOpen) setModelSearch('');
                         setModelMenuOpen((o) => !o);
-                        setProviderMenuOpen(false);
                         setThoughtMenuOpen(false);
                       }}
                       className={cn(
@@ -804,7 +713,11 @@ export function Composer({
                       {setModel.isPending ? (
                         <Loader2 className="pointer-events-none size-4 animate-spin" />
                       ) : (
-                        <Zap className="pointer-events-none size-4 text-current" />
+                        <ProviderLogo
+                          providerId={currentProviderId}
+                          name={currentProvider?.name}
+                          className="pointer-events-none size-4 shrink-0"
+                        />
                       )}
                       <span className="min-w-0 max-w-[8rem] truncate">
                         {currentModelId || '默认模型'}
@@ -896,7 +809,6 @@ export function Composer({
                       onClick={() => {
                         setThoughtMenuOpen((o) => !o);
                         setModelMenuOpen(false);
-                        setProviderMenuOpen(false);
                       }}
                       className="flex h-7 w-fit items-center justify-between gap-1 rounded-lg px-1.5 py-1.5 text-[13px] whitespace-nowrap transition-colors hover:bg-surface-hover text-foreground-subtle hover:text-foreground"
                       aria-label="思考等级"
