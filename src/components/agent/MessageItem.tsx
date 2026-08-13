@@ -1,5 +1,5 @@
-import { memo, useState } from 'react';
-import { Check, ChevronDown, CircleAlert } from 'lucide-react';
+import { memo } from 'react';
+import { Check, CircleAlert } from 'lucide-react';
 import {
   Message,
   MessageContent,
@@ -8,7 +8,6 @@ import {
 } from '../ui/message';
 import { Bubble, BubbleContent } from '../ui/bubble';
 import type { MessageVM } from '../../stores/agentStore';
-import type { Api } from '../../lib/api/types';
 import { Markdown } from './markdown';
 import { ToolCallCard } from './ToolCallCard';
 import { ToolResultCard } from './ToolResultCard';
@@ -33,26 +32,6 @@ const REASON_LABELS: Record<string, string> = {
   content_filter: '内容过滤',
 };
 
-/** 折叠摘要:提取消息的首段可见内容(文本首行 / 工具名 / 工具结果开头) */
-function previewText(parts: Api.ContentPart[]): string {
-  for (const p of parts) {
-    if (p.type === 'text') {
-      const t = ((p.data as { text?: string }).text ?? '').replace(/\s+/g, ' ').trim();
-      if (t) return t;
-    }
-    if (p.type === 'tool_call') {
-      const name = (p.data as { name?: string }).name;
-      if (name) return `调用 ${name}`;
-    }
-    if (p.type === 'tool_result') {
-      const c = (p.data as { content?: string | Record<string, unknown> }).content;
-      const s = typeof c === 'string' ? c.replace(/\s+/g, ' ').trim() : '';
-      if (s) return s;
-    }
-  }
-  return '';
-}
-
 // memo:流式更新时 store 只更新正在流式的那条消息对象引用,
 // 其余消息 vm 引用不变,直接跳过重渲染(markdown 渲染开销大)
 export const MessageItem = memo(function MessageItem({
@@ -64,8 +43,6 @@ export const MessageItem = memo(function MessageItem({
 }) {
   const parts = vm.parts ?? [];
   const isUser = vm.role === 'user';
-  // 默认折叠:仅显示摘要行,点击展开;流式输出期间自动展开
-  const [expanded, setExpanded] = useState(false);
   // 用户消息中是否包含真正的发送文本(否则只是工具结果的载体)
   const hasUserText = isUser && parts.some((p) => p.type === 'text');
   // 仅含工具结果、无用户文本的消息:作为中间过程展示,不伪装成用户消息
@@ -89,10 +66,6 @@ export const MessageItem = memo(function MessageItem({
   // assistant 且已有 finish part 时,用 reason 标签替换固定的 "Agent"
   const showFinishBadge = vm.role === 'assistant' && finishPart;
 
-  // 默认折叠:仅显示摘要行,点击展开;流式输出期间自动展开
-  const open = vm.streaming || expanded;
-  const preview = previewText(parts);
-
   const time = new Date(vm.createdAt).toLocaleTimeString('zh-CN', {
     hour: '2-digit',
     minute: '2-digit',
@@ -100,13 +73,7 @@ export const MessageItem = memo(function MessageItem({
   return (
     <Message align={align}>
       <MessageContent>
-        <MessageHeader
-          role="button"
-          aria-expanded={open}
-          className="cursor-pointer select-none gap-1.5"
-          onClick={() => setExpanded((v) => !v)}
-          title={open ? '收起' : '展开'}
-        >
+        <MessageHeader>
           {showFinishBadge ? (
             <span
               className={cn(
@@ -124,32 +91,19 @@ export const MessageItem = memo(function MessageItem({
           ) : (
             <span>{roleLabel}</span>
           )}
-          {/* 折叠时的内容首行预览 */}
-          {!open && preview && (
-            <span className="min-w-0 flex-1 truncate font-normal text-muted-foreground/70">
-              {preview}
-            </span>
-          )}
-          <ChevronDown
-            className={cn(
-              'size-3 shrink-0 text-muted-foreground/50 transition-transform',
-              open && 'rotate-180',
-            )}
-          />
           {!vm.streaming && (
-            <span className="font-mono text-[10px] text-muted-foreground/60">{time}</span>
+            <span className="ml-2 font-mono text-[10px] text-muted-foreground/60">{time}</span>
           )}
           {vm.streaming && (
             <span
-              className={cn('animate-pulse text-primary', isUser && 'sr-only')}
+              className={cn('ml-2 animate-pulse text-primary', isUser && 'sr-only')}
               aria-label="流式中"
             >
               ●
             </span>
           )}
         </MessageHeader>
-        {open && (
-          <Bubble variant={bubbleVariant} align={align}>
+        <Bubble variant={bubbleVariant} align={align}>
             <BubbleContent>
               {parts.map((part, i) => {
                 const d = part.data as never as {
@@ -240,7 +194,6 @@ export const MessageItem = memo(function MessageItem({
               })}
             </BubbleContent>
           </Bubble>
-        )}
         {vm.streaming && (
           <MessageFooter>
             <span className="animate-pulse">正在执行…</span>
