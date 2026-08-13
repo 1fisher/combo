@@ -64,13 +64,14 @@ impl RelayManager {
         *cfg_guard = Some(config_clone);
     }
 
-    /// 启动隧道并等待初始连接结果(最多 6 秒)。
+    /// 启动隧道并等待初始连接结果(最多 8 秒)。
     /// 返回 (connected, error):连接成功 → (true, None);
     /// 连接失败 → (false, Some(msg));超时未决 → (false, None)。
     pub async fn start_and_wait(&self, url: String, token: String, local_proxy_url: String) -> (bool, Option<String>) {
         self.start(url, token, local_proxy_url).await;
-        // 轮询等待初始连接结果(隧道 WebSocket 超时为 10s,这里等 6s 足够覆盖正常情况)
-        for _ in 0..60 {
+        // 轮询等待初始连接结果。
+        // WS 超时 5s,这里等 8s 足够覆盖:正常连接 1-2s,失败 5s 报错,加余量。
+        for _ in 0..80 {
             if self.is_connected() {
                 return (true, None);
             }

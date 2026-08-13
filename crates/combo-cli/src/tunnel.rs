@@ -152,15 +152,15 @@ async fn connect_and_serve(
     };
     let ws_url = format!("{}?token={}", ws_base, config.token);
     // connect_async 没有内置超时,网络不通时会永久挂起。
-    // 加 10s 超时,确保前端能在 15s 轮询窗口内拿到具体错误。
+    // 5s 超时:start_and_wait 等待 8s,足够在放弃前拿到错误。
     let (ws_stream, _response) = match tokio::time::timeout(
-        Duration::from_secs(10),
+        Duration::from_secs(5),
         tokio_tungstenite::connect_async(&ws_url),
     )
     .await
     {
         Ok(result) => result?,
-        Err(_) => anyhow::bail!("连接中转服务器超时(10s):{ws_base}"),
+        Err(_) => anyhow::bail!("连接中转服务器超时(5s):{ws_base}"),
     };
     connected.store(true, Ordering::Relaxed);
     println!("COMBO_TUNNEL_CONNECTED=1");
