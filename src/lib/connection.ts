@@ -160,11 +160,9 @@ export async function resolveProxyBaseUrl(): Promise<string> {
         // 保留 unlisten 引用避免被 GC
         void fn;
       });
-      // 轮询 command(每 500ms,持续 5s)以覆盖端口延迟就绪
-      let attempts = 0;
+      // 持续轮询直到端口就绪(serve 同进程绑定随机端口,不走 18234 fallback)
       const poll = () => {
-        if (resolved || attempts >= 10) return;
-        attempts++;
+        if (resolved) return;
         invoke<number | null>('get_proxy_port').then((p) => {
           if (p) done(`http://127.0.0.1:${p}`);
           else if (!resolved) setTimeout(poll, 500);
@@ -173,8 +171,6 @@ export async function resolveProxyBaseUrl(): Promise<string> {
         });
       };
       setTimeout(poll, 100);
-      // 最终兜底
-      setTimeout(() => done('http://127.0.0.1:18234'), 6000);
     });
   }
   // 浏览器模式:非 localhost 域名(中转/域名部署)时,使用同源地址作为代理

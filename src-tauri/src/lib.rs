@@ -115,24 +115,12 @@ async fn init_backend(app: &tauri::AppHandle) {
     };
     let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
 
-    let mut state = match AppState::new(cfg) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("初始化 combo 数据目录失败: {e:?}");
-            return;
-        }
-    };
-    state.local_port = port;
-
-    // 存入 Tauri state,前端可通过 get_proxy_port command 主动查询
+    // 立即暴露端口给前端:AppState 初始化(数据库迁移等)可能耗时数秒,
+    // 提前设置 ProxyPort + emit proxy-ready,前端 connectLoop 通过健康检查
+    // 轮询等待 serve 就绪,而非 fallback 到 18234 硬编码端口。
     if let Some(state) = app.try_state::<ProxyPort>() {
         *state.0.lock().unwrap() = Some(port);
     }
-    let origins = vec![
-        "tauri://localhost".to_string(),
-        "http://localhost:5173".to_string(),
-    ];
-    // emit 事件(兼容已有逻辑),同时持续重发以覆盖前端 listener 注册竞态
     let _ = app.emit(EVENT_RUNE_STATUS, RuneStatus { connected: true });
     let _ = app.emit(EVENT_PROXY_READY, ProxyReady { port });
     let app_clone = app.clone();
@@ -143,11 +131,26 @@ async fn init_backend(app: &tauri::AppHandle) {
             let _ = app_clone.emit(EVENT_PROXY_READY, ProxyReady { port });
         }
     });
+
+    let mut state = match AppState::new(cfg) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("初始化 combo 数据目录失败: {e:?}");
+            return;
+        }
+    };
+    state.local_port = port;
+
+    let origins = vec![
+        "tauri://localhost".to_string(),
+        "http://localhost:5173".to_string(),
+    ];
     // 长驻服务:combo-cli 与桌面端同进程,退出由桌面端进程回收;失败时仅记录
     // 静态资源目录:支持 tunnel-all 模式下通过隧道提供前端页面给远程中转服务器。
     let static_dir = resolve_static_dir(app);
-    if let Some(ref dir) = static_dir {
-        eprintln!("combo 静态资源目录(tunnel-all): {}", dir.display());
+    match &static_dir {
+        Some(dir) => eprintln!("combo 静态资源目录(tunnel-all): {}", dir.display()),
+        None => eprintln!("combo 静态资源目录: 未找到 dist/(tunnel-all 模式下远程页面将 404)"),
     }
     if let Err(e) = serve_listener(listener, state, origins, static_dir).await {
         eprintln!("serve exited: {e:?}");
@@ -170,10 +173,14 @@ fn resolve_static_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     }
 
     // 2. Tauri resource 目录(打包后的 production 模式)
+    //    resources 配置为 map 格式 {"../dist/": "dist/"} 时,文件在 resource_dir/dist/。
+    //    兼容旧配置:glob "../dist/*" 经 resource_relpath 转换后落在 _up_/dist/。
     if let Ok(resource_dir) = app.path().resource_dir() {
-        let dist = resource_dir.join("dist");
-        if dist.join("index.html").is_file() {
-            return Some(dist);
+        for sub in ["dist", "_up_/dist"] {
+            let candidate = resource_dir.join(sub);
+            if candidate.join("index.html").is_file() {
+                return Some(candidate);
+            }
         }
     }
 

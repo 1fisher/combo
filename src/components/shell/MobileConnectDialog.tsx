@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
-import { Check, Copy, KeyRound, RefreshCw, Smartphone, Wifi } from 'lucide-react';
+import { Check, Copy, KeyRound, RefreshCw, Smartphone, Wifi, AlertTriangle } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -30,6 +30,7 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
   const [tokenInfo, setTokenInfo] = useState<CreatedToken | null>(null);
   const [loading, setLoading] = useState(false);
   const [tunnelConnected, setTunnelConnected] = useState(false);
+  const [tunnelError, setTunnelError] = useState<string | null>(null);
   // ref 持有当前令牌,供 generateToken 撤销旧令牌时读取,
   // 避免 useCallback 依赖 tokenInfo 导致与 useEffect 形成无限循环。
   const tokenRef = useRef<CreatedToken | null>(null);
@@ -47,6 +48,7 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
   const generateToken = useCallback(async () => {
     setLoading(true);
     setTunnelConnected(false);
+    setTunnelError(null);
     try {
       // 刷新时先撤销上一枚令牌,避免令牌堆积
       if (tokenRef.current) {
@@ -60,11 +62,16 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
       const wsUrl = getEffectiveExternalUrl()
         .replace(/^http/, 'ws') // https→wss, http→ws
         .replace(/\/$/, '') + '/v1/relay/tunnel';
-      await startRelayTunnel(wsUrl, t.token).catch(() => {});
+      // 捕获启动失败(如本地 combo-cli 无 /v1/relay/start 路由、或参数错误),
+      // 不再静默吞掉——否则用户会看到二维码但扫码 503。
+      await startRelayTunnel(wsUrl, t.token).catch((e) => {
+        throw new Error(`启动隧道失败: ${e?.message ?? e}`);
+      });
       // 不在此处设置 tunnelConnected — 由下方轮询 /v1/relay/status 验证实际连接状态
-    } catch {
+    } catch (e) {
       tokenRef.current = null;
       setTokenInfo(null);
+      setTunnelError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
@@ -76,6 +83,7 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
       setTokenInfo(null);
       setQrDataUrl('');
       setTunnelConnected(false);
+      setTunnelError(null);
       return;
     }
     void generateToken();
@@ -83,6 +91,7 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
 
   // 轮询本地 combo-cli 的隧道状态,实际连接后显示二维码。
   // 兼容旧版二进制(无 connected 字段):task running + 等待 3s 后视为已连接。
+  // 不再做「超时强制显示二维码」——隧道未连上时显示二维码只会让用户扫码得到 503。
   useEffect(() => {
     if (!open || !tokenInfo) return;
     let cancelled = false;
@@ -103,11 +112,14 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
             return;
           }
         } catch {
-          // 忽略
+          // 忽略单次轮询错误,继续重试
         }
-        // 超时兜底:15s 后强制显示,避免永久阻塞
+        // 超时判定:15s 仍未连通 → 报错,不再强制显示二维码
         if (Date.now() - startTime > 15000) {
-          if (!cancelled) setTunnelConnected(true);
+          if (!cancelled) {
+            setTunnelConnected(false);
+            setTunnelError('隧道连接超时,请检查网络或中转域名后重试');
+          }
           return;
         }
         await new Promise((r) => setTimeout(r, 1000));
@@ -160,7 +172,7 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
         </DialogHeader>
 
         <div className="flex flex-col items-center gap-4">
-          {/* QR 码 */}
+          {/* QR 码 / 错误状态 */}
           <div className="rounded-2xl border border-border bg-white p-3">
             {qrDataUrl && tunnelConnected ? (
               <img
@@ -170,6 +182,23 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
                 width={208}
                 height={208}
               />
+            ) : tunnelError ? (
+              <div className="flex size-52 flex-col items-center justify-center gap-3 rounded-lg bg-white px-4 text-center">
+                <AlertTriangle className="size-8 text-destructive" />
+                <p className="text-[13px] leading-relaxed text-foreground">
+                  {tunnelError}
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 gap-1 text-[12px]"
+                  onClick={() => void generateToken()}
+                  disabled={loading}
+                >
+                  <RefreshCw className={cn('size-3', loading && 'animate-spin')} />
+                  重试
+                </Button>
+              </div>
             ) : (
               <div className="flex size-52 items-center justify-center text-[13px] text-foreground-subtle">
                 {loading ? '生成中…' : tunnelConnected ? '等待令牌' : '隧道连接中…'}
@@ -204,10 +233,18 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
               <span
                 className={cn(
                   'inline-block size-2 rounded-full',
-                  tunnelConnected ? 'bg-success' : 'bg-warning animate-pulse',
+                  tunnelError
+                    ? 'bg-destructive'
+                    : tunnelConnected
+                      ? 'bg-success'
+                      : 'bg-warning animate-pulse',
                 )}
               />
-              {tunnelConnected ? '隧道已连接,可扫码访问' : '隧道连接中,请稍候…'}
+              {tunnelError
+                ? '隧道连接失败'
+                : tunnelConnected
+                  ? '隧道已连接,可扫码访问'
+                  : '隧道连接中,请稍候…'}
             </span>
           </div>
 
