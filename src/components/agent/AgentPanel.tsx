@@ -13,7 +13,7 @@ import { useWorkspaces } from '../../hooks/useWorkspaces';
 import { useSessions } from '../../hooks/useSessions';
 import { MessageList } from './MessageList';
 import { Composer } from './Composer';
-import { ComboOverlay, settleCombo } from './ComboOverlay';
+import { ComboOverlay, nextCombo, settleCombo } from './ComboOverlay';
 import { ChatEmptyState } from './ChatEmptyState';
 import { FileChangesPanel, type ChangeStatus } from './FileChangesPanel';
 import { TodoList } from './TodoList';
@@ -53,9 +53,10 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
   // 防止快速连发时把「上一轮仍在流式的旧消息」误判为本轮回复
   const pendingRef = useRef<{ sid: string; sentAt: number } | null>(null);
   const settledIdsRef = useRef<Set<string>>(new Set());
-  // 流式计数:assistant 流式消息每次内容更新(parts 引用变化)+1。
-  // 用 parts 引用而非 updated_at——后端 updated_at 是秒级,同秒多块会被合并。
-  const streamTicksRef = useRef<Map<string, Api.ContentPart[]>>(new Map());
+  // 流式计数:assistant 流式消息每收到一次内容更新 +1;与上次更新间隔 ≥2s
+  // 视为连击中断,先归零再 +1(从 ×1 重新开始)。parts 每次更新都是新引用;
+  // 工具结果等新消息插入时,旧流式消息只是 streaming 翻 false,parts 引用不变,不会误计。
+  const streamTicksRef = useRef<Map<string, { parts: Api.ContentPart[]; at: number }>>(new Map());
 
   // 切换到某会话时,若 store 里没有该会话的消息,从后端拉取历史灌入
   const { data: history, isLoading: historyLoading } = useSessionHistory(workspaceId, sessionId);
@@ -81,15 +82,16 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
     const dt = Date.now() - pending.sentAt;
     setCombo((c) => settleCombo(c, dt));
   }, [messages, sessionId]);
-  // 流式计数:assistant 流式消息每收到一次内容更新 +1(叠加在快速回复 +1 之上)。
-  // 流式消息的 parts 每次更新都是新引用;工具结果等新消息插入时,旧流式消息
-  // 只是 streaming 翻 false,parts 引用不变,不会误计。
+  // 流式计数:assistant 流式消息每收到一次内容更新 +1;与上次更新间隔 ≥2s
+  // 视为连击中断,先归零再 +1(从 ×1 重新开始)。
   useEffect(() => {
+    const now = Date.now();
     for (const m of messages) {
       if (m.role !== 'assistant' || !m.streaming) continue;
-      if (streamTicksRef.current.get(m.id) === m.parts) continue;
-      streamTicksRef.current.set(m.id, m.parts);
-      setCombo((c) => c + 1);
+      const prev = streamTicksRef.current.get(m.id);
+      if (prev && prev.parts === m.parts) continue;
+      streamTicksRef.current.set(m.id, { parts: m.parts, at: now });
+      setCombo((c) => nextCombo(c, prev ? now - prev.at : null));
     }
   }, [messages, sessionId]);
   // [stream-debug] 每次 render 的运行状态(仅在有会话时打日志)

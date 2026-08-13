@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { comboHue, settleCombo } from './ComboOverlay';
+import { comboHue, nextCombo, settleCombo } from './ComboOverlay';
 
 describe('settleCombo', () => {
   it('increments when the reply arrives within 2s', () => {
@@ -15,6 +15,24 @@ describe('settleCombo', () => {
   it('supports a custom threshold', () => {
     expect(settleCombo(3, 500, 1000)).toBe(4);
     expect(settleCombo(3, 1000, 1000)).toBe(0);
+  });
+});
+
+describe('nextCombo', () => {
+  it('increments on every update; first update has no gap check', () => {
+    expect(nextCombo(5, null)).toBe(6);
+    expect(nextCombo(5, 100)).toBe(6);
+    expect(nextCombo(5, 1999)).toBe(6);
+  });
+
+  it('resets to 1 when the gap between updates is ≥2s', () => {
+    expect(nextCombo(12, 2000)).toBe(1);
+    expect(nextCombo(12, 5000)).toBe(1);
+  });
+
+  it('supports a custom threshold', () => {
+    expect(nextCombo(3, 500, 1000)).toBe(4);
+    expect(nextCombo(3, 1000, 1000)).toBe(1);
   });
 });
 

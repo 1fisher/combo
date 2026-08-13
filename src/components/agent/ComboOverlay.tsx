@@ -9,6 +9,15 @@ export function settleCombo(prev: number, dtMs: number, thresholdMs = 2000): num
 }
 
 /**
+ * 流式计数结算:每条流式内容更新 +1;与上次更新间隔 ≥ 阈值(默认 2s)
+ * 视为连击中断,先归零再 +1(从 ×1 重新开始)。dtMs 为 null 表示首次更新,
+ * 不做间隔判定(首 token 的快慢由 settleCombo 负责)。
+ */
+export function nextCombo(prev: number, dtMs: number | null, thresholdMs = 2000): number {
+  return (dtMs !== null && dtMs >= thresholdMs ? 0 : prev) + 1;
+}
+
+/**
  * combo 数值 → 色相:1 → 绿(≈120°),50 → 黄(60°),100 → 红(0°)。
  * ≥100 保持红色,负数/0 保持绿色。与 utils.usageColor 的绿→红刻度一致,
  * 这里只返回 hue 数值,供 CSS 渐变/发光使用。
