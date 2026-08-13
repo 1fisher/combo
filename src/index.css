@@ -173,19 +173,34 @@
     @apply font-sans;
     }
 }
-/* ---- 连击(combo)特效:拳皇连招风 ---- */
+/* ---- 连击(combo)特效:拳皇连招风;颜色随 combo 数值从绿渐变到红(100 为红) ---- */
 @layer components {
-  .combo-title {
-    @apply bg-gradient-to-b from-yellow-200 via-amber-400 to-orange-600 bg-clip-text text-transparent text-3xl font-black italic tracking-[0.35em];
-    filter: drop-shadow(0 2px 0 rgba(0, 0, 0, 0.85)) drop-shadow(0 0 18px rgba(251, 191, 36, 0.55));
-  }
-  .combo-count {
-    @apply bg-gradient-to-b from-white via-yellow-300 to-orange-500 bg-clip-text text-transparent text-8xl font-black italic leading-none;
-    filter: drop-shadow(0 3px 0 rgba(0, 0, 0, 0.9)) drop-shadow(0 0 26px rgba(255, 159, 28, 0.7));
-  }
   .combo-pop {
+    /* 默认金色;运行时由 ComboOverlay 按 combo 值覆盖为绿→红 */
+    --combo-hue: 40;
     animation: combo-pop 1.6s cubic-bezier(0.2, 0.8, 0.3, 1) forwards;
     transform-origin: 50% 60%;
+  }
+  .combo-title {
+    @apply text-3xl font-black italic tracking-[0.35em];
+    color: hsl(calc(var(--combo-hue) + 20) 95% 72%);
+    -webkit-text-stroke: 1.5px rgba(0, 0, 0, 0.85);
+    filter: drop-shadow(0 2px 0 rgba(0, 0, 0, 0.85))
+      drop-shadow(0 0 18px hsl(var(--combo-hue) 90% 55% / 0.55));
+  }
+  .combo-count {
+    @apply text-8xl font-black italic leading-none;
+    background: linear-gradient(
+      to bottom,
+      hsl(calc(var(--combo-hue) + 30) 95% 82%),
+      hsl(var(--combo-hue) 90% 62%) 55%,
+      hsl(calc(var(--combo-hue) - 15) 85% 45%)
+    );
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    filter: drop-shadow(0 3px 0 rgba(0, 0, 0, 0.9))
+      drop-shadow(0 0 26px hsl(var(--combo-hue) 90% 60% / 0.7));
   }
 }
 @keyframes combo-pop {

@@ -46,12 +46,16 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
   const [wsMenuOpen, setWsMenuOpen] = useState(false);
   const [showChanges, setShowChanges] = useState(false);
   const [changeStatuses, setChangeStatuses] = useState<Record<string, ChangeStatus>>({});
-  // 连击(combo)计数:连续快速回复时累加,超时/切会话归零
+  // 连击(combo)计数:连续快速回复时累加,超时/切会话归零;
+  // 流式期间每条内容更新也 +1(叠加,不封顶)。
   const [combo, setCombo] = useState(0);
   // 本轮发送时刻(pending 期间等待首 token);settledIds 记录已结算的 assistant 消息,
   // 防止快速连发时把「上一轮仍在流式的旧消息」误判为本轮回复
   const pendingRef = useRef<{ sid: string; sentAt: number } | null>(null);
   const settledIdsRef = useRef<Set<string>>(new Set());
+  // 流式计数:assistant 流式消息每次内容更新(parts 引用变化)+1。
+  // 用 parts 引用而非 updated_at——后端 updated_at 是秒级,同秒多块会被合并。
+  const streamTicksRef = useRef<Map<string, Api.ContentPart[]>>(new Map());
 
   // 切换到某会话时,若 store 里没有该会话的消息,从后端拉取历史灌入
   const { data: history, isLoading: historyLoading } = useSessionHistory(workspaceId, sessionId);
@@ -76,6 +80,17 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
     settledIdsRef.current.add(first.id);
     const dt = Date.now() - pending.sentAt;
     setCombo((c) => settleCombo(c, dt));
+  }, [messages, sessionId]);
+  // 流式计数:assistant 流式消息每收到一次内容更新 +1(叠加在快速回复 +1 之上)。
+  // 流式消息的 parts 每次更新都是新引用;工具结果等新消息插入时,旧流式消息
+  // 只是 streaming 翻 false,parts 引用不变,不会误计。
+  useEffect(() => {
+    for (const m of messages) {
+      if (m.role !== 'assistant' || !m.streaming) continue;
+      if (streamTicksRef.current.get(m.id) === m.parts) continue;
+      streamTicksRef.current.set(m.id, m.parts);
+      setCombo((c) => c + 1);
+    }
   }, [messages, sessionId]);
   // [stream-debug] 每次 render 的运行状态(仅在有会话时打日志)
   if (sessionId) {
@@ -110,6 +125,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
     setCombo(0);
     pendingRef.current = null;
     settledIdsRef.current.clear();
+    streamTicksRef.current.clear();
   }, [sessionId]);
 
   // 所有变更都已处理(批准/撤销)时，自动关闭审查视图
