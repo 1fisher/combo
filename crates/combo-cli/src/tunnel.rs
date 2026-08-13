@@ -129,7 +129,17 @@ async fn connect_and_serve(
     config: &TunnelClientConfig,
     connected: &AtomicBool,
 ) -> anyhow::Result<()> {
-    let ws_url = format!("{}?token={}", config.relay_url, config.token);
+    // 归一化 scheme:Https:// → wss://, https:// → wss://, Http:// → ws://
+    // 防御性处理前端传入的大小写不一致
+    let normalized = config.relay_url.trim();
+    let ws_base = if normalized.to_ascii_lowercase().starts_with("https://") {
+        format!("wss://{}", &normalized[8..])
+    } else if normalized.to_ascii_lowercase().starts_with("http://") {
+        format!("ws://{}", &normalized[7..])
+    } else {
+        normalized.to_string()
+    };
+    let ws_url = format!("{}?token={}", ws_base, config.token);
     let (ws_stream, _response) = tokio_tungstenite::connect_async(&ws_url).await?;
     connected.store(true, Ordering::Relaxed);
     println!("COMBO_TUNNEL_CONNECTED=1");

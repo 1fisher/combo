@@ -30,7 +30,9 @@ export function getEffectiveExternalUrl(): string {
 }
 
 export function setExternalUrl(url: string): void {
-  const clean = url.trim().replace(/\/$/, '');
+  // 归一化 scheme 为小写(Https:// → https://),避免后续 ws/wss 转换正则失配
+  const normalized = url.trim().replace(/^(HTTPS?|https?):\/\//i, (m) => m.toLowerCase());
+  const clean = normalized.replace(/\/$/, '');
   try {
     if (clean) localStorage.setItem(EXTERNAL_URL_KEY, clean);
     else localStorage.removeItem(EXTERNAL_URL_KEY);
