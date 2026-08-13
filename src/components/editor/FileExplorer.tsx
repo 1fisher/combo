@@ -11,9 +11,10 @@ import {
   MessageSquarePlus,
   MoreHorizontal,
   Search,
+  SearchCode,
   X,
 } from 'lucide-react';
-import { listFiles, searchFiles } from '../../lib/api';
+import { listFiles, searchFiles, type ContentSearchResult } from '../../lib/api';
 import type { Api } from '../../lib/api/types';
 import { cn } from '../../lib/utils';
 import { useContextStore } from '../../stores/contextStore';
@@ -21,8 +22,9 @@ import { ContextMenu, type MenuItem } from '../ui/ContextMenu';
 
 interface Props {
   workspaceId: string;
-  onOpenFile: (path: string, name: string) => void;
+  onOpenFile: (path: string, name: string, line?: number) => void;
   onError: (msg: string) => void;
+  onSearchQueryChange?: (query: string) => void;
 }
 
 interface SearchOptions {
@@ -34,34 +36,11 @@ interface SearchOptions {
 /** 搜索结果上限(与后端一致),用于截断提示 */
 const MAX_RESULTS = 500;
 
-/** 从文件名中提取扩展名(小写,不含点) */
-function getExt(name: string): string {
-  const idx = name.lastIndexOf('.');
-  return idx > 0 ? name.slice(idx + 1).toLowerCase() : '';
-}
-
-/** 解析扩展名过滤输入,返回小写扩展名集合(不含点) */
-function parseExtensions(input: string): Set<string> | null {
-  const trimmed = input.trim();
-  if (!trimmed) return null;
-  const exts = trimmed
-    .split(/[,\s]+/)
-    .map((e) => e.replace(/^\./, '').toLowerCase())
-    .filter(Boolean);
-  return exts.length > 0 ? new Set(exts) : null;
-}
-
-interface SearchResult {
-  name: string;
-  path: string;
-  type: Api.FileEntryType;
-}
-
 /**
  * 懒加载的目录树:目录首次展开时才向后端请求子项。
- * 支持文件名搜索(正则/区分大小写/完整单词)和扩展名过滤。
+ * 支持文件内容搜索(正则/区分大小写/完整单词)和右键目录搜索。
  */
-export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
+export function FileExplorer({ workspaceId, onOpenFile, onError, onSearchQueryChange }: Props) {
   const [byDir, setByDir] = useState<Record<string, Api.FileEntry[]>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [menu, setMenu] = useState<{ x: number; y: number; entry: Api.FileEntry } | null>(null);
@@ -70,7 +49,6 @@ export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
   // 搜索状态
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
-  const [extFilter, setExtFilter] = useState('');
   const [searchDir, setSearchDir] = useState('');
   const [searchOpts, setSearchOpts] = useState<SearchOptions>({
     useRegex: false,
@@ -78,7 +56,7 @@ export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
     wholeWord: false,
   });
   const [searching, setSearching] = useState(false);
-  const [results, setResults] = useState<SearchResult[] | null>(null);
+  const [results, setResults] = useState<ContentSearchResult[] | null>(null);
   const searchCancelRef = useRef(0);
 
   useEffect(() => {
@@ -95,13 +73,18 @@ export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
 
   // debounce 搜索输入
   useEffect(() => {
-    const t = setTimeout(() => setDebouncedQuery(searchQuery), 250);
+    const t = setTimeout(() => setDebouncedQuery(searchQuery), 300);
     return () => clearTimeout(t);
   }, [searchQuery]);
 
-  const isSearching = debouncedQuery.trim().length > 0 || extFilter.trim().length > 0;
+  // 通知父组件当前搜索关键词(用于编辑器内高亮)
+  useEffect(() => {
+    onSearchQueryChange?.(debouncedQuery.trim() || '');
+  }, [debouncedQuery, onSearchQueryChange]);
 
-  // 使用后端搜索(ripgrep --files + walkdir 回退)
+  const isSearching = debouncedQuery.trim().length > 0;
+
+  // 使用后端搜索文件内容(ripgrep --json + walkdir 回退)
   useEffect(() => {
     if (!isSearching) {
       setResults(null);
@@ -111,28 +94,17 @@ export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
     const cancelId = ++searchCancelRef.current;
     setSearching(true);
 
-    // 只有扩展名过滤时用通配符匹配全部,再客户端过滤
-    const queryText = debouncedQuery.trim();
-    const q = queryText || '.';
-    const useRegex = queryText ? searchOpts.useRegex : true;
-
     void (async () => {
       try {
         const entries = await searchFiles(workspaceId, {
-          q,
+          q: debouncedQuery,
           path: searchDir || undefined,
-          regex: useRegex,
+          regex: searchOpts.useRegex,
           caseSensitive: searchOpts.caseSensitive,
-          wholeWord: queryText ? searchOpts.wholeWord : false,
+          wholeWord: searchOpts.wholeWord,
         });
         if (cancelId !== searchCancelRef.current) return;
-
-        // 客户端扩展名过滤(后端不支持 ext 参数)
-        const extSet = parseExtensions(extFilter);
-        const filtered = extSet
-          ? entries.filter((e) => e.type === 'dir' || extSet.has(getExt(e.name)))
-          : entries;
-        setResults(filtered);
+        setResults(entries);
       } catch (e) {
         if (cancelId !== searchCancelRef.current) return;
         onError(e instanceof Error ? e.message : String(e));
@@ -141,7 +113,7 @@ export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
         if (cancelId === searchCancelRef.current) setSearching(false);
       }
     })();
-  }, [debouncedQuery, extFilter, searchDir, searchOpts, workspaceId, isSearching, onError]);
+  }, [debouncedQuery, searchDir, searchOpts, workspaceId, isSearching, onError]);
 
   async function load(dir: string) {
     try {
@@ -158,9 +130,25 @@ export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
     if (willOpen && !byDir[dir]) void load(dir);
   }
 
-  function contextMenuItems(entry: Api.FileEntry | SearchResult): MenuItem[] {
+  /** 在指定目录中搜索 */
+  function searchInDir(dir: string) {
+    setSearchDir(dir);
+    // 如果搜索框为空,聚焦搜索框让用户输入
+    if (!searchQuery) {
+      const input = document.querySelector<HTMLInputElement>('input[placeholder*="搜索文件内容"]');
+      input?.focus();
+    }
+  }
+
+  function contextMenuItems(entry: Api.FileEntry): MenuItem[] {
     const items: MenuItem[] = [];
-    if (entry.type !== 'dir') {
+    if (entry.type === 'dir') {
+      items.push({
+        label: '在此目录搜索',
+        icon: <SearchCode className="size-3.5 text-muted-foreground" />,
+        onClick: () => searchInDir(entry.path),
+      });
+    } else {
       items.push({
         label: '添加到对话',
         icon: <MessageSquarePlus className="size-3.5 text-muted-foreground" />,
@@ -174,24 +162,21 @@ export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
   /** 打开上下文菜单:右键用指针坐标,行内按钮用按钮位置 */
   function openMenu(
     ev: React.MouseEvent,
-    entry: Api.FileEntry | SearchResult,
+    entry: Api.FileEntry,
     fromButton = false,
   ) {
-    const list = contextMenuItems(entry);
-    if (list.length === 0) return;
     ev.preventDefault();
     ev.stopPropagation();
     if (fromButton) {
       const rect = (ev.currentTarget as HTMLElement).getBoundingClientRect();
-      setMenu({ x: rect.left, y: rect.bottom, entry: entry as Api.FileEntry });
+      setMenu({ x: rect.left, y: rect.bottom, entry });
     } else {
-      setMenu({ x: ev.clientX, y: ev.clientY, entry: entry as Api.FileEntry });
+      setMenu({ x: ev.clientX, y: ev.clientY, entry });
     }
   }
 
   function clearSearch() {
     setSearchQuery('');
-    setExtFilter('');
     setSearchDir('');
   }
 
@@ -201,7 +186,6 @@ export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
       <div key={dir}>
         {entries.map((e) => {
           const isDir = e.type === 'dir';
-          const hasMenu = contextMenuItems(e).length > 0;
           return (
             <div key={e.path}>
               <div className="group flex items-center">
@@ -238,16 +222,14 @@ export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
                 )}
               </button>
               {/* 行内更多操作:移动端常驻,桌面端 hover 显示;触屏替代右键菜单 */}
-              {hasMenu && (
-                <button
-                  onClick={(ev) => openMenu(ev, e, true)}
-                  className="flex shrink-0 items-center justify-center rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:opacity-0 md:group-hover:opacity-100"
-                  aria-label="更多操作"
-                  title="更多操作"
-                >
-                  <MoreHorizontal className="size-3.5" />
-                </button>
-              )}
+              <button
+                onClick={(ev) => openMenu(ev, e, true)}
+                className="flex shrink-0 items-center justify-center rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:opacity-0 md:group-hover:opacity-100"
+                aria-label="更多操作"
+                title="更多操作"
+              >
+                <MoreHorizontal className="size-3.5" />
+              </button>
               </div>
               {isDir && expanded[e.path] && renderDir(e.path, depth + 1)}
             </div>
@@ -277,49 +259,82 @@ export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
     if (!results || results.length === 0) {
       return (
         <div className="px-3 py-4 text-xs text-muted-foreground/70">
-          未找到匹配的文件
+          未找到匹配的内容
         </div>
       );
     }
+
+    // 按 path 分组
+    const grouped: Record<string, ContentSearchResult[]> = {};
+    for (const r of results) {
+      const key = r.path;
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(r);
+    }
+    const filePaths = Object.keys(grouped);
+
     return (
       <div>
-        {results.map((r) => {
-          const hasMenu = contextMenuItems(r).length > 0;
-          const dirPath = r.path.includes('/')
-            ? r.path.slice(0, r.path.lastIndexOf('/'))
+        {filePaths.map((fp) => {
+          const matches = grouped[fp];
+          const fileName = matches[0].name;
+          const dirPath = fp.includes('/')
+            ? fp.slice(0, fp.lastIndexOf('/'))
             : '';
           return (
-            <div key={r.path} className="group flex items-center">
-              <button
-                onClick={() => onOpenFile(r.path, r.name)}
-                onContextMenu={(ev) => openMenu(ev, r)}
-                className="flex min-w-0 flex-1 items-center gap-1.5 rounded py-1 pr-2 pl-6 text-left transition-colors hover:bg-accent"
-                title={r.path}
-              >
-                {r.type === 'dir' ? (
-                  <Folder className="h-3.5 w-3.5 shrink-0 text-primary/70" />
-                ) : (
+            <div key={fp} className="mb-0.5">
+              {/* 文件头 */}
+              <div className="group flex items-center">
+                <button
+                  onClick={() => onOpenFile(fp, fileName, matches[0]?.line ?? undefined)}
+                  className="flex min-w-0 flex-1 items-center gap-1.5 rounded py-1 pr-2 pl-6 text-left transition-colors hover:bg-accent"
+                  title={fp}
+                >
                   <FileText className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                )}
-                <span className="flex min-w-0 flex-col">
-                  <span className="truncate font-mono text-xs">{r.name}</span>
-                  {dirPath && (
-                    <span className="truncate text-[10px] text-muted-foreground/60">
-                      {dirPath}
+                  <span className="flex min-w-0 flex-col">
+                    <span className="truncate font-mono text-xs">{fileName}</span>
+                    {dirPath && (
+                      <span className="truncate text-[10px] text-muted-foreground/60">
+                        {dirPath}
+                      </span>
+                    )}
+                  </span>
+                </button>
+                <button
+                  onClick={() =>
+                    addItem({ filePath: fp, fileName, type: 'file' })
+                  }
+                  className="flex shrink-0 items-center justify-center rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:opacity-0 md:group-hover:opacity-100"
+                  aria-label="添加到对话"
+                  title="添加到对话"
+                >
+                  <MessageSquarePlus className="size-3.5" />
+                </button>
+              </div>
+              {/* 每个匹配行 */}
+              {matches.map((m, i) => (
+                <button
+                  key={i}
+                  onClick={() => onOpenFile(fp, fileName, m.line ?? undefined)}
+                  className="flex w-full min-w-0 items-start gap-1.5 rounded py-0.5 pr-2 pl-10 text-left transition-colors hover:bg-accent"
+                  title={`${fp}:${m.line ?? ''}`}
+                >
+                  {m.line != null && (
+                    <span className="shrink-0 text-[10px] leading-5 text-primary/60 tabular-nums">
+                      {m.line}
                     </span>
                   )}
-                </span>
-              </button>
-              {hasMenu && (
-                <button
-                  onClick={(ev) => openMenu(ev, r, true)}
-                  className="flex shrink-0 items-center justify-center rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground md:opacity-0 md:group-hover:opacity-100"
-                  aria-label="更多操作"
-                  title="更多操作"
-                >
-                  <MoreHorizontal className="size-3.5" />
+                  <code className="min-w-0 flex-1 truncate text-[11px] leading-5 text-foreground/80">
+                    <HighlightMatch
+                      text={m.content}
+                      query={debouncedQuery}
+                      useRegex={searchOpts.useRegex}
+                      caseSensitive={searchOpts.caseSensitive}
+                      wholeWord={searchOpts.wholeWord}
+                    />
+                  </code>
                 </button>
-              )}
+              ))}
             </div>
           );
         })}
@@ -342,7 +357,7 @@ export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
             <input
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="搜索文件名…"
+              placeholder="搜索文件内容…"
               className="h-7 w-full rounded-md border border-input-border bg-background pl-7 pr-6 text-xs outline-none placeholder:text-foreground-subtlest focus-visible:border-input-border-focused"
             />
             {searchQuery && (
@@ -378,25 +393,16 @@ export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
             title="完整单词"
             icon={<WholeWord className="size-3.5" />}
           />
-          <div className="ml-auto flex items-center gap-1">
-            <span className="text-[10px] text-muted-foreground/70">扩展名</span>
-            <input
-              value={extFilter}
-              onChange={(e) => setExtFilter(e.target.value)}
-              placeholder="ts,tsx"
-              className="h-6 w-16 rounded border border-input-border bg-background px-1.5 text-[11px] outline-none placeholder:text-foreground-subtlest focus-visible:border-input-border-focused"
-            />
-            {(searchQuery || extFilter || searchDir) && (
-              <button
-                onClick={clearSearch}
-                className="text-muted-foreground hover:text-foreground"
-                aria-label="清除所有搜索"
-                title="清除"
-              >
-                <X className="size-3.5" />
-              </button>
-            )}
-          </div>
+          {(searchQuery || searchDir) && (
+            <button
+              onClick={clearSearch}
+              className="ml-auto text-muted-foreground hover:text-foreground"
+              aria-label="清除所有搜索"
+              title="清除"
+            >
+              <X className="size-3.5" />
+            </button>
+          )}
         </div>
         {/* 搜索目录范围 */}
         <div className="flex items-center gap-1">
@@ -407,7 +413,22 @@ export function FileExplorer({ workspaceId, onOpenFile, onError }: Props) {
             placeholder="搜索目录(留空搜索全部)"
             className="h-6 w-full rounded border border-input-border bg-background px-1.5 text-[11px] outline-none placeholder:text-foreground-subtlest focus-visible:border-input-border-focused"
           />
+          {searchDir && (
+            <button
+              onClick={() => setSearchDir('')}
+              className="shrink-0 text-muted-foreground hover:text-foreground"
+              aria-label="清除搜索目录"
+              title="清除目录"
+            >
+              <X className="size-3" />
+            </button>
+          )}
         </div>
+        {searchDir && (
+          <div className="text-[10px] text-muted-foreground/60">
+            当前搜索范围:{searchDir}
+          </div>
+        )}
       </div>
 
       {/* 搜索结果 / 目录树 */}
@@ -459,4 +480,59 @@ function SearchToggle({
       {label && <span className="font-mono">{label}</span>}
     </button>
   );
+}
+
+/** 高亮搜索关键词。支持普通文本、正则、区分大小写、完整单词。 */
+function HighlightMatch({
+  text,
+  query,
+  useRegex,
+  caseSensitive,
+  wholeWord: _wholeWord,
+}: {
+  text: string;
+  query: string;
+  useRegex: boolean;
+  caseSensitive: boolean;
+  wholeWord: boolean;
+}) {
+  if (!query.trim()) return <>{text}</>;
+
+  let pattern: string;
+  if (useRegex) {
+    pattern = query;
+  } else {
+    pattern = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+  const flags = caseSensitive ? 'g' : 'gi';
+  let re: RegExp;
+  try {
+    re = new RegExp(pattern, flags);
+  } catch {
+    return <>{text}</>;
+  }
+
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  let key = 0;
+  while ((match = re.exec(text)) !== null) {
+    const matchStart = match.index;
+    const matchEnd = matchStart + match[0].length;
+    if (matchStart > lastIndex) {
+      parts.push(text.slice(lastIndex, matchStart));
+    }
+    parts.push(
+      <mark key={key++} className="rounded bg-yellow-400/30 px-0.5 text-yellow-200">
+        {match[0]}
+      </mark>,
+    );
+    lastIndex = matchEnd;
+    if (match[0].length === 0) re.lastIndex++;
+  }
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+
+  return <>{parts}</>;
 }

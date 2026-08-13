@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import CodeMirror from '@uiw/react-codemirror';
 import { EditorView } from '@codemirror/view';
 import { oneDark } from '@codemirror/theme-one-dark';
+import { search, SearchQuery, setSearchQuery } from '@codemirror/search';
 import { go } from '@codemirror/lang-go';
 import { javascript } from '@codemirror/lang-javascript';
 import { json } from '@codemirror/lang-json';
@@ -64,6 +65,8 @@ export function CodeEditor({
   filePath,
   onChange,
   headContent,
+  highlightQuery,
+  highlightLine,
 }: {
   value: string;
   filename: string;
@@ -71,6 +74,10 @@ export function CodeEditor({
   onChange: (value: string) => void;
   /** 文件在 HEAD 的内容;提供后启用 git gutter 行标记 */
   headContent?: string;
+  /** 搜索高亮关键词;提供后在编辑器内高亮所有匹配 */
+  highlightQuery?: string | null;
+  /** 搜索结果定位行号;打开后滚动到该行 */
+  highlightLine?: number | null;
 }) {
   const viewRef = useRef<EditorView | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -79,11 +86,48 @@ export function CodeEditor({
   const extensions = useMemo(() => {
     const lang = langForFile(filename);
     const exts = lang ? [lang, EditorView.lineWrapping] : [EditorView.lineWrapping];
+    // 搜索高亮扩展(始终挂载,通过 setSearchQuery effect 控制查询)
+    exts.push(
+      search({
+        top: false,
+        createPanel: () => null as never,
+      }),
+    );
     if (headContent !== undefined) {
       exts.push(...createGitGutter(headContent));
     }
     return exts;
   }, [filename, headContent]);
+
+  // 更新编辑器搜索高亮
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    const q = highlightQuery?.trim() || '';
+    view.dispatch({
+      effects: setSearchQuery.of(
+        new SearchQuery({
+          search: q || '',
+          caseSensitive: false,
+        }),
+      ),
+    });
+  }, [highlightQuery]);
+
+  // 滚动到指定行
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || !highlightLine) return;
+    try {
+      const line = view.state.doc.line(highlightLine);
+      view.dispatch({
+        selection: { anchor: line.from },
+        effects: EditorView.scrollIntoView(line.from, { y: 'center' }),
+      });
+    } catch {
+      // 行号超出范围,忽略
+    }
+  }, [highlightLine, value]);
 
   /** 取当前选区;无选区返回 null */
   function getSelection() {

@@ -168,6 +168,13 @@ export function putFileContent(
   });
 }
 
+export interface ContentSearchResult {
+  path: string;
+  name: string;
+  line: number | null;
+  content: string;
+}
+
 export function searchFiles(
   workspaceId: string,
   params: {
@@ -177,7 +184,7 @@ export function searchFiles(
     caseSensitive?: boolean;
     wholeWord?: boolean;
   },
-): Promise<Api.FileEntry[]> {
+): Promise<ContentSearchResult[]> {
   const query: Record<string, string> = { q: params.q };
   if (params.path) query.path = params.path;
   if (params.regex) query.regex = 'true';

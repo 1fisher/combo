@@ -71,6 +71,10 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
   const [loadError, setLoadError] = useState<string | null>(null);
   /** markdown 文件是否处于预览模式 */
   const [mdPreview, setMdPreview] = useState(true);
+  /** 搜索高亮关键词(从文件搜索结果带入,用于编辑器内高亮) */
+  const [highlightQuery, setHighlightQuery] = useState<string | null>(null);
+  /** 搜索结果定位行号(打开后跳转并高亮该行) */
+  const [highlightLine, setHighlightLine] = useState<number | null>(null);
 
   /** 文件/Git 侧边栏宽度(桌面端可拖拽) */
   const [fileSidebarW, setFileSidebarW] = useState(FILE_SIDEBAR_DEFAULT);
@@ -111,10 +115,12 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
   }, [isMobile, openFiles.length]);
 
   const handleOpenFile = useCallback(
-    async (filePath: string, name: string) => {
+    async (filePath: string, name: string, line?: number) => {
       setLoadError(null);
       setDiffPath(null);
       setSidebarOpen(false); // 移动端选文件后收起抽屉
+      // 从搜索结果打开时带入行号
+      setHighlightLine(line ?? null);
       const kind = fileKindOf(name);
       try {
         if (kind === 'text') {
@@ -223,6 +229,7 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
               workspaceId={workspaceId}
               onOpenFile={handleOpenFile}
               onError={setLoadError}
+              onSearchQueryChange={setHighlightQuery}
             />
           </div>
         ) : (
@@ -447,6 +454,8 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
                       filePath={active.path}
                       onChange={(val) => setContent(active.path, val)}
                       headContent={active.headContent ?? undefined}
+                      highlightQuery={highlightQuery}
+                      highlightLine={highlightLine}
                     />
                   )}
                 </div>

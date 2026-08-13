@@ -4,25 +4,21 @@ import userEvent from '@testing-library/user-event';
 import { FileExplorer } from './FileExplorer';
 
 vi.mock('../../lib/api', () => {
-  const allEntries = [
+  const rootEntries = [
     { name: 'src', path: 'src', type: 'dir' as const, size: 0 },
     { name: 'README.md', path: 'README.md', type: 'file' as const, size: 10 },
+  ];
+  const srcEntries = [
     { name: 'main.ts', path: 'src/main.ts', type: 'file' as const, size: 5 },
   ];
   return {
     listFiles: vi.fn(async (_w: string, path: string) =>
-      path === ''
-        ? [
-            { name: 'src', path: 'src', type: 'dir' as const, size: 0 },
-            { name: 'README.md', path: 'README.md', type: 'file' as const, size: 10 },
-          ]
-        : [{ name: 'main.ts', path: 'src/main.ts', type: 'file' as const, size: 5 }]
+      path === '' ? rootEntries : srcEntries
     ),
-    searchFiles: vi.fn(async (_w: string, params: { q: string }) => {
-      if (params.q === '.') return allEntries;
-      const q = params.q.toLowerCase();
-      return allEntries.filter((f) => f.name.toLowerCase().includes(q));
-    }),
+    searchFiles: vi.fn(async () => [
+      { path: 'README.md', name: 'README.md', line: 1, content: '# combo Project' },
+      { path: 'src/main.ts', name: 'main.ts', line: 3, content: 'const x = readme();' },
+    ]),
   };
 });
 
@@ -42,33 +38,23 @@ describe('FileExplorer', () => {
     expect(onOpen).toHaveBeenCalledWith('src/main.ts', 'main.ts');
   });
 
-  it('filters files by name search', async () => {
+  it('searches file contents and shows matching lines', async () => {
     const onOpen = vi.fn();
     render(<FileExplorer workspaceId="w1" onOpenFile={onOpen} onError={vi.fn()} />);
 
-    const input = screen.getByPlaceholderText('搜索文件名…');
+    const input = screen.getByPlaceholderText('搜索文件内容…');
     await userEvent.type(input, 'readme');
 
-    // 等待搜索完成:src 目录名不匹配,应从结果中消失
+    // 等待搜索完成:应显示匹配的内容行
     await waitFor(() => {
-      expect(screen.queryByText('src')).toBeNull();
+      expect(screen.getByText('main.ts')).toBeTruthy();
     });
-    // README.md 匹配,应出现在结果中
-    expect(screen.getByText('README.md')).toBeTruthy();
-  });
-
-  it('filters files by extension', async () => {
-    const onOpen = vi.fn();
-    render(<FileExplorer workspaceId="w1" onOpenFile={onOpen} onError={vi.fn()} />);
-
-    const extInput = screen.getByPlaceholderText('ts,tsx');
-    await userEvent.type(extInput, 'ts');
-
-    // 等待搜索完成:README.md 不是 .ts 文件,应消失
+    // 匹配行内容应出现(高亮后文本被拆分,用函数匹配)
     await waitFor(() => {
-      expect(screen.queryByText('README.md')).toBeNull();
+      const els = screen.getAllByText((_content, el) =>
+        el?.tagName === 'CODE' && !!el.textContent?.includes('const x = readme();'),
+      );
+      expect(els.length).toBeGreaterThan(0);
     });
-    // main.ts 在 src 子目录中,应出现在结果中
-    expect(screen.getByText('main.ts')).toBeTruthy();
   });
 });
