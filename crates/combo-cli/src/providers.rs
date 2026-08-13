@@ -39,8 +39,9 @@ pub struct ProviderInfo {
     pub api_key: Option<String>,
     /// 该 provider 已保存的全部 key 列表(按保存顺序);激活的 key 与
     /// `api_key` 一致。仅配置文件持久化,providers.json / 内置为空。
+    /// 元素可为纯字符串或带 name 的对象(见 `crate::config::ApiKeyEntry`)。
     #[serde(default)]
-    pub api_keys: Vec<String>,
+    pub api_keys: Vec<crate::config::ApiKeyEntry>,
     /// 可为字面 URL,或 `$ENV_VAR` 形式。
     #[serde(default)]
     pub api_endpoint: Option<String>,

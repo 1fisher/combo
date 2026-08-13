@@ -7,6 +7,51 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+/// 单个已保存的 API Key。配置文件中兼容两种形式(serde untagged 自动识别):
+/// - 纯字符串(旧格式):`api_keys = ["sk-1", "sk-2"]`
+/// - 对象(可带名称,便于记忆):`api_keys = [{ key = "sk-1", name = "工作" }, "sk-2"]`
+///
+/// 未命名时序列化为字符串,保持旧配置文件格式不变。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ApiKeyEntry {
+    Plain(String),
+    Named {
+        key: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+}
+
+impl ApiKeyEntry {
+    /// key 原文(可能为 `$ENV_VAR` 形式)。
+    pub fn key(&self) -> &str {
+        match self {
+            Self::Plain(k) => k,
+            Self::Named { key, .. } => key,
+        }
+    }
+
+    /// 用户自定义名称(可选)。
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            Self::Named { name, .. } => name.as_deref(),
+            Self::Plain(_) => None,
+        }
+    }
+
+    pub fn plain(key: impl Into<String>) -> Self {
+        Self::Plain(key.into())
+    }
+
+    pub fn named(key: impl Into<String>, name: impl Into<String>) -> Self {
+        Self::Named {
+            key: key.into(),
+            name: Some(name.into()),
+        }
+    }
+}
+
 /// 内嵌 provider 定义。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -17,8 +62,9 @@ pub struct ProviderConfig {
     /// 明文 key 或 `$ENV_VAR`(当前激活的 key)。
     pub api_key: Option<String>,
     /// 该 provider 已保存的全部 key 列表(按保存顺序,UI 可自由切换激活项)。
+    /// 元素可为纯字符串或带 name 的对象。
     #[serde(default)]
-    pub api_keys: Vec<String>,
+    pub api_keys: Vec<ApiKeyEntry>,
     /// API endpoint。
     pub base_url: Option<String>,
     /// 默认大模型 id。
@@ -421,8 +467,8 @@ pub fn save_provider_key(
         .entry(provider_id.to_string())
         .or_insert_with(ProviderConfig::default);
     entry.api_key = Some(api_key.to_string());
-    if !api_key.is_empty() && !entry.api_keys.iter().any(|k| k == api_key) {
-        entry.api_keys.push(api_key.to_string());
+    if !api_key.is_empty() && !entry.api_keys.iter().any(|k| k.key() == api_key) {
+        entry.api_keys.push(ApiKeyEntry::plain(api_key));
     }
     if let Some(pt) = provider_type {
         entry.provider_type = Some(pt.to_string());
@@ -436,20 +482,35 @@ pub fn save_provider_key(
     write_config(path, &cfg)
 }
 
-/// 追加一个 key 到 provider 的 key 列表;已存在则视为切换激活。
+/// 追加一个 key 到 provider 的 key 列表;已存在则视为切换激活(并可选更新名称)。
 /// 当前没有激活 key 时,新加的 key 自动成为激活 key。
-pub fn add_provider_key(path: &PathBuf, provider_id: &str, api_key: &str) -> Result<()> {
+pub fn add_provider_key(
+    path: &PathBuf,
+    provider_id: &str,
+    api_key: &str,
+    name: Option<&str>,
+) -> Result<()> {
     let key = api_key.trim();
     if key.is_empty() {
         return Err(anyhow::anyhow!("API Key 不能为空"));
     }
+    let name = name.map(str::trim).filter(|s| !s.is_empty());
     let mut cfg = load_config(path)?;
     let entry = cfg
         .providers
         .entry(provider_id.to_string())
         .or_insert_with(ProviderConfig::default);
-    if !entry.api_keys.iter().any(|k| k == key) {
-        entry.api_keys.push(key.to_string());
+    if let Some(existing) = entry.api_keys.iter_mut().find(|k| k.key() == key) {
+        // key 已存在:若有新名称则更新(便于给旧 key 补命名)
+        if let Some(n) = name {
+            let key_owned = existing.key().to_string();
+            *existing = ApiKeyEntry::named(key_owned, n);
+        }
+    } else {
+        entry.api_keys.push(match name {
+            Some(n) => ApiKeyEntry::named(key.to_string(), n),
+            None => ApiKeyEntry::plain(key.to_string()),
+        });
     }
     // 无激活 key(或激活的是空串)时自动激活新 key
     if entry.api_key.as_deref().unwrap_or("").is_empty() {
@@ -469,7 +530,8 @@ pub fn activate_provider_key(path: &PathBuf, provider_id: &str, index: usize) ->
         .api_keys
         .get(index)
         .ok_or_else(|| anyhow::anyhow!("Key 下标 {index} 越界"))?
-        .clone();
+        .key()
+        .to_string();
     entry.api_key = Some(key);
     write_config(path, &cfg)
 }
@@ -485,15 +547,41 @@ pub fn remove_provider_key(path: &PathBuf, provider_id: &str, index: usize) -> R
         .api_keys
         .get(index)
         .ok_or_else(|| anyhow::anyhow!("Key 下标 {index} 越界"))?
-        .clone();
+        .key()
+        .to_string();
     entry.api_keys.remove(index);
     // 删除的是激活 key:激活剩余第一个;删空则清除激活
     if entry.api_key.as_deref() == Some(removed.as_str()) {
-        entry.api_key = entry.api_keys.first().cloned();
+        entry.api_key = entry.api_keys.first().map(|k| k.key().to_string());
     }
     if entry.api_keys.is_empty() {
         entry.api_key = None;
     }
+    write_config(path, &cfg)
+}
+
+/// 按列表下标设置 key 的名称(name 为空则清除名称,还原为纯字符串)。
+pub fn rename_provider_key(
+    path: &PathBuf,
+    provider_id: &str,
+    index: usize,
+    name: Option<&str>,
+) -> Result<()> {
+    let mut cfg = load_config(path)?;
+    let entry = cfg
+        .providers
+        .get_mut(provider_id)
+        .ok_or_else(|| anyhow::anyhow!("provider `{provider_id}` 未配置任何 Key"))?;
+    let k = entry
+        .api_keys
+        .get_mut(index)
+        .ok_or_else(|| anyhow::anyhow!("Key 下标 {index} 越界"))?;
+    let trimmed = name.map(str::trim).filter(|s| !s.is_empty());
+    let key_owned = k.key().to_string();
+    *k = match trimmed {
+        Some(n) => ApiKeyEntry::named(key_owned, n),
+        None => ApiKeyEntry::plain(key_owned),
+    };
     write_config(path, &cfg)
 }
 
@@ -823,15 +911,16 @@ mod tests {
         let path = dir.path().join("combo-cli.toml");
 
         // 追加两个 key,首个自动激活
-        add_provider_key(&path, "deepseek", "sk-key-1").unwrap();
-        add_provider_key(&path, "deepseek", "sk-key-2").unwrap();
+        add_provider_key(&path, "deepseek", "sk-key-1", None).unwrap();
+        add_provider_key(&path, "deepseek", "sk-key-2", None).unwrap();
         let cfg = AppConfig::load_or_create(&path).unwrap();
         let pc = cfg.providers.get("deepseek").unwrap();
-        assert_eq!(pc.api_keys, vec!["sk-key-1", "sk-key-2"]);
+        let keys: Vec<&str> = pc.api_keys.iter().map(|k| k.key()).collect();
+        assert_eq!(keys, vec!["sk-key-1", "sk-key-2"]);
         assert_eq!(pc.api_key.as_deref(), Some("sk-key-1"), "无激活 key 时首个 key 自动激活");
 
         // 重复添加不产生重复项
-        add_provider_key(&path, "deepseek", "sk-key-2").unwrap();
+        add_provider_key(&path, "deepseek", "sk-key-2", None).unwrap();
         let cfg = AppConfig::load_or_create(&path).unwrap();
         assert_eq!(cfg.providers.get("deepseek").unwrap().api_keys.len(), 2);
 
@@ -844,7 +933,8 @@ mod tests {
         remove_provider_key(&path, "deepseek", 1).unwrap();
         let cfg = AppConfig::load_or_create(&path).unwrap();
         let pc = cfg.providers.get("deepseek").unwrap();
-        assert_eq!(pc.api_keys, vec!["sk-key-1"]);
+        let keys: Vec<&str> = pc.api_keys.iter().map(|k| k.key()).collect();
+        assert_eq!(keys, vec!["sk-key-1"]);
         assert_eq!(pc.api_key.as_deref(), Some("sk-key-1"));
 
         // 删除最后一个 key:激活被清空
@@ -858,7 +948,50 @@ mod tests {
         assert!(activate_provider_key(&path, "deepseek", 0).is_err());
         assert!(remove_provider_key(&path, "deepseek", 5).is_err());
         // 空 key 报错
-        assert!(add_provider_key(&path, "deepseek", "  ").is_err());
+        assert!(add_provider_key(&path, "deepseek", "  ", None).is_err());
+    }
+
+    #[test]
+    fn key_naming_and_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("combo-cli.toml");
+
+        // 添加时带名称
+        add_provider_key(&path, "deepseek", "sk-work", Some("工作")).unwrap();
+        add_provider_key(&path, "deepseek", "sk-test", Some("测试")).unwrap();
+        add_provider_key(&path, "deepseek", "sk-extra", None).unwrap();
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        let pc = cfg.providers.get("deepseek").unwrap();
+        assert_eq!(pc.api_keys[0].key(), "sk-work");
+        assert_eq!(pc.api_keys[0].name(), Some("工作"));
+        assert_eq!(pc.api_keys[1].name(), Some("测试"));
+        assert_eq!(pc.api_keys[2].name(), None, "未命名 key 为 Plain,无名称");
+
+        // 给已有 key 补名称(重复添加同一 key + 名称)
+        add_provider_key(&path, "deepseek", "sk-extra", Some("备用")).unwrap();
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        let pc = cfg.providers.get("deepseek").unwrap();
+        assert_eq!(pc.api_keys.len(), 3, "重复 key 不新增项");
+        assert_eq!(pc.api_keys[2].name(), Some("备用"));
+
+        // 重命名已有 key;清除名称还原为 Plain
+        rename_provider_key(&path, "deepseek", 0, Some("主力")).unwrap();
+        rename_provider_key(&path, "deepseek", 1, None).unwrap();
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        let pc = cfg.providers.get("deepseek").unwrap();
+        assert_eq!(pc.api_keys[0].key(), "sk-work");
+        assert_eq!(pc.api_keys[0].name(), Some("主力"));
+        assert_eq!(pc.api_keys[1].name(), None, "清除名称后还原为纯字符串");
+
+        // 越界改名报错
+        assert!(rename_provider_key(&path, "deepseek", 9, Some("x")).is_err());
+
+        // 序列化兼容:全部为 Plain 时写回纯字符串数组
+        let out = toml::to_string(&cfg).unwrap();
+        let re: AppConfig = toml::from_str(&out).unwrap();
+        let keys: Vec<&str> = re.providers["deepseek"].api_keys.iter().map(|k| k.key()).collect();
+        assert_eq!(keys, vec!["sk-work", "sk-test", "sk-extra"]);
+        assert!(out.contains("sk-extra"));
     }
 
     #[test]
@@ -871,7 +1004,8 @@ mod tests {
         save_provider_key(&path, "deepseek", "sk-new", None, None).unwrap();
         let cfg = AppConfig::load_or_create(&path).unwrap();
         let pc = cfg.providers.get("deepseek").unwrap();
-        assert_eq!(pc.api_keys, vec!["sk-old", "sk-new"]);
+        let keys: Vec<&str> = pc.api_keys.iter().map(|k| k.key()).collect();
+        assert_eq!(keys, vec!["sk-old", "sk-new"]);
         assert_eq!(pc.api_key.as_deref(), Some("sk-new"));
     }
 }

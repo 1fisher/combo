@@ -12,6 +12,8 @@ import {
   getWorkspaceProviders,
   removeGlobalProviderKey,
   removeProviderKey,
+  renameGlobalProviderKey,
+  renameProviderKey,
   saveGlobalProviderKey,
   saveProviderKey,
   setWorkspaceModel,
@@ -121,15 +123,15 @@ export function useSaveProviderKey(workspaceId: string | null | undefined) {
 }
 
 /**
- * provider API Key 多 key 管理:add 追加 / activate 切换激活 / remove 删除。
- * 任一操作成功后刷新所有 providers 查询(含 Composer 的脱敏展示)。
+ * provider API Key 多 key 管理:add 追加(可选命名)/ activate 切换激活 /
+ * rename 设置名称 / remove 删除。任一操作成功后刷新所有 providers 查询(含 Composer 的脱敏展示)。
  */
 export function useProviderKeys(workspaceId: string | null | undefined) {
   const qc = useQueryClient();
   const invalidate = () => qc.invalidateQueries({ queryKey: ['providers'] });
 
   const add = useMutation({
-    mutationFn: (vars: { providerId: string; apiKey: string }) =>
+    mutationFn: (vars: { providerId: string; apiKey: string; name?: string }) =>
       workspaceId ? addProviderKey(workspaceId, vars) : addGlobalProviderKey(vars),
     onSuccess: invalidate,
   });
@@ -140,10 +142,15 @@ export function useProviderKeys(workspaceId: string | null | undefined) {
         : activateGlobalProviderKey(vars),
     onSuccess: invalidate,
   });
+  const rename = useMutation({
+    mutationFn: (vars: { providerId: string; keyIndex: number; name?: string }) =>
+      workspaceId ? renameProviderKey(workspaceId, vars) : renameGlobalProviderKey(vars),
+    onSuccess: invalidate,
+  });
   const remove = useMutation({
     mutationFn: (vars: { providerId: string; keyIndex: number }) =>
       workspaceId ? removeProviderKey(workspaceId, vars) : removeGlobalProviderKey(vars),
     onSuccess: invalidate,
   });
-  return { add, activate, remove };
+  return { add, activate, rename, remove };
 }

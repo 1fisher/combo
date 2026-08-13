@@ -15,6 +15,7 @@ const fetchModelsMutate = vi.fn();
 const saveKeyMutate = vi.fn();
 const addKeyMutate = vi.fn();
 const activateKeyMutate = vi.fn();
+const renameKeyMutate = vi.fn();
 const removeKeyMutate = vi.fn();
 
 vi.mock('../../hooks/useAgentModel', () => ({
@@ -26,7 +27,10 @@ vi.mock('../../hooks/useAgentModel', () => ({
         type: 'openai-compat',
         has_api_key: true,
         api_key_masked: 'sk-a****1234',
-        api_keys_masked: ['sk-a****1234', 'sk-b****5678'],
+        api_keys_masked: [
+          { masked: 'sk-a****1234', name: '工作' },
+          { masked: 'sk-b****5678', name: null },
+        ],
         active_key_index: 0,
         models: [{ id: 'deepseek-v4-flash-free', name: 'deepseek-v4-flash-free' }],
       },
@@ -48,6 +52,7 @@ vi.mock('../../hooks/useAgentModel', () => ({
   useProviderKeys: () => ({
     add: { mutateAsync: addKeyMutate, isPending: false },
     activate: { mutateAsync: activateKeyMutate, isPending: false },
+    rename: { mutateAsync: renameKeyMutate, isPending: false },
     remove: { mutateAsync: removeKeyMutate, isPending: false },
   }),
 }));
@@ -71,6 +76,8 @@ describe('SettingsDialog', () => {
     addKeyMutate.mockResolvedValue({ ok: true });
     activateKeyMutate.mockReset();
     activateKeyMutate.mockResolvedValue({ ok: true });
+    renameKeyMutate.mockReset();
+    renameKeyMutate.mockResolvedValue({ ok: true });
     removeKeyMutate.mockReset();
     removeKeyMutate.mockResolvedValue({ ok: true });
     // confirmDialog 在浏览器模式走 window.confirm
@@ -109,6 +116,8 @@ describe('SettingsDialog', () => {
   it('shows masked api key when provider has one configured', async () => {
     renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
     await userEvent.click(screen.getByRole('button', { name: /OpenCode Zen/ }));
+    // 第一个 key 带名称:显示名称 + 脱敏 key
+    expect(screen.getByText('工作')).toBeTruthy();
     expect(screen.getByText('sk-a****1234')).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: /Zhipu/ }));
     expect(screen.getByText('已配置 Key')).toBeTruthy();
@@ -146,6 +155,40 @@ describe('SettingsDialog', () => {
       expect.objectContaining({ providerId: 'opencode', keyIndex: 1 })
     );
     expect(await screen.findByText('已切换激活 Key')).toBeTruthy();
+  });
+
+  it('adds api key with optional name', async () => {
+    renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: /OpenCode Zen/ }));
+    await userEvent.type(screen.getByPlaceholderText(/Key 名称/), '测试环境');
+    await userEvent.type(
+      screen.getByPlaceholderText(/输入新 API Key/),
+      'sk-test-xyz'
+    );
+    await userEvent.click(screen.getAllByRole('button', { name: '添加' })[0]);
+    expect(addKeyMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'opencode',
+        apiKey: 'sk-test-xyz',
+        name: '测试环境',
+      })
+    );
+    expect(await screen.findByText('已添加 Key')).toBeTruthy();
+  });
+
+  it('renames an api key via pencil button', async () => {
+    renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: /OpenCode Zen/ }));
+    // 第二个 key(sk-b****5678)没有名字,铅笔按钮 title 为「添加名称」
+    await userEvent.click(screen.getByTitle('添加名称'));
+    const input = screen.getByPlaceholderText('Key 名称(留空清除)');
+    await userEvent.clear(input);
+    await userEvent.type(input, '备用');
+    await userEvent.keyboard('{Enter}');
+    expect(renameKeyMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: 'opencode', keyIndex: 1, name: '备用' })
+    );
+    expect(await screen.findByText('已更新 Key 名称')).toBeTruthy();
   });
 
   it('disables fetch for provider without key and empty input', async () => {

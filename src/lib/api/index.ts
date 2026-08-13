@@ -482,11 +482,15 @@ export function saveGlobalProviderKey(
 /** 追加一个 API Key 到 provider(已存在则视为切换激活;无激活 key 时自动激活)。 */
 export function addProviderKey(
   workspaceId: string,
-  req: { providerId: string; apiKey: string },
+  req: { providerId: string; apiKey: string; name?: string },
 ): Promise<{ ok: boolean; provider: string }> {
   return apiRequest(`/v1/workspaces/${workspaceId}/providers/keys`, {
     method: 'POST',
-    body: { provider_id: req.providerId, api_key: req.apiKey },
+    body: {
+      provider_id: req.providerId,
+      api_key: req.apiKey,
+      name: req.name,
+    },
   });
 }
 
@@ -512,13 +516,24 @@ export function removeProviderKey(
   });
 }
 
+/** 按下标设置 provider 的 API Key 名称(name 留空则清除名称)。 */
+export function renameProviderKey(
+  workspaceId: string,
+  req: { providerId: string; keyIndex: number; name?: string },
+): Promise<{ ok: boolean; provider: string }> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/providers/keys/rename`, {
+    method: 'POST',
+    body: { provider_id: req.providerId, key_index: req.keyIndex, name: req.name },
+  });
+}
+
 /** 追加一个 API Key 到 provider(全局,不绑定 workspace)。 */
 export function addGlobalProviderKey(
-  req: { providerId: string; apiKey: string },
+  req: { providerId: string; apiKey: string; name?: string },
 ): Promise<{ ok: boolean; provider: string }> {
   return apiRequest('/v1/providers/keys', {
     method: 'POST',
-    body: { provider_id: req.providerId, api_key: req.apiKey },
+    body: { provider_id: req.providerId, api_key: req.apiKey, name: req.name },
   });
 }
 
@@ -539,6 +554,16 @@ export function removeGlobalProviderKey(
   return apiRequest('/v1/providers/keys/remove', {
     method: 'POST',
     body: { provider_id: req.providerId, key_index: req.keyIndex },
+  });
+}
+
+/** 按下标设置 provider 的 API Key 名称(全局,不绑定 workspace;name 留空则清除)。 */
+export function renameGlobalProviderKey(
+  req: { providerId: string; keyIndex: number; name?: string },
+): Promise<{ ok: boolean; provider: string }> {
+  return apiRequest('/v1/providers/keys/rename', {
+    method: 'POST',
+    body: { provider_id: req.providerId, key_index: req.keyIndex, name: req.name },
   });
 }
 

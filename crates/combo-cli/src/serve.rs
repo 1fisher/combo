@@ -290,6 +290,10 @@ fn build_router(
             "/v1/workspaces/:id/providers/keys/remove",
             post(remove_provider_key),
         )
+        .route(
+            "/v1/workspaces/:id/providers/keys/rename",
+            post(rename_provider_key),
+        )
         .route("/v1/providers", get(list_providers))
         .route("/v1/providers/fetch-models", post(fetch_models))
         .route("/v1/providers/save-key", post(save_provider_key))
@@ -301,6 +305,10 @@ fn build_router(
         .route(
             "/v1/providers/keys/remove",
             post(remove_provider_key),
+        )
+        .route(
+            "/v1/providers/keys/rename",
+            post(rename_provider_key),
         )
         .route("/v1/workspaces/:id/config/model", post(config_model))
         .route(
@@ -1419,17 +1427,20 @@ async fn list_providers(State(state): State<AppState>) -> Json<Value> {
         .map(|p| {
             // 已配置的 key 仅回传脱敏结果,不回传明文
             let masked = p.resolved_api_key().map(|k| mask_api_key(&k));
-            // 已保存的全部 key 列表(脱敏)与激活项下标
-            let keys_masked: Vec<String> = p
+            // 已保存的全部 key 列表(脱敏 + 可选名称)与激活项下标
+            let keys_masked: Vec<Value> = p
                 .api_keys
                 .iter()
                 .map(|k| {
-                    let resolved = providers::expand_env(k).unwrap_or_default();
-                    mask_api_key(&resolved)
+                    let resolved = providers::expand_env(k.key()).unwrap_or_default();
+                    json!({
+                        "masked": mask_api_key(&resolved),
+                        "name": k.name(),
+                    })
                 })
                 .collect();
             let active_key_index = match &p.api_key {
-                Some(active) => p.api_keys.iter().position(|k| k == active),
+                Some(active) => p.api_keys.iter().position(|k| k.key() == active),
                 None => None,
             };
             json!({
@@ -1625,11 +1636,14 @@ async fn save_provider_key(
 }
 
 /// POST /v1/workspaces/{id}/providers/keys — 追加一个 API Key。
-/// 请求体:`{ provider_id, api_key }`;已存在则视为切换激活,无激活 key 时自动激活。
+/// 请求体:`{ provider_id, api_key, name? }`;已存在则视为切换激活(并可选更新名称),
+/// 无激活 key 时自动激活。
 #[derive(Deserialize)]
 struct AddKeyReq {
     provider_id: String,
     api_key: String,
+    /// 可选名称(便于记忆);留空则不命名。
+    name: Option<String>,
 }
 
 async fn add_provider_key(
@@ -1640,6 +1654,7 @@ async fn add_provider_key(
         &crate::config::default_config_path(),
         &body.provider_id,
         &body.api_key,
+        body.name.as_deref(),
     )
     .map_err(|e| (StatusCode::BAD_REQUEST, format!("添加 Key 失败: {e}")))?;
     tracing::info!("已为 provider `{}` 添加 API Key", body.provider_id);
@@ -1687,6 +1702,30 @@ async fn remove_provider_key(
     )
     .map_err(|e| (StatusCode::BAD_REQUEST, format!("删除 Key 失败: {e}")))?;
     tracing::info!("已删除 provider `{}` 的 API Key", body.provider_id);
+    Ok(Json(json!({ "ok": true, "provider": body.provider_id })))
+}
+
+/// POST /v1/workspaces/{id}/providers/keys/rename — 按下标设置 key 的名称。
+/// 请求体:`{ provider_id, key_index, name? }`;name 留空则清除名称。
+#[derive(Deserialize)]
+struct RenameKeyReq {
+    provider_id: String,
+    key_index: usize,
+    name: Option<String>,
+}
+
+async fn rename_provider_key(
+    _state: State<AppState>,
+    Json(body): Json<RenameKeyReq>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    crate::config::rename_provider_key(
+        &crate::config::default_config_path(),
+        &body.provider_id,
+        body.key_index,
+        body.name.as_deref(),
+    )
+    .map_err(|e| (StatusCode::BAD_REQUEST, format!("重命名 Key 失败: {e}")))?;
+    tracing::info!("已重命名 provider `{}` 的 API Key", body.provider_id);
     Ok(Json(json!({ "ok": true, "provider": body.provider_id })))
 }
 

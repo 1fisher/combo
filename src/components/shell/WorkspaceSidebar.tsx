@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   Archive,
   BarChart3,
@@ -9,7 +9,6 @@ import {
   FolderInput,
   GripVertical,
   Hash,
-  KeyRound,
   ListFilter,
   Maximize2,
   MessageCirclePlus,
@@ -46,9 +45,6 @@ import { SessionRow } from './SessionRow';
 import { SkillsPanel } from './SkillsPanel';
 import { DirectoryPicker } from './DirectoryPicker';
 import { SettingsDialog } from './SettingsDialog';
-import { ProviderKeyDialog } from './ProviderKeyDialog';
-import { ProviderLogo } from '../agent/ProviderLogo';
-import { useProviders } from '../../hooks/useAgentModel';
 import { SearchDialog } from './SearchDialog';
 import { AutomationPanel } from './AutomationPanel';
 import { UsageStatsDialog } from './UsageStatsDialog';
@@ -221,15 +217,6 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
   const setActive = useAgentStore((s) => s.setActiveWorkspace);
   const setActiveSessionId = useAgentStore((s) => s.setActiveSessionId);
   const connStatus = useConnectionStore((s) => s.status);
-  // 侧边栏底部 Provider 入口:当前 provider 的 logo + 已保存 Key 数量
-  const { data: providerList } = useProviders(active);
-  const modelSelection = useAgentStore((s) => s.modelSelections[active ?? '']);
-  const currentProvider = useMemo(() => {
-    if (!providerList?.length) return undefined;
-    const sel = modelSelection?.provider;
-    return providerList.find((p) => p.id === sel) ?? providerList[0];
-  }, [providerList, modelSelection?.provider]);
-  const providerKeyCount = currentProvider?.api_keys_masked?.length ?? 0;
   const {
     sessions: activeSessions,
     create: createSessionIn,
@@ -247,7 +234,6 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
   const [sidebarError, setSidebarError] = useState<string | null>(null);
   const [skillsOpen, setSkillsOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [keyDialogOpen, setKeyDialogOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [autoOpen, setAutoOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
@@ -833,34 +819,11 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
           </span>
         </button>
         <div className="flex shrink-0 items-center gap-1.5">
-        <Button
-        variant="ghost"
-        size="icon-sm"
-        className="relative shrink-0 text-foreground-subtle hover:bg-surface-hover hover:text-foreground"
-        aria-label="Provider API Key 管理"
-        title={
-          currentProvider
-            ? `${currentProvider.name} API Key(${providerKeyCount} 个,点击管理/切换)`
-            : 'Provider API Key 管理'
-        }
-        onClick={() => setKeyDialogOpen(true)}
-      >
-        {currentProvider ? (
-          <ProviderLogo providerId={currentProvider.id} name={currentProvider.name} className="size-4" />
-        ) : (
-          <KeyRound className="size-4" />
-        )}
-        {providerKeyCount > 0 && (
-          <span className="absolute -right-1 -top-1 flex min-w-3.5 items-center justify-center rounded-full bg-brand px-0.5 text-[9px] font-semibold leading-3.5 text-white">
-            {providerKeyCount}
-          </span>
-        )}
-      </Button>
-        <Button
-        variant="ghost"
-        size="icon-sm"
-        className="shrink-0 text-foreground-subtle hover:bg-surface-hover hover:text-foreground"
-        aria-label="移动端远程控制"
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="shrink-0 text-foreground-subtle hover:bg-surface-hover hover:text-foreground"
+            aria-label="移动端远程控制"
             title="移动端远程控制"
             onClick={() => setMobileConnectOpen(true)}
           >
@@ -880,7 +843,6 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
       </div>
       <SkillsPanel open={skillsOpen} onOpenChange={setSkillsOpen} />
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
-      <ProviderKeyDialog open={keyDialogOpen} onOpenChange={setKeyDialogOpen} workspaceId={active} />
       <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} onNavigate={onNavigate} />
       <AutomationPanel open={autoOpen} onOpenChange={setAutoOpen} />
       <UsageStatsDialog open={statsOpen} onOpenChange={setStatsOpen} />

@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { Check, CheckCircle2, ChevronDown, Loader2, Trash2, Zap } from 'lucide-react';
+import { Check, CheckCircle2, ChevronDown, Loader2, Pencil, Plus, Trash2, Zap } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Switch } from '../ui/switch';
 import {
@@ -274,8 +274,12 @@ function ProviderConfigSection({ open }: { open: boolean }) {
 
   // 每个 provider 的输入状态
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
+  const [nameInputs, setNameInputs] = useState<Record<string, string>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [statusMsg, setStatusMsg] = useState<Record<string, { ok: boolean; msg: string }>>({});
+  // 行内重命名状态
+  const [renaming, setRenaming] = useState<{ providerId: string; keyIndex: number } | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
 
   // 对话框打开时刷新 provider 列表
   useEffect(() => {
@@ -322,6 +326,43 @@ function ProviderConfigSection({ open }: { open: boolean }) {
     }
   }
 
+  /** 仅保存新 Key 到当前 Provider(不拉取模型),供多 Key 切换使用;可带名称便于记忆。 */
+  async function handleAddKey(providerId: string) {
+    const apiKey = (keyInputs[providerId] ?? '').trim();
+    if (!apiKey) return;
+    const name = (nameInputs[providerId] ?? '').trim() || undefined;
+    setStatusMsg((s) => ({ ...s, [providerId]: { ok: false, msg: '' } }));
+    try {
+      await providerKeys.add.mutateAsync({ providerId, apiKey, name });
+      setKeyInputs((prev) => ({ ...prev, [providerId]: '' }));
+      setNameInputs((prev) => ({ ...prev, [providerId]: '' }));
+      setStatusMsg((s) => ({ ...s, [providerId]: { ok: true, msg: '已添加 Key' } }));
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setStatusMsg((s) => ({ ...s, [providerId]: { ok: false, msg } }));
+    }
+  }
+
+  /** 开始行内重命名指定 key。 */
+  function startRename(providerId: string, keyIndex: number, currentName: string) {
+    setRenaming({ providerId, keyIndex });
+    setRenameDraft(currentName);
+  }
+
+  /** 提交重命名;名称为空则清除名称。 */
+  async function commitRename(providerId: string, keyIndex: number) {
+    const name = renameDraft.trim() || undefined;
+    setRenaming(null);
+    setStatusMsg((s) => ({ ...s, [providerId]: { ok: false, msg: '' } }));
+    try {
+      await providerKeys.rename.mutateAsync({ providerId, keyIndex, name });
+      setStatusMsg((s) => ({ ...s, [providerId]: { ok: true, msg: '已更新 Key 名称' } }));
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setStatusMsg((s) => ({ ...s, [providerId]: { ok: false, msg } }));
+    }
+  }
+
   async function handleActivateKey(providerId: string, index: number) {
     setStatusMsg((s) => ({ ...s, [providerId]: { ok: false, msg: '' } }));
     try {
@@ -357,7 +398,7 @@ function ProviderConfigSection({ open }: { open: boolean }) {
           const modelCount = Array.isArray(p.models) ? p.models.length : 0;
           const isExpanded = expanded[p.id] ?? false;
           const st = statusMsg[p.id];
-          const busy = fetchModels.isPending || saveProviderKey.isPending || providerKeys.add.isPending || providerKeys.activate.isPending || providerKeys.remove.isPending;
+          const busy = fetchModels.isPending || saveProviderKey.isPending || providerKeys.add.isPending || providerKeys.activate.isPending || providerKeys.rename.isPending || providerKeys.remove.isPending;
           const hasKey = !!p.has_api_key;
           const typedKey = (keyInputs[p.id] ?? '').trim();
           const canFetch = hasKey || typedKey.length > 0;
@@ -402,11 +443,14 @@ function ProviderConfigSection({ open }: { open: boolean }) {
                       )}
                     </div>
                   )}
-                  {/* 已保存的多 key 列表:脱敏展示,支持「使用」切换 / 删除 */}
+                  {/* 已保存的多 key 列表:脱敏展示(可带名称),支持「使用」切换 / 重命名 / 删除 */}
                   {(p.api_keys_masked?.length ?? 0) > 0 && (
                     <div className="flex flex-col gap-1">
-                      {p.api_keys_masked!.map((masked, i) => {
+                      {p.api_keys_masked!.map((k, i) => {
                         const isActive = i === (p.active_key_index ?? -1);
+                        const masked = k.masked || '****';
+                        const name = k.name ?? '';
+                        const isRenaming = renaming?.providerId === p.id && renaming.keyIndex === i;
                         return (
                           <div
                             key={`${masked}-${i}`}
@@ -415,9 +459,52 @@ function ProviderConfigSection({ open }: { open: boolean }) {
                               isActive && 'text-brand',
                             )}
                           >
-                            <span className={cn('min-w-0 flex-1 truncate font-mono', isActive ? 'text-brand' : 'text-foreground-subtle')}>
-                              {masked || '****'}
-                            </span>
+                            {isRenaming ? (
+                              <input
+                                autoFocus
+                                value={renameDraft}
+                                onChange={(e) => setRenameDraft(e.target.value)}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    void commitRename(p.id, i);
+                                  }
+                                  if (e.key === 'Escape') setRenaming(null);
+                                }}
+                                onBlur={() => setRenaming(null)}
+                                placeholder="Key 名称(留空清除)"
+                                className="h-6 min-w-0 flex-1 rounded border border-input-border bg-input px-1.5 text-[11px] text-foreground outline-none placeholder:text-foreground-subtlest focus:border-input-border-focused"
+                              />
+                            ) : (
+                              <span className="min-w-0 flex-1 truncate" title={masked}>
+                                {name ? (
+                                  <>
+                                    <span className={isActive ? 'text-brand' : 'text-foreground'}>
+                                      {name}
+                                    </span>
+                                    <span
+                                      className={cn(
+                                        'ml-1.5 font-mono',
+                                        isActive ? 'text-brand/80' : 'text-foreground-subtlest',
+                                      )}
+                                    >
+                                      {masked}
+                                    </span>
+                                  </>
+                                ) : (
+                                  <span className="font-mono text-foreground-subtle">{masked}</span>
+                                )}
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => startRename(p.id, i, name)}
+                              title={name ? '重命名' : '添加名称'}
+                              className="inline-flex shrink-0 items-center rounded p-0.5 text-foreground-subtlest hover:bg-surface-hover hover:text-foreground disabled:opacity-50"
+                            >
+                              <Pencil className="size-3" />
+                            </button>
                             {isActive ? (
                               <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-brand/10 px-1 py-0.5 text-[10px] font-medium text-brand">
                                 <Check className="size-3" />
@@ -456,36 +543,63 @@ function ProviderConfigSection({ open }: { open: boolean }) {
                       (环境变量/内置,添加 Key 后可切换)
                     </div>
                   )}
-                  <div className="flex items-center gap-1">
+                  <div className="flex flex-col gap-1">
                     <input
-                      type="password"
-                      value={keyInputs[p.id] ?? ''}
+                      type="text"
+                      value={nameInputs[p.id] ?? ''}
                       onChange={(e) =>
-                        setKeyInputs((prev) => ({ ...prev, [p.id]: e.target.value }))
+                        setNameInputs((prev) => ({ ...prev, [p.id]: e.target.value }))
                       }
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !busy && canFetch) {
-                          e.preventDefault();
-                          handleFetch(p.id);
-                        }
-                      }}
-                      placeholder={hasKey ? '输入新 API Key 并拉取模型(追加到列表)' : '输入 API Key...'}
-                      className="h-7 min-w-0 flex-1 rounded-lg border border-input-border bg-input px-2 text-[12px] text-foreground outline-none placeholder:text-foreground-subtlest focus:border-input-border-focused"
+                      placeholder="Key 名称(可选,方便记忆,如:工作/测试)"
+                      className="h-7 w-full rounded-lg border border-input-border bg-input px-2 text-[12px] text-foreground outline-none placeholder:text-foreground-subtlest focus:border-input-border-focused"
                     />
-                    <Button
-                      type="button"
-                      size="sm"
-                      disabled={busy || !canFetch}
-                      onClick={() => handleFetch(p.id)}
-                      className="h-7 shrink-0 gap-1 rounded-lg px-2 text-[12px]"
-                    >
-                      {busy ? (
-                        <Loader2 className="size-3 animate-spin" />
-                      ) : (
-                        <Zap className="size-3" />
-                      )}
-                      拉取模型
-                    </Button>
+                    <div className="flex items-center gap-1">
+                      <input
+                        type="password"
+                        value={keyInputs[p.id] ?? ''}
+                        onChange={(e) =>
+                          setKeyInputs((prev) => ({ ...prev, [p.id]: e.target.value }))
+                        }
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' && !busy && typedKey) {
+                            e.preventDefault();
+                            void handleAddKey(p.id);
+                          }
+                        }}
+                        placeholder={hasKey ? '输入新 API Key(拉取模型或仅添加保存)' : '输入 API Key...'}
+                        className="h-7 min-w-0 flex-1 rounded-lg border border-input-border bg-input px-2 text-[12px] text-foreground outline-none placeholder:text-foreground-subtlest focus:border-input-border-focused"
+                      />
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={busy || !typedKey}
+                        onClick={() => void handleAddKey(p.id)}
+                        className="h-7 shrink-0 gap-1 rounded-lg px-2 text-[12px]"
+                        title="仅保存 Key,不拉取模型"
+                      >
+                        {providerKeys.add.isPending ? (
+                          <Loader2 className="size-3 animate-spin" />
+                        ) : (
+                          <Plus className="size-3" />
+                        )}
+                        添加
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={busy || !canFetch}
+                        onClick={() => handleFetch(p.id)}
+                        className="h-7 shrink-0 gap-1 rounded-lg px-2 text-[12px]"
+                      >
+                        {busy ? (
+                          <Loader2 className="size-3 animate-spin" />
+                        ) : (
+                          <Zap className="size-3" />
+                        )}
+                        拉取模型
+                      </Button>
+                    </div>
                   </div>
                   {st?.msg && (
                     <div className={`text-[11px] ${st.ok ? 'text-brand' : 'text-destructive'}`}>
@@ -499,8 +613,9 @@ function ProviderConfigSection({ open }: { open: boolean }) {
         })}
       </div>
       <div className="text-[12px] text-foreground-subtle">
-        输入 API Key 后点击「拉取模型」获取模型列表并追加到 Key 列表;已配置 Key 的
-        Provider 可直接点击「拉取模型」同步最新模型,点击「使用」切换激活 Key。
+        每个 Provider 可保存多个 API Key:填写名称(可选)+ Key 后点「添加」仅保存,点
+        「拉取模型」保存并同步模型列表(已配置 Key 可直接拉取);铅笔可命名/改名,点
+        「使用」切换激活 Key,点「删除」移除。
       </div>
     </div>
   );
