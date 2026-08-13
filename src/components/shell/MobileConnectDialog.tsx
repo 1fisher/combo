@@ -15,7 +15,6 @@ import {
   createAccessToken,
   revokeAccessToken,
   startRelayTunnel,
-  getRelayStatus,
   type CreatedToken,
 } from '../../lib/api';
 
@@ -62,12 +61,18 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
       const wsUrl = getEffectiveExternalUrl()
         .replace(/^http/, 'ws') // https→wss, http→ws
         .replace(/\/$/, '') + '/v1/relay/tunnel';
-      // 捕获启动失败(如本地 combo-cli 无 /v1/relay/start 路由、或参数错误),
-      // 不再静默吞掉——否则用户会看到二维码但扫码 503。
-      await startRelayTunnel(wsUrl, t.token).catch((e) => {
+      // 后端 start_relay 会同步等待初始连接结果(最多 6s)。
+      // 直接用返回值判断,不再依赖后续轮询。
+      const relayResult = await startRelayTunnel(wsUrl, t.token).catch((e) => {
         throw new Error(`启动隧道失败: ${e?.message ?? e}`);
       });
-      // 不在此处设置 tunnelConnected — 由下方轮询 /v1/relay/status 验证实际连接状态
+      if (relayResult.connected) {
+        setTunnelConnected(true);
+      } else if (relayResult.error) {
+        throw new Error(relayResult.error);
+      } else {
+        throw new Error('隧道连接超时,请检查网络或中转域名后重试');
+      }
     } catch (e) {
       tokenRef.current = null;
       setTokenInfo(null);
@@ -89,53 +94,8 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
     void generateToken();
   }, [open, generateToken]);
 
-  // 轮询本地 combo-cli 的隧道状态,实际连接后显示二维码。
-  // 兼容旧版二进制(无 connected 字段):task running + 等待 3s 后视为已连接。
-  // 不再做「超时强制显示二维码」——隧道未连上时显示二维码只会让用户扫码得到 503。
-  useEffect(() => {
-    if (!open || !tokenInfo) return;
-    let cancelled = false;
-    const startTime = Date.now();
-    const poll = async () => {
-      while (!cancelled) {
-        try {
-          const st = await getRelayStatus();
-          // 新版二进制:connected === true 表示 WSS 实际连通
-          if (st.connected) {
-            if (!cancelled) setTunnelConnected(true);
-            return;
-          }
-          // 后端报出了具体错误(如 TLS 失败 / DNS 解析 / 连接拒绝)→ 立即显示
-          if (st.error) {
-            if (!cancelled) {
-              setTunnelConnected(false);
-              setTunnelError(st.error);
-            }
-            return;
-          }
-          // 旧版二进制无 connected 字段(undefined):
-          // task 已 running 且过了 3s 宽限期 → 视为已连接
-          if (st.connected === undefined && st.running && Date.now() - startTime > 3000) {
-            if (!cancelled) setTunnelConnected(true);
-            return;
-          }
-        } catch {
-          // 忽略单次轮询错误,继续重试
-        }
-        // 超时判定:15s 仍未连通 → 报错,不再强制显示二维码
-        if (Date.now() - startTime > 15000) {
-          if (!cancelled) {
-            setTunnelConnected(false);
-            setTunnelError('隧道连接超时,请检查网络或中转域名后重试');
-          }
-          return;
-        }
-        await new Promise((r) => setTimeout(r, 1000));
-      }
-    };
-    void poll();
-    return () => { cancelled = true; };
-  }, [open, tokenInfo]);
+  // 兼容旧版二进制:start_relay 不同步等待连接结果时,
+  // 仍需轮询 /v1/relay/status 确认实际状态。
 
   useEffect(() => {
     if (!open || !mobileUrl) {

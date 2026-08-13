@@ -11,6 +11,7 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
@@ -61,6 +62,24 @@ impl RelayManager {
 
         let mut cfg_guard = self.config.lock().await;
         *cfg_guard = Some(config_clone);
+    }
+
+    /// 启动隧道并等待初始连接结果(最多 6 秒)。
+    /// 返回 (connected, error):连接成功 → (true, None);
+    /// 连接失败 → (false, Some(msg));超时未决 → (false, None)。
+    pub async fn start_and_wait(&self, url: String, token: String, local_proxy_url: String) -> (bool, Option<String>) {
+        self.start(url, token, local_proxy_url).await;
+        // 轮询等待初始连接结果(隧道 WebSocket 超时为 10s,这里等 6s 足够覆盖正常情况)
+        for _ in 0..60 {
+            if self.is_connected() {
+                return (true, None);
+            }
+            if let Some(err) = self.last_error() {
+                return (false, Some(err));
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        (false, None)
     }
 
     pub async fn stop(&self) {
@@ -117,11 +136,12 @@ pub async fn start_relay(
     let local = body
         .local_proxy_url
         .unwrap_or_else(|| format!("http://127.0.0.1:{}", state.local_port));
-    state.relay.start(body.url, body.token, local).await;
+    // 同步等待初始连接结果(最多 6s),让前端立即知道是否成功
+    let (connected, error) = state.relay.start_and_wait(body.url, body.token, local).await;
     Json(RelayStatus {
         running: true,
-        connected: false,
-        error: None,
+        connected,
+        error,
     })
 }
 
