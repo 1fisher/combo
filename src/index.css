@@ -178,18 +178,26 @@
   .combo-pop {
     /* 默认金色;运行时由 ComboOverlay 按 combo 值覆盖为绿→红 */
     --combo-hue: 40;
+    /* 字号随视口收缩:弹出动画会放大到 1.45 倍,固定 96px 在窄窗口/移动端
+       (会话区 ≤ ~350px)下数字右端会超出被 overflow-hidden 裁掉。宽窗口
+       clamp 取 96px 保持视觉冲击,窄窗口自动缩小保证不越界。 */
+    font-size: clamp(48px, 15vw, 96px);
     animation: combo-pop 1.6s cubic-bezier(0.2, 0.8, 0.3, 1) forwards;
     transform-origin: 50% 60%;
   }
   .combo-title {
-    @apply text-3xl font-black italic tracking-[0.35em];
+    /* 相对 .combo-pop 字号(30/96)缩放,跟随 clamp 自适应 */
+    @apply font-black italic leading-tight tracking-[0.35em];
+    font-size: 0.3125em;
     color: hsl(calc(var(--combo-hue) + 20) 95% 72%);
     -webkit-text-stroke: 1.5px rgba(0, 0, 0, 0.85);
     filter: drop-shadow(0 2px 0 rgba(0, 0, 0, 0.85))
       drop-shadow(0 0 18px hsl(var(--combo-hue) 90% 55% / 0.55));
   }
   .combo-count {
-    @apply text-8xl font-black italic leading-none;
+    /* 继承 .combo-pop 的 clamp 字号 */
+    @apply font-black italic leading-none;
+    font-size: 1em;
     background: linear-gradient(
       to bottom,
       hsl(calc(var(--combo-hue) + 30) 95% 82%),
