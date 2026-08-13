@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { FileExplorer } from './FileExplorer';
 
@@ -28,5 +28,35 @@ describe('FileExplorer', () => {
     // 点击文件回调路径与名称
     await userEvent.click(screen.getByText('main.ts'));
     expect(onOpen).toHaveBeenCalledWith('src/main.ts', 'main.ts');
+  });
+
+  it('filters files by name search', async () => {
+    const onOpen = vi.fn();
+    render(<FileExplorer workspaceId="w1" onOpenFile={onOpen} onError={vi.fn()} />);
+
+    const input = screen.getByPlaceholderText('搜索文件名…');
+    await userEvent.type(input, 'readme');
+
+    // 等待搜索完成:src 目录名不匹配,应从结果中消失
+    await waitFor(() => {
+      expect(screen.queryByText('src')).toBeNull();
+    });
+    // README.md 匹配,应出现在结果中
+    expect(screen.getByText('README.md')).toBeTruthy();
+  });
+
+  it('filters files by extension', async () => {
+    const onOpen = vi.fn();
+    render(<FileExplorer workspaceId="w1" onOpenFile={onOpen} onError={vi.fn()} />);
+
+    const extInput = screen.getByPlaceholderText('ts,tsx');
+    await userEvent.type(extInput, 'ts');
+
+    // 等待搜索完成:README.md 不是 .ts 文件,应消失
+    await waitFor(() => {
+      expect(screen.queryByText('README.md')).toBeNull();
+    });
+    // main.ts 在 src 子目录中,应出现在结果中
+    expect(screen.getByText('main.ts')).toBeTruthy();
   });
 });

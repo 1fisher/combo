@@ -1,6 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { CheckCircle2, ChevronDown, Loader2, Trash2, Zap } from 'lucide-react';
 import { Button } from '../ui/button';
+import { Switch } from '../ui/switch';
 import {
   Dialog,
   DialogContent,
@@ -22,6 +23,7 @@ import {
 import { useUpdater } from '../../hooks/useUpdater';
 import { useFetchModels, useProviders, useSaveProviderKey } from '../../hooks/useAgentModel';
 import { useAgentStore } from '../../stores/agentStore';
+import { useUIPreferences } from '../../stores/uiPreferencesStore';
 import { formatTokenCount } from '../../lib/tokens';
 import { useQueryClient } from '@tanstack/react-query';
 
@@ -45,6 +47,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [appVersion, setAppVersion] = useState('');
   // 上下文窗口区块的提交句柄(与域名/代理一样,点「保存」才生效)
   const ctxSectionRef = useRef<{ commit: () => void }>(null);
+  const liquidEnabled = useUIPreferences((s) => s.liquidEnabled);
+  const setLiquidEnabled = useUIPreferences((s) => s.setLiquidEnabled);
 
   useEffect(() => {
     if (open && isTauri()) {
@@ -96,6 +100,17 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
         </DialogHeader>
 
         <div className="flex flex-col gap-4">
+          {/* Liquid 流体特效 */}
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-0.5">
+              <label className="text-[13px] font-medium text-foreground">Liquid 流体特效</label>
+              <span className="text-[12px] text-foreground-subtle">
+                鼠标移动时的全屏 WebGL 流体动效
+              </span>
+            </div>
+            <Switch checked={liquidEnabled} onCheckedChange={setLiquidEnabled} aria-label="Liquid 流体特效" />
+          </div>
+
           {/* 模型 Provider 配置 */}
           <ProviderConfigSection open={open} />
 
