@@ -37,7 +37,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
   const { create: createSessionIn, activate: activateSession, remove: removeSession } = useSessions(workspaceId);
 
   const rt = useAgentStore((s) => (sessionId ? s.bySession[sessionId] : undefined));
-  const todos = useAgentStore((s) => (sessionId ? s.todos[sessionId] : EMPTY_TODOS));
+  const todos = useAgentStore((s) => (sessionId ? s.todos[sessionId] : undefined) ?? EMPTY_TODOS);
   const hydrateMessages = useAgentStore((s) => s.hydrateMessages);
   const setQueued = useAgentStore((s) => s.setQueued);
   const [postError, setPostError] = useState<string | null>(null);
