@@ -1,4 +1,4 @@
-.PHONY: help dev dev-proxy build build-cli build-relay \
+.PHONY: help dev dev-proxy build build-cli build-relay build-desktop bundle dmg tsc \
 	version version-patch version-minor version-major \
 	release release-patch release-minor release-major \
 	tag push clean
@@ -32,8 +32,14 @@ build-desktop: ## 编译桌面端,内嵌前端资源 (target/release/combo)
 	npm run build
 	cargo build --release -p combo --features tauri/custom-protocol
 
-bundle: ## 打包桌面端安装包 (需要 cargo install tauri-cli)
-	cargo tauri build
+bundle: ## 打包桌面端安装包 (macOS: .app + .dmg)
+	npx tauri build
+
+dmg: ## 打包 macOS DMG 安装镜像 (仅 DMG, 跳过 .app 独立包)
+	npx tauri build --bundles dmg
+	@echo ""
+	@echo "✓ DMG 打包完成:"
+	@find src-tauri/target/release/bundle/dmg -name '*.dmg' -exec ls -lh {} \;
 
 tsc: ## TypeScript 类型检查 (tsc -b)
 	npm run tsc
