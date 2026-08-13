@@ -31,6 +31,7 @@ pub fn builtin_tools(
         bash_tool(ws.clone()),
         web_search_tool(),
         current_datetime_tool(),
+<<<<<<< Updated upstream
     ];
     // 配置了 LSP server 时注册代码导航工具,共享同一 LspManager(lazy 启动)。
     let manager = Arc::new(LspManager::new(ws.clone(), lsp));
@@ -41,6 +42,9 @@ pub fn builtin_tools(
         tools.push(lsp_hover_tool(ws.clone(), manager));
     }
     tools
+=======
+    ]
+>>>>>>> Stashed changes
 }
 
 // ============================= read =============================
@@ -1234,6 +1238,7 @@ fn current_datetime_tool() -> DynamicTool {
                 use chrono::Local;
                 let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
                 Ok(ToolOutput::text(format!("当前日期时间:{now}")))
+<<<<<<< Updated upstream
             })
         },
     )
@@ -1283,6 +1288,8 @@ fn lsp_diagnostics_tool(ws: PathBuf, manager: Arc<LspManager>) -> DynamicTool {
                     Ok(s) => Ok(ToolOutput::text(s)),
                     Err(e) => Ok(ToolOutput::text(format!("LSP 诊断失败: {e}"))),
                 }
+=======
+>>>>>>> Stashed changes
             })
         },
     )
