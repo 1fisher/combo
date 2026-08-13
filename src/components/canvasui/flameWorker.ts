@@ -251,13 +251,16 @@ void main () {
   vec2 frag = vUv * uResolution;
   vec2 rel = frag - uRectCenter;
   float unit = max(uHeight, 24.0);
+  // x 方向使用固定密度基准(像素),height 变化只影响 y 轴(火苗高度/旺盛度),
+  // 不再让火焰图案在水平方向整体缩放
+  const float xUnit = 48.0;
   float corner = min(uCorner, min(uRectHalf.x, uRectHalf.y));
   float spreadPx = max(uSpread, 8.0);
   float t = uTime;
   float detail = clamp(uScale, 0.05, 1.0);
 
   float d0 = sdRoundRect(rel, uRectHalf, corner);
-  float px = rel.x / unit;
+  float px = rel.x / xUnit;
   float py = rel.y / unit;
 
   float yA = max(rel.y - uRectHalf.y, 0.0) / unit;
@@ -278,7 +281,11 @@ void main () {
   float yF = uRectHalf.y - biteTop;
   float frontTop = rel.y - yF;
 
-  float perim = fbm2(rel * (1.9 / unit) * detail + vec2(0.0, t * 0.4) + 31.0);
+  float perim = fbm2(
+    vec2(rel.x * (1.9 / xUnit), rel.y * (1.9 / unit)) * detail
+      + vec2(0.0, t * 0.4)
+      + 31.0
+  );
   float biteSB = 3.0 + meltPx * (0.25 + 0.75 * perim);
   float frontSB = d0 + biteSB;
 
@@ -352,10 +359,10 @@ void main () {
       ppos.y += (life - 0.5) * 0.3 * rnd2.y;
       float tw = S(0.02, 0.2, life) * S(1.0, 0.55, life);
       tw *= 0.75 + 0.25 * sin(t * (6.0 + rnd2.z * 9.0) + rnd.x * 6.2832);
-      vec2 pd = (fr - ppos) / cells * unit;
+      vec2 pd = (fr - ppos) / cells * xUnit;
       pd.y *= 0.55 + 0.3 * rnd2.z;
       float dp = length(pd);
-      float r = (0.004 + 0.014 * rnd.y * rnd.y) * unit * sSize
+      float r = (0.004 + 0.014 * rnd.y * rnd.y) * xUnit * sSize
         * mix(1.15, 0.55, life);
       float bmask = S(0.5, 0.32, max(abs(fr.x - 0.5), abs(fr.y - 0.5)));
       float sbody = exp(-dp * dp / (r * r));
@@ -404,7 +411,9 @@ void main () {
 
   float burn = clamp(uIntensity, 0.0, 1.0);
   float depth = max(-front, 0.0);
-  float charPatch = 0.5 + 0.5 * fbm2(rel * (2.6 / unit) * detail + 57.0);
+  float charPatch = 0.5 + 0.5 * fbm2(
+    vec2(rel.x * (2.6 / xUnit), rel.y * (2.6 / unit)) * detail + 57.0
+  );
   float charW = mix(4.0, 6.0 + meltPx * 1.6, wTop) * charPatch;
   float charT = (1.0 - S(charW, charW * 2.4, depth));
   content.rgb = mix(
@@ -425,7 +434,11 @@ void main () {
     clamp(whiteHot, 0.0, 1.0) * burn
   );
 
-  float dn = fbm2(rel * (3.2 / unit) * detail + vec2(0.0, t * 0.5) + 91.0);
+  float dn = fbm2(
+    vec2(rel.x * (3.2 / xUnit), rel.y * (3.2 / unit)) * detail
+      + vec2(0.0, t * 0.5)
+      + 91.0
+  );
   float dw = mix(2.0, 5.0, wTop);
   float dissolve = S(-dw, dw, front + (dn - 0.5) * dw * 2.5);
   float cA = content.a * (1.0 - dissolve) * inRect;
