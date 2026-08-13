@@ -192,8 +192,8 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
               />
             ) : tunnelError ? (
               <div className="flex size-52 flex-col items-center justify-center gap-3 rounded-lg bg-white px-4 text-center">
-                <AlertTriangle className="size-8 text-destructive" />
-                <p className="text-[13px] leading-relaxed text-foreground">
+                <AlertTriangle className="size-8 text-red-600" />
+                <p className="text-[13px] leading-relaxed text-red-600">
                   {tunnelError}
                 </p>
                 <Button
