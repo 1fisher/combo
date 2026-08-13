@@ -88,6 +88,13 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
     setShowChanges(false);
     setChangeStatuses({});
   }, [sessionId]);
+
+  // 所有变更都已处理(批准/撤销)时，自动关闭审查视图
+  useEffect(() => {
+    if (showChanges && changedFiles.size > 0 && pendingCount === 0) {
+      setShowChanges(false);
+    }
+  }, [showChanges, pendingCount, changedFiles]);
   const ws = workspaces?.find((w) => w.id === workspaceId) ?? null;
   const wsName = ws ? (ws.name?.trim() ? ws.name : basename(ws.path)) : undefined;
 
