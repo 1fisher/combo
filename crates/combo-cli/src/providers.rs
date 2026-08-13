@@ -71,7 +71,6 @@ impl ProviderInfo {
     }
 
     /// 按 id 查模型。
-    #[allow(dead_code)]
     pub fn find_model(&self, id: &str) -> Option<&ModelInfo> {
         self.models.iter().find(|m| m.id == id)
     }

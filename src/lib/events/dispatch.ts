@@ -17,7 +17,17 @@ function ts() {
 export function applyEvent(s: Store, env: EventEnvelope): void {
   switch (env.type) {
     case 'message': {
-      const p = unwrap<Api.Message>(env);
+      const inner = env.payload as { type: string; payload: unknown };
+      // 消息删除(上下文压缩时批量清除旧消息)
+      if (inner.type === 'deleted') {
+        const p = inner.payload as { id: string; session_id: string };
+        console.debug(
+          `[${ts()}][dispatch] message deleted id="${p.id}" session="${p.session_id}"`
+        );
+        s.deleteMessage(p.session_id, p.id);
+        break;
+      }
+      const p = inner.payload as Api.Message;
       const partTypes = (p.parts ?? []).map((pt) => pt.type).join(',');
       const hasFinish = (p.parts ?? []).some((pt) => pt.type === 'finish');
       console.debug(

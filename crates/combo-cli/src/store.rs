@@ -484,6 +484,15 @@ impl ComboDb {
         Ok(())
     }
 
+    /// 删除单条消息(按消息 ID)。
+    pub fn delete_message(&self, id: &str) -> anyhow::Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM messages WHERE id=?1", params![id])?;
+        Ok(())
+    }
+
     /// 删除某个 workspace 下的所有消息(删除项目时级联清理)。
     pub fn delete_messages_by_workspace(&self, workspace_id: &str) -> anyhow::Result<()> {
         self.conn

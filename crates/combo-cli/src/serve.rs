@@ -15,6 +15,7 @@
 
 use crate::agent::{self, AskConfig, RunEvent};
 use crate::auth;
+use crate::compact;
 use crate::config::AppConfig;
 use crate::fs;
 use crate::git;
@@ -584,7 +585,7 @@ async fn run_agent_ws(
 
     // 2. 会话历史从本地 sqlite 解析(多轮上下文)。
     //    body 里旧客户端注入的 history 仅在 sqlite 无数据时兜底。
-    let history: Vec<Value> = match &body.history {
+    let mut history: Vec<Value> = match &body.history {
         Some(h) if !h.is_empty() => h.clone(),
         _ => state
             .meta
@@ -613,7 +614,70 @@ async fn run_agent_ws(
         history.len(),
     );
 
+    // 3.5 自动压缩:上下文接近模型窗口上限时,总结旧消息释放空间。
+    //     仅在从 sqlite 加载历史时触发(client body 传来的历史无 ID 无法删除)。
+    if body.history.as_ref().map_or(true, |h| h.is_empty())
+        && compact::needs_compact(&cfg, &history)
+    {
+        let stored = state
+            .meta
+            .db()
+            .list_messages(&ws_id, &body.session_id)
+            .unwrap_or_default();
+        let ids: Vec<String> = stored.iter().map(|m| m.id.clone()).collect();
+        if ids.len() == history.len() {
+            match compact::compact(&cfg, &history, &ids).await {
+                Ok(Some(result)) => {
+                    let removed_ids = result.removed_ids.clone();
+                    let count = result.compacted_count;
+                    let tokens_before = result.tokens_before;
+                    let tokens_after = result.tokens_after;
+                    match compact::persist_compaction(
+                        &state.meta,
+                        &ws_id,
+                        &body.session_id,
+                        &result,
+                    ) {
+                        Ok(summary_id) => {
+                            // 广播:删除旧消息
+                            for id in &removed_ids {
+                                let _ = tx.send(msg_env(
+                                    "deleted",
+                                    json!({ "id": id, "session_id": &body.session_id }),
+                                ));
+                            }
+                            // 广播:插入摘要消息
+                            let summary_msg = compact::summary_message_json(
+                                &body.session_id,
+                                &summary_id,
+                                &result.summary,
+                                count,
+                                tokens_before,
+                                tokens_after,
+                                &cfg,
+                            );
+                            let _ = tx.send(msg_env("created", summary_msg));
+                            // 从压缩后的 sqlite 重建历史
+                            history = compact::load_compacted_history(
+                                &state.meta,
+                                &ws_id,
+                                &body.session_id,
+                            );
+                            eprintln!(
+                                "自动压缩完成: {count} 条消息, tokens {tokens_before} → {tokens_after}"
+                            );
+                        }
+                        Err(e) => eprintln!("自动压缩持久化失败: {e}"),
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => eprintln!("自动压缩失败(已跳过): {e}"),
+            }
+        }
+    }
+
     // 4. 后台运行 agent,事件经广播流出
+    let ws_id_tool = ws_id.clone();
     let state2 = state.clone();
     tokio::spawn(async move {
         let session_id = body.session_id.clone();
@@ -646,6 +710,13 @@ async fn run_agent_ws(
                 session_id.clone(),
                 tx.clone(),
                 state2.todos.clone(),
+            ),
+            compact::compact_tool(
+                ws_id_tool.clone(),
+                session_id.clone(),
+                state2.meta.clone(),
+                cfg.clone(),
+                tx.clone(),
             ),
         ];
         let result =
