@@ -523,7 +523,7 @@ function HighlightMatch({
       parts.push(text.slice(lastIndex, matchStart));
     }
     parts.push(
-      <mark key={key++} className="rounded bg-yellow-400/30 px-0.5 text-yellow-200">
+      <mark key={key++} className="rounded bg-teal-400/30 px-0.5 text-teal-100">
         {match[0]}
       </mark>,
     );

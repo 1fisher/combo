@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type PointerEvent } from 'react';
-import { Eye, Folder, GitBranch, History, PanelLeft, Pencil, X } from 'lucide-react';
+import { Eye, Folder, GitBranch, History, PanelLeft, Pencil, Search, X } from 'lucide-react';
+import { EditorView } from '@codemirror/view';
+import { openSearchPanel } from '@codemirror/search';
 import { getFileContent, getGitFileAtHead, putFileContent } from '../../lib/api';
 import { useEditorStore, type FileKind } from '../../stores/editorStore';
 import { getProxyBaseUrl } from '../../lib/connection';
@@ -75,6 +77,8 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
   const [highlightQuery, setHighlightQuery] = useState<string | null>(null);
   /** 搜索结果定位行号(打开后跳转并高亮该行) */
   const [highlightLine, setHighlightLine] = useState<number | null>(null);
+  /** 编辑器视图引用(用于打开文件内搜索面板) */
+  const editorViewRef = useRef<EditorView | null>(null);
 
   /** 文件/Git 侧边栏宽度(桌面端可拖拽) */
   const [fileSidebarW, setFileSidebarW] = useState(FILE_SIDEBAR_DEFAULT);
@@ -431,6 +435,20 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
                     </button>
                   </div>
                 )}
+                {/* 文件内搜索按钮 */}
+                <div className="flex shrink-0 items-center border-l px-1">
+                  <button
+                    onClick={() => {
+                      const view = editorViewRef.current;
+                      if (view) openSearchPanel(view);
+                    }}
+                    className="flex items-center justify-center rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                    aria-label="文件内搜索"
+                    title="文件内搜索 (⌘F)"
+                  >
+                    <Search className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               </div>
               {active ? (
                 <div className="min-h-0 flex-1 overflow-hidden">
@@ -446,7 +464,7 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
                       className="h-full w-full border-0"
                     />
                   ) : isMarkdown(active.name) && mdPreview ? (
-                    <MarkdownPreview content={active.content} />
+                    <MarkdownPreview content={active.content} highlightQuery={highlightQuery} />
                   ) : (
                     <CodeEditor
                       value={active.content}
@@ -456,6 +474,9 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
                       headContent={active.headContent ?? undefined}
                       highlightQuery={highlightQuery}
                       highlightLine={highlightLine}
+                      onEditorReady={(view) => {
+                        editorViewRef.current = view;
+                      }}
                     />
                   )}
                 </div>
