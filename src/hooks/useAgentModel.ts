@@ -1,11 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  activateGlobalProviderKey,
+  activateProviderKey,
+  addGlobalProviderKey,
+  addProviderKey,
   fetchGlobalProviderModels,
   fetchProviderModels,
   getAgentInfo,
   getGlobalProviders,
   getWorkspaceConfig,
   getWorkspaceProviders,
+  removeGlobalProviderKey,
+  removeProviderKey,
   saveGlobalProviderKey,
   saveProviderKey,
   setWorkspaceModel,
@@ -112,4 +118,32 @@ export function useSaveProviderKey(workspaceId: string | null | undefined) {
       qc.invalidateQueries({ queryKey: ['providers'] });
     },
   });
+}
+
+/**
+ * provider API Key 多 key 管理:add 追加 / activate 切换激活 / remove 删除。
+ * 任一操作成功后刷新所有 providers 查询(含 Composer 的脱敏展示)。
+ */
+export function useProviderKeys(workspaceId: string | null | undefined) {
+  const qc = useQueryClient();
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['providers'] });
+
+  const add = useMutation({
+    mutationFn: (vars: { providerId: string; apiKey: string }) =>
+      workspaceId ? addProviderKey(workspaceId, vars) : addGlobalProviderKey(vars),
+    onSuccess: invalidate,
+  });
+  const activate = useMutation({
+    mutationFn: (vars: { providerId: string; keyIndex: number }) =>
+      workspaceId
+        ? activateProviderKey(workspaceId, vars)
+        : activateGlobalProviderKey(vars),
+    onSuccess: invalidate,
+  });
+  const remove = useMutation({
+    mutationFn: (vars: { providerId: string; keyIndex: number }) =>
+      workspaceId ? removeProviderKey(workspaceId, vars) : removeGlobalProviderKey(vars),
+    onSuccess: invalidate,
+  });
+  return { add, activate, remove };
 }

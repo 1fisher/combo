@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { CheckCircle2, ChevronDown, Loader2, Trash2, Zap } from 'lucide-react';
+import { Check, CheckCircle2, ChevronDown, Loader2, Trash2, Zap } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Switch } from '../ui/switch';
 import {
@@ -21,11 +21,13 @@ import {
   setProxyUrlOverride,
 } from '../../lib/connection';
 import { useUpdater } from '../../hooks/useUpdater';
-import { useFetchModels, useProviders, useSaveProviderKey } from '../../hooks/useAgentModel';
+import { useFetchModels, useProviderKeys, useProviders, useSaveProviderKey } from '../../hooks/useAgentModel';
 import { useAgentStore } from '../../stores/agentStore';
 import { useUIPreferences } from '../../stores/uiPreferencesStore';
 import { formatTokenCount } from '../../lib/tokens';
 import { useQueryClient } from '@tanstack/react-query';
+import { confirmDialog } from '../../lib/confirm';
+import { cn } from '../../lib/utils';
 
 interface SettingsDialogProps {
   open: boolean;
@@ -268,6 +270,7 @@ function ProviderConfigSection({ open }: { open: boolean }) {
   const { data: providers } = useProviders(null);
   const fetchModels = useFetchModels(null);
   const saveProviderKey = useSaveProviderKey(null);
+  const providerKeys = useProviderKeys(null);
 
   // 每个 provider 的输入状态
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
@@ -319,18 +322,24 @@ function ProviderConfigSection({ open }: { open: boolean }) {
     }
   }
 
-  async function handleClearKey(providerId: string) {
-    const p = providers?.find((x) => x.id === providerId);
+  async function handleActivateKey(providerId: string, index: number) {
     setStatusMsg((s) => ({ ...s, [providerId]: { ok: false, msg: '' } }));
     try {
-      // 保存空 key 即清除(resolved_api_key 对空串返回 None,has_api_key 变 false)
-      await saveProviderKey.mutateAsync({
-        providerId,
-        apiKey: '',
-        providerType: p?.type,
-      });
-      setKeyInputs((prev) => ({ ...prev, [providerId]: '' }));
-      setStatusMsg((s) => ({ ...s, [providerId]: { ok: true, msg: '已清除 API Key' } }));
+      await providerKeys.activate.mutateAsync({ providerId, keyIndex: index });
+      setStatusMsg((s) => ({ ...s, [providerId]: { ok: true, msg: '已切换激活 Key' } }));
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setStatusMsg((s) => ({ ...s, [providerId]: { ok: false, msg } }));
+    }
+  }
+
+  async function handleRemoveKey(providerId: string, index: number) {
+    const ok = await confirmDialog('确定删除该 API Key?');
+    if (!ok) return;
+    setStatusMsg((s) => ({ ...s, [providerId]: { ok: false, msg: '' } }));
+    try {
+      await providerKeys.remove.mutateAsync({ providerId, keyIndex: index });
+      setStatusMsg((s) => ({ ...s, [providerId]: { ok: true, msg: '已删除 API Key' } }));
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setStatusMsg((s) => ({ ...s, [providerId]: { ok: false, msg } }));
@@ -348,7 +357,7 @@ function ProviderConfigSection({ open }: { open: boolean }) {
           const modelCount = Array.isArray(p.models) ? p.models.length : 0;
           const isExpanded = expanded[p.id] ?? false;
           const st = statusMsg[p.id];
-          const busy = fetchModels.isPending || saveProviderKey.isPending;
+          const busy = fetchModels.isPending || saveProviderKey.isPending || providerKeys.add.isPending || providerKeys.activate.isPending || providerKeys.remove.isPending;
           const hasKey = !!p.has_api_key;
           const typedKey = (keyInputs[p.id] ?? '').trim();
           const canFetch = hasKey || typedKey.length > 0;
@@ -393,21 +402,58 @@ function ProviderConfigSection({ open }: { open: boolean }) {
                       )}
                     </div>
                   )}
-                  {/* 已配置的脱敏 key 展示 */}
-                  {hasKey && !typedKey && (
-                    <div className="flex items-center gap-1 text-[11px] text-foreground-subtle">
-                      已配置 API Key:
+                  {/* 已保存的多 key 列表:脱敏展示,支持「使用」切换 / 删除 */}
+                  {(p.api_keys_masked?.length ?? 0) > 0 && (
+                    <div className="flex flex-col gap-1">
+                      {p.api_keys_masked!.map((masked, i) => {
+                        const isActive = i === (p.active_key_index ?? -1);
+                        return (
+                          <div
+                            key={`${masked}-${i}`}
+                            className={cn(
+                              'flex items-center gap-1.5 text-[11px]',
+                              isActive && 'text-brand',
+                            )}
+                          >
+                            <span className={cn('min-w-0 flex-1 truncate font-mono', isActive ? 'text-brand' : 'text-foreground-subtle')}>
+                              {masked || '****'}
+                            </span>
+                            {isActive ? (
+                              <span className="inline-flex shrink-0 items-center gap-0.5 rounded bg-brand/10 px-1 py-0.5 text-[10px] font-medium text-brand">
+                                <Check className="size-3" />
+                                使用中
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => handleActivateKey(p.id, i)}
+                                className="inline-flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[11px] text-foreground-subtle hover:bg-surface-hover hover:text-foreground disabled:opacity-50"
+                              >
+                                <Check className="size-3" />
+                                使用
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => handleRemoveKey(p.id, i)}
+                              className="inline-flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[11px] text-destructive hover:bg-surface-hover disabled:opacity-50"
+                            >
+                              <Trash2 className="size-3" />
+                              删除
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {/* 仅环境变量/内置 key(不在列表中):提示添加后可切换 */}
+                  {hasKey && !typedKey && (p.api_keys_masked?.length ?? 0) === 0 && (
+                    <div className="text-[11px] text-foreground-subtle">
+                      当前 Key:
                       <span className="font-mono text-foreground">{p.api_key_masked || '****'}</span>
-                      <span className="text-foreground-subtlest">(输入新 Key 可覆盖)</span>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => handleClearKey(p.id)}
-                        className="ml-1 inline-flex shrink-0 items-center gap-0.5 rounded px-1 py-0.5 text-[11px] text-destructive hover:bg-surface-hover disabled:opacity-50"
-                      >
-                        <Trash2 className="size-3" />
-                        清除
-                      </button>
+                      (环境变量/内置,添加 Key 后可切换)
                     </div>
                   )}
                   <div className="flex items-center gap-1">
@@ -423,9 +469,7 @@ function ProviderConfigSection({ open }: { open: boolean }) {
                           handleFetch(p.id);
                         }
                       }}
-                      placeholder={
-                        hasKey ? '输入新 API Key 覆盖(留空使用已保存)' : '输入 API Key...'
-                      }
+                      placeholder={hasKey ? '输入新 API Key 并拉取模型(追加到列表)' : '输入 API Key...'}
                       className="h-7 min-w-0 flex-1 rounded-lg border border-input-border bg-input px-2 text-[12px] text-foreground outline-none placeholder:text-foreground-subtlest focus:border-input-border-focused"
                     />
                     <Button
@@ -455,8 +499,8 @@ function ProviderConfigSection({ open }: { open: boolean }) {
         })}
       </div>
       <div className="text-[12px] text-foreground-subtle">
-        输入 API Key 后点击「拉取模型」获取该 Provider 支持的模型列表;已配置 Key 的
-        Provider 可直接点击「拉取模型」同步最新模型。
+        输入 API Key 后点击「拉取模型」获取模型列表并追加到 Key 列表;已配置 Key 的
+        Provider 可直接点击「拉取模型」同步最新模型,点击「使用」切换激活 Key。
       </div>
     </div>
   );

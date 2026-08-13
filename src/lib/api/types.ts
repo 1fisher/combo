@@ -2149,8 +2149,12 @@ export namespace Api {
     models?: { id?: string; name?: string; context_window?: number; [k: string]: unknown }[];
     /** 是否已配置 API Key(后端不回传明文,只给脱敏结果)。 */
     has_api_key?: boolean;
-    /** 已配置 API Key 的脱敏展示,如 `sk-a****1234`。 */
+    /** 当前激活 API Key 的脱敏展示,如 `sk-a****1234`。 */
     api_key_masked?: string;
+    /** 已保存的全部 API Key 脱敏列表(按保存顺序)。 */
+    api_keys_masked?: string[];
+    /** 当前激活 key 在 api_keys_masked 中的下标;未在列表中(如环境变量)时为 null。 */
+    active_key_index?: number | null;
     /** provider 默认大模型 id(切换 provider 时自动选用)。 */
     default_large_model_id?: string;
     /** provider 默认小模型 id。 */

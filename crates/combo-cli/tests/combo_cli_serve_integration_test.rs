@@ -24,6 +24,7 @@ fn cfg_no_key() -> AskConfig {
             id: "test".into(),
             name: None,
             api_key: None,
+            api_keys: Vec::new(),
             api_endpoint: None,
             provider_type: Some("openai-compat".into()),
             default_large_model_id: None,

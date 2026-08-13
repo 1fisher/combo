@@ -299,6 +299,7 @@ pub fn collect_stats() -> UsageStats {
                         id: provider.clone(),
                         name: None,
                         api_key: None,
+                        api_keys: vec![],
                         api_endpoint: None,
                         provider_type: None,
                         default_large_model_id: None,

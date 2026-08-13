@@ -479,6 +479,69 @@ export function saveGlobalProviderKey(
   });
 }
 
+/** 追加一个 API Key 到 provider(已存在则视为切换激活;无激活 key 时自动激活)。 */
+export function addProviderKey(
+  workspaceId: string,
+  req: { providerId: string; apiKey: string },
+): Promise<{ ok: boolean; provider: string }> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/providers/keys`, {
+    method: 'POST',
+    body: { provider_id: req.providerId, api_key: req.apiKey },
+  });
+}
+
+/** 按下标切换 provider 的激活 API Key。 */
+export function activateProviderKey(
+  workspaceId: string,
+  req: { providerId: string; keyIndex: number },
+): Promise<{ ok: boolean; provider: string }> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/providers/keys/activate`, {
+    method: 'POST',
+    body: { provider_id: req.providerId, key_index: req.keyIndex },
+  });
+}
+
+/** 按下标删除 provider 的 API Key(删除激活 key 后自动激活剩余第一个)。 */
+export function removeProviderKey(
+  workspaceId: string,
+  req: { providerId: string; keyIndex: number },
+): Promise<{ ok: boolean; provider: string }> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/providers/keys/remove`, {
+    method: 'POST',
+    body: { provider_id: req.providerId, key_index: req.keyIndex },
+  });
+}
+
+/** 追加一个 API Key 到 provider(全局,不绑定 workspace)。 */
+export function addGlobalProviderKey(
+  req: { providerId: string; apiKey: string },
+): Promise<{ ok: boolean; provider: string }> {
+  return apiRequest('/v1/providers/keys', {
+    method: 'POST',
+    body: { provider_id: req.providerId, api_key: req.apiKey },
+  });
+}
+
+/** 按下标切换 provider 的激活 API Key(全局,不绑定 workspace)。 */
+export function activateGlobalProviderKey(
+  req: { providerId: string; keyIndex: number },
+): Promise<{ ok: boolean; provider: string }> {
+  return apiRequest('/v1/providers/keys/activate', {
+    method: 'POST',
+    body: { provider_id: req.providerId, key_index: req.keyIndex },
+  });
+}
+
+/** 按下标删除 provider 的 API Key(全局,不绑定 workspace)。 */
+export function removeGlobalProviderKey(
+  req: { providerId: string; keyIndex: number },
+): Promise<{ ok: boolean; provider: string }> {
+  return apiRequest('/v1/providers/keys/remove', {
+    method: 'POST',
+    body: { provider_id: req.providerId, key_index: req.keyIndex },
+  });
+}
+
 /** 设置 workspace 当前使用的模型。 */
 export function setWorkspaceModel(
   workspaceId: string,

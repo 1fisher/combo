@@ -34,9 +34,13 @@ pub struct ProviderInfo {
     pub id: String,
     #[serde(default)]
     pub name: Option<String>,
-    /// 可为字面 key,或 `$ENV_VAR` 形式(运行时展开环境变量)。
+    /// 当前激活的 key:可为字面 key,或 `$ENV_VAR` 形式(运行时展开环境变量)。
     #[serde(default)]
     pub api_key: Option<String>,
+    /// 该 provider 已保存的全部 key 列表(按保存顺序);激活的 key 与
+    /// `api_key` 一致。仅配置文件持久化,providers.json / 内置为空。
+    #[serde(default)]
+    pub api_keys: Vec<String>,
     /// 可为字面 URL,或 `$ENV_VAR` 形式。
     #[serde(default)]
     pub api_endpoint: Option<String>,
@@ -77,7 +81,7 @@ impl ProviderInfo {
 }
 
 /// `$VAR` 展开;无 `$` 前缀或变量未定义时返回 None。
-fn expand_env(s: &str) -> Option<String> {
+pub(crate) fn expand_env(s: &str) -> Option<String> {
     if let Some(var) = s.strip_prefix('$') {
         std::env::var(var).ok()
     } else if s.is_empty() {
@@ -94,6 +98,7 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
             id: "opencode".into(),
             name: Some("OpenCode Zen".into()),
             api_key: Some("$OPENCODE_API_KEY".into()),
+            api_keys: vec![],
             api_endpoint: Some("https://opencode.ai/zen/v1".into()),
             provider_type: Some("openai-compat".into()),
             default_large_model_id: Some("deepseek-v4-flash-free".into()),
@@ -121,6 +126,7 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
             id: "openrouter".into(),
             name: Some("OpenRouter".into()),
             api_key: Some("$OPENROUTER_API_KEY".into()),
+            api_keys: vec![],
             api_endpoint: Some("https://openrouter.ai/api/v1".into()),
             provider_type: Some("openai-compat".into()),
             default_large_model_id: Some("anthropic/claude-sonnet-4".into()),
@@ -131,6 +137,7 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
             id: "zhipu".into(),
             name: Some("智谱 Coding".into()),
             api_key: Some("$ZHIPU_API_KEY".into()),
+            api_keys: vec![],
             api_endpoint: Some("https://open.bigmodel.cn/api/coding/paas/v4".into()),
             provider_type: Some("openai-compat".into()),
             default_large_model_id: Some("glm-4.6".into()),
@@ -166,6 +173,7 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
             id: "deepseek".into(),
             name: Some("DeepSeek".into()),
             api_key: Some("$DEEPSEEK_API_KEY".into()),
+            api_keys: vec![],
             api_endpoint: Some("https://api.deepseek.com/v1".into()),
             provider_type: Some("openai-compat".into()),
             default_large_model_id: Some("deepseek-chat".into()),
@@ -369,6 +377,7 @@ pub fn find_provider(
                 // 内置 provider 被配置部分覆盖:仅覆盖显式给出的字段,
                 // 缺失的 base_url/key/模型回落内置定义(与 list_providers 口径一致)
                 if from_cfg.api_key.is_some() { b.api_key = from_cfg.api_key; }
+                if !from_cfg.api_keys.is_empty() { b.api_keys = from_cfg.api_keys; }
                 if from_cfg.api_endpoint.is_some() { b.api_endpoint = from_cfg.api_endpoint; }
                 if from_cfg.provider_type.is_some() { b.provider_type = from_cfg.provider_type; }
                 if from_cfg.default_large_model_id.is_some() {
@@ -425,6 +434,7 @@ impl ProviderInfo {
             id: id.to_string(),
             name: Some(id.to_string()),
             api_key: c.api_key.clone(),
+            api_keys: c.api_keys.clone(),
             api_endpoint: c.base_url.clone(),
             provider_type: c.provider_type.clone(),
             default_large_model_id: c.default_large_model_id.clone(),

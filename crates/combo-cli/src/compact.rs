@@ -483,6 +483,7 @@ mod tests {
             id: "test".into(),
             name: None,
             api_key: None,
+            api_keys: vec![],
             api_endpoint: None,
             provider_type: None,
             default_large_model_id: None,

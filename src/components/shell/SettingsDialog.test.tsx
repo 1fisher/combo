@@ -13,6 +13,9 @@ import {
 
 const fetchModelsMutate = vi.fn();
 const saveKeyMutate = vi.fn();
+const addKeyMutate = vi.fn();
+const activateKeyMutate = vi.fn();
+const removeKeyMutate = vi.fn();
 
 vi.mock('../../hooks/useAgentModel', () => ({
   useProviders: () => ({
@@ -23,6 +26,8 @@ vi.mock('../../hooks/useAgentModel', () => ({
         type: 'openai-compat',
         has_api_key: true,
         api_key_masked: 'sk-a****1234',
+        api_keys_masked: ['sk-a****1234', 'sk-b****5678'],
+        active_key_index: 0,
         models: [{ id: 'deepseek-v4-flash-free', name: 'deepseek-v4-flash-free' }],
       },
       { id: 'zhipu', name: 'Zhipu', type: 'openai', has_api_key: true, models: [] },
@@ -40,6 +45,11 @@ vi.mock('../../hooks/useAgentModel', () => ({
   }),
   useFetchModels: () => ({ mutateAsync: fetchModelsMutate, isPending: false }),
   useSaveProviderKey: () => ({ mutateAsync: saveKeyMutate, isPending: false }),
+  useProviderKeys: () => ({
+    add: { mutateAsync: addKeyMutate, isPending: false },
+    activate: { mutateAsync: activateKeyMutate, isPending: false },
+    remove: { mutateAsync: removeKeyMutate, isPending: false },
+  }),
 }));
 
 function renderWithProviders(ui: React.ReactElement) {
@@ -57,6 +67,14 @@ describe('SettingsDialog', () => {
     fetchModelsMutate.mockResolvedValue({ provider: 'opencode', models: [{ id: 'm1', name: 'M1' }] });
     saveKeyMutate.mockReset();
     saveKeyMutate.mockResolvedValue({ ok: true });
+    addKeyMutate.mockReset();
+    addKeyMutate.mockResolvedValue({ ok: true });
+    activateKeyMutate.mockReset();
+    activateKeyMutate.mockResolvedValue({ ok: true });
+    removeKeyMutate.mockReset();
+    removeKeyMutate.mockResolvedValue({ ok: true });
+    // confirmDialog 在浏览器模式走 window.confirm
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
   });
 
   it('saves the proxy url override to localStorage', async () => {
@@ -108,14 +126,26 @@ describe('SettingsDialog', () => {
     expect(await screen.findByText('已拉取到 1 个模型(使用已保存的 Key)')).toBeTruthy();
   });
 
-  it('clears configured api key via 清除 button', async () => {
+  it('removes api key via 删除 button', async () => {
     renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
     await userEvent.click(screen.getByRole('button', { name: /OpenCode Zen/ }));
-    await userEvent.click(screen.getByRole('button', { name: '清除' }));
-    expect(saveKeyMutate).toHaveBeenCalledWith(
-      expect.objectContaining({ providerId: 'opencode', apiKey: '' })
+    await userEvent.click(screen.getAllByRole('button', { name: '删除' })[0]);
+    expect(removeKeyMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: 'opencode', keyIndex: 0 })
     );
-    expect(await screen.findByText('已清除 API Key')).toBeTruthy();
+    expect(await screen.findByText('已删除 API Key')).toBeTruthy();
+  });
+
+  it('switches active api key via 使用 button', async () => {
+    renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: /OpenCode Zen/ }));
+    const useBtn = screen.getAllByRole('button', { name: '使用' })[0] as HTMLButtonElement;
+    expect(useBtn).toBeTruthy();
+    await userEvent.click(useBtn);
+    expect(activateKeyMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: 'opencode', keyIndex: 1 })
+    );
+    expect(await screen.findByText('已切换激活 Key')).toBeTruthy();
   });
 
   it('disables fetch for provider without key and empty input', async () => {

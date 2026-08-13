@@ -14,8 +14,11 @@ pub struct ProviderConfig {
     /// provider 类型:openai / openai-compat / anthropic / google / azure ...
     #[serde(rename = "type")]
     pub provider_type: Option<String>,
-    /// 明文 key 或 `$ENV_VAR`。
+    /// 明文 key 或 `$ENV_VAR`(当前激活的 key)。
     pub api_key: Option<String>,
+    /// 该 provider 已保存的全部 key 列表(按保存顺序,UI 可自由切换激活项)。
+    #[serde(default)]
+    pub api_keys: Vec<String>,
     /// API endpoint。
     pub base_url: Option<String>,
     /// 默认大模型 id。
@@ -377,7 +380,29 @@ pub fn import_opencode_key(path: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-/// 把 provider 的 API key 保存到配置文件。
+/// 读取配置文件(不存在则生成默认模板)。
+fn load_config(path: &PathBuf) -> Result<AppConfig> {
+    if path.exists() {
+        let text = std::fs::read_to_string(path)?;
+        toml::from_str::<AppConfig>(&text)
+            .map_err(|e| anyhow::anyhow!("解析配置文件 {} 失败: {e}", path.display()))
+    } else {
+        write_default(path, false)?;
+        Ok(AppConfig::default())
+    }
+}
+
+/// 写回配置文件。
+fn write_config(path: &PathBuf, cfg: &AppConfig) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let out = toml::to_string_pretty(cfg).map_err(|e| anyhow::anyhow!("序列化配置失败: {e}"))?;
+    std::fs::write(path, out)?;
+    Ok(())
+}
+
+/// 把 provider 的 API key 保存到配置文件(设为激活 key,并加入 key 列表)。
 ///
 /// 写入 `[providers.{provider_id}]` 段;若 provider 段不存在则创建。
 /// api_key 为明文(不使用 $ENV_VAR 形式,因为是 UI 直接输入的值)。
@@ -389,20 +414,16 @@ pub fn save_provider_key(
     provider_type: Option<&str>,
     base_url: Option<&str>,
 ) -> Result<()> {
-    let mut cfg = if path.exists() {
-        let text = std::fs::read_to_string(path)?;
-        toml::from_str::<AppConfig>(&text)
-            .map_err(|e| anyhow::anyhow!("解析配置文件 {} 失败: {e}", path.display()))?
-    } else {
-        write_default(path, false)?;
-        AppConfig::default()
-    };
+    let mut cfg = load_config(path)?;
 
     let entry = cfg
         .providers
         .entry(provider_id.to_string())
         .or_insert_with(ProviderConfig::default);
     entry.api_key = Some(api_key.to_string());
+    if !api_key.is_empty() && !entry.api_keys.iter().any(|k| k == api_key) {
+        entry.api_keys.push(api_key.to_string());
+    }
     if let Some(pt) = provider_type {
         entry.provider_type = Some(pt.to_string());
     }
@@ -412,13 +433,68 @@ pub fn save_provider_key(
         }
     }
 
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+    write_config(path, &cfg)
+}
+
+/// 追加一个 key 到 provider 的 key 列表;已存在则视为切换激活。
+/// 当前没有激活 key 时,新加的 key 自动成为激活 key。
+pub fn add_provider_key(path: &PathBuf, provider_id: &str, api_key: &str) -> Result<()> {
+    let key = api_key.trim();
+    if key.is_empty() {
+        return Err(anyhow::anyhow!("API Key 不能为空"));
     }
-    let out = toml::to_string_pretty(&cfg)
-        .map_err(|e| anyhow::anyhow!("序列化配置失败: {e}"))?;
-    std::fs::write(path, out)?;
-    Ok(())
+    let mut cfg = load_config(path)?;
+    let entry = cfg
+        .providers
+        .entry(provider_id.to_string())
+        .or_insert_with(ProviderConfig::default);
+    if !entry.api_keys.iter().any(|k| k == key) {
+        entry.api_keys.push(key.to_string());
+    }
+    // 无激活 key(或激活的是空串)时自动激活新 key
+    if entry.api_key.as_deref().unwrap_or("").is_empty() {
+        entry.api_key = Some(key.to_string());
+    }
+    write_config(path, &cfg)
+}
+
+/// 按列表下标切换激活 key。
+pub fn activate_provider_key(path: &PathBuf, provider_id: &str, index: usize) -> Result<()> {
+    let mut cfg = load_config(path)?;
+    let entry = cfg
+        .providers
+        .get_mut(provider_id)
+        .ok_or_else(|| anyhow::anyhow!("provider `{provider_id}` 未配置任何 Key"))?;
+    let key = entry
+        .api_keys
+        .get(index)
+        .ok_or_else(|| anyhow::anyhow!("Key 下标 {index} 越界"))?
+        .clone();
+    entry.api_key = Some(key);
+    write_config(path, &cfg)
+}
+
+/// 按列表下标删除 key;若删除的是激活 key,激活剩余第一个 key。
+pub fn remove_provider_key(path: &PathBuf, provider_id: &str, index: usize) -> Result<()> {
+    let mut cfg = load_config(path)?;
+    let entry = cfg
+        .providers
+        .get_mut(provider_id)
+        .ok_or_else(|| anyhow::anyhow!("provider `{provider_id}` 未配置任何 Key"))?;
+    let removed = entry
+        .api_keys
+        .get(index)
+        .ok_or_else(|| anyhow::anyhow!("Key 下标 {index} 越界"))?
+        .clone();
+    entry.api_keys.remove(index);
+    // 删除的是激活 key:激活剩余第一个;删空则清除激活
+    if entry.api_key.as_deref() == Some(removed.as_str()) {
+        entry.api_key = entry.api_keys.first().cloned();
+    }
+    if entry.api_keys.is_empty() {
+        entry.api_key = None;
+    }
+    write_config(path, &cfg)
 }
 
 /// 写入默认配置文件模板。`overwrite=false` 时若文件已存在则不写。
@@ -739,5 +815,63 @@ mod tests {
         assert_eq!(pc.api_key.as_deref(), Some(""));
         let info = crate::providers::ProviderInfo::from_config("deepseek", pc);
         assert_eq!(info.resolved_api_key(), None);
+    }
+
+    #[test]
+    fn multi_key_add_activate_remove() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("combo-cli.toml");
+
+        // 追加两个 key,首个自动激活
+        add_provider_key(&path, "deepseek", "sk-key-1").unwrap();
+        add_provider_key(&path, "deepseek", "sk-key-2").unwrap();
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        let pc = cfg.providers.get("deepseek").unwrap();
+        assert_eq!(pc.api_keys, vec!["sk-key-1", "sk-key-2"]);
+        assert_eq!(pc.api_key.as_deref(), Some("sk-key-1"), "无激活 key 时首个 key 自动激活");
+
+        // 重复添加不产生重复项
+        add_provider_key(&path, "deepseek", "sk-key-2").unwrap();
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        assert_eq!(cfg.providers.get("deepseek").unwrap().api_keys.len(), 2);
+
+        // 切换激活
+        activate_provider_key(&path, "deepseek", 1).unwrap();
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        assert_eq!(cfg.providers.get("deepseek").unwrap().api_key.as_deref(), Some("sk-key-2"));
+
+        // 删除激活的 key:自动激活剩余第一个
+        remove_provider_key(&path, "deepseek", 1).unwrap();
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        let pc = cfg.providers.get("deepseek").unwrap();
+        assert_eq!(pc.api_keys, vec!["sk-key-1"]);
+        assert_eq!(pc.api_key.as_deref(), Some("sk-key-1"));
+
+        // 删除最后一个 key:激活被清空
+        remove_provider_key(&path, "deepseek", 0).unwrap();
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        let pc = cfg.providers.get("deepseek").unwrap();
+        assert!(pc.api_keys.is_empty());
+        assert!(pc.api_key.is_none());
+
+        // 越界下标报错
+        assert!(activate_provider_key(&path, "deepseek", 0).is_err());
+        assert!(remove_provider_key(&path, "deepseek", 5).is_err());
+        // 空 key 报错
+        assert!(add_provider_key(&path, "deepseek", "  ").is_err());
+    }
+
+    #[test]
+    fn save_provider_key_appends_to_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("combo-cli.toml");
+
+        save_provider_key(&path, "deepseek", "sk-old", None, None).unwrap();
+        // SettingsDialog「拉取模型」覆盖 key:新 key 追加进列表并激活
+        save_provider_key(&path, "deepseek", "sk-new", None, None).unwrap();
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        let pc = cfg.providers.get("deepseek").unwrap();
+        assert_eq!(pc.api_keys, vec!["sk-old", "sk-new"]);
+        assert_eq!(pc.api_key.as_deref(), Some("sk-new"));
     }
 }

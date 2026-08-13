@@ -100,6 +100,7 @@ impl AppState {
             id: "test".into(),
             name: None,
             api_key: None,
+            api_keys: vec![],
             api_endpoint: None,
             provider_type: None,
             default_large_model_id: None,
@@ -280,9 +281,27 @@ fn build_router(
             post(fetch_models),
         )
         .route("/v1/workspaces/:id/providers/save-key", post(save_provider_key))
+        .route("/v1/workspaces/:id/providers/keys", post(add_provider_key))
+        .route(
+            "/v1/workspaces/:id/providers/keys/activate",
+            post(activate_provider_key),
+        )
+        .route(
+            "/v1/workspaces/:id/providers/keys/remove",
+            post(remove_provider_key),
+        )
         .route("/v1/providers", get(list_providers))
         .route("/v1/providers/fetch-models", post(fetch_models))
         .route("/v1/providers/save-key", post(save_provider_key))
+        .route("/v1/providers/keys", post(add_provider_key))
+        .route(
+            "/v1/providers/keys/activate",
+            post(activate_provider_key),
+        )
+        .route(
+            "/v1/providers/keys/remove",
+            post(remove_provider_key),
+        )
         .route("/v1/workspaces/:id/config/model", post(config_model))
         .route(
             "/v1/workspaces/:id/config",
@@ -1162,6 +1181,14 @@ fn history_to_messages(history: &[Value]) -> Vec<Message> {
         }
     }
     let mut out = Vec::new();
+    // 等待 tool 消息响应的 assistant(tool_calls) 回合:
+    // Some((out 中该 assistant 消息的下标, 剩余待响应的 call id 集合))。
+    // OpenAI 兼容 provider 要求 role=tool 消息紧跟带 tool_calls 的 assistant
+    // 且每个 call 都有响应;历史里若出现坏序列(如持久化漏存了 assistant 的
+    // tool_call/finish parts、只留下中间快照,或 tool_result 与 call 不配对),
+    // 整组回滚丢弃,否则跟进消息 400("Messages with role 'tool' must be a
+    // response to a preceding message with 'tool_calls'")。
+    let mut pending: Option<(usize, HashSet<String>)> = None;
     for h in history {
         let role = h.get("role").and_then(Value::as_str).unwrap_or("assistant");
         let Some(parts) = h.get("parts").and_then(Value::as_array) else {
@@ -1174,6 +1201,10 @@ fn history_to_messages(history: &[Value]) -> Vec<Message> {
                 let Some(data) = p.get("data") else { continue };
                 match ptype {
                     "text" => {
+                        // user 消息打断未完成的工具回合:回滚该回合
+                        if let Some((idx, _)) = pending.take() {
+                            out.truncate(idx);
+                        }
                         let t = data.get("text").and_then(Value::as_str).unwrap_or("");
                         out.push(Message::user(t));
                     }
@@ -1183,12 +1214,32 @@ fn history_to_messages(history: &[Value]) -> Vec<Message> {
                             .and_then(Value::as_str)
                             .unwrap_or("")
                             .to_string();
-                        let content = data
-                            .get("content")
-                            .and_then(Value::as_str)
-                            .unwrap_or("")
-                            .to_string();
-                        out.push(Message::tool_result(id, content));
+                        let matched = matches!(&pending, Some((_, ids)) if ids.contains(&id));
+                        if matched {
+                            if let Some((_, ids)) = &mut pending {
+                                ids.remove(&id);
+                            }
+                            out.push(Message::tool_result(
+                                id.clone(),
+                                data.get("content")
+                                    .and_then(Value::as_str)
+                                    .unwrap_or("")
+                                    .to_string(),
+                            ));
+                            // 该 assistant 回合的 call 全部有响应,回合完成
+                            if matches!(&pending, Some((_, ids)) if ids.is_empty()) {
+                                pending = None;
+                            }
+                        } else {
+                            // 孤儿 tool_result(前一条非 assistant(tool_calls)
+                            // 或 id 不匹配):连同未完成的 assistant 回合一起回滚
+                            tracing::warn!(
+                                "历史注入:丢弃孤儿 tool_result(tool_call_id={id},无配对 assistant tool_calls),避免 provider 400"
+                            );
+                            if let Some((idx, _)) = pending.take() {
+                                out.truncate(idx);
+                            }
+                        }
                     }
                     _ => {}
                 }
@@ -1203,6 +1254,7 @@ fn history_to_messages(history: &[Value]) -> Vec<Message> {
         let mut texts: Vec<String> = Vec::new();
         let mut reasoning_text = String::new();
         let mut calls: Vec<AssistantContent> = Vec::new();
+        let mut call_ids: HashSet<String> = HashSet::new();
         for p in parts {
             let ptype = p.get("type").and_then(Value::as_str).unwrap_or("");
             let Some(data) = p.get("data") else { continue };
@@ -1230,12 +1282,19 @@ fn history_to_messages(history: &[Value]) -> Vec<Message> {
                     let raw = data.get("input").and_then(Value::as_str).unwrap_or("{}");
                     let arguments: Value =
                         serde_json::from_str(raw).unwrap_or_else(|_| json!({}));
+                    call_ids.insert(id.clone());
                     calls.push(AssistantContent::ToolCall(ToolCall::new(
                         id,
                         ToolFunction::new(name, arguments),
                     )));
                 }
                 _ => {}
+            }
+        }
+        // 新一条 assistant 消息输出前,回滚上一个未完成(被本消息打断)的工具回合
+        if !texts.is_empty() || !reasoning_text.is_empty() || !calls.is_empty() {
+            if let Some((idx, _)) = pending.take() {
+                out.truncate(idx);
             }
         }
         if reasoning_text.is_empty() {
@@ -1248,6 +1307,7 @@ fn history_to_messages(history: &[Value]) -> Vec<Message> {
                     id: None,
                     content: OneOrMany::many(calls).expect("calls 非空"),
                 });
+                pending = Some((out.len() - 1, call_ids));
             }
         } else {
             // 推理+文本+工具调用合并为一条 assistant 消息(与 rig 的 openai 转换
@@ -1258,12 +1318,20 @@ fn history_to_messages(history: &[Value]) -> Vec<Message> {
             if !texts.is_empty() {
                 content.push(AssistantContent::text(texts.join("\n")));
             }
+            let has_calls = !calls.is_empty();
             content.extend(calls);
             out.push(Message::Assistant {
                 id: None,
                 content: OneOrMany::many(content).expect("reasoning 非空,集合必然非空"),
             });
+            if has_calls {
+                pending = Some((out.len() - 1, call_ids));
+            }
         }
+    }
+    // 结尾残留的未完成工具回合(最后一条 assistant(tool_calls) 无 tool 响应)回滚
+    if let Some((idx, _)) = pending.take() {
+        out.truncate(idx);
     }
     out
 }
@@ -1288,6 +1356,7 @@ async fn list_providers(State(state): State<AppState>) -> Json<Value> {
             let from_cfg = ProviderInfo::from_config(&p.id, pc);
             // 覆盖 key/endpoint/type/默认模型
             if from_cfg.api_key.is_some() { p.api_key = from_cfg.api_key; }
+            if !from_cfg.api_keys.is_empty() { p.api_keys = from_cfg.api_keys; }
             if from_cfg.api_endpoint.is_some() { p.api_endpoint = from_cfg.api_endpoint; }
             if from_cfg.provider_type.is_some() { p.provider_type = from_cfg.provider_type; }
             if from_cfg.default_large_model_id.is_some() { p.default_large_model_id = from_cfg.default_large_model_id; }
@@ -1309,6 +1378,7 @@ async fn list_providers(State(state): State<AppState>) -> Json<Value> {
         for p in &mut all {
             if let Some(cp) = combo.iter().find(|cp| cp.id == p.id) {
                 if p.api_key.is_none() && cp.api_key.is_some() { p.api_key = cp.api_key.clone(); }
+                if p.api_keys.is_empty() && !cp.api_keys.is_empty() { p.api_keys = cp.api_keys.clone(); }
                 if p.api_endpoint.is_none() && cp.api_endpoint.is_some() { p.api_endpoint = cp.api_endpoint.clone(); }
                 if p.default_large_model_id.is_none() && cp.default_large_model_id.is_some() {
                     p.default_large_model_id = cp.default_large_model_id.clone();
@@ -1349,12 +1419,27 @@ async fn list_providers(State(state): State<AppState>) -> Json<Value> {
         .map(|p| {
             // 已配置的 key 仅回传脱敏结果,不回传明文
             let masked = p.resolved_api_key().map(|k| mask_api_key(&k));
+            // 已保存的全部 key 列表(脱敏)与激活项下标
+            let keys_masked: Vec<String> = p
+                .api_keys
+                .iter()
+                .map(|k| {
+                    let resolved = providers::expand_env(k).unwrap_or_default();
+                    mask_api_key(&resolved)
+                })
+                .collect();
+            let active_key_index = match &p.api_key {
+                Some(active) => p.api_keys.iter().position(|k| k == active),
+                None => None,
+            };
             json!({
                 "id": p.id,
                 "name": p.name.as_deref().unwrap_or(&p.id),
                 "type": p.provider_type.as_deref().unwrap_or(""),
                 "has_api_key": masked.is_some(),
                 "api_key_masked": masked.unwrap_or_default(),
+                "api_keys_masked": keys_masked,
+                "active_key_index": active_key_index,
                 "default_large_model_id": p.default_large_model_id,
                 "default_small_model_id": p.default_small_model_id,
                 "models": p.models.iter().map(|m| {
@@ -1536,6 +1621,72 @@ async fn save_provider_key(
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("保存失败: {e}")))?;
 
     tracing::info!("已保存 provider `{}` 的 API Key", body.provider_id);
+    Ok(Json(json!({ "ok": true, "provider": body.provider_id })))
+}
+
+/// POST /v1/workspaces/{id}/providers/keys — 追加一个 API Key。
+/// 请求体:`{ provider_id, api_key }`;已存在则视为切换激活,无激活 key 时自动激活。
+#[derive(Deserialize)]
+struct AddKeyReq {
+    provider_id: String,
+    api_key: String,
+}
+
+async fn add_provider_key(
+    _state: State<AppState>,
+    Json(body): Json<AddKeyReq>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    crate::config::add_provider_key(
+        &crate::config::default_config_path(),
+        &body.provider_id,
+        &body.api_key,
+    )
+    .map_err(|e| (StatusCode::BAD_REQUEST, format!("添加 Key 失败: {e}")))?;
+    tracing::info!("已为 provider `{}` 添加 API Key", body.provider_id);
+    Ok(Json(json!({ "ok": true, "provider": body.provider_id })))
+}
+
+/// POST /v1/workspaces/{id}/providers/keys/activate — 按下标切换激活 key。
+/// 请求体:`{ provider_id, key_index }`。
+#[derive(Deserialize)]
+struct ActivateKeyReq {
+    provider_id: String,
+    key_index: usize,
+}
+
+async fn activate_provider_key(
+    _state: State<AppState>,
+    Json(body): Json<ActivateKeyReq>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    crate::config::activate_provider_key(
+        &crate::config::default_config_path(),
+        &body.provider_id,
+        body.key_index,
+    )
+    .map_err(|e| (StatusCode::BAD_REQUEST, format!("切换 Key 失败: {e}")))?;
+    tracing::info!("已切换 provider `{}` 的激活 Key", body.provider_id);
+    Ok(Json(json!({ "ok": true, "provider": body.provider_id })))
+}
+
+/// POST /v1/workspaces/{id}/providers/keys/remove — 按下标删除 key。
+/// 请求体:`{ provider_id, key_index }`;删除激活 key 后自动激活剩余第一个。
+#[derive(Deserialize)]
+struct RemoveKeyReq {
+    provider_id: String,
+    key_index: usize,
+}
+
+async fn remove_provider_key(
+    _state: State<AppState>,
+    Json(body): Json<RemoveKeyReq>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    crate::config::remove_provider_key(
+        &crate::config::default_config_path(),
+        &body.provider_id,
+        body.key_index,
+    )
+    .map_err(|e| (StatusCode::BAD_REQUEST, format!("删除 Key 失败: {e}")))?;
+    tracing::info!("已删除 provider `{}` 的 API Key", body.provider_id);
     Ok(Json(json!({ "ok": true, "provider": body.provider_id })))
 }
 
@@ -1993,6 +2144,46 @@ mod tests {
         sp.text_delta("c");
         assert_eq!(sp.parts.len(), 4);
         assert_eq!(sp.parts[3]["data"]["text"], "c");
+    }
+
+    #[test]
+    fn history_to_messages_drops_orphan_tool_result() {
+        // 复现线上 400:assistant 消息因持久化丢失只留下中间快照([reasoning],
+        // 无 tool_call/finish parts),tool_result 变成孤儿,后续跟进消息
+        // 被 OpenAI 兼容 provider 拒绝("Messages with role 'tool' must be a
+        // response to a preceding message with 'tool_calls'")。
+        let history = vec![
+            json!({ "role": "user", "parts": [part("text", r#"{"text":"读文件"}"#)] }),
+            json!({
+                "role": "assistant",
+                "parts": [part("reasoning", r#"{"thinking":"让我看看","signature":""}"#)],
+            }),
+            json!({
+                "role": "user",
+                "parts": [part("tool_result", r#"{"tool_call_id":"call_1","content":"/tmp"}"#)],
+            }),
+            json!({ "role": "user", "parts": [part("text", r#"{"text":"继续"}"#)] }),
+        ];
+        let msgs = history_to_messages(&history);
+        assert_eq!(msgs.len(), 3, "孤儿 tool_result 应被丢弃");
+        assert!(matches!(&msgs[0], Message::User { .. }));
+        assert!(matches!(&msgs[1], Message::Assistant { .. }), "仅剩 reasoning 的 assistant 消息保留");
+        assert!(matches!(&msgs[2], Message::User { .. }));
+        // 正常配对不受影响:assistant(tool_call) → tool(tool_result)
+        let good = vec![
+            json!({
+                "role": "assistant",
+                "parts": [part("tool_call", r#"{"id":"call_2","name":"bash","input":"{}"}"#)],
+            }),
+            json!({
+                "role": "user",
+                "parts": [part("tool_result", r#"{"tool_call_id":"call_2","content":"ok"}"#)],
+            }),
+        ];
+        let msgs = history_to_messages(&good);
+        assert_eq!(msgs.len(), 2);
+        assert!(matches!(&msgs[0], Message::Assistant { .. }));
+        assert!(matches!(&msgs[1], Message::User { .. }));
     }
 
     #[test]
