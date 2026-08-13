@@ -530,7 +530,7 @@ function blit(target: Target | null) {
     gl!.viewport(0, 0, target.width, target.height);
   } else {
     gl!.bindFramebuffer(gl!.FRAMEBUFFER, null);
-    gl!.viewport(0, 0, cssWidth, cssHeight);
+    gl!.viewport(0, 0, gl!.drawingBufferWidth, gl!.drawingBufferHeight);
   }
   gl!.drawArrays(gl!.TRIANGLE_STRIP, 0, 4);
 }

@@ -17,7 +17,7 @@ if (isTauri()) {
 
 const liquidOptions = {
   rainbow: false,
-  color: [0.53, 0.81, 0.92] as [number, number, number],
+  color: [1, 1, 1] as [number, number, number],
   intensity: 0.08,
   densityDissipation: 0.97,
   velocityDissipation: 0.995,
