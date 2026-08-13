@@ -102,6 +102,30 @@ pub struct TunnelClientConfig {
     pub local_proxy_url: String,
 }
 
+/// 仅测试 WebSocket 连接能否建立(不启动 serve 循环)。
+/// 供 start_relay 同步试连,失败时立即把具体错误返回给前端。
+pub async fn test_connection(config: &TunnelClientConfig) -> Result<(), String> {
+    let normalized = config.relay_url.trim();
+    let ws_base = if normalized.to_ascii_lowercase().starts_with("https://") {
+        format!("wss://{}", &normalized[8..])
+    } else if normalized.to_ascii_lowercase().starts_with("http://") {
+        format!("ws://{}", &normalized[7..])
+    } else {
+        normalized.to_string()
+    };
+    let ws_url = format!("{}?token={}", ws_base, config.token);
+    match tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio_tungstenite::connect_async(&ws_url),
+    )
+    .await
+    {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(e)) => Err(format!("{e}")),
+        Err(_) => Err(format!("连接中转服务器超时(5s):{ws_base}")),
+    }
+}
+
 /// 启动隧道客户端(阻塞运行,含自动重连)。
 ///
 /// `last_error` 用于将最近一次连接错误透传给前端(RelayStatus.error),

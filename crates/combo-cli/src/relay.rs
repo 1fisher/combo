@@ -5,7 +5,7 @@
 //! - `POST /v1/relay/stop` — 停止隧道
 //! - `GET /v1/relay/status` — 查询状态
 
-use crate::tunnel::{run_tunnel_client, TunnelClientConfig};
+use crate::tunnel::{run_tunnel_client, test_connection, TunnelClientConfig};
 use axum::extract::State;
 use axum::Json;
 use serde::{Deserialize, Serialize};
@@ -137,13 +137,33 @@ pub async fn start_relay(
     let local = body
         .local_proxy_url
         .unwrap_or_else(|| format!("http://127.0.0.1:{}", state.local_port));
-    // 同步等待初始连接结果(最多 6s),让前端立即知道是否成功
-    let (connected, error) = state.relay.start_and_wait(body.url, body.token, local).await;
-    Json(RelayStatus {
-        running: true,
-        connected,
-        error,
-    })
+
+    // 先同步试连一次(5s 超时),确保 WebSocket 能建立。
+    // 这样 API 响应中直接包含成功/失败结果,不依赖后续轮询。
+    let test_config = TunnelClientConfig {
+        relay_url: body.url.clone(),
+        token: body.token.clone(),
+        local_proxy_url: local.clone(),
+    };
+    match test_connection(&test_config).await {
+        Ok(()) => {
+            // 试连成功,启动后台重连循环
+            state.relay.start(body.url, body.token, local).await;
+            Json(RelayStatus {
+                running: true,
+                connected: true,
+                error: None,
+            })
+        }
+        Err(e) => {
+            // 试连失败,不启动后台任务,直接返回错误
+            Json(RelayStatus {
+                running: false,
+                connected: false,
+                error: Some(e),
+            })
+        }
+    }
 }
 
 pub async fn stop_relay(
