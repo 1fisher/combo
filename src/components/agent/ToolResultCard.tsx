@@ -5,18 +5,11 @@ import { useAgentStore } from '../../stores/agentStore';
 import { countChanges, diffFromToolInput, type DiffLine } from '../../lib/fileChanges';
 import { DiffView } from './DiffView';
 import { TerminalOutput } from './TerminalOutput';
+import { JsonView, tryParseJson } from './JsonView';
 
 const FILE_DIFF_TOOLS = new Set(['write', 'edit', 'multiedit']);
 const BASH_TOOLS = new Set(['bash', 'run_shell_command']);
 const COLLAPSE_THRESHOLD = 600;
-
-function tryFormatJson(content: string): string {
-  try {
-    return JSON.stringify(JSON.parse(content), null, 2);
-  } catch {
-    return content;
-  }
-}
 
 /** 从 store 中查找 tool_call_id 对应的工具输入 */
 function useToolCallInput(toolCallId: string): { name: string; input: string } | null {
@@ -69,9 +62,10 @@ export function ToolResultCard({ result }: { result: Api.ToolResult }) {
     const t = content.trim();
     return (t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'));
   })();
-  const displayContent = isJson ? tryFormatJson(content) : content;
-  const isLong = !diffLines && displayContent.length > COLLAPSE_THRESHOLD;
-  const visibleContent = expanded || !isLong ? displayContent : displayContent.slice(0, COLLAPSE_THRESHOLD);
+  // JSON 内容解析为结构化展示(解析失败则回退原始文本)
+  const parsedJson = isJson ? tryParseJson(content) : null;
+  const isLong = !diffLines && parsedJson === null && content.length > COLLAPSE_THRESHOLD;
+  const visibleContent = expanded || !isLong ? content : content.slice(0, COLLAPSE_THRESHOLD);
 
   // 提取 metadata 信息
   let metaInfo = '';
@@ -116,7 +110,7 @@ export function ToolResultCard({ result }: { result: Api.ToolResult }) {
         {metaInfo && <span className="text-[10px] text-muted-foreground/60">{metaInfo}</span>}
         {isLong && !expanded && (
           <span className="ml-auto text-[10px] text-brand">
-            {displayContent.length.toLocaleString()} 字符 · 点击展开
+            {content.length.toLocaleString()} 字符 · 点击展开
           </span>
         )}
       </summary>
@@ -130,15 +124,19 @@ export function ToolResultCard({ result }: { result: Api.ToolResult }) {
         )}
         {/* bash 输出 → TerminalOutput(diff 着色) */}
         {!diffLines && isBash && (
-          <TerminalOutput content={displayContent} className="border-0" />
+          <TerminalOutput content={content} className="border-0" />
+        )}
+        {/* JSON → 结构化展示 */}
+        {!diffLines && !isBash && parsedJson !== null && (
+          <JsonView data={parsedJson} className="max-h-[60vh] border-0" />
         )}
         {/* 其他 → 普通 pre */}
-        {!diffLines && !isBash && (
+        {!diffLines && !isBash && parsedJson === null && (
           <pre className="max-h-[60vh] overflow-auto bg-background px-3 py-2 font-mono text-[11px] leading-relaxed text-foreground/80">
             {visibleContent}
             {isLong && !expanded && (
               <span className="text-muted-foreground/50">
-                {'\n'}… ({displayContent.length - COLLAPSE_THRESHOLD} 字符已折叠)
+                {'\n'}… ({content.length - COLLAPSE_THRESHOLD} 字符已折叠)
               </span>
             )}
           </pre>

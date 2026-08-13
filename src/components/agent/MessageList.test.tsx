@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MessageList, decideScrollBehavior, mergeToolResults } from './MessageList';
 import type { MessageVM } from '../../stores/agentStore';
 
@@ -38,6 +39,40 @@ describe('MessageList', () => {
           el?.tagName === 'P' && (el.textContent ?? '').includes('好的,开始。')
       )
     ).toBeTruthy();
+  });
+
+  it('collapses non-streaming content by default, expands on header click', async () => {
+    const finished: MessageVM = {
+      id: 'f1',
+      role: 'assistant',
+      createdAt: 5,
+      updatedAt: 5,
+      streaming: false,
+      parts: [{ type: 'text', data: { text: '这是完整的回复内容' } }],
+    };
+    render(<MessageList messages={[finished]} />);
+    // 默认折叠:摘要行预览首行内容,但气泡未渲染(markdown 的 <p> 不存在)
+    expect(screen.getByText('这是完整的回复内容')).toBeTruthy();
+    expect(document.querySelector('p')).toBeNull();
+    // 点击 header 展开后气泡出现
+    await userEvent.click(screen.getByTitle('展开'));
+    expect(document.querySelector('p')).toBeTruthy();
+    // 再次点击收起
+    await userEvent.click(screen.getByTitle('收起'));
+    expect(document.querySelector('p')).toBeNull();
+  });
+
+  it('keeps streaming messages expanded', () => {
+    const streaming: MessageVM = {
+      id: 's1',
+      role: 'assistant',
+      createdAt: 6,
+      updatedAt: 6,
+      streaming: true,
+      parts: [{ type: 'text', data: { text: '正在输出…' } }],
+    };
+    render(<MessageList messages={[streaming]} />);
+    expect(document.querySelector('p')).toBeTruthy();
   });
 });
 

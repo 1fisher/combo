@@ -1,5 +1,6 @@
-import { CheckCircle2, FileText } from 'lucide-react';
+import { FileText, Wrench } from 'lucide-react';
 import { openFileInEditor } from '../../lib/openFile';
+import { JsonView, tryParseJson } from './JsonView';
 
 export interface ToolCallInfo {
   id: string;
@@ -31,11 +32,12 @@ export function ToolCallCard({
   workspaceId?: string;
 }) {
   const path = workspaceId ? toolPathFromInput(call.input) : null;
+  const inputJson = tryParseJson(call.input);
   return (
     <details className="rounded-md border bg-muted/30">
       <summary className="flex cursor-pointer items-center gap-2 px-3 py-2">
         {call.finished ? (
-          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-green-500" />
+          <Wrench className="h-3.5 w-3.5 shrink-0 text-brand" />
         ) : (
           <span className="font-mono text-xs">⚙</span>
         )}
@@ -55,9 +57,13 @@ export function ToolCallCard({
           </button>
         )}
       </summary>
-      <pre className="overflow-x-auto border-t bg-background px-3 py-2 font-mono text-xs text-muted-foreground">
-        {call.input}
-      </pre>
+      {inputJson !== null ? (
+        <JsonView data={inputJson} className="border-t border-border px-3 py-2" />
+      ) : (
+        <pre className="overflow-x-auto border-t bg-background px-3 py-2 font-mono text-xs text-muted-foreground">
+          {call.input}
+        </pre>
+      )}
     </details>
   );
 }

@@ -11,11 +11,14 @@ describe('ToolCallCard', () => {
       />
     );
     expect(screen.getByText(/bash/)).toBeTruthy();
-    // 完成时显示绿色对勾,而不是 done 文字
+    // 完成时显示工具图标(替代绿色对勾),而不是 done 文字
     expect(screen.queryByText('done')).toBeNull();
-    expect(document.querySelector('svg.lucide-circle-check')).toBeTruthy();
+    expect(document.querySelector('svg.lucide-wrench')).toBeTruthy();
+    // JSON 输入解析为结构化展示,不显示原始 JSON
     await userEvent.click(screen.getByText(/bash/));
-    expect(screen.getByText('{"cmd":"ls"}')).toBeTruthy();
+    expect(screen.queryByText('{"cmd":"ls"}')).toBeNull();
+    expect(screen.getByText('cmd')).toBeTruthy();
+    expect(screen.getByText('ls')).toBeTruthy();
   });
 
   it('shows gear icon while pending', () => {
@@ -25,6 +28,6 @@ describe('ToolCallCard', () => {
       />
     );
     expect(screen.getByText('⚙')).toBeTruthy();
-    expect(document.querySelector('svg.lucide-circle-check')).toBeNull();
+    expect(document.querySelector('svg.lucide-wrench')).toBeNull();
   });
 });
