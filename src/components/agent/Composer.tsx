@@ -777,24 +777,31 @@ export function Composer({
                                   />
                                   <span className="truncate">{g.providerName}</span>
                                 </div>
-                                {g.models.map((m) => (
-                                  <button
-                                    key={`${g.providerId}/${m.id}`}
-                                    type="button"
-                                    onClick={() => handleModelChange(m.id, g.providerId)}
-                                    className={cn(
-                                      'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-hover',
-                                      m.id === currentModelId && 'bg-surface-hover'
-                                    )}
-                                  >
-                                    <span className="min-w-0 flex-1 truncate font-medium">
-                                      {m.name || m.id}
-                                    </span>
-                                    {m.id === currentModelId && (
-                                      <Check className="size-3.5 shrink-0 text-brand" />
-                                    )}
-                                  </button>
-                                ))}
+                                {g.models.map((m) => {
+                                  // 选中态必须同时匹配 provider + 模型 id:不同 provider 下
+                                  // 可能存在同名模型(如 deepseek / opencode-zen 都有
+                                  // deepseek-v4-flash-free),只比较 id 会全部高亮打勾
+                                  const isSelected =
+                                    m.id === currentModelId && g.providerId === currentProviderId;
+                                  return (
+                                    <button
+                                      key={`${g.providerId}/${m.id}`}
+                                      type="button"
+                                      onClick={() => handleModelChange(m.id, g.providerId)}
+                                      className={cn(
+                                        'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-hover',
+                                        isSelected && 'bg-surface-hover'
+                                      )}
+                                    >
+                                      <span className="min-w-0 flex-1 truncate font-medium">
+                                        {m.name || m.id}
+                                      </span>
+                                      {isSelected && (
+                                        <Check className="size-3.5 shrink-0 text-brand" />
+                                      )}
+                                    </button>
+                                  );
+                                })}
                               </div>
                             ))
                           )}
