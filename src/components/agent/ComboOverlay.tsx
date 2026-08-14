@@ -49,7 +49,7 @@ export function ComboOverlay({ combo }: { combo: number }) {
   const [phase, setPhase] = useState<Phase>('hidden');
   const lastBumpRef = useRef(0);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const countRef = useRef<HTMLDivElement>(null);
+  const popRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (combo <= 0) {
@@ -60,11 +60,11 @@ export function ComboOverlay({ combo }: { combo: number }) {
     setDisplay(combo);
     // 出现/重新出现 → 放大弹出;已展示 → 保持放大态
     setPhase((p) => (p === 'hidden' || p === 'shrink' ? 'shown' : 'shown'));
-    // 连续增长:数字膨胀脉冲(节流),整体不回缩
+    // 连续增长:整体放大倾斜脉冲(节流),不回缩
     const now = Date.now();
     if (now - lastBumpRef.current >= BUMP_THROTTLE_MS) {
       lastBumpRef.current = now;
-      const el = countRef.current;
+      const el = popRef.current;
       if (el) {
         el.classList.remove('combo-bump');
         // 强制 reflow,确保连续更新时动画可重播
@@ -91,6 +91,7 @@ export function ComboOverlay({ combo }: { combo: number }) {
   return (
     <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center overflow-visible px-[12%] py-[8%] [container-type:inline-size]">
       <div
+        ref={popRef}
         className={cn('combo-pop select-none text-center', phase === 'shrink' && 'combo-pop--shrink')}
         style={{ '--combo-hue': hue } as CSSProperties}
         onAnimationEnd={(e) => {
@@ -100,9 +101,7 @@ export function ComboOverlay({ combo }: { combo: number }) {
         }}
       >
         <div className="combo-title">COMBO</div>
-        <div ref={countRef} className="combo-count">
-          × {display}
-        </div>
+        <div className="combo-count">× {display}</div>
       </div>
     </div>
   );
