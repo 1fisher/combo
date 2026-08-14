@@ -336,8 +336,8 @@ export function GitGraph({ workspaceId, repo, onShowCommitDiff }: Props) {
                   <span className="min-w-0 flex-1 truncate px-1.5 text-xs text-foreground">
                     {commit.message}
                   </span>
-                  <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
-                    {commit.shortHash}
+                  <span className="shrink-0 text-[10px] text-muted-foreground" title={commit.author}>
+                    {commit.author}
                   </span>
                 </div>
 
