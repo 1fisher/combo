@@ -156,7 +156,12 @@ pub fn list(cfg: &ResolvedConfig) -> Result<()> {
     for s in &skills {
         let desc = s.description.trim().replace('\n', " ");
         let desc = if desc.len() > 100 {
-            format!("{}…", &desc[..100])
+            // 按字符边界截断,避免字节切片落在 UTF-8 多字节字符中间 panic
+            let mut end = 100;
+            while end > 0 && !desc.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{}…", &desc[..end])
         } else {
             desc
         };

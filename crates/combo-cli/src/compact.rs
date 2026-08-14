@@ -108,11 +108,18 @@ fn format_for_summary(history: &[Value]) -> String {
     out
 }
 
+/// 按 UTF-8 字符边界安全截断:截断点若落在多字节字符中间,回退到最近的字符边界。
+/// 历史含超长中文(工具调用/结果)时自动压缩会调用本函数,旧的 `&s[..max]` 字节切片
+/// 在截断点处 panic,导致 run_agent_ws 请求中断、前端报「发送失败 network error」。
 fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
-        format!("{}…", &s[..max])
+        let mut end = max.min(s.len());
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…", &s[..end])
     }
 }
 
@@ -446,6 +453,35 @@ mod tests {
     fn truncate_long_text_capped() {
         let result = truncate("abcdefghij", 5);
         assert_eq!(result, "abcde…");
+    }
+
+    #[test]
+    fn truncate_handles_multibyte_boundary() {
+        // 回归测试:截断点 500 字节落在 UTF-8 中文字符(3 字节)内部时不得 panic。
+        // 旧实现 `&s[..max]` 在此 panic → 自动压缩中断 → 前端报 network error。
+        let s = "为".repeat(200); // 600 字节,500 % 3 = 2 → 截断点在字符中间
+        let result = truncate(&s, 500);
+        assert!(result.starts_with("为"));
+        assert!(result.ends_with('…'));
+        // 回退到最近的字符边界(498 字节 = 166 个"为")+ "…"(3 字节)
+        assert_eq!(result.len(), 501);
+        assert!(result.ends_with('…'));
+        assert!(!result.contains('\u{FFFD}'));
+    }
+
+    #[test]
+    fn truncate_multibyte_max_inside_char() {
+        let s = "中文abc中文"; // 3+3+3+3+3 = 15 字节
+        let result = truncate(s, 7); // 第 7 字节落在第二个"中"内部(6..9)
+        assert!(!result.contains('\u{FFFD}'));
+        assert!(result.ends_with('…'));
+    }
+
+    #[test]
+    fn truncate_empty_or_zero() {
+        assert_eq!(truncate("", 10), "");
+        assert_eq!(truncate("abc", 0), "…");
+        assert_eq!(truncate("为", 0), "…");
     }
 
     #[test]

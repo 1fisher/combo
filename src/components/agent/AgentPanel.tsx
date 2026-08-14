@@ -18,6 +18,7 @@ import { ChatEmptyState } from './ChatEmptyState';
 import { FileChangesPanel, type ChangeStatus } from './FileChangesPanel';
 import { TodoList } from './TodoList';
 import { extractFileToolCalls } from '../../lib/fileChanges';
+import { autoTitleFor, titleFromPrompt } from './autoTitle';
 import { cn } from '../../lib/utils';
 
 function basename(p: string): string {
@@ -35,7 +36,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
   const sessionId = useAgentStore((s) => s.activeSessionId);
   const setActiveWorkspace = useAgentStore((s) => s.setActiveWorkspace);
   const { workspaces } = useWorkspaces();
-  const { create: createSessionIn, activate: activateSession, remove: removeSession } = useSessions(workspaceId);
+  const { sessions, create: createSessionIn, activate: activateSession, remove: removeSession, rename: renameSessionIn } = useSessions(workspaceId);
 
   const rt = useAgentStore((s) => (sessionId ? s.bySession[sessionId] : undefined));
   const todos = useAgentStore((s) => (sessionId ? s.todos[sessionId] : undefined) ?? EMPTY_TODOS);
@@ -154,6 +155,22 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
     }
   }
 
+  /**
+   * 复用「新建任务」创建的占位会话(标题为「会话 N」/「新任务」)发送消息时,
+   * 自动把左侧任务名更新为首条需求内容(与直接输入发送创建会话时的命名一致)。
+   * 用户手动重命名过的会话不会被覆盖。
+   */
+  async function autoTitleFromPrompt(sid: string, prompt: string) {
+    const cur = sessions?.find((s) => s.id === sid);
+    const title = autoTitleFor(prompt, cur?.title);
+    if (!title) return;
+    try {
+      await renameSessionIn({ id: sid, title });
+    } catch {
+      /* 重命名失败不阻塞主流程,下次发送仍会尝试 */
+    }
+  }
+
   async function doSend(
     prompt: string,
     attachments: Api.Attachment[] = [],
@@ -174,7 +191,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
     if (!sid) {
       // 首个消息:先创建会话,发送成功后才保留(失败时自动删除)
       try {
-        const s = await createSessionIn(sendPrompt.slice(0, 20) || '新任务');
+        const s = await createSessionIn(titleFromPrompt(sendPrompt));
         sid = s.id;
         createdSid = s.id;
       } catch (e) {
@@ -206,13 +223,15 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
       st.markRun(sid!, runId, 'running');
       // 记录本轮发送时刻,用于连击(combo)判定
       pendingRef.current = { sid: sid!, sentAt: Date.now() };
+      // 复用「新建任务」创建的占位会话时,自动更新任务名为本次需求
+      void autoTitleFromPrompt(sid!, sendPrompt);
     } catch (e) {
       const err = e as { status?: number; message?: string };
       // 后端重启后会话丢失(404):若是复用的旧会话则自动重建后重试一次
       if (reused && err?.status === 404) {
         st.deleteMessage(sid!, `local-${runId}`);
         try {
-          const s = await createSessionIn(sendPrompt.slice(0, 20) || '新任务');
+          const s = await createSessionIn(titleFromPrompt(sendPrompt));
           sid = s.id;
           createdSid = s.id;
           const retryRunId = randomUUID();
