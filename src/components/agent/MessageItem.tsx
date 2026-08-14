@@ -12,6 +12,7 @@ import { Markdown } from './markdown';
 import { ToolCallCard } from './ToolCallCard';
 import { ToolResultCard } from './ToolResultCard';
 import { JsonView, tryParseJson } from './JsonView';
+import { TodoList } from './TodoList';
 import { cn } from '../../lib/utils';
 
 const ROLE_LABEL: Record<MessageVM['role'], string> = {
@@ -42,6 +43,15 @@ export const MessageItem = memo(function MessageItem({
   workspaceId?: string;
 }) {
   const parts = vm.parts ?? [];
+  // 已归档的任务清单卡片(上一轮 todo_write 全部完成):作为消息流中的独立
+  // 条目展示,不按普通消息气泡渲染(无 header / 气泡,整条就是任务清单卡片)
+  if (vm.todoItems && vm.todoItems.length > 0) {
+    return (
+      <div className="py-1">
+        <TodoList todos={vm.todoItems} variant="archived" />
+      </div>
+    );
+  }
   const isUser = vm.role === 'user';
   // 用户消息中是否包含真正的发送文本(否则只是工具结果的载体)
   const hasUserText = isUser && parts.some((p) => p.type === 'text');

@@ -94,6 +94,54 @@ describe('agentStore 选中持久化', () => {
   });
 });
 
+describe('agentStore insertTodoCard 任务归档', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useAgentStore.setState({
+      activeWorkspaceId: null,
+      lastWorkspacePath: null,
+      activeSessionId: null,
+      bySession: {},
+      permissionQueue: [],
+      questionQueue: [],
+      todos: {},
+    });
+  });
+
+  it('把完成的 todo 清单作为卡片消息插入消息流末尾', () => {
+    const todos: Api.TodoItem[] = [
+      { content: '任务一', status: 'completed' },
+      { content: '任务二', status: 'completed' },
+    ];
+    useAgentStore.getState().insertTodoCard('s1', 'run-1', todos);
+    const rt = useAgentStore.getState().bySession['s1'];
+    expect(rt.messages).toHaveLength(1);
+    expect(rt.messages[0].id).toBe('todo-run-1');
+    expect(rt.messages[0].role).toBe('system');
+    expect(rt.messages[0].todoItems).toEqual(todos);
+    expect(rt.messages[0].streaming).toBe(false);
+  });
+
+  it('多次归档按顺序追加,且不影响已有消息', () => {
+    useAgentStore.getState().upsertMessage('s1', mkMsg('m1', 'user', 'hi'));
+    const t1: Api.TodoItem[] = [{ content: '第一批', status: 'completed' }];
+    const t2: Api.TodoItem[] = [{ content: '第二批', status: 'completed' }];
+    useAgentStore.getState().insertTodoCard('s1', 'run-1', t1);
+    useAgentStore.getState().insertTodoCard('s1', 'run-2', t2);
+    const rt = useAgentStore.getState().bySession['s1'];
+    expect(rt.messages.map((m) => m.id)).toEqual(['m1', 'todo-run-1', 'todo-run-2']);
+    expect(rt.messages[0].todoItems).toBeUndefined();
+  });
+
+  it('归档后通过 clearTodos 从活跃列表移除,输入坞上方不再显示', () => {
+    const todos: Api.TodoItem[] = [{ content: '任务一', status: 'completed' }];
+    useAgentStore.getState().setTodos('s1', todos);
+    useAgentStore.getState().insertTodoCard('s1', 'run-1', todos);
+    useAgentStore.getState().clearTodos('s1');
+    expect(useAgentStore.getState().todos['s1']).toBeUndefined();
+  });
+});
+
 describe('agentStore hydrateMessages 历史加载', () => {
   beforeEach(() => {
     localStorage.clear();

@@ -14,6 +14,8 @@ export interface MessageVM {
   createdAt: number;
   updatedAt: number;
   streaming: boolean;
+  /** 已全部完成的任务清单(上一轮 todo_write 的结果),归档为消息流中的一张任务卡片 */
+  todoItems?: Api.TodoItem[];
 }
 
 export interface SessionRuntime {
@@ -89,6 +91,8 @@ interface AgentState {
   dismissQuestionBatch: (batchId: string) => void;
   setTodos: (sessionId: string, todos: Api.TodoItem[]) => void;
   clearTodos: (sessionId: string) => void;
+  /** 把已全部完成的任务清单作为一张卡片消息插入消息流末尾(归档,不再占用输入坞上方) */
+  insertTodoCard: (sessionId: string, runId: string, todos: Api.TodoItem[]) => void;
   clearSessionRuntime: (sessionId: string) => void;
 }
 
@@ -272,6 +276,25 @@ export const useAgentStore = create<AgentState>()(
     set((st) => {
       const { [sessionId]: _drop, ...rest } = st.todos;
       return { todos: rest };
+    }),
+  insertTodoCard: (sessionId, runId, todos) =>
+    set((st) => {
+      const rt = st.bySession[sessionId] ?? emptyRuntime();
+      const card: MessageVM = {
+        id: `todo-${runId}`,
+        role: 'system',
+        parts: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        streaming: false,
+        todoItems: todos,
+      };
+      return {
+        bySession: {
+          ...st.bySession,
+          [sessionId]: { ...rt, messages: [...rt.messages, card] },
+        },
+      };
     }),
   clearSessionRuntime: (sessionId) =>
     set((st) => {

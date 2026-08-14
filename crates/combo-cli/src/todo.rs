@@ -30,6 +30,17 @@ impl TodoStatus {
     }
 }
 
+/// 若列表中没有 in_progress 且存在 pending,自动把第一个 pending 标记为 in_progress,
+/// 保证一次性提交完整任务列表时「从第一条开始处理」,前端能立即看到第一条处于进行中。
+fn auto_start_first(todos: &mut [TodoItem]) {
+    if todos.iter().any(|t| t.status == TodoStatus::InProgress) {
+        return;
+    }
+    if let Some(first) = todos.iter_mut().find(|t| t.status == TodoStatus::Pending) {
+        first.status = TodoStatus::InProgress;
+    }
+}
+
 /// 单个待办项。
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct TodoItem {
@@ -84,7 +95,9 @@ pub fn todo_write_tool(
 (2) 同一时刻只能有一个任务处于 in_progress 状态;\
 (3) 开始处理某个任务时,将其标记为 in_progress;\
 (4) 完成某个任务后立即将其标记为 completed;\
-(5) 如果计划发生变化(新增/删除/调整顺序),用更新后的完整列表再次调用。",
+(5) 如果计划发生变化(新增/删除/调整顺序),用更新后的完整列表再次调用。\
+注意:若提交的列表中没有任何 in_progress 且存在 pending,工具会自动把第一条 pending \
+标记为 in_progress(从第一条开始处理);agent 处理时按顺序逐条推进即可。",
         json!({
             "type": "object",
             "properties": {
@@ -174,6 +187,11 @@ pub fn todo_write_tool(
                     )));
                 }
 
+                // 自动从第一条开始处理:若列表中没有 in_progress 且存在 pending,
+                // 自动把第一个 pending 标记为 in_progress(agent 一次性提交完整列表时
+                // 通常不会自标状态,前端需要立即知道「正在处理第一条」)。
+                auto_start_first(&mut todos);
+
                 // 统计信息
                 let total = todos.len();
                 let completed = todos
@@ -230,6 +248,55 @@ mod tests {
         assert_eq!(TodoStatus::parse("completed"), TodoStatus::Completed);
         assert_eq!(TodoStatus::parse("done"), TodoStatus::Completed);
         assert_eq!(TodoStatus::parse("anything"), TodoStatus::Pending);
+    }
+
+    #[test]
+    fn auto_start_first_marks_first_pending_when_all_pending() {
+        let mut todos = vec![
+            TodoItem { content: "任务1".into(), status: TodoStatus::Pending, active_form: None },
+            TodoItem { content: "任务2".into(), status: TodoStatus::Pending, active_form: None },
+            TodoItem { content: "任务3".into(), status: TodoStatus::Pending, active_form: None },
+        ];
+        auto_start_first(&mut todos);
+        assert_eq!(todos[0].status, TodoStatus::InProgress);
+        assert_eq!(todos[1].status, TodoStatus::Pending);
+        assert_eq!(todos[2].status, TodoStatus::Pending);
+    }
+
+    #[test]
+    fn auto_start_first_keeps_existing_in_progress() {
+        let mut todos = vec![
+            TodoItem { content: "任务1".into(), status: TodoStatus::Completed, active_form: None },
+            TodoItem { content: "任务2".into(), status: TodoStatus::InProgress, active_form: Some("正在处理任务2".into()) },
+            TodoItem { content: "任务3".into(), status: TodoStatus::Pending, active_form: None },
+        ];
+        auto_start_first(&mut todos);
+        assert_eq!(todos[1].status, TodoStatus::InProgress);
+        assert_eq!(todos[2].status, TodoStatus::Pending);
+    }
+
+    #[test]
+    fn auto_start_first_resumes_at_first_pending() {
+        // 已有完成项、无 in_progress:自动从第一个 pending 继续
+        let mut todos = vec![
+            TodoItem { content: "任务1".into(), status: TodoStatus::Completed, active_form: None },
+            TodoItem { content: "任务2".into(), status: TodoStatus::Pending, active_form: None },
+            TodoItem { content: "任务3".into(), status: TodoStatus::Pending, active_form: None },
+        ];
+        auto_start_first(&mut todos);
+        assert_eq!(todos[0].status, TodoStatus::Completed);
+        assert_eq!(todos[1].status, TodoStatus::InProgress);
+        assert_eq!(todos[2].status, TodoStatus::Pending);
+    }
+
+    #[test]
+    fn auto_start_first_noop_when_all_completed() {
+        let mut todos = vec![
+            TodoItem { content: "任务1".into(), status: TodoStatus::Completed, active_form: None },
+            TodoItem { content: "任务2".into(), status: TodoStatus::Completed, active_form: None },
+        ];
+        auto_start_first(&mut todos);
+        assert!(todos.iter().all(|t| t.status == TodoStatus::Completed));
     }
 
     #[test]

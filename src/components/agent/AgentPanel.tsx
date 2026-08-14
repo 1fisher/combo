@@ -201,6 +201,20 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
     }
     const runId = randomUUID();
     const st = useAgentStore.getState();
+    // 上一轮任务已全部完成(run 已结束)时,把 todo 清单归档进消息流,
+    // 让「任务进度」从输入坞上方移入对话历史,不再一直占用输入区位置。
+    // 时机:用户再次输入提示词发送 → 归档为消息流中的一张任务卡片。
+    const curRun = st.bySession[sid!]?.run;
+    const curTodos = st.todos[sid!];
+    if (
+      curTodos &&
+      curTodos.length > 0 &&
+      curTodos.every((t) => t.status === 'completed') &&
+      curRun?.status === 'done'
+    ) {
+      st.insertTodoCard(sid!, runId, curTodos);
+      st.clearTodos(sid!);
+    }
     // 先插入用户消息,再激活会话 — 确保 React 渲染时消息已就绪,
     // 避免空会话视图(加载中/欢迎页)闪烁
     st.upsertMessage(sid!, {
