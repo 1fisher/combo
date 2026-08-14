@@ -2078,6 +2078,16 @@ export namespace Api {
     behind: number;
   };
 
+  export type GitBranch = {
+    name: string;
+    current: boolean;
+  };
+
+  export type GitBranchList = {
+    current: string;
+    branches: GitBranch[];
+  };
+
   export type GitCommitFile = {
     path: string;
     oldPath?: string;

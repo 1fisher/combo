@@ -642,6 +642,68 @@ pub async fn branch_info(
     }))
 }
 
+/// GET /v1/workspaces/{id}/git/branches?repo=...
+/// 列出本地分支(按最近提交时间倒序),标注当前分支。
+pub async fn git_branches(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<RepoQuery>,
+) -> Response {
+    let root = match resolve_git_dir(&state, &id, q.repo.as_deref()) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+    let current = git_output(&root, ["rev-parse", "--abbrev-ref", "HEAD"])
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| "HEAD".to_string());
+    let raw = match git_output(
+        &root,
+        ["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", "refs/heads"],
+    ) {
+        Ok(r) => r,
+        Err(msg) => return error(StatusCode::INTERNAL_SERVER_ERROR, &msg),
+    };
+    let branches: Vec<serde_json::Value> = raw
+        .lines()
+        .map(|line| line.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .map(|name| json!({ "name": name, "current": name == current }))
+        .collect();
+    ok_json(json!({ "current": current, "branches": branches }))
+}
+
+#[derive(Deserialize)]
+pub struct BranchBody {
+    pub branch: String,
+    pub repo: Option<String>,
+}
+
+/// POST /v1/workspaces/{id}/git/checkout  body: { "branch": "xxx", "repo": "..." }
+/// 切换到指定本地分支。工作区存在未提交变更时 git 会拒绝,返回 stderr 错误。
+pub async fn git_checkout(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    axum::extract::Json(body): axum::extract::Json<BranchBody>,
+) -> Response {
+    let root = match resolve_git_dir(&state, &id, body.repo.as_deref()) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+    // 分支名只允许 git ref 合法字符,防止参数注入
+    if body.branch.is_empty()
+        || !body
+            .branch
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._-/*".contains(c))
+    {
+        return error(StatusCode::BAD_REQUEST, "非法的分支名");
+    }
+    match git_output(&root, ["checkout", &body.branch]) {
+        Ok(output) => ok_json(json!({ "ok": true, "output": output })),
+        Err(msg) => error(StatusCode::INTERNAL_SERVER_ERROR, &msg),
+    }
+}
+
 #[derive(Deserialize)]
 pub struct CommitQuery {
     pub hash: String,

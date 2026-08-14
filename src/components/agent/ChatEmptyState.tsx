@@ -53,7 +53,7 @@ export function ChatEmptyState({
           </svg>
         </div>
         <p className="relative z-10 w-full px-4 text-center text-3xl font-medium max-md:text-xl">
-          {hasSession ? '新任务已创建，输入消息开始对话' : 'combo — 一体化 Agent IDE，把复杂交给 AI，把时间留给自己'}
+          {hasSession ? '新任务已创建，输入消息开始对话' : '把复杂交给 AI，把时间留给自己'}
         </p>
       </div>
       {/* 订阅横幅 + 模板卡片 */}

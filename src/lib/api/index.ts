@@ -318,6 +318,23 @@ export function getGitBranchInfo(
   });
 }
 
+export function getGitBranches(workspaceId: string, repo?: string): Promise<Api.GitBranchList> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/branches`, {
+    query: repo ? { repo } : undefined,
+  });
+}
+
+export function gitCheckout(
+  workspaceId: string,
+  branch: string,
+  repo?: string
+): Promise<{ ok: boolean; output: string }> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/checkout`, {
+    method: 'POST',
+    body: { branch, ...(repo ? { repo } : {}) },
+  });
+}
+
 export function getGitLog(
   workspaceId: string,
   limit?: number,

@@ -415,6 +415,8 @@ fn build_router(
         .route("/v1/workspaces/:id/git/pull", post(git::pull))
         .route("/v1/workspaces/:id/git/fetch", post(git::fetch))
         .route("/v1/workspaces/:id/git/branch-info", get(git::branch_info))
+.route("/v1/workspaces/:id/git/branches", get(git::git_branches))
+.route("/v1/workspaces/:id/git/checkout", post(git::git_checkout))
         .route("/v1/workspaces/:id/git/commit/files", get(git::commit_files))
         .route("/v1/workspaces/:id/git/commit/diff", get(git::commit_diff))
         .layer(from_fn_with_state(state.clone(), auth::require_token))

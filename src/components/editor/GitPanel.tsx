@@ -2,12 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowDown,
   ArrowUp,
+  Check,
   ChevronDown,
   CircleDot,
   Download,
   FilePlus,
   FileText,
   Folder,
+  GitBranch,
   GitCommitHorizontal,
   MinusCircle,
   PencilLine,
@@ -19,6 +21,8 @@ import {
   getGitStatus,
   getGitRepos,
   getGitBranchInfo,
+  getGitBranches,
+  gitCheckout,
   gitStage,
   gitUnstage,
   gitDiscard,
@@ -130,6 +134,10 @@ export function GitPanel({ workspaceId, repo = '', onRepoChange, selectedDiffPat
   const [committing, setCommitting] = useState(false);
   const [commitError, setCommitError] = useState<string | null>(null);
   const [branchInfo, setBranchInfo] = useState<Api.GitBranchInfo | null>(null);
+  const [branchList, setBranchList] = useState<Api.GitBranch[]>([]);
+  const [branchMenuOpen, setBranchMenuOpen] = useState(false);
+  const [branchBusy, setBranchBusy] = useState<string | null>(null);
+  const [branchError, setBranchError] = useState<string | null>(null);
   const [remoteBusy, setRemoteBusy] = useState<null | 'push' | 'pull' | 'fetch'>(null);
   const [remoteError, setRemoteError] = useState<string | null>(null);
   const [discardTarget, setDiscardTarget] = useState<string | null>(null);
@@ -149,12 +157,14 @@ export function GitPanel({ workspaceId, repo = '', onRepoChange, selectedDiffPat
       }
       const repoPath = current.path;
       if (repoPath !== repo) onRepoChange?.(repoPath);
-      const [status, info] = await Promise.all([
+      const [status, info, branches] = await Promise.all([
         getGitStatus(workspaceId, repoPath || undefined),
         getGitBranchInfo(workspaceId, repoPath || undefined).catch(() => null),
+        getGitBranches(workspaceId, repoPath || undefined).catch(() => null),
       ]);
       setGitData(status.branch, status.files);
       if (info) setBranchInfo(info);
+      if (branches) setBranchList(branches.branches);
     } catch (e) {
       console.error('[GitPanel] git status failed:', e);
       setGitData('', []);
@@ -258,6 +268,21 @@ export function GitPanel({ workspaceId, repo = '', onRepoChange, selectedDiffPat
     }
   }
 
+  async function handleCheckout(target: string) {
+    if (branchBusy || target === branch) return;
+    setBranchBusy(target);
+    setBranchError(null);
+    setBranchMenuOpen(false);
+    try {
+      await gitCheckout(workspaceId, target, repo || undefined);
+      await refresh();
+    } catch (e) {
+      setBranchError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBranchBusy(null);
+    }
+  }
+
   return (
     <div className="flex h-full flex-col">
       {/* 头部:仓库选择(多仓库时) + 分支 + ahead/behind + 拉取/推送/获取 + 刷新 */}
@@ -302,9 +327,56 @@ export function GitPanel({ workspaceId, repo = '', onRepoChange, selectedDiffPat
             )}
           </div>
         )}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5">
           <GitCommitHorizontal className="h-3.5 w-3.5 shrink-0 text-primary/60" />
-          <span className="truncate font-mono text-xs text-foreground">{branch || '—'}</span>
+          {/* 分支切换下拉:当前分支 + 其他本地分支,点击直接切换 */}
+          <div className="relative min-w-0">
+            <button
+              onClick={() => setBranchMenuOpen((v) => !v)}
+              disabled={branchBusy !== null}
+              className="flex max-w-40 items-center gap-1 rounded px-1 py-0.5 text-xs font-medium transition-colors hover:bg-accent disabled:opacity-50"
+              title="切换分支"
+            >
+              <GitBranch className="h-3 w-3 shrink-0 text-muted-foreground" />
+              <span className="truncate font-mono">{branch || '—'}</span>
+              <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+            </button>
+            {branchMenuOpen && (
+              <div className="absolute left-0 z-50 mt-1 max-h-64 w-52 overflow-y-auto rounded-md border bg-popover p-1 shadow-md">
+                {branchList.length === 0 ? (
+                  <div className="px-2 py-1.5 text-[10px] text-muted-foreground">无本地分支</div>
+                ) : (
+                  branchList.map((b) => {
+                    const isCurrent = b.name === branch;
+                    const busy = branchBusy === b.name;
+                    return (
+                      <button
+                        key={b.name}
+                        onClick={() => void handleCheckout(b.name)}
+                        disabled={isCurrent || branchBusy !== null}
+                        className={cn(
+                          'flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-[11px] transition-colors',
+                          isCurrent
+                            ? 'bg-accent/60 font-medium text-foreground'
+                            : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+                          branchBusy !== null && 'cursor-default opacity-70',
+                        )}
+                        title={isCurrent ? '当前分支' : `切换到 ${b.name}`}
+                      >
+                        {isCurrent ? (
+                          <Check className="h-3 w-3 shrink-0 text-primary" />
+                        ) : (
+                          <GitBranch className="h-3 w-3 shrink-0 text-muted-foreground" />
+                        )}
+                        <span className="truncate font-mono">{b.name}</span>
+                        {busy && <RefreshCw className="ml-auto h-2.5 w-2.5 shrink-0 animate-spin" />}
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            )}
+          </div>
           {branchInfo?.upstream && (
             <span className="truncate text-[10px] text-muted-foreground/60">
               ← {branchInfo.upstream}
@@ -374,6 +446,9 @@ export function GitPanel({ workspaceId, repo = '', onRepoChange, selectedDiffPat
         )}
         {remoteError && (
           <div className="text-[10px] text-destructive">{remoteError}</div>
+        )}
+        {branchError && (
+          <div className="text-[10px] text-destructive">{branchError}</div>
         )}
       </div>
 
