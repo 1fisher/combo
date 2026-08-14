@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { cn } from '../../lib/utils';
 
 /**
  * 连击结算:本轮「发送 → 收到首个 token」耗时低于阈值(默认 2s)则 combo +1,
@@ -27,48 +28,81 @@ export function comboHue(combo: number): number {
   return Math.round(120 * (1 - clamped / 100));
 }
 
+/** 数字膨胀动画的节流间隔:低于它只刷新数字,不重播 bump,避免连续增长时抖动 */
+const BUMP_THROTTLE_MS = 600;
+/** 距上次 combo 更新超过该时长(与连击中断阈值一致)无更新 → 缩小渐隐 */
+const IDLE_SHRINK_MS = 2000;
+
+type Phase = 'hidden' | 'shown' | 'shrink';
+
 /**
  * 会话区中央的连击浮动特效(拳皇连招风):
- * 弹出大字「COMBO × N」,放大/抖动后上飘渐隐。
+ * 弹出大字「COMBO × N」,放大后**保持放大态**上浮渐隐。
  * - 颜色随 combo 数值从绿(1)渐变到红(100),100+ 保持红色;
- * - 弹出动画按 600ms 节流重播:流式期间 combo 高频更新时,数字实时刷新
- *   (key 不变不重挂子树),只有超过节流窗口才重播一次弹出动画,避免闪烁;
- *   流式结束后最后一次动画播完即渐隐。
+ * - 连续数字增长:整体停在放大态 scale(1.25) 不回缩,数字每次更新做一次
+ *   膨胀脉冲(600ms 节流),避免高频刷新时「放大→缩小」来回闪烁;
+ * - 超过阈值时间(2s)无更新(流式结束/连击中断):播放缩小动画渐隐,
+ *   下轮连击重新从放大弹出开始。
  */
 export function ComboOverlay({ combo }: { combo: number }) {
   const [display, setDisplay] = useState(combo);
-  const [popKey, setPopKey] = useState(0);
-  const [gone, setGone] = useState(true);
-  const lastPopRef = useRef(0);
+  const [phase, setPhase] = useState<Phase>('hidden');
+  const lastBumpRef = useRef(0);
+  const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const countRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (combo <= 0) {
-      setGone(true);
+      // 连击中断:若正在展示则走缩小渐隐,否则保持隐藏
+      setPhase((p) => (p === 'shown' ? 'shrink' : 'hidden'));
       return;
     }
     setDisplay(combo);
+    // 出现/重新出现 → 放大弹出;已展示 → 保持放大态
+    setPhase((p) => (p === 'hidden' || p === 'shrink' ? 'shown' : 'shown'));
+    // 连续增长:数字膨胀脉冲(节流),整体不回缩
     const now = Date.now();
-    if (now - lastPopRef.current >= 600) {
-      lastPopRef.current = now;
-      setGone(false);
-      setPopKey((k) => k + 1);
+    if (now - lastBumpRef.current >= BUMP_THROTTLE_MS) {
+      lastBumpRef.current = now;
+      const el = countRef.current;
+      if (el) {
+        el.classList.remove('combo-bump');
+        // 强制 reflow,确保连续更新时动画可重播
+        void el.offsetWidth;
+        el.classList.add('combo-bump');
+      }
     }
+    // 超时缩小:超过阈值无更新(流式结束)先缩小再隐藏
+    if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    idleTimerRef.current = setTimeout(() => {
+      setPhase((p) => (p === 'shown' ? 'shrink' : p));
+    }, IDLE_SHRINK_MS);
   }, [combo]);
 
-  if (combo <= 0 || gone) return null;
+  useEffect(
+    () => () => {
+      if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    },
+    []
+  );
+
+  if (phase === 'hidden') return null;
   const hue = comboHue(combo);
   return (
-    <div
-      key={popKey}
-      className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center"
-      onAnimationEnd={() => setGone(true)}
-    >
+    <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center overflow-visible px-[12%] py-[8%] [container-type:inline-size]">
       <div
-        className="combo-pop select-none text-center"
+        className={cn('combo-pop select-none text-center', phase === 'shrink' && 'combo-pop--shrink')}
         style={{ '--combo-hue': hue } as CSSProperties}
+        onAnimationEnd={(e) => {
+          if (e.animationName === 'combo-shrink' && e.target === e.currentTarget) {
+            setPhase('hidden');
+          }
+        }}
       >
         <div className="combo-title">COMBO</div>
-        <div className="combo-count">× {display}</div>
+        <div ref={countRef} className="combo-count">
+          × {display}
+        </div>
       </div>
     </div>
   );
