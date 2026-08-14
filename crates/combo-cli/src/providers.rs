@@ -364,6 +364,26 @@ pub fn save_cached_models(provider_id: &str, models: &[ModelInfo]) -> Result<()>
     Ok(())
 }
 
+/// 删除某 provider 的本地模型缓存(删除自定义 provider 时清理遗留,
+/// 避免残留模型出现在 Composer 列表里)。
+pub fn remove_cached_models(provider_id: &str) -> Result<()> {
+    let mut list = load_cached_models()?;
+    let before = list.len();
+    list.retain(|c| c.id != provider_id);
+    if list.len() == before {
+        // 无此条目(或缓存文件本就不存在):无需写回
+        return Ok(());
+    }
+    let path = model_cache_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let out = serde_json::to_string_pretty(&list)
+        .map_err(|e| anyhow::anyhow!("序列化模型缓存失败: {e}"))?;
+    std::fs::write(&path, out)?;
+    Ok(())
+}
+
 /// 按 id 查找 provider:先查自定义 providers map,再查 combo providers.json,
 /// 最后回退内置定义。
 pub fn find_provider(
@@ -378,6 +398,7 @@ pub fn find_provider(
                 // 内置 provider 被配置部分覆盖:仅覆盖显式给出的字段,
                 // 缺失的 base_url/key/模型回落内置定义(与 list_providers 口径一致)
                 if from_cfg.api_key.is_some() { b.api_key = from_cfg.api_key; }
+                if from_cfg.name.is_some() { b.name = from_cfg.name; }
                 if !from_cfg.api_keys.is_empty() { b.api_keys = from_cfg.api_keys; }
                 if from_cfg.api_endpoint.is_some() { b.api_endpoint = from_cfg.api_endpoint; }
                 if from_cfg.provider_type.is_some() { b.provider_type = from_cfg.provider_type; }
@@ -433,7 +454,9 @@ impl ProviderInfo {
         }
         Self {
             id: id.to_string(),
-            name: Some(id.to_string()),
+            // 显示名称透传配置(未设置时由调用方回落到 id,内置 provider 覆盖场景
+            // 保持内置显示名不受影响)
+            name: c.name.clone(),
             api_key: c.api_key.clone(),
             api_keys: c.api_keys.clone(),
             api_endpoint: c.base_url.clone(),

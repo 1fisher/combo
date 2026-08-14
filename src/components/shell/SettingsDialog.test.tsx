@@ -17,6 +17,8 @@ const addKeyMutate = vi.fn();
 const activateKeyMutate = vi.fn();
 const renameKeyMutate = vi.fn();
 const removeKeyMutate = vi.fn();
+const createProviderMutate = vi.fn();
+const removeProviderMutate = vi.fn();
 
 vi.mock('../../hooks/useAgentModel', () => ({
   useProviders: () => ({
@@ -45,6 +47,14 @@ vi.mock('../../hooks/useAgentModel', () => ({
           { id: 'deepseek-chat', name: 'DeepSeek Chat' },
         ],
       },
+      {
+        id: 'my-relay',
+        name: '我的中转',
+        type: 'openai-compat',
+        custom: true,
+        has_api_key: false,
+        models: [],
+      },
     ],
   }),
   useFetchModels: () => ({ mutateAsync: fetchModelsMutate, isPending: false }),
@@ -54,6 +64,10 @@ vi.mock('../../hooks/useAgentModel', () => ({
     activate: { mutateAsync: activateKeyMutate, isPending: false },
     rename: { mutateAsync: renameKeyMutate, isPending: false },
     remove: { mutateAsync: removeKeyMutate, isPending: false },
+  }),
+  useProviderCrud: () => ({
+    create: { mutateAsync: createProviderMutate, isPending: false },
+    remove: { mutateAsync: removeProviderMutate, isPending: false },
   }),
 }));
 
@@ -80,6 +94,10 @@ describe('SettingsDialog', () => {
     renameKeyMutate.mockResolvedValue({ ok: true });
     removeKeyMutate.mockReset();
     removeKeyMutate.mockResolvedValue({ ok: true });
+    createProviderMutate.mockReset();
+    createProviderMutate.mockResolvedValue({ ok: true });
+    removeProviderMutate.mockReset();
+    removeProviderMutate.mockResolvedValue({ ok: true });
     // confirmDialog 在浏览器模式走 window.confirm
     vi.spyOn(window, 'confirm').mockReturnValue(true);
   });
@@ -196,6 +214,60 @@ describe('SettingsDialog', () => {
     await userEvent.click(screen.getByRole('button', { name: /DeepSeek/ }));
     const fetchBtn = screen.getAllByRole('button', { name: '拉取模型' })[0] as HTMLButtonElement;
     expect(fetchBtn.disabled).toBe(true);
+  });
+
+  it('places key name and key inputs on the same row', async () => {
+    renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: /OpenCode Zen/ }));
+    const nameInput = screen.getByPlaceholderText(/Key 名称/);
+    const keyInput = screen.getByPlaceholderText(/输入新 API Key/);
+    // 两个输入框同为同一个 flex 行的子元素
+    expect(nameInput.parentElement).toBe(keyInput.parentElement);
+  });
+
+  it('shows custom badge only for custom providers', () => {
+    renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
+    // 只有 my-relay 是自定义 provider,显示「自定义」标记
+    expect(screen.getAllByText('自定义').length).toBe(1);
+    // 删除 Provider 按钮只出现在自定义 provider 上(内置 3 个没有)
+    expect(screen.getAllByTitle(/删除该自定义 Provider/).length).toBe(1);
+  });
+
+  it('deletes a custom provider via 删除 Provider button', async () => {
+    renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: '删除 Provider' }));
+    expect(removeProviderMutate).toHaveBeenCalledWith({ providerId: 'my-relay' });
+  });
+
+  it('creates a provider via the 添加 Provider form', async () => {
+    renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: '添加 Provider' }));
+    await userEvent.type(screen.getByPlaceholderText(/^ID/), 'relay2');
+    await userEvent.type(screen.getByPlaceholderText(/^显示名称/), '二号中转');
+    await userEvent.type(screen.getByPlaceholderText(/^Base URL/), 'https://x.example.com/v1');
+    await userEvent.type(screen.getByPlaceholderText(/^API Key/), 'sk-new-1');
+    await userEvent.click(screen.getByRole('button', { name: '创建' }));
+    expect(createProviderMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'relay2',
+        name: '二号中转',
+        providerType: 'openai-compat',
+        baseUrl: 'https://x.example.com/v1',
+        apiKey: 'sk-new-1',
+      }),
+    );
+    expect(await screen.findByText(/已创建/)).toBeTruthy();
+  });
+
+  it('disables create button until id is filled', async () => {
+    renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
+    await userEvent.click(screen.getByRole('button', { name: '添加 Provider' }));
+    const btn = screen.getByRole('button', { name: '创建' }) as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    await userEvent.type(screen.getByPlaceholderText(/^ID/), 'relay3');
+    expect((screen.getByRole('button', { name: '创建' }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
   });
 
   it('切换 Provider 后上下文窗口保存到新 provider 的模型,不残留旧模型', async () => {

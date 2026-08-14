@@ -21,7 +21,7 @@ import {
   setProxyUrlOverride,
 } from '../../lib/connection';
 import { useUpdater } from '../../hooks/useUpdater';
-import { useFetchModels, useProviderKeys, useProviders, useSaveProviderKey } from '../../hooks/useAgentModel';
+import { useFetchModels, useProviderCrud, useProviderKeys, useProviders, useSaveProviderKey } from '../../hooks/useAgentModel';
 import { useAgentStore } from '../../stores/agentStore';
 import { useUIPreferences } from '../../stores/uiPreferencesStore';
 import { formatTokenCount } from '../../lib/tokens';
@@ -280,6 +280,17 @@ function ProviderConfigSection({ open }: { open: boolean }) {
   // 行内重命名状态
   const [renaming, setRenaming] = useState<{ providerId: string; keyIndex: number } | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
+  // 自定义 provider 增删
+  const providerCrud = useProviderCrud(null);
+  const [showAddProvider, setShowAddProvider] = useState(false);
+  const [newProvider, setNewProvider] = useState({
+    id: '',
+    name: '',
+    type: 'openai-compat',
+    baseUrl: '',
+    apiKey: '',
+  });
+  const [providerMsg, setProviderMsg] = useState<{ ok: boolean; msg: string } | null>(null);
 
   // 对话框打开时刷新 provider 列表
   useEffect(() => {
@@ -387,42 +398,202 @@ function ProviderConfigSection({ open }: { open: boolean }) {
     }
   }
 
+  /** 创建自定义 provider;失败在表单下方内联提示。 */
+  async function handleCreateProvider() {
+    const id = newProvider.id.trim();
+    if (!id) return;
+    setProviderMsg(null);
+    try {
+      await providerCrud.create.mutateAsync({
+        id,
+        name: newProvider.name.trim() || undefined,
+        providerType: newProvider.type || undefined,
+        baseUrl: newProvider.baseUrl.trim() || undefined,
+        apiKey: newProvider.apiKey.trim() || undefined,
+      });
+      setNewProvider({ id: '', name: '', type: 'openai-compat', baseUrl: '', apiKey: '' });
+      setShowAddProvider(false);
+      setProviderMsg({ ok: true, msg: `Provider「${id}」已创建` });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setProviderMsg({ ok: false, msg });
+    }
+  }
+
+  /** 删除自定义 provider(连同其全部 Key 与模型缓存),失败时展开该行提示。 */
+  async function handleRemoveProvider(p: { id: string; name?: string }) {
+    const ok = await confirmDialog(
+      `确定删除 Provider「${p.name ?? p.id}」?其全部 API Key 与模型缓存将一并删除。`,
+    );
+    if (!ok) return;
+    setStatusMsg((s) => ({ ...s, [p.id]: { ok: false, msg: '' } }));
+    try {
+      await providerCrud.remove.mutateAsync({ providerId: p.id });
+      setExpanded((prev) => ({ ...prev, [p.id]: false }));
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setExpanded((prev) => ({ ...prev, [p.id]: true }));
+      setStatusMsg((s) => ({ ...s, [p.id]: { ok: false, msg } }));
+    }
+  }
+
   const list = providers ?? [];
-  if (list.length === 0) return null;
+  const providerBusy = providerCrud.create.isPending || providerCrud.remove.isPending;
+  const inputCls =
+    'h-7 w-full rounded-lg border border-input-border bg-input px-2 text-[12px] text-foreground outline-none placeholder:text-foreground-subtlest focus:border-input-border-focused';
 
   return (
     <div className="flex flex-col gap-2">
-      <label className="text-[13px] font-medium text-foreground">模型 Provider</label>
+      <div className="flex items-center justify-between">
+        <label className="text-[13px] font-medium text-foreground">模型 Provider</label>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-7 gap-1 px-2 text-[12px]"
+          onClick={() => {
+            setShowAddProvider((v) => !v);
+            setProviderMsg(null);
+          }}
+        >
+          <Plus className="size-3" />
+          添加 Provider
+        </Button>
+      </div>
+      {/* 新增自定义 provider 表单 */}
+      {showAddProvider && (
+        <div className="flex flex-col gap-1.5 rounded-lg border border-input-border bg-background px-2.5 py-2">
+          <div className="grid grid-cols-2 gap-1">
+            <input
+              type="text"
+              value={newProvider.id}
+              onChange={(e) => setNewProvider((s) => ({ ...s, id: e.target.value }))}
+              placeholder="ID(必填,如 my-relay)"
+              className={inputCls}
+            />
+            <input
+              type="text"
+              value={newProvider.name}
+              onChange={(e) => setNewProvider((s) => ({ ...s, name: e.target.value }))}
+              placeholder="显示名称(可选)"
+              className={inputCls}
+            />
+            <select
+              value={newProvider.type}
+              onChange={(e) => setNewProvider((s) => ({ ...s, type: e.target.value }))}
+              aria-label="Provider 类型"
+              className={`${inputCls} [color-scheme:dark]`}
+            >
+              <option value="openai-compat">OpenAI 兼容</option>
+              <option value="openai">OpenAI</option>
+              <option value="anthropic">Anthropic</option>
+              <option value="google">Google Gemini</option>
+              <option value="azure">Azure</option>
+            </select>
+            <input
+              type="text"
+              value={newProvider.baseUrl}
+              onChange={(e) => setNewProvider((s) => ({ ...s, baseUrl: e.target.value }))}
+              placeholder="Base URL(可选,如 https://api.example.com/v1)"
+              className={inputCls}
+            />
+          </div>
+          <input
+            type="password"
+            value={newProvider.apiKey}
+            onChange={(e) => setNewProvider((s) => ({ ...s, apiKey: e.target.value }))}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !providerBusy && newProvider.id.trim()) {
+                e.preventDefault();
+                void handleCreateProvider();
+              }
+            }}
+            placeholder="API Key(可选,创建后也可在列表中添加)"
+            className={inputCls}
+          />
+          <div className="flex items-center gap-1">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 px-2 text-[12px]"
+              onClick={() => setShowAddProvider(false)}
+            >
+              取消
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              className="h-7 gap-1 px-2 text-[12px]"
+              disabled={providerBusy || !newProvider.id.trim()}
+              onClick={() => void handleCreateProvider()}
+            >
+              {providerCrud.create.isPending ? (
+                <Loader2 className="size-3 animate-spin" />
+              ) : (
+                <Plus className="size-3" />
+              )}
+              创建
+            </Button>
+          </div>
+        </div>
+      )}
+      {providerMsg?.msg && (
+        <div className={`text-[11px] ${providerMsg.ok ? 'text-brand' : 'text-destructive'}`}>
+          {providerMsg.msg}
+        </div>
+      )}
       <div className="flex flex-col gap-1.5">
         {list.map((p) => {
           const modelCount = Array.isArray(p.models) ? p.models.length : 0;
           const isExpanded = expanded[p.id] ?? false;
           const st = statusMsg[p.id];
-          const busy = fetchModels.isPending || saveProviderKey.isPending || providerKeys.add.isPending || providerKeys.activate.isPending || providerKeys.rename.isPending || providerKeys.remove.isPending;
+          const busy = fetchModels.isPending || saveProviderKey.isPending || providerKeys.add.isPending || providerKeys.activate.isPending || providerKeys.rename.isPending || providerKeys.remove.isPending || providerCrud.create.isPending || providerCrud.remove.isPending;
           const hasKey = !!p.has_api_key;
           const typedKey = (keyInputs[p.id] ?? '').trim();
           const canFetch = hasKey || typedKey.length > 0;
           return (
             <div key={p.id} className="rounded-lg border border-input-border bg-background">
-              <button
-                type="button"
-                onClick={() => setExpanded((prev) => ({ ...prev, [p.id]: !isExpanded }))}
-                className="flex w-full items-center justify-between px-2.5 py-1.5 text-left"
-              >
-                <span className="flex items-center gap-1.5">
-                  <span className="text-[13px] font-medium text-foreground">{p.name ?? p.id}</span>
-                  <span
-                    className={`rounded px-1.5 py-0.5 text-[10px] ${
-                      hasKey ? 'bg-brand/10 text-brand' : 'bg-surface-hover text-foreground-subtle'
-                    }`}
-                  >
-                    {modelCount > 0 ? `${modelCount} 个模型` : hasKey ? '已配置 Key' : '未配置'}
+              <div className="flex items-center gap-1 pr-2">
+                <button
+                  type="button"
+                  onClick={() => setExpanded((prev) => ({ ...prev, [p.id]: !isExpanded }))}
+                  className="flex min-w-0 flex-1 items-center justify-between px-2.5 py-1.5 text-left"
+                >
+                  <span className="flex min-w-0 items-center gap-1.5">
+                    <span className="truncate text-[13px] font-medium text-foreground">
+                      {p.name ?? p.id}
+                    </span>
+                    {p.custom && (
+                      <span className="shrink-0 rounded bg-surface-hover px-1.5 py-0.5 text-[10px] text-foreground-subtle">
+                        自定义
+                      </span>
+                    )}
+                    <span
+                      className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${
+                        hasKey ? 'bg-brand/10 text-brand' : 'bg-surface-hover text-foreground-subtle'
+                      }`}
+                    >
+                      {modelCount > 0 ? `${modelCount} 个模型` : hasKey ? '已配置 Key' : '未配置'}
+                    </span>
                   </span>
-                </span>
-                <ChevronDown
-                  className={`size-3.5 text-foreground-subtle transition-transform ${isExpanded ? 'rotate-180' : ''}`}
-                />
-              </button>
+                  <ChevronDown
+                    className={`size-3.5 shrink-0 text-foreground-subtle transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                  />
+                </button>
+                {p.custom && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void handleRemoveProvider(p)}
+                    aria-label="删除 Provider"
+                    title="删除该自定义 Provider(连同全部 Key 与模型缓存)"
+                    className="inline-flex shrink-0 items-center rounded p-1 text-foreground-subtlest hover:bg-surface-hover hover:text-destructive disabled:opacity-50"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </button>
+                )}
+              </div>
               {isExpanded && (
                 <div className="flex flex-col gap-1.5 border-t border-input-border px-2.5 py-2">
                   {/* 已有模型列表 */}
@@ -543,63 +714,63 @@ function ProviderConfigSection({ open }: { open: boolean }) {
                       (环境变量/内置,添加 Key 后可切换)
                     </div>
                   )}
-                  <div className="flex flex-col gap-1">
+                  {/* Key 名称 + Key 同一行:名称选填便于记忆,回车即添加 */}
+                  <div className="flex items-center gap-1">
                     <input
                       type="text"
                       value={nameInputs[p.id] ?? ''}
                       onChange={(e) =>
                         setNameInputs((prev) => ({ ...prev, [p.id]: e.target.value }))
                       }
-                      placeholder="Key 名称(可选,方便记忆,如:工作/测试)"
-                      className="h-7 w-full rounded-lg border border-input-border bg-input px-2 text-[12px] text-foreground outline-none placeholder:text-foreground-subtlest focus:border-input-border-focused"
+                      title="Key 名称,方便记忆,如:工作/测试"
+                      placeholder="Key 名称(可选)"
+                      className="h-7 w-32 shrink-0 rounded-lg border border-input-border bg-input px-2 text-[12px] text-foreground outline-none placeholder:text-foreground-subtlest focus:border-input-border-focused"
                     />
-                    <div className="flex items-center gap-1">
-                      <input
-                        type="password"
-                        value={keyInputs[p.id] ?? ''}
-                        onChange={(e) =>
-                          setKeyInputs((prev) => ({ ...prev, [p.id]: e.target.value }))
+                    <input
+                      type="password"
+                      value={keyInputs[p.id] ?? ''}
+                      onChange={(e) =>
+                        setKeyInputs((prev) => ({ ...prev, [p.id]: e.target.value }))
+                      }
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !busy && typedKey) {
+                          e.preventDefault();
+                          void handleAddKey(p.id);
                         }
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' && !busy && typedKey) {
-                            e.preventDefault();
-                            void handleAddKey(p.id);
-                          }
-                        }}
-                        placeholder={hasKey ? '输入新 API Key(拉取模型或仅添加保存)' : '输入 API Key...'}
-                        className="h-7 min-w-0 flex-1 rounded-lg border border-input-border bg-input px-2 text-[12px] text-foreground outline-none placeholder:text-foreground-subtlest focus:border-input-border-focused"
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={busy || !typedKey}
-                        onClick={() => void handleAddKey(p.id)}
-                        className="h-7 shrink-0 gap-1 rounded-lg px-2 text-[12px]"
-                        title="仅保存 Key,不拉取模型"
-                      >
-                        {providerKeys.add.isPending ? (
-                          <Loader2 className="size-3 animate-spin" />
-                        ) : (
-                          <Plus className="size-3" />
-                        )}
-                        添加
-                      </Button>
-                      <Button
-                        type="button"
-                        size="sm"
-                        disabled={busy || !canFetch}
-                        onClick={() => handleFetch(p.id)}
-                        className="h-7 shrink-0 gap-1 rounded-lg px-2 text-[12px]"
-                      >
-                        {busy ? (
-                          <Loader2 className="size-3 animate-spin" />
-                        ) : (
-                          <Zap className="size-3" />
-                        )}
-                        拉取模型
-                      </Button>
-                    </div>
+                      }}
+                      placeholder={hasKey ? '输入新 API Key(拉取模型或仅添加保存)' : '输入 API Key...'}
+                      className="h-7 min-w-0 flex-1 rounded-lg border border-input-border bg-input px-2 text-[12px] text-foreground outline-none placeholder:text-foreground-subtlest focus:border-input-border-focused"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={busy || !typedKey}
+                      onClick={() => void handleAddKey(p.id)}
+                      className="h-7 shrink-0 gap-1 rounded-lg px-2 text-[12px]"
+                      title="仅保存 Key,不拉取模型"
+                    >
+                      {providerKeys.add.isPending ? (
+                        <Loader2 className="size-3 animate-spin" />
+                      ) : (
+                        <Plus className="size-3" />
+                      )}
+                      添加
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={busy || !canFetch}
+                      onClick={() => handleFetch(p.id)}
+                      className="h-7 shrink-0 gap-1 rounded-lg px-2 text-[12px]"
+                    >
+                      {busy ? (
+                        <Loader2 className="size-3 animate-spin" />
+                      ) : (
+                        <Zap className="size-3" />
+                      )}
+                      拉取模型
+                    </Button>
                   </div>
                   {st?.msg && (
                     <div className={`text-[11px] ${st.ok ? 'text-brand' : 'text-destructive'}`}>
@@ -613,9 +784,10 @@ function ProviderConfigSection({ open }: { open: boolean }) {
         })}
       </div>
       <div className="text-[12px] text-foreground-subtle">
-        每个 Provider 可保存多个 API Key:填写名称(可选)+ Key 后点「添加」仅保存,点
-        「拉取模型」保存并同步模型列表(已配置 Key 可直接拉取);铅笔可命名/改名,点
-        「使用」切换激活 Key,点「删除」移除。
+        每个 Provider 可保存多个 API Key:同一行填写「名称(可选)+ Key」,点「添加」仅保存,
+        点「拉取模型」保存并同步模型列表(已配置 Key 可直接拉取);铅笔可命名/改名,点
+        「使用」切换激活 Key,点「删除」移除。右上角可添加自定义 Provider
+        (OpenAI 兼容中转等),自定义 Provider 可整项删除,内置 Provider 不可删除。
       </div>
     </div>
   );

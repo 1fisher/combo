@@ -584,6 +584,76 @@ export function renameGlobalProviderKey(
   });
 }
 
+/** 新增自定义 provider(写入配置文件 `[providers.<id>]`;类型缺省 openai-compat)。 */
+export function createProvider(
+  workspaceId: string,
+  req: {
+    id: string;
+    name?: string;
+    providerType?: string;
+    baseUrl?: string;
+    apiKey?: string;
+    defaultLargeModelId?: string;
+  },
+): Promise<{ ok: boolean; provider: string }> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/providers/create`, {
+    method: 'POST',
+    body: {
+      id: req.id,
+      name: req.name,
+      type: req.providerType,
+      base_url: req.baseUrl,
+      api_key: req.apiKey,
+      default_large_model_id: req.defaultLargeModelId,
+    },
+  });
+}
+
+/** 删除自定义 provider(连同其全部 API Key 与模型缓存;内置 provider 不可删)。 */
+export function removeProvider(
+  workspaceId: string,
+  req: { providerId: string },
+): Promise<{ ok: boolean; provider: string }> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/providers/remove`, {
+    method: 'POST',
+    body: { provider_id: req.providerId },
+  });
+}
+
+/** 新增自定义 provider(全局,不绑定 workspace)。 */
+export function createGlobalProvider(
+  req: {
+    id: string;
+    name?: string;
+    providerType?: string;
+    baseUrl?: string;
+    apiKey?: string;
+    defaultLargeModelId?: string;
+  },
+): Promise<{ ok: boolean; provider: string }> {
+  return apiRequest('/v1/providers/create', {
+    method: 'POST',
+    body: {
+      id: req.id,
+      name: req.name,
+      type: req.providerType,
+      base_url: req.baseUrl,
+      api_key: req.apiKey,
+      default_large_model_id: req.defaultLargeModelId,
+    },
+  });
+}
+
+/** 删除自定义 provider(全局,不绑定 workspace)。 */
+export function removeGlobalProvider(
+  req: { providerId: string },
+): Promise<{ ok: boolean; provider: string }> {
+  return apiRequest('/v1/providers/remove', {
+    method: 'POST',
+    body: { provider_id: req.providerId },
+  });
+}
+
 /** 设置 workspace 当前使用的模型。 */
 export function setWorkspaceModel(
   workspaceId: string,

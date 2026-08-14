@@ -320,6 +320,8 @@ fn build_router(
             "/v1/workspaces/:id/providers/keys/rename",
             post(rename_provider_key),
         )
+        .route("/v1/workspaces/:id/providers/create", post(create_provider))
+        .route("/v1/workspaces/:id/providers/remove", post(delete_provider))
         .route("/v1/providers", get(list_providers))
         .route("/v1/providers/fetch-models", post(fetch_models))
         .route("/v1/providers/save-key", post(save_provider_key))
@@ -336,6 +338,8 @@ fn build_router(
             "/v1/providers/keys/rename",
             post(rename_provider_key),
         )
+        .route("/v1/providers/create", post(create_provider))
+        .route("/v1/providers/remove", post(delete_provider))
         .route("/v1/workspaces/:id/config/model", post(config_model))
         .route(
             "/v1/workspaces/:id/config",
@@ -1382,6 +1386,12 @@ async fn list_providers(State(state): State<AppState>) -> Json<Value> {
     let cfg = state.cfg.lock().unwrap().clone();
     let config_path = AppConfig::load_or_create(&crate::config::default_config_path())
         .unwrap_or_default();
+    // 内置 id 与配置条目 id 集合:标记「自定义 provider」(配置文件新增、可删除)
+    let builtin_ids: HashSet<String> = providers::builtin_providers()
+        .into_iter()
+        .map(|p| p.id)
+        .collect();
+    let config_ids: HashSet<String> = config_path.providers.keys().cloned().collect();
 
     // 内置 provider 作为基准(保持顺序)
     let mut all: Vec<ProviderInfo> = providers::builtin_providers();
@@ -1395,6 +1405,7 @@ async fn list_providers(State(state): State<AppState>) -> Json<Value> {
             if !from_cfg.api_keys.is_empty() { p.api_keys = from_cfg.api_keys; }
             if from_cfg.api_endpoint.is_some() { p.api_endpoint = from_cfg.api_endpoint; }
             if from_cfg.provider_type.is_some() { p.provider_type = from_cfg.provider_type; }
+            if from_cfg.name.is_some() { p.name = from_cfg.name; }
             if from_cfg.default_large_model_id.is_some() { p.default_large_model_id = from_cfg.default_large_model_id; }
             // 合并而非替换:from_config 会用 default_large/small id 自动生成
             // 裸模型(无 context_window/name),整体替换会丢掉内置定义里的
@@ -1474,6 +1485,8 @@ async fn list_providers(State(state): State<AppState>) -> Json<Value> {
             json!({
                 "id": p.id,
                 "name": p.name.as_deref().unwrap_or(&p.id),
+                // 自定义 provider:来自配置文件且不在内置列表中(前端据此显示删除按钮)
+                "custom": !builtin_ids.contains(&p.id) && config_ids.contains(&p.id),
                 "type": p.provider_type.as_deref().unwrap_or(""),
                 "has_api_key": masked.is_some(),
                 "api_key_masked": masked.unwrap_or_default(),
@@ -1755,6 +1768,65 @@ async fn rename_provider_key(
     .map_err(|e| (StatusCode::BAD_REQUEST, format!("重命名 Key 失败: {e}")))?;
     tracing::info!("已重命名 provider `{}` 的 API Key", body.provider_id);
     Ok(Json(json!({ "ok": true, "provider": body.provider_id })))
+}
+
+/// POST /v1/providers/create — 新增自定义 provider(写入 `[providers.<id>]` 段)。
+/// 请求体:`{ id, name?, type?, base_url?, api_key?, default_large_model_id? }`。
+/// id 仅允许字母/数字/`-`/`_`;提供 api_key 时同时入 key 列表并激活。
+#[derive(Deserialize)]
+struct CreateProviderReq {
+    id: String,
+    name: Option<String>,
+    #[serde(rename = "type")]
+    provider_type: Option<String>,
+    base_url: Option<String>,
+    api_key: Option<String>,
+    default_large_model_id: Option<String>,
+}
+
+async fn create_provider(
+    Json(body): Json<CreateProviderReq>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    crate::config::add_provider(
+        &crate::config::default_config_path(),
+        &body.id,
+        body.name.as_deref(),
+        body.provider_type.as_deref(),
+        body.base_url.as_deref(),
+        body.api_key.as_deref(),
+        body.default_large_model_id.as_deref(),
+    )
+    .map_err(|e| (StatusCode::BAD_REQUEST, format!("创建 Provider 失败: {e}")))?;
+    tracing::info!("已新增自定义 provider `{}`", body.id);
+    Ok(Json(json!({ "ok": true, "provider": body.id })))
+}
+
+/// POST /v1/providers/remove — 删除自定义 provider(连同其全部 API Key 与模型缓存)。
+/// 请求体:`{ provider_id }`。内置 provider 不可删除(列表始终会从内置定义生成,
+/// 删除配置条目等价于「恢复默认」,故拒绝以避免误导)。
+#[derive(Deserialize)]
+struct DeleteProviderReq {
+    provider_id: String,
+}
+
+async fn delete_provider(
+    Json(body): Json<DeleteProviderReq>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let pid = body.provider_id.trim();
+    if providers::builtin_providers().iter().any(|p| p.id == pid) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("provider `{pid}` 是内置 Provider,不可删除;可删除其 API Key 或在配置文件中覆盖"),
+        ));
+    }
+    crate::config::remove_provider(&crate::config::default_config_path(), pid)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("删除 Provider 失败: {e}")))?;
+    // 清理该 provider 的本地模型缓存,避免残留模型继续出现在 Composer 列表
+    if let Err(e) = providers::remove_cached_models(pid) {
+        tracing::warn!("清理 provider `{pid}` 的模型缓存失败: {e}");
+    }
+    tracing::info!("已删除自定义 provider `{pid}`");
+    Ok(Json(json!({ "ok": true, "provider": pid })))
 }
 
 /// GET /v1/workspaces/{id}/agent — 返回 agent 信息(含当前模型与其 context_window)。
@@ -2341,5 +2413,49 @@ mod tests {
 
         // 清理
         let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn provider_create_and_delete_handlers() {
+        // 构造 Json<T> 请求体(从 json! 反序列化为目标类型)
+        fn req<T: serde::de::DeserializeOwned>(v: Value) -> Json<T> {
+            Json(serde_json::from_value(v).unwrap())
+        }
+        // 隔离配置目录,避免读写真实 ~/.config/combo/combo-cli.toml
+        let dir = tempfile::tempdir().unwrap();
+        let prev = std::env::var_os("COMBO_CONFIG_DIR");
+        std::env::set_var("COMBO_CONFIG_DIR", dir.path());
+
+        // 创建自定义 provider(缺省类型 openai-compat)
+        let r = create_provider(req(json!({
+            "id": "my-relay", "name": "中转", "base_url": "https://relay.example.com/v1"
+        })))
+        .await
+        .unwrap();
+        assert_eq!(r.0["ok"], json!(true));
+
+        // 重复创建 / 非法 id 报错
+        assert!(create_provider(req(json!({ "id": "my-relay" }))).await.is_err());
+        assert!(create_provider(req(json!({ "id": "bad id!" }))).await.is_err());
+
+        // 内置 provider 拒绝删除
+        assert!(
+            delete_provider(req(json!({ "provider_id": "deepseek" })))
+                .await
+                .is_err()
+        );
+
+        // 删除自定义 provider:成功且配置条目移除
+        let r2 = delete_provider(req(json!({ "provider_id": "my-relay" })))
+            .await
+            .unwrap();
+        assert_eq!(r2.0["ok"], json!(true));
+        let cfg = AppConfig::load_or_create(&dir.path().join("combo-cli.toml")).unwrap();
+        assert!(!cfg.providers.contains_key("my-relay"));
+
+        match prev {
+            Some(v) => std::env::set_var("COMBO_CONFIG_DIR", v),
+            None => std::env::remove_var("COMBO_CONFIG_DIR"),
+        }
     }
 }

@@ -2169,6 +2169,8 @@ export namespace Api {
     default_large_model_id?: string;
     /** provider 默认小模型 id。 */
     default_small_model_id?: string;
+    /** 自定义 provider(配置文件新增、非内置,前端据此显示删除按钮)。 */
+    custom?: boolean;
     [key: string]: unknown;
   };
 }

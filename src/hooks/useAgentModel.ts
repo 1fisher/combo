@@ -4,13 +4,17 @@ import {
   activateProviderKey,
   addGlobalProviderKey,
   addProviderKey,
+  createGlobalProvider,
+  createProvider,
   fetchGlobalProviderModels,
   fetchProviderModels,
   getAgentInfo,
   getGlobalProviders,
   getWorkspaceConfig,
   getWorkspaceProviders,
+  removeGlobalProvider,
   removeGlobalProviderKey,
+  removeProvider,
   removeProviderKey,
   renameGlobalProviderKey,
   renameProviderKey,
@@ -153,4 +157,34 @@ export function useProviderKeys(workspaceId: string | null | undefined) {
     onSuccess: invalidate,
   });
   return { add, activate, rename, remove };
+}
+
+/**
+ * 自定义 provider 管理:create 新增(写入配置文件)/ remove 删除(连同全部
+ * API Key 与模型缓存;内置 provider 由后端拒绝删除)。成功后刷新所有 providers 查询。
+ */
+export function useProviderCrud(workspaceId: string | null | undefined) {
+  const qc = useQueryClient();
+  const invalidate = () => qc.invalidateQueries({ queryKey: ['providers'] });
+
+  const create = useMutation({
+    mutationFn: (vars: {
+      id: string;
+      name?: string;
+      providerType?: string;
+      baseUrl?: string;
+      apiKey?: string;
+      defaultLargeModelId?: string;
+    }) =>
+      workspaceId
+        ? createProvider(workspaceId, vars)
+        : createGlobalProvider(vars),
+    onSuccess: invalidate,
+  });
+  const remove = useMutation({
+    mutationFn: (vars: { providerId: string }) =>
+      workspaceId ? removeProvider(workspaceId, vars) : removeGlobalProvider(vars),
+    onSuccess: invalidate,
+  });
+  return { create, remove };
 }

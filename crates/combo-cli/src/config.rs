@@ -56,6 +56,8 @@ impl ApiKeyEntry {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProviderConfig {
+    /// 显示名称(自定义 provider 用于 UI 展示;缺省显示 id)。
+    pub name: Option<String>,
     /// provider 类型:openai / openai-compat / anthropic / google / azure ...
     #[serde(rename = "type")]
     pub provider_type: Option<String>,
@@ -585,6 +587,70 @@ pub fn rename_provider_key(
     write_config(path, &cfg)
 }
 
+/// 新增自定义 provider(写入 `[providers.<id>]` 段)。
+///
+/// id 仅允许字母/数字/`-`/`_`(TOML key 与 URL 安全),且不能与已有配置条目重复。
+/// provider_type 缺省为 `openai-compat`;api_key 可选,提供时同时加入 key 列表并激活。
+pub fn add_provider(
+    path: &PathBuf,
+    id: &str,
+    name: Option<&str>,
+    provider_type: Option<&str>,
+    base_url: Option<&str>,
+    api_key: Option<&str>,
+    default_large_model_id: Option<&str>,
+) -> Result<()> {
+    let id = id.trim();
+    if id.is_empty() {
+        return Err(anyhow::anyhow!("Provider ID 不能为空"));
+    }
+    if !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err(anyhow::anyhow!("Provider ID 仅支持字母、数字、`-`、`_`"));
+    }
+    let name = name.map(str::trim).filter(|s| !s.is_empty());
+    let provider_type = provider_type
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("openai-compat");
+    let base_url = base_url.map(str::trim).filter(|s| !s.is_empty());
+    let api_key = api_key.map(str::trim).filter(|s| !s.is_empty());
+    let default_large_model_id = default_large_model_id
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    let mut cfg = load_config(path)?;
+    if cfg.providers.contains_key(id) {
+        return Err(anyhow::anyhow!("provider `{id}` 已存在"));
+    }
+    let mut entry = ProviderConfig {
+        name: name.map(String::from),
+        provider_type: Some(provider_type.to_string()),
+        api_key: api_key.map(String::from),
+        api_keys: Vec::new(),
+        base_url: base_url.map(String::from),
+        default_large_model_id: default_large_model_id.map(String::from),
+        default_small_model_id: None,
+    };
+    // 提供 key 时同时入列表并激活(与 save_provider_key 行为一致)
+    if let Some(k) = api_key {
+        entry.api_keys.push(ApiKeyEntry::plain(k.to_string()));
+    }
+    cfg.providers.insert(id.to_string(), entry);
+    write_config(path, &cfg)
+}
+
+/// 删除配置文件中的自定义 provider(连同其全部 key)。
+///
+/// 仅删除配置条目:内置 provider 被删后回落内置定义(UI 侧已过滤内置项,
+/// 这里不做限制,删除内置 id 的配置覆盖等价于「恢复默认」)。
+pub fn remove_provider(path: &PathBuf, provider_id: &str) -> Result<()> {
+    let mut cfg = load_config(path)?;
+    if cfg.providers.remove(provider_id).is_none() {
+        return Err(anyhow::anyhow!("provider `{provider_id}` 未在配置文件中定义"));
+    }
+    write_config(path, &cfg)
+}
+
 /// 写入默认配置文件模板。`overwrite=false` 时若文件已存在则不写。
 pub fn write_default(path: &PathBuf, overwrite: bool) -> Result<()> {
     if path.exists() && !overwrite {
@@ -1007,5 +1073,67 @@ mod tests {
         let keys: Vec<&str> = pc.api_keys.iter().map(|k| k.key()).collect();
         assert_eq!(keys, vec!["sk-old", "sk-new"]);
         assert_eq!(pc.api_key.as_deref(), Some("sk-new"));
+    }
+
+    #[test]
+    fn custom_provider_add_and_remove() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("combo-cli.toml");
+
+        // 新增:缺省类型 openai-compat;提供 key 时入列表并激活
+        add_provider(
+            &path,
+            "my-relay",
+            Some("中转"),
+            None,
+            Some(" https://relay.example.com/v1 "),
+            Some("sk-1"),
+            None,
+        )
+        .unwrap();
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        let pc = cfg.providers.get("my-relay").unwrap();
+        assert_eq!(pc.name.as_deref(), Some("中转"));
+        assert_eq!(pc.provider_type.as_deref(), Some("openai-compat"));
+        assert_eq!(pc.base_url.as_deref(), Some("https://relay.example.com/v1"), "前后空白应被 trim");
+        assert_eq!(pc.api_key.as_deref(), Some("sk-1"));
+        assert_eq!(pc.api_keys.len(), 1);
+
+        // 重复 id 报错
+        assert!(add_provider(&path, "my-relay", None, None, None, None, None).is_err());
+        // 非法 id / 空 id 报错
+        assert!(add_provider(&path, "bad id!", None, None, None, None, None).is_err());
+        assert!(add_provider(&path, "  ", None, None, None, None, None).is_err());
+
+        // 无 key / 无名称也能创建
+        add_provider(&path, "bare", None, Some("anthropic"), None, None, Some("claude-x")).unwrap();
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        let bare = cfg.providers.get("bare").unwrap();
+        assert_eq!(bare.provider_type.as_deref(), Some("anthropic"));
+        assert!(bare.api_key.is_none());
+        assert_eq!(bare.default_large_model_id.as_deref(), Some("claude-x"));
+
+        // 删除后配置条目消失,再删报错
+        remove_provider(&path, "my-relay").unwrap();
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        assert!(!cfg.providers.contains_key("my-relay"));
+        assert!(remove_provider(&path, "my-relay").is_err());
+        // 未定义过的 id 报错
+        assert!(remove_provider(&path, "never-exists").is_err());
+    }
+
+    #[test]
+    fn custom_provider_from_config_carries_name() {
+        // from_config 透传配置里的显示名;未设置时为 None(由序列化层回落 id)
+        let pc = ProviderConfig {
+            name: Some("中转".into()),
+            ..Default::default()
+        };
+        let info = crate::providers::ProviderInfo::from_config("my-relay", &pc);
+        assert_eq!(info.name.as_deref(), Some("中转"));
+
+        let info2 =
+            crate::providers::ProviderInfo::from_config("my-relay", &ProviderConfig::default());
+        assert_eq!(info2.name, None);
     }
 }
