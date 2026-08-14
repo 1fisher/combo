@@ -28,7 +28,7 @@ export function comboHue(combo: number): number {
   return Math.round(120 * (1 - clamped / 100));
 }
 
-/** 数字膨胀动画的节流间隔:低于它只刷新数字,不重播 bump,避免连续增长时抖动 */
+/** 整体摆动/数字膨胀动画的节流间隔:低于它只刷新数字,不重播,避免连续增长时抖动 */
 const BUMP_THROTTLE_MS = 600;
 /** 距上次 combo 更新超过该时长(与连击中断阈值一致)无更新 → 缩小渐隐 */
 const IDLE_SHRINK_MS = 2000;
@@ -39,8 +39,10 @@ type Phase = 'hidden' | 'shown' | 'shrink';
  * 会话区中央的连击浮动特效(拳皇连招风):
  * 弹出大字「COMBO × N」,放大后**保持放大态**上浮渐隐。
  * - 颜色随 combo 数值从绿(1)渐变到红(100),100+ 保持红色;
- * - 连续数字增长:整体停在放大态 scale(1.25) 不回缩,数字每次更新做一次
- *   膨胀脉冲(600ms 节流),避免高频刷新时「放大→缩小」来回闪烁;
+ * - 连续数字增长:整体停在放大态 scale(1.3) 不回缩,每次更新整体做一次
+ *   倾斜摆动 + 单程放大(combo-tilt,scale 1.25→1.3、rotate −5°→0°,600ms
+ *   节流,**无心跳脉冲**),同时数字自身膨胀(combo-count-bump,×1→×1.25→×1),
+ *   避免高频刷新时「放大→缩小」来回闪烁;
  * - 超过阈值时间(2s)无更新(流式结束/连击中断):播放缩小动画渐隐,
  *   下轮连击重新从放大弹出开始。
  */
@@ -60,7 +62,7 @@ export function ComboOverlay({ combo }: { combo: number }) {
     setDisplay(combo);
     // 出现/重新出现 → 放大弹出;已展示 → 保持放大态
     setPhase((p) => (p === 'hidden' || p === 'shrink' ? 'shown' : 'shown'));
-    // 连续增长:整体放大倾斜脉冲(节流),不回缩
+    // 连续增长:整体倾斜摆动 + 数字自身膨胀(节流),不回缩
     const now = Date.now();
     if (now - lastBumpRef.current >= BUMP_THROTTLE_MS) {
       lastBumpRef.current = now;

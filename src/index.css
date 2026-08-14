@@ -175,16 +175,17 @@
 }
 /* ---- 连击(combo)特效:拳皇连招风;颜色随 combo 数值从绿渐变到红(100 为红) ----
    动画拆三段:
-   - combo-pop-in:出现时放大弹出(峰值 1.35 即停),结束后**保持放大态 scale(1.25)**
+   - combo-pop-in:出现时放大弹出(峰值 1.38 即停),结束后**保持放大态 scale(1.3)**
      不回缩 —— 连续数字增长期间整体一直保持放大,避免高频刷新来回缩放闪烁;
-   - combo-bump:连续增长时**整体(标题+数字)放大倾斜脉冲**(保持态 1.25 上再冲
-     到 1.36 并 ±3° 摇摆,结束回 1.25),配合 animation 列表里保留 combo-pop-in
-     保证脉冲结束回落时整体不会突然缩回无 transform 状态;
+   - combo-tilt:连续增长时**整体倾斜摆动 + 单程放大**(scale 1.25 → 1.3 不回缩,
+     rotate −5° → 0° → 0°,0.3s 平滑缓动)—— 有连击动感、没有心跳脉冲;同一时刻
+     数字自身播放 combo-count-bump(×1 → ×1.25 → ×1,0.3s)轻微膨胀。animation
+     列表里保留 combo-pop-in,保证摆动结束回落时整体不会突然缩回无 transform 状态;
    - combo-shrink:超过阈值(2s)无更新/连击中断时缩小渐隐。
-   峰值 scale 刻意压到 1.36(原 1.45)且 rotate 幅度减小,配合外层容器 padding
-   缓冲,避免 2 位以上数字放大/旋转后右端超出会话区被 overflow-hidden 裁掉;
-   .combo-count 另补横向 padding(content-box),把斜体字形的右端悬垂留在盒内
-   —— 会话区裁剪边界是竖直的,而数字是斜的,右端最易被竖向切掉。 */
+   整体保持态 scale(1.3) 与数字膨胀 1.25 叠加(峰值 ≈1.63)时,配合外层容器
+   padding 缓冲,避免 2 位以上数字放大/旋转后右端超出会话区被 overflow-hidden
+   裁掉;.combo-count 另补横向 padding(content-box),把斜体字形的右端悬垂留在
+   盒内 —— 会话区裁剪边界是竖直的,而数字是斜的,右端最易被竖向切掉。 */
 @layer components {
   .combo-pop {
     /* 默认金色;运行时由 ComboOverlay 按 combo 值覆盖为绿→红 */
@@ -202,14 +203,20 @@
   .combo-pop--shrink {
     animation: combo-shrink 0.5s cubic-bezier(0.6, 0, 0.85, 0.4) forwards;
   }
-  /* 连续增长时的整体放大倾斜脉冲:动画列表里**保留 combo-pop-in**,避免脉冲结束
-     回落时整体从 1.25 突缩到 1(combo-bump 默认无填充,移除 class 后需要
-     combo-pop-in 的 forwards 值继续兜底);combo-pop-in 已在列表中,参数不变,
-     浏览器不会重播它。 */
+  /* 连续增长时的整体倾斜摆动 + 单程放大(combo-bump 类名沿用,动画换成 combo-tilt):
+     animation 列表里**保留 combo-pop-in**,避免摆动结束回落时整体从 1.3 突缩
+     到 1(combo-tilt 默认无填充,移除 class 后需要 combo-pop-in 的 forwards 值
+     继续兜底);combo-pop-in 已在列表中,参数不变,浏览器不会重播它。
+     同一时刻 .combo-count 后代播放 combo-count-bump 数字膨胀。 */
   .combo-pop.combo-bump {
     animation:
       combo-pop-in 0.7s cubic-bezier(0.2, 0.8, 0.3, 1) forwards,
-      combo-bump 0.3s ease-out;
+      combo-tilt 0.3s cubic-bezier(0.2, 0.8, 0.3, 1);
+  }
+  /* 连击时数字自身轻微膨胀(×1 → ×1.25 → ×1),独立于整体 transform;
+     整体只做倾斜摆动、不缩放 —— 有连击动感,没有心跳 */
+  .combo-pop.combo-bump .combo-count {
+    animation: combo-count-bump 0.3s ease-out;
   }
   .combo-title {
     /* 相对 .combo-pop 字号(30/96)缩放,跟随 clamp 自适应 */
@@ -225,6 +232,8 @@
     @apply font-black italic leading-none;
     font-size: 1em;
     width: max-content;
+    /* 数字膨胀以自身中心偏下为基准,缩放时视觉重心不偏移 */
+    transform-origin: 50% 60%;
     /* 斜体字形右端会超出字面盒(max-content 宽度)约 0.2em:补横向内边距把悬垂
        部分留在盒内,避免放大/旋转后右端被会话区 overflow-hidden 沿竖直方向裁掉
        (切割边界是竖直的,而数字是斜的,右端最容易被切)。box-sizing 用 content-box
@@ -247,16 +256,25 @@
 }
 @keyframes combo-pop-in {
   0%   { transform: scale(0.2) rotate(-8deg); opacity: 0; }
-  20%  { transform: scale(1.35) rotate(3deg);  opacity: 1; }
-  40%  { transform: scale(1.18) rotate(-1deg); opacity: 1; }
-  100% { transform: scale(1.25) rotate(0deg);  opacity: 1; }
+  20%  { transform: scale(1.38) rotate(3deg);  opacity: 1; }
+  40%  { transform: scale(1.22) rotate(-1deg); opacity: 1; }
+  100% { transform: scale(1.3) rotate(0deg);   opacity: 1; }
 }
 @keyframes combo-shrink {
-  0%   { transform: scale(1.25);                  opacity: 1; }
+  0%   { transform: scale(1.3);                   opacity: 1; }
   100% { transform: scale(0.35) translateY(46px); opacity: 0; }
 }
-@keyframes combo-bump {
-  0%   { transform: scale(1.25) rotate(-2deg); }
-  45%  { transform: scale(1.36) rotate(2.5deg); }
-  100% { transform: scale(1.25) rotate(0deg); }
+/* 连击倾斜摆动:整体从 scale(1.25) rotate(−5°) 平滑放大摆正到
+   scale(1.3) rotate(0°)(−5° → 0° → 0°,0.3s 平滑缓动);
+   单程放大不回缩 —— 有连击动感,没有心跳脉冲 */
+@keyframes combo-tilt {
+  0%   { transform: scale(1.25) rotate(-5deg); }
+  60%  { transform: scale(1.3) rotate(0deg); }
+  100% { transform: scale(1.3) rotate(0deg); }
+}
+/* 数字自身轻微膨胀:×1 → ×1.25 → ×1 */
+@keyframes combo-count-bump {
+  0%   { transform: scale(1); }
+  45%  { transform: scale(1.25); }
+  100% { transform: scale(1); }
 }
