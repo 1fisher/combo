@@ -180,7 +180,9 @@
    - combo-bump:连续增长时仅数字做膨胀脉冲(整体仍保持 1.25);
    - combo-shrink:超过阈值(2s)无更新/连击中断时缩小渐隐。
    峰值 scale 刻意压到 1.35(原 1.45)且 rotate 幅度减小,配合外层容器 padding
-   缓冲,避免 2 位以上数字放大/旋转后右端超出会话区被 overflow-hidden 裁掉。 */
+   缓冲,避免 2 位以上数字放大/旋转后右端超出会话区被 overflow-hidden 裁掉;
+   .combo-count 另补横向 padding(content-box),把斜体字形的右端悬垂留在盒内
+   —— 会话区裁剪边界是竖直的,而数字是斜的,右端最易被竖向切掉。 */
 @layer components {
   .combo-pop {
     /* 默认金色;运行时由 ComboOverlay 按 combo 值覆盖为绿→红 */
@@ -212,6 +214,13 @@
     @apply font-black italic leading-none;
     font-size: 1em;
     width: max-content;
+    /* 斜体字形右端会超出字面盒(max-content 宽度)约 0.2em:补横向内边距把悬垂
+       部分留在盒内,避免放大/旋转后右端被会话区 overflow-hidden 沿竖直方向裁掉
+       (切割边界是竖直的,而数字是斜的,右端最容易被切)。box-sizing 用 content-box
+       保证内边距在 max-content 宽度之外外扩,不被 border-box 吃掉;em 单位随
+       clamp 字号缩放。 */
+    box-sizing: content-box;
+    padding-inline: 0.25em;
     background: linear-gradient(
       to bottom,
       hsl(calc(var(--combo-hue) + 30) 95% 82%),
