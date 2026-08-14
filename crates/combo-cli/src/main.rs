@@ -61,8 +61,8 @@ enum Command {
     },
     /// 以服务模式运行(health + control 端点,进程守护式管理)
     Serve {
-        /// 监听端口(默认 0 = 随机)
-        #[arg(long, default_value_t = 0)]
+        /// 监听端口(默认 18236;被占用时自动 +1 递增)
+        #[arg(long, default_value_t = combo_cli::serve::DEFAULT_SERVE_PORT)]
         port: u16,
         /// 监听地址
         #[arg(long, default_value = "127.0.0.1")]

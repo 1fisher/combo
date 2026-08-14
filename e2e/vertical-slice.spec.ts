@@ -26,7 +26,7 @@ test.describe('M1 vertical slice', () => {
     await page.evaluate(
       async ({ dir, clientId }) => {
         localStorage.setItem('combo.clientId', clientId);
-        await fetch(`http://127.0.0.1:18234/v1/workspaces?client_id=${clientId}`, {
+        await fetch(`http://127.0.0.1:18236/v1/workspaces?client_id=${clientId}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ path: dir, client_id: clientId, backend: 'combo-cli' }),

@@ -33,9 +33,9 @@ Three components, three languages/dirs:
   技能注入(`skills.rs`)。`AppState::new(cfg)` 打开默认 MetaStore 并迁移 crush 数据;
   `reconcile_all` 已并入构造函数。
 - **`src-tauri`** (Rust, Tauri v2) — thin shell. `init_backend` in `src/lib.rs`
-  加载 combo 配置、构造 `combo_cli::serve::AppState`、绑定 `127.0.0.1:0` 随机端口、
-  spawn `serve_listener`(同进程内嵌,无子进程)。端口经 Tauri events
-  `proxy-ready` (`{port}`) 与 `rune-status` (`{connected}`) 推给前端。
+  加载 combo 配置、构造 `combo_cli::serve::AppState`、绑定 `127.0.0.1:18236`
+  (被占用自动 +1,与独立 serve 行为一致)、spawn `serve_listener`(同进程内嵌,无子进程)。
+  端口经 Tauri events `proxy-ready` (`{port}`) 与 `rune-status` (`{connected}`) 推给前端。
 - **`src/`** (React 19 + Vite + TS, shadcn/ui) — the frontend. TanStack Query
   for REST data, **Zustand** (`stores/agentStore.ts`) for SSE-driven live state,
   keyed by `sessionId`.
@@ -48,14 +48,14 @@ plain browser. M1 directory picking is a path input, not a native dialog.
 
 ```bash
 npm run dev                 # Vite dev server, strict port 5173 (browser mode)
-bash scripts/dev-proxy.sh   # = VITE_PROXY_URL=http://127.0.0.1:18234 npm run dev
+bash scripts/dev-proxy.sh   # = VITE_PROXY_URL=http://127.0.0.1:18236 npm run dev
 npm run build               # tsc -b && vite build (production build, outputs dist/)
 npm run tsc                 # tsc -b (project references: tsconfig.app.json + tsconfig.node.json)
 npm test                    # vitest run (jsdom; config lives inside vite.config.ts)
 npm run test:e2e            # Playwright; SKIPS itself unless COMBO_CLI_BIN is set
 npm run gen:api             # regenerate src/lib/api/types.ts from swagger/swagger.json
-cargo run -p combo-cli -- serve --port 18234                # 后端独立运行(combo 全部 API)
-bash scripts/dev-backend.sh    # 一步:编译 combo-cli → serve 模式跑在 :18234(可传参)
+cargo run -p combo-cli -- serve --port 18236                # 后端独立运行(combo 全部 API;默认 18236,被占用自动 +1)
+bash scripts/dev-backend.sh    # 一步:编译 combo-cli → serve 模式跑在 :18236(可传参)
 cargo run -p combo-cli --bin combo-cli -- ask "你好"         # 自有 agent CLI(rig 驱动)
 cargo test -p combo-cli     # combo-cli 单元测试
 cargo test -p combo         # src-tauri 单元测试
@@ -72,8 +72,8 @@ cargo test -p combo         # src-tauri 单元测试
 
 **Browser dev workflow (recommended):** terminal 1 `bash scripts/dev-proxy.sh`,
 terminal 2 `bash scripts/dev-backend.sh`(一步编译 combo-cli 并以 serve 模式跑在
-:18234,等价于 `cargo build -p combo-cli` 后运行 `target/debug/combo-cli serve
---port 18234`),then open http://localhost:5173.
+:18236,等价于 `cargo build -p combo-cli` 后运行 `target/debug/combo-cli serve
+--port 18236`),then open http://localhost:5173.
 
 **Tauri desktop mode:** the README says `npm run tauri dev`, but **that does not
 work out of the box** — there is no `tauri` npm script and `@tauri-apps/cli` is not
@@ -87,7 +87,7 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
 |---|---|
 | `COMBO_IT_DIR` | E2E workspace directory (default `/tmp/combo-e2e`). |
 | `COMBO_DATA_DIR` | combo sqlite 数据目录(默认 `$XDG_DATA_HOME/combo`,macOS 无 XDG 时 `~/.local/share/combo`)。combo-cli 的 providers.json 也在此目录。 |
-| `VITE_PROXY_URL` | Proxy base URL for browser mode (e.g. `http://127.0.0.1:18234`). In Tauri mode the port comes from the `proxy-ready` event with a 2s fallback to `:18234`. |
+| `VITE_PROXY_URL` | Proxy base URL for browser mode (e.g. `http://127.0.0.1:18236`). combo-cli serve 默认监听 18236,被占用自动 +1;Tauri 模式取内嵌 serve 事件端口;连接失败时前端自动扫描本机 18236+ 端口匹配 combo-cli。 |
 | `COMBO_HOST` | serve 监听地址(默认 `127.0.0.1`)。域名部署时设 `0.0.0.0` 对外开放;命令行 `--host` 优先级更高。 |
 | `COMBO_CLI_BIN` | E2E 开关:设置后 Playwright spec 才运行(验证真实 agent 工作流)。 |
 | `COMBO_CONFIG_DIR` | combo-cli 配置文件目录(默认 `~/.config/combo`,文件 `combo-cli.toml`)。 |
@@ -194,7 +194,7 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   跑全部单元测试(70+ 项)。
 - **E2E (Playwright):** `playwright.config.ts` `webServer` auto-starts both Vite
   (`bash scripts/dev-proxy.sh`) and the backend (`bash scripts/dev-backend.sh
-  18234`,即 `combo-cli serve`) with `reuseExistingServer: true`. The spec skips
+  18236`,即 `combo-cli serve`) with `reuseExistingServer: true`. The spec skips
   itself unless `COMBO_CLI_BIN` is set. It **wipes the workspace dir
   (`/tmp/combo-e2e`) before running**.
   Selectors rely on Chinese UI text (e.g. button `添加项目`, `发送`, title `新建会话`);
@@ -270,8 +270,7 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
    `default_large_model_id` 时从 combo providers.json 合并默认模型。
 
 1. `npm run tauri dev` (README) is wrong as-is — no tauri npm script/CLI installed.
-2. Browser dev needs the backend on `:18234`; that port is hard-coded as fallback in
-   `connection.ts`, `dev-proxy.sh`, `playwright.config.ts`, and the e2e spec.
+2. Browser dev needs the backend on `:18236`; combo-cli serve 默认监听 18236,端口被占用时自动 +1,前端连接失败会自动扫描匹配本机 combo-cli(见 `connection.ts`)。
 3. `client_id` goes in query params everywhere, but must also be in the
    `createWorkspace` request body.
 4. SSE envelopes are double-nested; don't read `env.payload` directly.
@@ -309,7 +308,7 @@ combo 支持前后端分离部署:combo-cli serve 只当 API 服务,前端(dist/
 (nginx/Vercel 等),浏览器/手机通过 `VITE_PROXY_URL`(构建期)或「设置」里的
 **运行时后端地址覆盖**(`localStorage["combo.proxyUrl"]`,见 `connection.ts`
 `get/set/clearProxyUrlOverride`)指向远端 serve。`resolveProxyBaseUrl` 优先级:
-运行时覆盖 → `VITE_PROXY_URL` → Tauri 内置端口 → `127.0.0.1:18234`。SSE 与
+运行时覆盖 → `VITE_PROXY_URL` → Tauri 内置端口 → 本机端口扫描(18236 起,serve 被占用自动 +1)。SSE 与
 health 都走同一 base,跨域由 CORS 放开。
 
 - **CORS**:serve 的 `build_router` 接收 `allowed_origins` 白名单;独立运行时为空即

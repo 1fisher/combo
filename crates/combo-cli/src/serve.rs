@@ -166,6 +166,31 @@ impl RunState {
     }
 }
 
+/// combo-cli 默认监听端口(桌面端/浏览器前端默认连接本机 combo-cli 的端口)。
+pub const DEFAULT_SERVE_PORT: u16 = 18236;
+
+/// 端口被占用时自动 +1 递增的最大尝试次数:18236 → 18237 → … → 18255。
+pub const PORT_AUTO_INCREMENT_MAX: u16 = 20;
+
+/// 绑定监听端口;若端口被占用则自动 +1 递增尝试(最多 [`PORT_AUTO_INCREMENT_MAX`] 次)。
+/// 实际端口经 `listener.local_addr()` 获取(供 COMBO_CLI_PORT 输出 / proxy-ready 事件下发)。
+pub async fn bind_auto(host: &str, port: u16) -> std::io::Result<tokio::net::TcpListener> {
+    let mut last_err: Option<std::io::Error> = None;
+    for offset in 0..PORT_AUTO_INCREMENT_MAX {
+        let candidate = port.saturating_add(offset);
+        match tokio::net::TcpListener::bind(format!("{host}:{candidate}")).await {
+            Ok(listener) => return Ok(listener),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(last_err.unwrap_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::AddrInUse,
+            format!("端口 {host}:{port} 及后续 {PORT_AUTO_INCREMENT_MAX} 个端口均被占用"),
+        )
+    }))
+}
+
 /// POST /v1/workspaces/{id}/agent 请求体。
 #[derive(Deserialize)]
 struct AgentReq {
@@ -185,7 +210,8 @@ pub async fn run(
     static_dir: Option<PathBuf>,
 ) -> Result<()> {
     let mut state = AppState::new(cfg.clone())?;
-    let listener = tokio::net::TcpListener::bind(format!("{host}:{port}")).await?;
+    // 默认监听 18236,被占用时自动 +1 递增(与桌面端内嵌行为一致)
+    let listener = bind_auto(&host, port).await?;
     let actual = listener.local_addr()?;
     state.local_port = actual.port();
     // 机器可读端口输出(供外部脚本解析)

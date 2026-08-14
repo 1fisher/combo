@@ -12,8 +12,8 @@ export default defineConfig({
       timeout: 30_000,
     },
     {
-      command: 'bash scripts/dev-backend.sh 18234',
-      url: 'http://127.0.0.1:18234/v1/health',
+      command: 'bash scripts/dev-backend.sh 18236',
+      url: 'http://127.0.0.1:18236/v1/health',
       reuseExistingServer: true,
       timeout: 60_000,
     },

@@ -86,11 +86,11 @@ describe('SettingsDialog', () => {
 
   it('saves the proxy url override to localStorage', async () => {
     renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
-    const input = screen.getByPlaceholderText('http://127.0.0.1:18234');
+    const input = screen.getByPlaceholderText('http://127.0.0.1:18236');
     await userEvent.clear(input);
-    await userEvent.type(input, 'http://10.0.0.5:18234');
+    await userEvent.type(input, 'http://10.0.0.5:18236');
     await userEvent.click(screen.getByRole('button', { name: '保存' }));
-    expect(getProxyUrlOverride()).toBe('http://10.0.0.5:18234');
+    expect(getProxyUrlOverride()).toBe('http://10.0.0.5:18236');
     clearProxyUrlOverride();
   });
 

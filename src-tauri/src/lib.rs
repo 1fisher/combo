@@ -100,12 +100,10 @@ fn fallback_cfg() -> combo_cli::agent::AskConfig {
     }
 }
 
-/// 直接内嵌 combo-cli serve:在随机端口上提供 combo 全部 API
+/// 直接内嵌 combo-cli serve:默认在 18236(被占用自动 +1)上提供 combo 全部 API
 /// (不再有独立的 combo-proxy 子进程,combo-cli 与桌面端同进程)。
 async fn init_backend(app: &tauri::AppHandle) {
     use combo_cli::serve::{AppState, serve_listener};
-    use std::net::SocketAddr;
-    use tokio::net::TcpListener;
 
     // 初始化 tracing:打包后看不到 stderr,日志写到文件方便诊断。
     // 开发模式(终端运行)时 stderr 仍有输出。
@@ -124,7 +122,14 @@ async fn init_backend(app: &tauri::AppHandle) {
         .ok()
         .and_then(|h| h.trim().parse().ok())
         .unwrap_or([127, 0, 0, 1].into());
-    let listener = match TcpListener::bind(SocketAddr::from((bind_host, 0))).await {
+    // 默认监听 18236(与独立 combo-cli serve 行为一致),被占用自动 +1 递增;
+    // 桌面端前端默认连接本机 combo-cli,实际端口经 proxy-ready 事件/命令下发。
+    let listener = match combo_cli::serve::bind_auto(
+        &bind_host.to_string(),
+        combo_cli::serve::DEFAULT_SERVE_PORT,
+    )
+    .await
+    {
         Ok(l) => l,
         Err(e) => {
             eprintln!("serve bind failed: {e:?}");
@@ -135,7 +140,7 @@ async fn init_backend(app: &tauri::AppHandle) {
 
     // 立即暴露端口给前端:AppState 初始化(数据库迁移等)可能耗时数秒,
     // 提前设置 ProxyPort + emit proxy-ready,前端 connectLoop 通过健康检查
-    // 轮询等待 serve 就绪,而非 fallback 到 18234 硬编码端口。
+    // 轮询等待 serve 就绪,而非 fallback 到硬编码端口。
     if let Some(state) = app.try_state::<ProxyPort>() {
         *state.0.lock().unwrap() = Some(port);
     }

@@ -14,7 +14,7 @@ combo 是一款开源 Agent IDE 桌面应用:以统一的界面驱动
 在多个项目工作区里并发跑多个会话、实时观察工具调用与输出。
 
 Tauri v2 桌面端 + React 19 / TypeScript 前端,直接内嵌 combo-cli 的
-`serve` 服务模式(进程内 axum,随机端口)——不再有独立的反向代理进程,
+`serve` 服务模式(进程内 axum,默认监听 `127.0.0.1:18236`,被占用自动 +1)——不再有独立的反向代理进程,
 前端永远只面对一套统一的 REST + SSE 契约(`/v1/*`)。
 
 </div>
@@ -42,7 +42,7 @@ Tauri v2 桌面端 + React 19 / TypeScript 前端,直接内嵌 combo-cli 的
 │                    Tauri Webview (React / TS)                │
 │   fetch / EventSource                                        │
 └──────────────────────────┬───────────────────────────────────┘
-                           │  http://127.0.0.1:<随机端口>/v1/*
+                           │  http://127.0.0.1:18236(+1)/v1/*
                            ▼
 ┌──────────────────────────────────────────────────────────────┐
 │              combo-cli serve  (进程内 axum,同进程嵌入)        │
@@ -57,8 +57,8 @@ Tauri v2 桌面端 + React 19 / TypeScript 前端,直接内嵌 combo-cli 的
 
 | 组件 | 目录 | 说明 |
 |------|------|------|
-| **combo-cli serve** | `crates/combo-cli/` | combo 完整后端。监听 `127.0.0.1:<随机端口>`,提供 `/v1/*` 全部端点(REST + SSE);Tauri 模式下以库方式同进程嵌入(`src-tauri` 直接调 `serve_listener`)。 |
-| **Tauri 壳** | `src-tauri/` | 加载 combo 配置,构造 `AppState` 并内嵌启动 serve;随机端口通过 Tauri event `proxy-ready` 推送给前端。 |
+| **combo-cli serve** | `crates/combo-cli/` | combo 完整后端。默认监听 `127.0.0.1:18236`(被占用自动 +1),提供 `/v1/*` 全部端点(REST + SSE);Tauri 模式下以库方式同进程嵌入(`src-tauri` 直接调 `serve_listener`)。 |
+| **Tauri 壳** | `src-tauri/` | 加载 combo 配置,构造 `AppState` 并内嵌启动 serve(默认 18236,被占用自动 +1);实际端口通过 Tauri event `proxy-ready` 推送给前端,连接失败时前端自动扫描本机 combo-cli。 |
 | **前端** | `src/` | React 19 + Vite + shadcn/ui(Radix + Tailwind)。TanStack Query 管 REST,Zustand 按 `sessionId` 分片管 SSE 实时状态。 |
 
 ## 运行前提
@@ -103,13 +103,13 @@ Tauri 壳会直接内嵌启动 combo-cli serve(combo 完整后端),无需手动�
 
 ```bash
 bash scripts/dev-proxy.sh
-# 等价于:VITE_PROXY_URL=http://127.0.0.1:18234 npm run dev
+# 等价于:VITE_PROXY_URL=http://127.0.0.1:18236 npm run dev
 ```
 
 **终端 2** —— 一步编译并启动 combo-cli serve(combo 完整 API 服务):
 
 ```bash
-bash scripts/dev-backend.sh          # 等价于:cargo build -p combo-cli → 以 serve 模式跑在 :18234
+bash scripts/dev-backend.sh          # 等价于:cargo build -p combo-cli → 以 serve 模式跑在 :18236(被占用自动 +1)
 ```
 
 然后浏览器打开 **http://localhost:5173**。
@@ -120,7 +120,7 @@ bash scripts/dev-backend.sh          # 等价于:cargo build -p combo-cli → �
 |------|------|
 | `COMBO_CLI_BIN` | E2E 开关:设置后 Playwright spec 才会运行(校验真实 agent 工作流)。 |
 | `COMBO_IT_DIR` | E2E 工作区目录(默认 `/tmp/combo-e2e`)。 |
-| `VITE_PROXY_URL` | 浏览器模式下后端基地址,如 `http://127.0.0.1:18234`。Tauri 模式自动取 serve 事件端口(2s 回退到 `:18234`)。 |
+| `VITE_PROXY_URL` | 浏览器模式下后端基地址,如 `http://127.0.0.1:18236`。Tauri 模式自动取内嵌 serve 事件端口(默认 18236,被占用自动 +1);连接失败时自动扫描匹配本机 combo-cli。 |
 
 ## 常用脚本
 
@@ -132,7 +132,7 @@ npm test                    # vitest run(jsdom 环境)
 npm run test:e2e            # Playwright(未设 COMBO_CLI_BIN 时自动跳过)
 npm run gen:api             # 由 swagger/swagger.json 重新生成 src/lib/api/types.ts
 cargo test -p combo-cli     # Rust 单元测试
-cargo run -p combo-cli -- serve --port 18234   # 后端独立运行
+cargo run -p combo-cli -- serve --port 18236   # 后端独立运行(默认 18236,被占用自动 +1)
 ```
 
 ## 测试

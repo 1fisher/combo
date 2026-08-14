@@ -8,6 +8,12 @@ const PROXY_OVERRIDE_KEY = 'combo.proxyUrl';
 /** 外部访问域名(localStorage),用于域名部署时生成二维码和远程连接。 */
 const EXTERNAL_URL_KEY = 'combo.externalUrl';
 
+/** combo-cli 默认本地端口:被占用时 serve 自动 +1 递增,前端按此端口起扫描本机实例。 */
+export const DEFAULT_LOCAL_PORT = 18236;
+
+/** 本机 combo-cli 端口扫描范围(18236 → 18236 + SCAN_PORT_COUNT - 1)。 */
+export const SCAN_PORT_COUNT = 20;
+
 /** 默认中转域名,远程访问时通过此地址做中转,实现扫码即用。 */
 export const DEFAULT_RELAY_URL = 'https://proxy.apesoft.cn';
 
@@ -125,6 +131,48 @@ export async function checkHealth(baseUrl: string): Promise<boolean> {
   }
 }
 
+/** 带超时的健康检查(扫描端口时避免某个端口挂起拖慢整个扫描)。 */
+async function checkHealthTimeout(baseUrl: string, timeoutMs: number): Promise<boolean> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${baseUrl}/v1/health`, { signal: ctrl.signal });
+    return res.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** 判断地址是否指向本机(localhost/回环)。 */
+export function isLocalHostname(url: string): boolean {
+  try {
+    const { hostname } = new URL(url);
+    return (
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname === '::1' ||
+      hostname === '[::1]'
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 扫描本机 combo-cli:从默认端口 18236 起逐个健康检查,返回第一个可用地址;
+ * 全部不可用返回 null。combo-cli serve 端口被占用时自动 +1,因此按端口段扫描
+ * 即可匹配到本机正在运行的那一个实例。
+ */
+export async function findLocalComboCli(): Promise<string | null> {
+  for (let i = 0; i < SCAN_PORT_COUNT; i++) {
+    const base = `http://127.0.0.1:${DEFAULT_LOCAL_PORT + i}`;
+    if (await checkHealthTimeout(base, 300)) return base;
+  }
+  return null;
+}
+
 export async function resolveProxyBaseUrl(): Promise<string> {
   // 运行时覆盖优先:前后端分离部署时用户可手动指向远端 proxy
   const override = getProxyUrlOverride();
@@ -140,11 +188,12 @@ export async function resolveProxyBaseUrl(): Promise<string> {
     } catch {
       // command 不存在(旧版本),回退到事件机制
     }
-    // 轮询 command 直到端口就绪,或事件到达
+    // 轮询 command 直到端口就绪,或事件到达;超过 10s 仍未就绪(如内嵌 serve
+    // 启动失败)则回退到本机端口扫描,自动匹配外部 combo-cli serve。
     const { listen } = await import('@tauri-apps/api/event');
-    return await new Promise<string>((resolve) => {
+    const portUrl = await new Promise<string | null>((resolve) => {
       let resolved = false;
-      const done = (url: string) => {
+      const done = (url: string | null) => {
         if (!resolved) {
           resolved = true;
           resolve(url);
@@ -160,7 +209,7 @@ export async function resolveProxyBaseUrl(): Promise<string> {
         // 保留 unlisten 引用避免被 GC
         void fn;
       });
-      // 持续轮询直到端口就绪(serve 同进程绑定随机端口,不走 18234 fallback)
+      // 持续轮询直到端口就绪(内嵌 serve 绑定 18236+,端口经事件下发)
       const poll = () => {
         if (resolved) return;
         invoke<number | null>('get_proxy_port').then((p) => {
@@ -171,7 +220,9 @@ export async function resolveProxyBaseUrl(): Promise<string> {
         });
       };
       setTimeout(poll, 100);
+      setTimeout(() => done(null), 10_000);
     });
+    if (portUrl) return portUrl;
   }
   // 浏览器模式:非 localhost 域名(中转/域名部署)时,使用同源地址作为代理
   if (typeof window !== 'undefined') {
@@ -180,7 +231,10 @@ export async function resolveProxyBaseUrl(): Promise<string> {
       return window.location.origin;
     }
   }
-  return 'http://127.0.0.1:18234';
+  // 本机默认:扫描本机 combo-cli(默认端口 18236 起,被占用自动 +1);
+  // 全部不可用时回到默认端口,connectLoop 在失败时持续扫描自动匹配。
+  const found = await findLocalComboCli();
+  return found ?? `http://127.0.0.1:${DEFAULT_LOCAL_PORT}`;
 }
 
 export async function connectLoop(opts: { intervalMs?: number } = {}): Promise<void> {
@@ -207,13 +261,24 @@ export async function connectLoop(opts: { intervalMs?: number } = {}): Promise<v
     useConnectionStore.getState().setStatus(ok ? 'connected' : 'disconnected');
     if (!ok) {
       staleCount++;
-      // 连续 3 次失败:重新解析端口(可能 proxy-ready 竞态导致用了错误端口)
+      // 连续 3 次失败:本机地址连接失败 → 自动扫描匹配本机 combo-cli
+      // (serve 默认 18236,被占用自动 +1);用户配置了非本机代理地址时
+      // 保留配置(远程部署/中转场景),不做本地回退。
       if (staleCount >= 3) {
         useConnectionStore.getState().setError('agent 服务不可用,正在重试...');
-        const fresh = await resolveProxyBaseUrl();
-        if (fresh !== base) {
-          setProxyBaseUrl(fresh);
-          base = fresh;
+        if (isLocalHostname(base)) {
+          const found = await findLocalComboCli();
+          if (found && found !== base) {
+            setProxyBaseUrl(found);
+            base = found;
+          }
+        } else {
+          // 非本机地址(用户配置的代理/域名部署):重新解析,仍不可用则保留配置
+          const fresh = await resolveProxyBaseUrl();
+          if (fresh !== base) {
+            setProxyBaseUrl(fresh);
+            base = fresh;
+          }
         }
         staleCount = 0;
       }

@@ -152,7 +152,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               onKeyDown={(e) => {
                 if (e.key === 'Enter') save();
               }}
-              placeholder={isTauri() ? '桌面模式使用内置代理' : 'http://127.0.0.1:18234'}
+              placeholder={isTauri() ? '桌面模式使用内置代理' : 'http://127.0.0.1:18236'}
               className="h-9 w-full rounded-lg border border-input-border bg-background px-2.5 text-[13px] outline-none placeholder:text-foreground-subtlest focus-visible:border-input-border-focused"
             />
             <div className="text-[12px] text-foreground-subtle">
