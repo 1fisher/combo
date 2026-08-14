@@ -5,7 +5,6 @@ import {
   Check,
   ChevronDown,
   CircleDot,
-  Download,
   FilePlus,
   FileText,
   Folder,
@@ -285,7 +284,7 @@ export function GitPanel({ workspaceId, repo = '', onRepoChange, selectedDiffPat
 
   return (
     <div className="flex h-full flex-col">
-      {/* 头部:仓库选择(多仓库时) + 分支 + ahead/behind + 拉取/推送/获取 + 刷新 */}
+      {/* 头部:仓库选择(多仓库时) + 分支 + ahead/behind + 拉取/推送 + 刷新 */}
       <div className="flex shrink-0 flex-col gap-1.5 border-b px-3 py-2">
         {/* 多仓库切换:工作区根目录 + 一级子目录中的独立 git 仓库;
             仅一个子仓库时也显示,便于确认当前查看的仓库 */}
@@ -414,15 +413,6 @@ export function GitPanel({ workspaceId, repo = '', onRepoChange, selectedDiffPat
               </div>
             )}
             <div className="ml-auto flex items-center gap-0.5">
-              <button
-                onClick={() => void handleRemote('fetch')}
-                disabled={!!remoteBusy}
-                className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
-                title="获取远程变更"
-              >
-                <Download className={cn('h-3 w-3', remoteBusy === 'fetch' && 'animate-spin')} />
-                获取
-              </button>
               <button
                 onClick={() => void handleRemote('pull')}
                 disabled={!!remoteBusy}
