@@ -1,12 +1,14 @@
 import { isTauri } from './connection';
 import { useUIPreferences } from '../stores/uiPreferencesStore';
 import { useAgentStore } from '../stores/agentStore';
+import { playNotifyAttention, playNotifyDone } from './sfx';
 
 /**
  * 系统通知:任务结束 / 需要用户交互(确认、提问)时提醒用户。
  * 桌面模式走 tauri-plugin-notification,浏览器模式走 Web Notification API。
  * 窗口聚焦且正在查看对应会话时不打扰,其余情况(切走、最小化、
- * 看着别的会话)才发送。
+ * 看着别的会话)才发送;「通知音效」开启时同时播放提示音
+ * (音效独立于系统通知权限,权限被拒也能听到)。
  */
 
 function truncate(text: string, max = 120): string {
@@ -72,6 +74,7 @@ export function notifyRunComplete(sessionId?: string | null, error?: string): vo
   if (!sessionNeedsNotification(sessionId)) return;
   const title = error ? '任务出错' : '任务已完成';
   const body = error ? truncate(error) : '会话任务已结束,点击返回查看结果';
+  if (useUIPreferences.getState().notifySoundEnabled) playNotifyDone();
   void sendNotification(title, body);
 }
 
@@ -82,6 +85,7 @@ export function notifyPermissionRequest(p: {
 }): void {
   if (!useUIPreferences.getState().notifyInteraction) return;
   if (!sessionNeedsNotification(p.session_id)) return;
+  if (useUIPreferences.getState().notifySoundEnabled) playNotifyAttention();
   void sendNotification('等待确认', `Agent 请求执行 ${p.tool_name},需要你的批准`);
 }
 
@@ -92,6 +96,7 @@ export function notifyQuestionRequest(p: {
 }): void {
   if (!useUIPreferences.getState().notifyInteraction) return;
   if (!sessionNeedsNotification(p.session_id)) return;
+  if (useUIPreferences.getState().notifySoundEnabled) playNotifyAttention();
   const first = p.questions?.[0]?.question;
   void sendNotification('等待回答', first ? truncate(first, 80) : 'Agent 提出了问题,需要你的输入');
 }

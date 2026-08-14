@@ -1,9 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { notifyPermissionRequest, notifyQuestionRequest, notifyRunComplete } from './notify';
+import { playNotifyAttention, playNotifyDone } from './sfx';
 import { useUIPreferences } from '../stores/uiPreferencesStore';
 import { useAgentStore } from '../stores/agentStore';
 
 vi.mock('./connection', () => ({ isTauri: () => false }));
+vi.mock('./sfx', () => ({
+  playNotifyDone: vi.fn(),
+  playNotifyAttention: vi.fn(),
+}));
 
 class NotificationStub {
   static permission: NotificationPermission = 'granted';
@@ -25,8 +30,14 @@ describe('notify', () => {
     created.length = 0;
     vi.stubGlobal('Notification', NotificationStub);
     vi.spyOn(document, 'hasFocus').mockReturnValue(false);
-    useUIPreferences.setState({ notifyRunComplete: true, notifyInteraction: true });
+    useUIPreferences.setState({
+      notifyRunComplete: true,
+      notifyInteraction: true,
+      notifySoundEnabled: true,
+    });
     useAgentStore.setState({ activeSessionId: null });
+    vi.mocked(playNotifyDone).mockClear();
+    vi.mocked(playNotifyAttention).mockClear();
   });
 
   afterEach(() => {
@@ -79,5 +90,29 @@ describe('notify', () => {
     expect(created[0].options.body).toContain('edit_file');
     expect(created[1].title).toBe('等待回答');
     expect(created[1].options.body).toContain('使用哪个分支?');
+  });
+
+  it('发送通知时按音色播放提示音:完成/交互各用对应音效', () => {
+    notifyRunComplete('s1');
+    expect(playNotifyDone).toHaveBeenCalledTimes(1);
+    notifyPermissionRequest({ session_id: 's1', tool_name: 'bash' });
+    notifyQuestionRequest({ session_id: 's1', questions: [{ question: '继续吗' }] });
+    expect(playNotifyAttention).toHaveBeenCalledTimes(2);
+  });
+
+  it('关闭通知音效后只发系统通知不播音', () => {
+    useUIPreferences.setState({ notifySoundEnabled: false });
+    notifyRunComplete('s1');
+    notifyPermissionRequest({ session_id: 's1', tool_name: 'bash' });
+    expect(created).toHaveLength(2);
+    expect(playNotifyDone).not.toHaveBeenCalled();
+    expect(playNotifyAttention).not.toHaveBeenCalled();
+  });
+
+  it('窗口聚焦且查看该会话(不打扰场景)音效同样不播放', () => {
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    useAgentStore.setState({ activeSessionId: 's1' });
+    notifyRunComplete('s1');
+    expect(playNotifyDone).not.toHaveBeenCalled();
   });
 });

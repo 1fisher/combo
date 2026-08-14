@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { cn } from '../../lib/utils';
+import { playComboHit } from '../../lib/sfx';
+import { useUIPreferences } from '../../stores/uiPreferencesStore';
 
 /**
  * 连击结算:本轮「发送 → 收到首个 token」耗时低于阈值(默认 2s)则 combo +1,
@@ -62,10 +64,12 @@ export function ComboOverlay({ combo }: { combo: number }) {
     setDisplay(combo);
     // 出现/重新出现 → 放大弹出;已展示 → 保持放大态
     setPhase((p) => (p === 'hidden' || p === 'shrink' ? 'shown' : 'shown'));
-    // 连续增长:整体倾斜摆动 + 数字自身膨胀(节流),不回缩
+    // 连续增长:整体倾斜摆动 + 数字自身膨胀(节流),不回缩;
+    // 打击音效与视觉摆动共用同一节流(600ms),连续高频更新不会变成机关枪
     const now = Date.now();
     if (now - lastBumpRef.current >= BUMP_THROTTLE_MS) {
       lastBumpRef.current = now;
+      if (useUIPreferences.getState().comboSoundEnabled) playComboHit(combo);
       const el = popRef.current;
       if (el) {
         el.classList.remove('combo-bump');

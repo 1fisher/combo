@@ -38,9 +38,10 @@ interface SettingsDialogProps {
 /**
  * 设置对话框:
  * 1. 模型 Provider 配置 — 为各 provider 填入 API Key 并拉取可用模型。
- * 2. 系统通知 — 任务结束 / 需要交互时发送系统通知。
- * 3. 外部访问域名 — 域名部署时填写公开访问地址。
- * 4. 代理地址 — 前后端分离部署时指定 combo-cli serve 服务地址。
+ * 2. 特效与音效 — Liquid 流体特效 / Combo 连击打击音。
+ * 3. 系统通知 — 任务结束 / 需要交互时发送系统通知(可选同时播放提示音)。
+ * 4. 外部访问域名 — 域名部署时填写公开访问地址。
+ * 5. 代理地址 — 前后端分离部署时指定 combo-cli serve 服务地址。
  */
 export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [proxyInput, setProxyInput] = useState('');
@@ -53,10 +54,14 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const ctxSectionRef = useRef<{ commit: () => void }>(null);
   const liquidEnabled = useUIPreferences((s) => s.liquidEnabled);
   const setLiquidEnabled = useUIPreferences((s) => s.setLiquidEnabled);
+  const comboSoundEnabled = useUIPreferences((s) => s.comboSoundEnabled);
+  const setComboSoundEnabled = useUIPreferences((s) => s.setComboSoundEnabled);
   const notifyRunComplete = useUIPreferences((s) => s.notifyRunComplete);
   const setNotifyRunComplete = useUIPreferences((s) => s.setNotifyRunComplete);
   const notifyInteraction = useUIPreferences((s) => s.notifyInteraction);
   const setNotifyInteraction = useUIPreferences((s) => s.setNotifyInteraction);
+  const notifySoundEnabled = useUIPreferences((s) => s.notifySoundEnabled);
+  const setNotifySoundEnabled = useUIPreferences((s) => s.setNotifySoundEnabled);
   // 通知权限被拒时的提示(开启开关时请求权限,失败则提示去系统设置开启)
   const [notifyBlocked, setNotifyBlocked] = useState(false);
 
@@ -130,6 +135,21 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
             <Switch checked={liquidEnabled} onCheckedChange={setLiquidEnabled} aria-label="Liquid 流体特效" />
           </div>
 
+          {/* Combo 特效音效 */}
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-0.5">
+              <label className="text-[13px] font-medium text-foreground">Combo 特效音效</label>
+              <span className="text-[12px] text-foreground-subtle">
+                连击特效弹出与增长时播放打击音,连击越高音色越烈
+              </span>
+            </div>
+            <Switch
+              checked={comboSoundEnabled}
+              onCheckedChange={setComboSoundEnabled}
+              aria-label="Combo 特效音效"
+            />
+          </div>
+
           {/* 系统通知 */}
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between">
@@ -156,6 +176,19 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                 checked={notifyInteraction}
                 onCheckedChange={(v) => void toggleNotify(v, setNotifyInteraction)}
                 aria-label="交互请求通知"
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[13px] font-medium text-foreground">通知音效</label>
+                <span className="text-[12px] text-foreground-subtle">
+                  发送系统通知时同时播放提示音(任务完成与交互提醒音色不同)
+                </span>
+              </div>
+              <Switch
+                checked={notifySoundEnabled}
+                onCheckedChange={setNotifySoundEnabled}
+                aria-label="通知音效"
               />
             </div>
             {notifyBlocked && (

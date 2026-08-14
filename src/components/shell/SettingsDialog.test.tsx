@@ -300,4 +300,14 @@ describe('SettingsDialog', () => {
     expect(useUIPreferences.getState().notifyInteraction).toBe(false);
     useUIPreferences.setState({ notifyRunComplete: true, notifyInteraction: true });
   });
+
+  it('关闭 Combo 特效音效与通知音效开关', async () => {
+    useUIPreferences.setState({ comboSoundEnabled: true, notifySoundEnabled: true });
+    renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
+    await userEvent.click(screen.getByRole('switch', { name: 'Combo 特效音效' }));
+    await userEvent.click(screen.getByRole('switch', { name: '通知音效' }));
+    expect(useUIPreferences.getState().comboSoundEnabled).toBe(false);
+    expect(useUIPreferences.getState().notifySoundEnabled).toBe(false);
+    useUIPreferences.setState({ comboSoundEnabled: true, notifySoundEnabled: true });
+  });
 });
