@@ -21,6 +21,7 @@ import {
   setProxyUrlOverride,
 } from '../../lib/connection';
 import { useUpdater } from '../../hooks/useUpdater';
+import { requestNotifyPermission } from '../../lib/notify';
 import { useFetchModels, useProviderCrud, useProviderKeys, useProviders, useSaveProviderKey } from '../../hooks/useAgentModel';
 import { useAgentStore } from '../../stores/agentStore';
 import { useUIPreferences } from '../../stores/uiPreferencesStore';
@@ -37,8 +38,9 @@ interface SettingsDialogProps {
 /**
  * 设置对话框:
  * 1. 模型 Provider 配置 — 为各 provider 填入 API Key 并拉取可用模型。
- * 2. 外部访问域名 — 域名部署时填写公开访问地址。
- * 3. 代理地址 — 前后端分离部署时指定 combo-cli serve 服务地址。
+ * 2. 系统通知 — 任务结束 / 需要交互时发送系统通知。
+ * 3. 外部访问域名 — 域名部署时填写公开访问地址。
+ * 4. 代理地址 — 前后端分离部署时指定 combo-cli serve 服务地址。
  */
 export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [proxyInput, setProxyInput] = useState('');
@@ -51,6 +53,21 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const ctxSectionRef = useRef<{ commit: () => void }>(null);
   const liquidEnabled = useUIPreferences((s) => s.liquidEnabled);
   const setLiquidEnabled = useUIPreferences((s) => s.setLiquidEnabled);
+  const notifyRunComplete = useUIPreferences((s) => s.notifyRunComplete);
+  const setNotifyRunComplete = useUIPreferences((s) => s.setNotifyRunComplete);
+  const notifyInteraction = useUIPreferences((s) => s.notifyInteraction);
+  const setNotifyInteraction = useUIPreferences((s) => s.setNotifyInteraction);
+  // 通知权限被拒时的提示(开启开关时请求权限,失败则提示去系统设置开启)
+  const [notifyBlocked, setNotifyBlocked] = useState(false);
+
+  async function toggleNotify(next: boolean, apply: (v: boolean) => void) {
+    apply(next);
+    if (next) {
+      setNotifyBlocked(!(await requestNotifyPermission()));
+    } else {
+      setNotifyBlocked(false);
+    }
+  }
 
   useEffect(() => {
     if (open && isTauri()) {
@@ -111,6 +128,41 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               </span>
             </div>
             <Switch checked={liquidEnabled} onCheckedChange={setLiquidEnabled} aria-label="Liquid 流体特效" />
+          </div>
+
+          {/* 系统通知 */}
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[13px] font-medium text-foreground">任务结束通知</label>
+                <span className="text-[12px] text-foreground-subtle">
+                  任务运行结束时发送系统通知
+                </span>
+              </div>
+              <Switch
+                checked={notifyRunComplete}
+                onCheckedChange={(v) => void toggleNotify(v, setNotifyRunComplete)}
+                aria-label="任务结束通知"
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[13px] font-medium text-foreground">交互请求通知</label>
+                <span className="text-[12px] text-foreground-subtle">
+                  需要确认工具或回答问题时发送系统通知
+                </span>
+              </div>
+              <Switch
+                checked={notifyInteraction}
+                onCheckedChange={(v) => void toggleNotify(v, setNotifyInteraction)}
+                aria-label="交互请求通知"
+              />
+            </div>
+            {notifyBlocked && (
+              <div className="text-[12px] text-amber-500">
+                未能获取通知权限,请在系统或浏览器设置中允许 combo 发送通知。
+              </div>
+            )}
           </div>
 
           {/* 模型 Provider 配置 */}

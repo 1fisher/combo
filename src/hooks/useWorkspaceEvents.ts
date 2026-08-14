@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 import { applyEvent } from '../lib/events/dispatch';
 import { WorkspaceEventSource } from '../lib/events/sse';
 import { persistMessage } from '../lib/api';
+import { notifyRunComplete } from '../lib/notify';
 import type { Api } from '../lib/api/types';
 import { useAgentStore } from '../stores/agentStore';
 
@@ -43,6 +44,7 @@ export function useWorkspaceEvents(workspaceId: string | null) {
                 `[${ts}][events] session.is_busy=false → markRun done session="${sess.id}"`
               );
               st.markRun(sess.id, rt.run.runId, 'done');
+              notifyRunComplete(sess.id);
             }
           }
           return;

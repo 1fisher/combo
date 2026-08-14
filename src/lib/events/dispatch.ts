@@ -1,6 +1,7 @@
 import type { Api } from '../api/types';
 import type { useAgentStore } from '../../stores/agentStore';
 import type { EventEnvelope } from './payloadTypes';
+import { notifyPermissionRequest, notifyQuestionRequest, notifyRunComplete } from '../notify';
 
 type Store = ReturnType<typeof useAgentStore.getState>;
 
@@ -44,7 +45,11 @@ export function applyEvent(s: Store, env: EventEnvelope): void {
         console.debug(
           `[${ts()}][dispatch] ✓ finish detected reason="${finishData?.reason ?? ''}" → markRun done`
         );
+        const wasRunning = s.bySession[p.session_id]?.run?.status === 'running';
         s.markRun(p.session_id, p.id, 'done');
+        if (wasRunning) {
+          notifyRunComplete(p.session_id, finishData?.reason === 'error' ? '任务运行出错' : undefined);
+        }
       }
       break;
     }
@@ -53,20 +58,28 @@ export function applyEvent(s: Store, env: EventEnvelope): void {
       console.debug(
         `[${ts()}][dispatch] ✓ run_complete session="${p.session_id}" run="${p.run_id}" error="${p.error ?? ''}"`
       );
+      const wasRunning = s.bySession[p.session_id]?.run?.status === 'running';
       s.markRun(p.session_id, p.run_id || p.session_id, 'done', p.error);
+      if (wasRunning) notifyRunComplete(p.session_id, p.error);
       break;
     }
-    case 'permission_request':
-      s.enqueuePermission(unwrap<Api.PermissionRequest>(env));
+    case 'permission_request': {
+      const p = unwrap<Api.PermissionRequest>(env);
+      s.enqueuePermission(p);
+      notifyPermissionRequest(p);
       break;
+    }
     case 'permission_notification': {
       const p = unwrap<{ tool_call_id: string }>(env);
       s.resolvePermission(p.tool_call_id);
       break;
     }
-    case 'question_batch_request':
-      s.enqueueQuestionBatch(unwrap<Api.QuestionRequest>(env));
+    case 'question_batch_request': {
+      const p = unwrap<Api.QuestionRequest>(env);
+      s.enqueueQuestionBatch(p);
+      notifyQuestionRequest(p);
       break;
+    }
     case 'question_batch_notification': {
       const p = unwrap<{ batch_id: string }>(env);
       s.dismissQuestionBatch(p.batch_id);

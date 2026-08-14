@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SettingsDialog } from './SettingsDialog';
 import { useAgentStore } from '../../stores/agentStore';
+import { useUIPreferences } from '../../stores/uiPreferencesStore';
 import {
   clearExternalUrl,
   clearProxyUrlOverride,
@@ -288,5 +289,15 @@ describe('SettingsDialog', () => {
       'deepseek-v4-flash': 1_048_576,
     });
     useAgentStore.getState().clearContextOverride('deepseek-v4-flash');
+  });
+
+  it('关闭任务结束通知与交互请求通知开关', async () => {
+    useUIPreferences.setState({ notifyRunComplete: true, notifyInteraction: true });
+    renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
+    await userEvent.click(screen.getByRole('switch', { name: '任务结束通知' }));
+    await userEvent.click(screen.getByRole('switch', { name: '交互请求通知' }));
+    expect(useUIPreferences.getState().notifyRunComplete).toBe(false);
+    expect(useUIPreferences.getState().notifyInteraction).toBe(false);
+    useUIPreferences.setState({ notifyRunComplete: true, notifyInteraction: true });
   });
 });
