@@ -97,7 +97,13 @@ export function TodoList({
         </button>
       )}
       {!collapsed && (
-        <div className="border-t border-border/50 px-3 py-1.5">
+        <div
+          className={cn(
+            'border-t border-border/50 px-3 py-1.5',
+            // 输入坞上方的实时列表限高,项多时内部滚动,避免挤压 Composer
+            !archived && 'max-h-48 overflow-y-auto overscroll-contain'
+          )}
+        >
           {todos.map((t, i) => (
             <div
               key={i}
