@@ -53,7 +53,7 @@ export function ChatEmptyState({
           </svg>
         </div>
         <p className="relative z-10 w-full px-4 text-center text-3xl font-medium max-md:text-xl">
-          {hasSession ? '新任务已创建，输入消息开始对话' : '下午好呀，接下来交给我吧'}
+          {hasSession ? '新任务已创建，输入消息开始对话' : 'combo — 一体化 Agent IDE，把复杂交给 AI，把时间留给自己'}
         </p>
       </div>
       {/* 订阅横幅 + 模板卡片 */}
@@ -65,7 +65,7 @@ export function ChatEmptyState({
               <Megaphone className="size-4" />
             </span>
             <span className="min-w-0 cursor-default leading-snug">
-              订阅用户新功能体验：创建“闲时任务”，我们将免费在算力富余时段为你完成指派任务。
+              combo 是开源免费的 Agent IDE，喜欢就分享给朋友，一起体验 AI 编程的乐趣。
             </span>
           </div>
           <button

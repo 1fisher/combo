@@ -10,6 +10,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{error, info, warn};
 
@@ -55,10 +56,27 @@ impl RelayState {
         // 单隧道模式:浏览器加载静态资源(无 Authorization header)时自动选用
         self.single_tunnel_token()
     }
+
+    /// 移除指定 token 的隧道条目,仅当该条目属于本次连接(conn_id 匹配)。
+    /// 同 token 快速重连时,旧连接的清理可能晚于新连接注册执行,
+    /// 直接 remove 会误删新条目,导致中转端存在存活 WS 但 tunnels 表里
+    /// 没有该 token,浏览器请求全部 502「桌面客户端未连接」。
+    pub fn remove_tunnel_if_owned(&self, token: &str, conn_id: &str) {
+        let is_mine = self
+            .tunnels
+            .get(token)
+            .map(|h| h.conn_id == conn_id)
+            .unwrap_or(false);
+        if is_mine {
+            self.tunnels.remove(token);
+        }
+    }
 }
 
 /// 一条已建立的隧道(桌面客户端的 WebSocket 连接)。
 pub struct TunnelHandle {
+    /// 本次连接的唯一标识(用于同 token 快速重连时区分新旧连接)。
+    pub conn_id: String,
     /// 向桌面客户端 WebSocket 发送消息的通道。
     pub tx: mpsc::UnboundedSender<TunnelMsg>,
     /// 待响应的请求:request_id → 响应通道。
@@ -101,7 +119,9 @@ async fn tunnel_task(state: RelayState, token: String, socket: WebSocket) {
     let pending_ws: Arc<DashMap<String, mpsc::UnboundedSender<WsTunnelEvent>>> =
         Arc::new(DashMap::new());
 
+    let conn_id = uuid::Uuid::new_v4().to_string();
     let handle = TunnelHandle {
+        conn_id: conn_id.clone(),
         tx,
         pending: pending.clone(),
         pending_ws: pending_ws.clone(),
@@ -114,18 +134,33 @@ async fn tunnel_task(state: RelayState, token: String, socket: WebSocket) {
     state.tunnels.insert(token.clone(), handle);
     info!("隧道已建立: token={:.8}", token);
 
-    // 发送循环:从通道读取消息,写入 WebSocket
+    // 发送循环:从通道读取消息,写入 WebSocket。
+    // 同时每 30s 发送一次 Ping 保活,防止中转服务器/负载均衡/运营商
+    // 因空闲超时断开长连接(桌面端收到 Ping 会自动回 Pong)。
+    let mut ping_interval = tokio::time::interval(Duration::from_secs(30));
+    ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    ping_interval.tick().await; // 消耗立即触发的首拍
     let send_task = tokio::spawn(async move {
-        while let Some(msg) = rx.recv().await {
-            let json = match serde_json::to_string(&msg) {
-                Ok(j) => j,
-                Err(e) => {
-                    error!("序列化隧道消息失败: {e}");
-                    continue;
+        loop {
+            tokio::select! {
+                msg = rx.recv() => {
+                    let Some(msg) = msg else { break };
+                    let json = match serde_json::to_string(&msg) {
+                        Ok(j) => j,
+                        Err(e) => {
+                            error!("序列化隧道消息失败: {e}");
+                            continue;
+                        }
+                    };
+                    if ws_sink.send(Message::Text(json)).await.is_err() {
+                        break;
+                    }
                 }
-            };
-            if ws_sink.send(Message::Text(json)).await.is_err() {
-                break;
+                _ = ping_interval.tick() => {
+                    if ws_sink.send(Message::Ping(Vec::new().into())).await.is_err() {
+                        break;
+                    }
+                }
             }
         }
     });
@@ -225,7 +260,10 @@ async fn tunnel_task(state: RelayState, token: String, socket: WebSocket) {
         let _ = entry.send(WsTunnelEvent::Close);
     }
     pending_ws.clear();
-    state.tunnels.remove(&token);
+    // 只移除属于本次连接的条目:同 token 快速重连时,旧连接的清理可能晚于
+    // 新连接注册执行,直接 remove 会误删新条目,导致中转端存在存活 WS 但
+    // tunnels 表里没有该 token,浏览器请求全部 502「桌面客户端未连接」。
+    state.remove_tunnel_if_owned(&token, &conn_id);
     info!("隧道已断开: token={:.8}", token);
 }
 
@@ -884,6 +922,7 @@ mod tests {
         state.tunnels.insert(
             "tok1".to_string(),
             TunnelHandle {
+                conn_id: "conn-1".to_string(),
                 tx,
                 pending,
                 pending_ws,
@@ -898,6 +937,7 @@ mod tests {
         let (tx1, _rx1) = mpsc::unbounded_channel::<TunnelMsg>();
         let (tx2, _rx2) = mpsc::unbounded_channel::<TunnelMsg>();
         let make_handle = || TunnelHandle {
+            conn_id: uuid::Uuid::new_v4().to_string(),
             tx: mpsc::unbounded_channel().0,
             pending: Arc::new(DashMap::new()),
             pending_ws: Arc::new(DashMap::new()),
@@ -912,6 +952,7 @@ mod tests {
     fn resolve_token_falls_back_to_single_tunnel() {
         let state = RelayState::default();
         let make_handle = || TunnelHandle {
+            conn_id: uuid::Uuid::new_v4().to_string(),
             tx: mpsc::unbounded_channel().0,
             pending: Arc::new(DashMap::new()),
             pending_ws: Arc::new(DashMap::new()),
@@ -931,6 +972,29 @@ mod tests {
         let state = RelayState::default();
         let req = make_request_with_headers(&[], "/index.html");
         assert_eq!(state.resolve_token(&req), None);
+    }
+
+    #[test]
+    fn remove_tunnel_only_when_owned() {
+        let state = RelayState::default();
+        let make_handle = || TunnelHandle {
+            conn_id: uuid::Uuid::new_v4().to_string(),
+            tx: mpsc::unbounded_channel().0,
+            pending: Arc::new(DashMap::new()),
+            pending_ws: Arc::new(DashMap::new()),
+        };
+        // 注册旧连接条目
+        state.tunnels.insert("tok".to_string(), make_handle());
+        let old_conn_id = state.tunnels.get("tok").unwrap().conn_id.clone();
+        // 同 token 快速重连:新连接覆盖注册
+        state.tunnels.insert("tok".to_string(), make_handle());
+        // 旧连接清理:conn_id 不匹配 → 不得误删新条目
+        state.remove_tunnel_if_owned("tok", &old_conn_id);
+        assert!(state.tunnels.contains_key("tok"));
+        // 当前连接清理:conn_id 匹配 → 正常移除
+        let new_conn_id = state.tunnels.get("tok").unwrap().conn_id.clone();
+        state.remove_tunnel_if_owned("tok", &new_conn_id);
+        assert!(!state.tunnels.contains_key("tok"));
     }
 
     #[test]
