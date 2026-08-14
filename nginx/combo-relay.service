@@ -12,7 +12,8 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/opt/combo/combo-relay --host 127.0.0.1 --port 8080 --static-dir /var/www/combo/dist
+# 8080 被同机 CBAN 服务占用,combo-relay 改用 8081
+ExecStart=/opt/combo/combo-relay --host 127.0.0.1 --port 8081 --static-dir /var/www/combo/dist
 WorkingDirectory=/opt/combo
 Restart=on-failure
 RestartSec=3
