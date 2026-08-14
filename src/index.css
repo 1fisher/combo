@@ -213,15 +213,17 @@
       combo-pop-in 0.7s cubic-bezier(0.2, 0.8, 0.3, 1) forwards,
       combo-tilt 0.3s cubic-bezier(0.2, 0.8, 0.3, 1);
   }
-  /* 连击时数字自身轻微膨胀(×1 → ×1.25 → ×1),独立于整体 transform;
-     整体只做倾斜摆动、不缩放 —— 有连击动感,没有心跳 */
-  .combo-pop.combo-bump .combo-count {
+  /* 连击时标题与数字自身同步轻微膨胀(×1 → ×1.25 → ×1,0.3s),独立于整体
+     transform;整体只做倾斜摆动 + 单程放大 —— 有连击动感,没有心跳 */
+  .combo-pop.combo-bump :is(.combo-title, .combo-count) {
     animation: combo-count-bump 0.3s ease-out;
   }
   .combo-title {
     /* 相对 .combo-pop 字号(30/96)缩放,跟随 clamp 自适应 */
     @apply font-black italic leading-tight tracking-[0.35em];
     font-size: 0.3125em;
+    /* 标题膨胀与数字一致:以自身中心偏下为基准,缩放时视觉重心不偏移 */
+    transform-origin: 50% 60%;
     color: hsl(calc(var(--combo-hue) + 20) 95% 72%);
     -webkit-text-stroke: 1.5px rgba(0, 0, 0, 0.85);
     filter: drop-shadow(0 2px 0 rgba(0, 0, 0, 0.85))
