@@ -28,7 +28,10 @@ pub async fn list(State(state): State<AppState>, Path(id): Path<String>) -> Resp
     };
     match state.meta.db().list_conversations_multi(&ws_ids) {
         Ok(convs) => {
-            let arr: Vec<Value> = convs.iter().map(session_json).collect();
+            let arr: Vec<Value> = convs
+                .iter()
+                .map(|c| session_json(c, state.runs.is_busy(&c.id)))
+                .collect();
             json_ok(&json!(arr))
         }
         Err(e) => json_err(
@@ -68,7 +71,7 @@ pub async fn create(
         context_tokens: 0,
     };
     match state.meta.db().upsert_conversation(&conv) {
-        Ok(_) => json_ok(&session_json(&conv)),
+        Ok(_) => json_ok(&session_json(&conv, false)),
         Err(e) => json_err(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("创建会话失败: {e}"),
@@ -100,7 +103,7 @@ pub async fn rename(
         Ok(()) => match state.meta.db().list_conversations(&id) {
             Ok(convs) => {
                 if let Some(c) = convs.iter().find(|c| c.id == sid) {
-                    json_ok(&session_json(c))
+                    json_ok(&session_json(c, state.runs.is_busy(&sid)))
                 } else {
                     json_err(StatusCode::NOT_FOUND, "会话不存在")
                 }
@@ -117,7 +120,7 @@ pub async fn rename(
     }
 }
 
-fn session_json(c: &ConversationMeta) -> Value {
+fn session_json(c: &ConversationMeta, is_busy: bool) -> Value {
     json!({
         "id": c.id,
         "title": c.title,
@@ -128,6 +131,7 @@ fn session_json(c: &ConversationMeta) -> Value {
         "context_tokens": c.context_tokens,
         "created_at": c.created_at,
         "updated_at": c.updated_at,
+        "is_busy": is_busy,
     })
 }
 

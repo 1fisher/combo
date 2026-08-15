@@ -10,7 +10,7 @@ import { useSessionHistory } from '../../hooks/useSessions';
 import { useWorkspaceEvents } from '../../hooks/useWorkspaceEvents';
 import { useAgentMode } from '../../hooks/useAgentMode';
 import { useWorkspaces } from '../../hooks/useWorkspaces';
-import { useSessions } from '../../hooks/useSessions';
+import { useSessions, markRunStarted } from '../../hooks/useSessions';
 import { MessageList } from './MessageList';
 import { Composer } from './Composer';
 import { ComboOverlay, nextCombo, settleCombo } from './ComboOverlay';
@@ -241,6 +241,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
     // 先标记 running 再发 POST:SSE 事件可能在 POST 响应之前到达
     // (agent 秒回/报错立即 finish),若此时 run 还不是 running,
     // finish/run_complete 的 wasRunning 判断会漏掉任务结束通知。
+    markRunStarted(sid!);
     st.markRun(sid!, runId, 'running');
     try {
       await sendAgentMessage(workspaceId, { sessionId: sid!, runId, prompt: sendPrompt, attachments });
@@ -273,6 +274,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
           } as never);
           void activateSession(sid);
           setQueued(sid, true);
+          markRunStarted(sid);
           st.markRun(sid, retryRunId, 'running');
           await sendAgentMessage(workspaceId, { sessionId: sid, runId: retryRunId, prompt: sendPrompt, attachments });
           pendingRef.current = { sid, sentAt: Date.now() };

@@ -67,6 +67,15 @@ cargo test -p combo         # src-tauri 单元测试
 > (`store.rs`)负责,多轮上下文由 `run_agent_ws` 从
 > `state.meta.db().list_messages(ws_id, session_id)` 读历史注入
 > (`serve.rs::history_to_messages`);工具自动执行、无权限拦截。
+> **消息持久化在服务端**:`run_agent_ws` 直接把用户消息、工具结果与
+> assistant 快照(节流 ~1.5s + 最终版)upsert 进 sqlite,前端不再经 SSE 回写。
+> **多会话并发**:`RunState.active`(session_id → {ws_id, run_id})跟踪进行中
+> 的 run——同一 session 并发发起返回 409,跨 workspace/session 完全并发;
+> run 启动/结束广播 `session` 事件(含 `is_busy` 与 `run_id`),`RunGuard`
+> 的 Drop 保证任意退出路径(含 panic)释放 busy;SSE 订阅建立时补发该
+> workspace 的 busy 快照;`GET .../sessions` 列表带 `is_busy`,前端
+> (`useSessions::reconcileRunsFromSessions` + `useWorkspaceEvents`)据此
+> 恢复/收敛运行态,修复「切走再切回时 run 永远转圈、无法再次发起」。
 > 历史版本写入的 `backend=crush` / `backend=combo-cli` workspace 会在
 > `AppState::new` 时自动归一化迁移(`workspace.rs::reconcile_all`)。
 
@@ -148,9 +157,15 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   `Date.now()`), POSTs `/v1/workspaces/{id}/agent`, then marks the run `running`.
   If no session is active yet, it first creates one via `useSessions().create`
   (title = 首条消息截断 20 字). On failure it deletes the optimistic message.
-  `run_complete` sets the run to `done`. Note: `MessageVM.streaming` is set to
-  `true` on every upsert and never flipped back — completion is signaled by run
-  status, not message flags.
+  `run_complete` sets the run to `done`(`dispatch.ts` 会按 run_id 忽略过期
+  run 的收尾事件);serve 侧同一 session 的并发 POST 返回 409。运行态跨
+  workspace 切换自愈:`session` 事件的 `is_busy`(启动携带 `run_id`,SSE
+  订阅时 serve 补发快照)恢复 running,`useSessions` 的
+  `reconcileRunsFromSessions` 依据列表 `is_busy=false` 收敛卡死的 running。
+  Note: `MessageVM.streaming` is set to `true` on every upsert and never
+  flipped back — completion is signaled by run status, not message flags.
+  消息持久化由 serve 在运行时直接落库;`hydrateMessages` 按 id+updatedAt
+  跳过无变化的重放(仅比 id 会漏掉「服务端收尾后的内容刷新」)。
 - **serve gotchas** (`crates/combo-cli/src/serve.rs`): CORS 由 `build_router` 的
   `CorsLayer` 处理,`allowed_origins` 为空则全开放(独立 `serve` 模式);
   Tauri 模式传 `tauri://localhost` 和 `http://localhost:5173`。

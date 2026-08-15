@@ -202,11 +202,13 @@ export const useAgentStore = create<AgentState>()(
         })),
         ...liveMessages,
       ];
-      // 消息 id 列表未变化时跳过更新,避免不必要的渲染
+      // 消息 id 与 updatedAt 均未变化时跳过更新,避免不必要的渲染。
+      // 必须比较 updatedAt:run 在未订阅期间结束时(run 于服务端收尾),
+      // 同 id 消息的内容已更新(流式快照 → 最终版),仅比 id 会漏刷新。
       if (
         rt &&
         rt.messages.length === messages.length &&
-        rt.messages.every((m, i) => m.id === messages[i].id)
+        rt.messages.every((m, i) => m.id === messages[i].id && m.updatedAt === messages[i].updatedAt)
       ) {
         return st;
       }

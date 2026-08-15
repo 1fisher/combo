@@ -2,22 +2,18 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { applyEvent } from '../lib/events/dispatch';
 import { WorkspaceEventSource } from '../lib/events/sse';
-import { persistMessage } from '../lib/api';
 import { notifyRunComplete } from '../lib/notify';
-import type { Api } from '../lib/api/types';
 import { useAgentStore } from '../stores/agentStore';
 
 /**
- * 消息持久化串行队列:SSE 事件按顺序到达,但 fire-and-forget 的 POST 若并发
- * 发出可能乱序到达后端,导致同一秒内的消息(assistant 与 user 常同秒)在
- * sqlite 中的插入顺序错位,进而让历史回放顺序颠倒(工具调用场景会触发
- * provider 400)。串行执行保证插入顺序 = 事件顺序。
+ * 会话事件负载:run 启动/结束时 serve 广播(含 SSE 订阅快照),
+ * 前端据此恢复/收敛运行态。消息持久化已由 serve 服务端落库,
+ * 前端不再经 SSE 回写(多会话并发时未订阅的 workspace 也能保留完整历史)。
  */
-let persistChain: Promise<unknown> = Promise.resolve();
-function enqueuePersist(workspaceId: string, msg: Api.Message) {
-  persistChain = persistChain
-    .catch(() => {})
-    .then(() => persistMessage(workspaceId, msg).catch(() => {}));
+interface SessionEventPayload {
+  id: string;
+  is_busy?: boolean;
+  run_id?: string;
 }
 
 export function useWorkspaceEvents(workspaceId: string | null) {
@@ -31,13 +27,13 @@ export function useWorkspaceEvents(workspaceId: string | null) {
         const st = useAgentStore.getState();
         if (env.type === 'session') {
           void qc.invalidateQueries({ queryKey: ['sessions', workspaceId] });
-          // 某些场景不发 finish part / run_complete 事件,
-          // 而是通过 session.is_busy=false 表示运行结束。
-          // 检测该信号并标记 run 完成。
-          const inner = env.payload as { type: string; payload: { id?: string; is_busy?: boolean } };
+          const inner = env.payload as { type: string; payload: SessionEventPayload };
           const sess = inner?.payload;
-          if (sess?.id && sess.is_busy === false) {
-            const rt = st.bySession[sess.id];
+          if (!sess?.id) return;
+          const rt = st.bySession[sess.id];
+          if (sess.is_busy === false) {
+            // run 结束(含订阅快照对账):收敛仍标记为 running 的本地状态,
+            // 修复「切走再切回时错过 run_complete 导致会话永远转圈」。
             if (rt?.run?.status === 'running') {
               const ts = new Date().toISOString().slice(11, 23);
               console.debug(
@@ -46,21 +42,24 @@ export function useWorkspaceEvents(workspaceId: string | null) {
               st.markRun(sess.id, rt.run.runId, 'done');
               notifyRunComplete(sess.id);
             }
+          } else if (sess.is_busy === true) {
+            // run 启动/快照:本地无运行态时恢复(如刷新页面后重连、
+            // 切回仍有任务在跑的项目),阻止向运行中的会话重复发送。
+            if (rt?.run?.status !== 'running') {
+              const runId = sess.run_id ?? `server-${sess.id}`;
+              const ts = new Date().toISOString().slice(11, 23);
+              console.debug(
+                `[${ts}][events] session.is_busy=true → markRun running session="${sess.id}" run="${runId}"`
+              );
+              st.markRun(sess.id, runId, 'running');
+            }
           }
           return;
         }
         applyEvent(st, env);
-        // run 结束后刷新会话列表(token/cost 已更新)
+        // run 结束后刷新会话列表(token/cost/is_busy 已更新)
         if (env.type === 'run_complete') {
           void qc.invalidateQueries({ queryKey: ['sessions', workspaceId] });
-        }
-        // 收到 message 事件时按事件顺序串行持久化到后端 sqlite
-        if (env.type === 'message') {
-          const inner = env.payload as { type: string; payload: Api.Message };
-          const msg = inner?.payload;
-          if (msg?.id && !msg.id.startsWith('local-')) {
-            enqueuePersist(workspaceId, msg);
-          }
         }
       },
       {

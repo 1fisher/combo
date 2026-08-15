@@ -58,7 +58,16 @@ export function applyEvent(s: Store, env: EventEnvelope): void {
       console.debug(
         `[${ts()}][dispatch] ✓ run_complete session="${p.session_id}" run="${p.run_id}" error="${p.error ?? ''}"`
       );
-      const wasRunning = s.bySession[p.session_id]?.run?.status === 'running';
+      const cur = s.bySession[p.session_id]?.run;
+      // 过期收尾防护:取消后立刻重发时,旧 run 的收尾事件可能晚于新 run 到达;
+      // run_id 对不上且当前有新 run 在跑时忽略,避免把新 run 误标为完成。
+      if (cur?.status === 'running' && p.run_id && cur.runId !== p.run_id) {
+        console.debug(
+          `[${ts()}][dispatch] 忽略过期 run_complete(cur="${cur.runId}" recv="${p.run_id}")`
+        );
+        break;
+      }
+      const wasRunning = cur?.status === 'running';
       s.markRun(p.session_id, p.run_id || p.session_id, 'done', p.error);
       if (wasRunning) notifyRunComplete(p.session_id, p.error);
       break;

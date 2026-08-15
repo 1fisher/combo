@@ -38,7 +38,7 @@ use axum::{
     response::Response,
     routing::{delete, get, post},
 };
-use futures::stream::unfold;
+use futures::stream::{iter, unfold, StreamExt};
 use rig::completion::message::{ToolCall, ToolFunction};
 use rig::completion::{AssistantContent, Message};
 use rig::OneOrMany;
@@ -137,11 +137,22 @@ impl AppState {
     }
 }
 
-/// 运行态:按 workspace 广播事件,按 session 取消运行。
+/// 运行态:按 workspace 广播事件,按 session 取消运行,并跟踪每个
+/// session 当前是否有进行中的 run(多会话并发的基础)。
 #[derive(Default)]
 pub struct RunState {
     broadcasts: Mutex<HashMap<String, broadcast::Sender<Value>>>,
     cancels: Mutex<HashMap<String, watch::Sender<bool>>>,
+    /// 正在运行的 run:session_id → (workspace_id, run_id)。
+    /// 同一 session 同时只允许一个 run(并发发送返回 409)。
+    active: Mutex<HashMap<String, ActiveRun>>,
+}
+
+/// 一个进行中的 run 的定位信息。
+#[derive(Clone, Debug)]
+pub struct ActiveRun {
+    pub ws_id: String,
+    pub run_id: String,
 }
 
 impl RunState {
@@ -163,6 +174,52 @@ impl RunState {
         if let Some(tx) = self.cancels.lock().unwrap().get(session_id) {
             let _ = tx.send(true);
         }
+        // 取消即释放 busy 标记,用户可立刻在同会话重新发起(残留的后台
+        // 任务收尾时会再广播最终消息,前端按 run_id 忽略过期收尾)。
+        self.active.lock().unwrap().remove(session_id);
+    }
+
+    /// 标记 session 开始运行;已有进行中的 run 时返回 false(调用方回 409),
+    /// 且不覆盖已登记的 run 信息。
+    fn start_run(&self, ws_id: &str, session_id: &str, run_id: &str) -> bool {
+        let mut m = self.active.lock().unwrap();
+        if m.contains_key(session_id) {
+            return false;
+        }
+        m.insert(
+            session_id.to_string(),
+            ActiveRun {
+                ws_id: ws_id.to_string(),
+                run_id: run_id.to_string(),
+            },
+        );
+        true
+    }
+
+    /// 结束运行:仅当 run_id 匹配当前活跃 run 时移除,避免旧任务的收尾
+    /// 清掉取消后立刻重启的新 run。
+    fn finish_run(&self, session_id: &str, run_id: &str) {
+        let mut m = self.active.lock().unwrap();
+        if m.get(session_id).map(|r| r.run_id.as_str()) == Some(run_id) {
+            m.remove(session_id);
+        }
+    }
+
+    /// 该 workspace 下正在运行的 run 列表(session_id, run 信息);
+    /// 供 SSE 订阅快照与会话列表 is_busy 使用。
+    fn workspace_active_runs(&self, ws_id: &str) -> Vec<(String, ActiveRun)> {
+        self.active
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(_, r)| r.ws_id == ws_id)
+            .map(|(sid, r)| (sid.clone(), r.clone()))
+            .collect()
+    }
+
+    /// session 当前是否有进行中的 run(会话列表 is_busy 用,跨模块访问)。
+    pub(crate) fn is_busy(&self, session_id: &str) -> bool {
+        self.active.lock().unwrap().contains_key(session_id)
     }
 }
 
@@ -627,8 +684,17 @@ async fn run_agent_ws(
     }
     let run_id = body.run_id.clone().unwrap_or_else(|| body.session_id.clone());
     let run_id_for_task = run_id.clone();
+    // 同一 session 同时只允许一个 run(多会话并发,单会话串行)。
+    if !state.runs.start_run(&ws_id, &body.session_id, &run_id) {
+        return Err((
+            StatusCode::CONFLICT,
+            "该会话已有正在进行的任务,请等待完成或先停止".into(),
+        ));
+    }
     let tx = state.runs.broadcast(&ws_id);
     let cancel_rx = state.runs.cancel_tx(&body.session_id).subscribe();
+    // 广播 busy=true(携带 run_id):订阅方据此恢复运行态(前端 markRun running)。
+    let _ = tx.send(session_busy_env(&body.session_id, true, Some(&run_id)));
 
     // 1. 回传用户消息(created),前端据此移除乐观插入的 local- 消息。
     //    workspace 根目录先解析,以便加载该项目的 AGENTS.md(项目基础规则)
@@ -644,7 +710,10 @@ async fn run_agent_ws(
         base.with_workspace(workspace_dir.clone(), &ws_disabled)
     };
     let user_msg = user_message_json(&body.session_id, &body.prompt, &cfg);
-    let _ = tx.send(msg_env("created", user_msg));
+    let _ = tx.send(msg_env("created", user_msg.clone()));
+    // 服务端持久化:用户消息立即落库(历史不再依赖前端订阅回写,
+    // 未订阅该 workspace 的客户端也能拿到完整历史)。
+    persist_msg(state.meta.as_ref(), &ws_id, &user_msg);
 
     // 2. 会话历史从本地 sqlite 解析(多轮上下文)。
     //    body 里旧客户端注入的 history 仅在 sqlite 无数据时兜底。
@@ -765,6 +834,14 @@ async fn run_agent_ws(
     let state2 = state.clone();
     tokio::spawn(async move {
         let session_id = body.session_id.clone();
+        // RunGuard:任务结束(含 panic)时释放 busy 标记并广播 is_busy=false,
+        // 保证任意退出路径下该会话都能重新发起。
+        let _run_guard = RunGuard {
+            state: state2.clone(),
+            session_id: session_id.clone(),
+            run_id: run_id_for_task.clone(),
+            tx: tx.clone(),
+        };
         // 注入未完成的任务清单状态:上一轮中断(报错/取消)清单仍留在 TodoStore,
         // 附带进度让 agent 开局即对准「当前第几项」。仅影响本次发往 LLM 的
         // prompt;广播与落库的用户消息仍用 body.prompt 原文,不污染历史。
@@ -789,6 +866,11 @@ async fn run_agent_ws(
         let mut sparts = StreamParts::default();
         let mut usage: Option<RunUsage> = None;
         let tx_ev = tx.clone();
+        // 服务端持久化(节流):assistant 快照至少间隔 1.5s 落库一次,
+        // 工具调用/工具结果/最终消息必落;崩溃最多至丢失 1.5s 内的增量。
+        let meta_p = state2.meta.clone();
+        let ws_p = ws_id_tool.clone();
+        let mut last_persist = std::time::Instant::now();
         // 收集工具调用摘要供响应日志使用
         let mut tool_call_summaries: Vec<crate::request_log::ToolCallSummary> = Vec::new();
         // question 工具:需要 broadcast tx、registry 和 cancel 信号
@@ -814,6 +896,8 @@ async fn run_agent_ws(
         ];
         let result =
             crate::agent::stream_run(&cfg, &prompt, &rig_history, workspace_dir, cancel_rx, extra_tools, |ev| {
+            // 本次事件是否需要立即落库(工具调用是消息结构边界,必须落)
+            let mut force_persist = false;
             match ev {
                 RunEvent::TextDelta(t) => {
                     crate::request_log::log_event(
@@ -845,6 +929,7 @@ async fn run_agent_ws(
                         input: input.clone(),
                     });
                     sparts.tool_call(&id, &name, &input);
+                    force_persist = true;
                 }
                 RunEvent::ToolResult { id, name, content } => {
                     crate::request_log::log_event(
@@ -854,20 +939,23 @@ async fn run_agent_ws(
                         json!({ "id": &id, "name": &name, "content_preview": content.chars().take(2000).collect::<String>() }),
                     );
                     let msg = tool_result_message_json(&session_id, &id, &name, &content);
+                    persist_msg(meta_p.as_ref(), &ws_p, &msg);
                     let _ = tx_ev.send(msg_env("created", msg));
                 }
                 RunEvent::Usage(u) => usage = Some(u),
             }
-            let _ = tx_ev.send(msg_env(
-                "updated",
-                assistant_message_json(
-                    &session_id,
-                    &assistant_id,
-                    &cfg,
-                    sparts.parts.clone(),
-                    created_at,
-                ),
-            ));
+            let upd = assistant_message_json(
+                &session_id,
+                &assistant_id,
+                &cfg,
+                sparts.parts.clone(),
+                created_at,
+            );
+            if force_persist || last_persist.elapsed() >= Duration::from_millis(1500) {
+                persist_msg(meta_p.as_ref(), &ws_p, &upd);
+                last_persist = std::time::Instant::now();
+            }
+            let _ = tx_ev.send(msg_env("updated", upd));
         })
         .await;
 
@@ -880,16 +968,15 @@ async fn run_agent_ws(
             }
         };
         sparts.finish(reason, now_secs(), usage.as_ref());
-        let _ = tx.send(msg_env(
-            "updated",
-            assistant_message_json(
-                &session_id,
-                &assistant_id,
-                &cfg,
-                sparts.into_parts(),
-                created_at,
-            ),
-        ));
+        let final_msg = assistant_message_json(
+            &session_id,
+            &assistant_id,
+            &cfg,
+            sparts.into_parts(),
+            created_at,
+        );
+        persist_msg(meta_p.as_ref(), &ws_p, &final_msg);
+        let _ = tx.send(msg_env("updated", final_msg));
         let _ = tx.send(run_complete_env(
             &session_id,
             &run_id2,
@@ -967,7 +1054,20 @@ async fn events(
     Path(ws_id): Path<String>,
 ) -> Response {
     let rx = state.runs.broadcast(&ws_id).subscribe();
-    let stream = unfold(rx, |mut rx| async move {
+    // 订阅快照:先补发该 workspace 当前正在运行的 session 的 busy 状态,
+    // 让新连上的客户端(切回项目/刷新页面)立即恢复运行态。
+    let initial: Vec<Result<bytes::Bytes, Infallible>> = state
+        .runs
+        .workspace_active_runs(&ws_id)
+        .iter()
+        .map(|(sid, r)| {
+            Ok(bytes::Bytes::from(format!(
+                "data: {}\n\n",
+                session_busy_env(sid, true, Some(&r.run_id))
+            )))
+        })
+        .collect();
+    let live = unfold(rx, |mut rx| async move {
         // 注意:unfold 每产出一个元素会重建 async block,因此不能用
         // interval.tick()(首 tick 立即就绪会造成 ping 洪泛);用 sleep 保活。
         loop {
@@ -992,6 +1092,7 @@ async fn events(
             }
         }
     });
+    let stream = iter(initial).chain(live);
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/event-stream")
@@ -1121,6 +1222,48 @@ fn extract_api_message(raw: &str) -> Option<String> {
 /// rune 双层信封:`{ type, payload: { type: created|updated|deleted, payload } }`。
 fn msg_env(kind: &str, msg: Value) -> Value {
     json!({ "type": "message", "payload": { "type": kind, "payload": msg } })
+}
+
+/// session 忙碌状态事件(双层信封):payload 携带 is_busy 与可选 run_id。
+/// run 启动/结束时广播;SSE 新订阅时补发快照,前端据此恢复/收敛运行态。
+fn session_busy_env(session_id: &str, is_busy: bool, run_id: Option<&str>) -> Value {
+    let mut payload = json!({ "id": session_id, "is_busy": is_busy });
+    if let Some(r) = run_id {
+        payload["run_id"] = Value::String(r.to_string());
+    }
+    json!({ "type": "session", "payload": { "type": "updated", "payload": payload } })
+}
+
+/// 把广播出去的消息镜像写入 sqlite(服务端持久化)。
+/// 历史不再依赖前端订阅回写:未订阅该 workspace 的客户端(多会话并发时
+/// 切换项目)、后端重启前的消息都能完整保留。按消息 ID 幂等 upsert。
+fn persist_msg(meta: &MetaStore, ws_id: &str, msg: &Value) {
+    let Some(id) = msg.get("id").and_then(Value::as_str) else { return };
+    let Some(sid) = msg.get("session_id").and_then(Value::as_str) else { return };
+    let role = msg.get("role").and_then(Value::as_str).unwrap_or("assistant");
+    let parts = msg.get("parts").cloned().unwrap_or(Value::Array(vec![])).to_string();
+    let now = now_secs();
+    let created_at = msg.get("created_at").and_then(Value::as_i64).unwrap_or(now);
+    let updated_at = msg.get("updated_at").and_then(Value::as_i64).unwrap_or(now);
+    if let Err(e) = meta.db().upsert_message(ws_id, sid, id, role, &parts, created_at, updated_at) {
+        tracing::warn!("消息落库失败 session={sid} id={id}: {e}");
+    }
+}
+
+/// run 生命周期护栏:Drop 时释放 busy 标记并广播 is_busy=false。
+/// 无论任务正常结束、出错还是 panic,会话都不会卡在「运行中」。
+struct RunGuard {
+    state: AppState,
+    session_id: String,
+    run_id: String,
+    tx: broadcast::Sender<Value>,
+}
+
+impl Drop for RunGuard {
+    fn drop(&mut self) {
+        self.state.runs.finish_run(&self.session_id, &self.run_id);
+        let _ = self.tx.send(session_busy_env(&self.session_id, false, None));
+    }
 }
 
 fn run_complete_env(
@@ -2613,5 +2756,151 @@ mod tests {
             Some(v) => std::env::set_var("COMBO_CONFIG_DIR", v),
             None => std::env::remove_var("COMBO_CONFIG_DIR"),
         }
+    }
+
+    // ---------- 多会话并发:RunState / busy / 服务端持久化 ----------
+
+    #[test]
+    fn runstate_active_run_lifecycle() {
+        let runs = RunState::default();
+        assert!(runs.start_run("ws1", "s1", "r1"));
+        // 同一 session 的第二个 run 被拒绝(409 的来源)
+        assert!(!runs.start_run("ws1", "s1", "r2"));
+        // 其它 session 互不影响
+        assert!(runs.start_run("ws1", "s2", "r3"));
+        assert!(runs.start_run("ws2", "s3", "r4"));
+
+        assert!(runs.is_busy("s1"));
+        let active = runs.workspace_active_runs("ws1");
+        assert_eq!(active.len(), 2);
+        assert!(active.iter().any(|(sid, r)| sid == "s1" && r.run_id == "r1"));
+
+        // 不匹配的 run_id 不清除(旧任务收尾不能误删重启后的新 run)
+        runs.finish_run("s1", "old-run");
+        assert!(runs.is_busy("s1"));
+        runs.finish_run("s1", "r1");
+        assert!(!runs.is_busy("s1"));
+
+        // cancel 无条件释放 busy
+        runs.cancel("s2");
+        assert!(!runs.is_busy("s2"));
+        assert_eq!(runs.workspace_active_runs("ws1").len(), 0);
+        assert_eq!(runs.workspace_active_runs("ws2").len(), 1);
+    }
+
+    fn multi_session_test_state() -> AppState {
+        let meta = Arc::new(MetaStore::new());
+        meta.insert(crate::meta::WorkspaceMeta {
+            id: "ws_t".into(),
+            path: std::env::temp_dir(),
+            name: "t".into(),
+            backend_type: crate::store::BackendType::ComboCli,
+        });
+        AppState::test_state(meta, None)
+    }
+
+    #[tokio::test]
+    async fn run_agent_ws_rejects_second_run_in_same_session() {
+        let state = multi_session_test_state();
+        // 预置一个进行中的 run(不真正启动 agent,避免依赖 provider)
+        assert!(state.runs.start_run("ws_t", "busy-sid", "run-1"));
+
+        fn req(v: Value) -> Json<AgentReq> {
+            Json(serde_json::from_value(v).unwrap())
+        }
+        let err = run_agent_ws(
+            State(state.clone()),
+            Path("ws_t".into()),
+            req(json!({ "session_id": "busy-sid", "prompt": "你好" })),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.0, StatusCode::CONFLICT);
+
+        // 其它 session 正常受理(后台任务因缺 API key 很快报错收尾,不影响断言)
+        let ok = run_agent_ws(
+            State(state.clone()),
+            Path("ws_t".into()),
+            req(json!({ "session_id": "other-sid", "prompt": "你好" })),
+        )
+        .await
+        .unwrap();
+        assert_eq!(ok.0["ok"], json!(true));
+        // 等待后台任务收尾:busy 标记被 RunGuard 释放
+        for _ in 0..100 {
+            if !state.runs.is_busy("other-sid") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(!state.runs.is_busy("other-sid"));
+    }
+
+    #[tokio::test]
+    async fn persist_msg_upserts_and_updates() {
+        let state = multi_session_test_state();
+        let msg = json!({
+            "id": "m1",
+            "session_id": "s1",
+            "role": "assistant",
+            "parts": [{ "type": "text", "data": { "text": "第一段" } }],
+            "created_at": 100,
+            "updated_at": 100,
+        });
+        persist_msg(state.meta.as_ref(), "ws_t", &msg);
+        let list = state.meta.db().list_messages("ws_t", "s1").unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, "m1");
+        assert!(list[0].parts.contains("第一段"));
+
+        // 同 ID 再写为快照更新(不新增行)
+        let msg2 = json!({
+            "id": "m1",
+            "session_id": "s1",
+            "role": "assistant",
+            "parts": [{ "type": "text", "data": { "text": "第一段 第二段" } }],
+            "created_at": 100,
+            "updated_at": 101,
+        });
+        persist_msg(state.meta.as_ref(), "ws_t", &msg2);
+        let list = state.meta.db().list_messages("ws_t", "s1").unwrap();
+        assert_eq!(list.len(), 1);
+        assert!(list[0].parts.contains("第二段"));
+
+        // 缺 id 的消息直接忽略
+        persist_msg(state.meta.as_ref(), "ws_t", &json!({ "role": "user" }));
+        assert_eq!(state.meta.db().list_messages("ws_t", "s1").unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn session_list_reports_is_busy() {
+        let state = multi_session_test_state();
+        let conv = crate::store::ConversationMeta {
+            id: "s_busy".into(),
+            workspace_id: "ws_t".into(),
+            title: "忙".into(),
+            message_count: 0,
+            created_at: 1,
+            updated_at: 1,
+            prompt_tokens: 0,
+            completion_tokens: 0,
+            cost: 0.0,
+            context_tokens: 0,
+        };
+        state.meta.db().upsert_conversation(&conv).unwrap();
+        assert!(state.runs.start_run("ws_t", "s_busy", "r1"));
+
+        let resp = crate::session::list(State(state.clone()), Path("ws_t".into())).await;
+        let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v[0]["id"], json!("s_busy"));
+        assert_eq!(v[0]["is_busy"], json!(true));
+
+        // run 结束后 is_busy 恢复 false
+        state.runs.finish_run("s_busy", "r1");
+        let resp = crate::session::list(State(state), Path("ws_t".into())).await;
+        let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v[0]["is_busy"], json!(false));
     }
 }

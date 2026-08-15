@@ -23,6 +23,40 @@ export function markCreated(id: string) {
   setTimeout(() => recentlyCreated.delete(id), 5000);
 }
 
+/**
+ * 最近刚在本端发起 run 的会话(时间戳)。
+ * 会话列表的 is_busy 对账会跳过这几秒内的会话:发送后列表 refetch 可能
+ * 抢在 serve 的 busy=true 广播前返回旧的 is_busy=false,过早把乐观标记的
+ * running 收敛掉会造成输入坞闪烁解锁。
+ */
+const recentlyRan = new Map<string, number>();
+const RECENT_RUN_WINDOW_MS = 5000;
+
+/** 发送消息前调用:标记该会话刚刚发起 run(供对账逻辑跳过)。 */
+export function markRunStarted(id: string) {
+  recentlyRan.set(id, Date.now());
+  setTimeout(() => recentlyRan.delete(id), RECENT_RUN_WINDOW_MS);
+}
+
+/**
+ * 会话列表 → 本地 run 状态对账(纯函数,便于测试):
+ * 服务端 is_busy=false 而本地仍 running 的会话,说明 run 已在未订阅期间
+ * 结束(如切换到其它项目),收敛为 done,解除输入坞封锁。
+ */
+export function reconcileRunsFromSessions(
+  store: { bySession: Record<string, { run?: { status: string; runId: string } | null }> },
+  markRun: (sessionId: string, runId: string, status: 'done') => void,
+  sessions: { id: string; is_busy?: boolean }[]
+) {
+  for (const s of sessions) {
+    if (s.is_busy !== false) continue;
+    const rt = store.bySession[s.id];
+    if (rt?.run?.status !== 'running') continue;
+    if (Date.now() - (recentlyRan.get(s.id) ?? 0) < RECENT_RUN_WINDOW_MS) continue;
+    markRun(s.id, rt.run.runId, 'done');
+  }
+}
+
 export function useSessions(workspaceId: string | null) {
   const qc = useQueryClient();
   const setActiveSessionId = useAgentStore((s) => s.setActiveSessionId);
@@ -74,6 +108,13 @@ export function useSessions(workspaceId: string | null) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId, q.data, activeSessionId]);
+  // 服务端 is_busy 对账:切回项目/列表刷新时收敛错过的 run 结束信号。
+  useEffect(() => {
+    if (!q.data) return;
+    const st = useAgentStore.getState();
+    reconcileRunsFromSessions(st, st.markRun, q.data);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q.data]);
   return { sessions: q.data, isLoading: q.isLoading, create: create.mutateAsync, activate, remove: remove.mutateAsync, rename: rename.mutateAsync };
 }
 

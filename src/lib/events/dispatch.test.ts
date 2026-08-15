@@ -260,4 +260,33 @@ describe('applyEvent', () => {
     // run_complete 应同时清除消息的 streaming 标志
     expect(useAgentStore.getState().bySession['s1'].messages[0].streaming).toBe(false);
   });
+
+  it('ignores stale run_complete from an older run', () => {
+    // 新 run 正在运行(runId r2),旧 run r1 的收尾事件迟到
+    useAgentStore.getState().markRun('s1', 'r2', 'running');
+    applyEvent(useAgentStore.getState(), {
+      type: 'run_complete',
+      payload: {
+        type: 'updated',
+        payload: { session_id: 's1', run_id: 'r1', message_id: 'm-old', text: '' },
+      },
+    });
+    expect(useAgentStore.getState().bySession['s1'].run).toEqual({
+      runId: 'r2',
+      status: 'running',
+    });
+
+    // 匹配的 run_complete 正常收尾
+    applyEvent(useAgentStore.getState(), {
+      type: 'run_complete',
+      payload: {
+        type: 'updated',
+        payload: { session_id: 's1', run_id: 'r2', message_id: 'm-new', text: 'ok' },
+      },
+    });
+    expect(useAgentStore.getState().bySession['s1'].run).toEqual({
+      runId: 'r2',
+      status: 'done',
+    });
+  });
 });
