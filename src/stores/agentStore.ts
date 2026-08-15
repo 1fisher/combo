@@ -20,7 +20,13 @@ export interface MessageVM {
 
 export interface SessionRuntime {
   messages: MessageVM[];
-  run: { runId: string; status: 'running' | 'done'; error?: string } | null;
+  /** startedAt:run 进入 running 的时刻(执行耗时展示);done 后保留原值 */
+  run: {
+    runId: string;
+    status: 'running' | 'done';
+    error?: string;
+    startedAt?: number;
+  } | null;
   queued: boolean;
 }
 
@@ -246,12 +252,21 @@ export const useAgentStore = create<AgentState>()(
         status === 'done'
           ? rt.messages.map((m) => ({ ...m, streaming: false }))
           : rt.messages;
+      // 进入 running 记录起点(输入坞上方「正在执行」耗时展示);
+      // 收尾为 done 时保留原起点,便于需要时回看本轮耗时
+      const startedAt =
+        status === 'running' ? Date.now() : rt.run?.startedAt;
       return {
         bySession: {
           ...st.bySession,
           [sessionId]: {
             ...rt,
-            run: { runId, status, ...(error ? { error } : {}) },
+            run: {
+              runId,
+              status,
+              ...(startedAt != null ? { startedAt } : {}),
+              ...(error ? { error } : {}),
+            },
             messages,
           },
         },

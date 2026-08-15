@@ -3,7 +3,6 @@ import { Check, CircleAlert } from 'lucide-react';
 import {
   Message,
   MessageContent,
-  MessageFooter,
   MessageHeader,
 } from '../ui/message';
 import { Bubble, BubbleContent } from '../ui/bubble';
@@ -209,11 +208,6 @@ export const MessageItem = memo(function MessageItem({
               })}
             </BubbleContent>
           </Bubble>
-        {vm.streaming && (
-          <MessageFooter>
-            <span className="animate-pulse">正在执行…</span>
-          </MessageFooter>
-        )}
       </MessageContent>
     </Message>
   );

@@ -274,6 +274,7 @@ describe('applyEvent', () => {
     expect(useAgentStore.getState().bySession['s1'].run).toEqual({
       runId: 'r2',
       status: 'running',
+      startedAt: expect.any(Number),
     });
 
     // 匹配的 run_complete 正常收尾
@@ -287,6 +288,7 @@ describe('applyEvent', () => {
     expect(useAgentStore.getState().bySession['s1'].run).toEqual({
       runId: 'r2',
       status: 'done',
+      startedAt: expect.any(Number),
     });
   });
 });

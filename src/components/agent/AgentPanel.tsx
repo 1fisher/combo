@@ -13,6 +13,7 @@ import { useWorkspaces } from '../../hooks/useWorkspaces';
 import { useSessions, markRunStarted } from '../../hooks/useSessions';
 import { MessageList } from './MessageList';
 import { Composer } from './Composer';
+import { RunningIndicator } from './RunningIndicator';
 import { ComboOverlay, nextCombo, settleCombo } from './ComboOverlay';
 import { ChatEmptyState } from './ChatEmptyState';
 import { FileChangesPanel, type ChangeStatus } from './FileChangesPanel';
@@ -417,6 +418,11 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
           onSend={(attachments, contextItems) => void doSend(draft, attachments, contextItems)}
           running={running}
           onStop={cancel}
+          banner={
+            rt?.run?.status === 'running' ? (
+              <RunningIndicator startedAt={rt.run.startedAt} />
+            ) : undefined
+          }
         />
       </div>
     </div>

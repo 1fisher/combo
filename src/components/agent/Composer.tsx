@@ -122,6 +122,7 @@ export function Composer({
   disabled,
   running,
   onStop,
+  banner,
 }: {
   workspaceName?: string;
   workspaceId?: string;
@@ -131,6 +132,8 @@ export function Composer({
   disabled?: boolean;
   running?: boolean;
   onStop?: () => void;
+  /** 渲染在输入框正上方的插槽(如运行中指示器),与输入框同宽边距 */
+  banner?: ReactNode;
 }) {
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
@@ -517,6 +520,7 @@ export function Composer({
   return (
     <div className="w-full shrink-0 px-4 pb-4 pt-12">
       <div className="w-full">
+        {banner}
         <div className="w-full shrink-0 rounded-2xl bg-surface shadow-xl/5">
           <form
             className="relative p-0"

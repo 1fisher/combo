@@ -280,3 +280,35 @@
   45%  { transform: scale(1.25); }
   100% { transform: scale(1); }
 }
+
+/* ---- 运行中指示器(RunningIndicator)流光特效:品牌色高光沿胶囊自左向右
+   循环扫过。实现为 ::before 斜切光带(width 45%,left -60%)做 translateX
+   位移:终点 380%(自身宽度的 3.8 倍 ≈ 容器宽度的 171%)保证光带完全滑出
+   右缘后循环,不出现回扫;外层 .run-shimmer overflow-hidden 裁掉容器外部分。 */
+.run-shimmer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.run-shimmer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -60%;
+  width: 45%;
+  background: linear-gradient(
+    100deg,
+    transparent,
+    color-mix(in oklab, var(--brand) 30%, transparent),
+    color-mix(in oklab, var(--brand) 45%, transparent),
+    color-mix(in oklab, var(--brand) 30%, transparent),
+    transparent
+  );
+  animation: run-shimmer-sweep 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+@keyframes run-shimmer-sweep {
+  0%   { transform: translateX(0) skewX(-16deg); }
+  100% { transform: translateX(380%) skewX(-16deg); }
+}
