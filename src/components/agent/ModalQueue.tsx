@@ -4,9 +4,8 @@ import {
   WRITE_TOOL_NAMES,
   type AgentMode,
 } from '../../stores/agentStore';
-import { answerQuestion, grantPermission } from '../../lib/api';
+import { grantPermission } from '../../lib/api';
 import { PermissionDialog } from './PermissionDialog';
-import { QuestionDialog } from './QuestionDialog';
 
 /**
  * 根据 agentMode 判断该权限请求是否应自动放行(不弹窗)。
@@ -20,18 +19,19 @@ function shouldAutoApprove(mode: AgentMode, toolName: string): boolean {
   return false;
 }
 
+/**
+ * 权限请求队列(question 工具已改为非模态卡片,在输入坞上方由
+ * AgentPanel 渲染 QuestionCard,不再占用此处模态弹窗)。
+ */
 export function ModalQueue({ workspaceId }: { workspaceId: string }) {
   const permissionQueue = useAgentStore((s) => s.permissionQueue);
-  const questionQueue = useAgentStore((s) => s.questionQueue);
   const agentMode = useAgentStore((s) => s.agentMode);
   const resolvePermission = useAgentStore((s) => s.resolvePermission);
-  const dismissQuestion = useAgentStore((s) => s.dismissQuestionBatch);
 
   // 记录已处理的 tool_call_id,避免重复 auto-approve
   const processed = useRef<Set<string>>(new Set());
 
-  const activeQuestion = questionQueue[0];
-  const activePermission = !activeQuestion ? permissionQueue[0] : undefined;
+  const activePermission = permissionQueue[0];
 
   // 自动放行:yolo / edit 模式下,权限请求到达后立即 grant 而不弹窗
   useEffect(() => {
@@ -62,15 +62,6 @@ export function ModalQueue({ workspaceId }: { workspaceId: string }) {
 
   return (
     <>
-      {activeQuestion && (
-        <QuestionDialog
-          batch={activeQuestion}
-          onResolve={async (answer) => {
-            await answerQuestion(workspaceId, answer);
-            dismissQuestion(activeQuestion.id);
-          }}
-        />
-      )}
       {renderPermission && (
         <PermissionDialog
           permission={activePermission}

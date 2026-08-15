@@ -233,12 +233,6 @@ fn format_answer(questions: &[Value], answer: &Value) -> String {
 
         if let Some(yes) = resp.get("yes").and_then(Value::as_bool) {
             out.push_str(&format!("{}. {} → {}\n", i + 1, qtext, if yes { "是" } else { "否" }));
-        } else if let Some(text) = resp.get("fill_in_text").and_then(Value::as_str) {
-            if text.is_empty() {
-                out.push_str(&format!("{}. {} → (用户未输入)\n", i + 1, qtext));
-            } else {
-                out.push_str(&format!("{}. {} → {}\n", i + 1, qtext, text));
-            }
         } else if let Some(ids) = resp.get("selected_ids").and_then(|v| v.as_array()) {
             // 将 choice id 翻译为 label,方便 agent 理解
             let choices = q.and_then(|q| q.get("choices")).and_then(|c| c.as_array());
@@ -256,10 +250,34 @@ fn format_answer(questions: &[Value], answer: &Value) -> String {
                         .to_string()
                 })
                 .collect();
-            if labels.is_empty() {
+            // 「其他(手动输入)」的自定义答案:与已选选项合并输出
+            // (前端 QuestionCard 允许单选/多选同时附带自定义文本)
+            let custom = resp
+                .get("fill_in_text")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|t| !t.is_empty());
+            let mut parts: Vec<String> = Vec::new();
+            if !labels.is_empty() {
+                parts.push(labels.join(", "));
+            }
+            match custom {
+                // 仅有自定义(没选任何预置选项)→ 直接输出文本,不加前缀
+                Some(text) if parts.is_empty() => parts.push(text.to_string()),
+                // 选项 + 自定义并存 → 标注「自定义:」便于 agent 区分
+                Some(text) => parts.push(format!("自定义:{}", text)),
+                None => {}
+            }
+            if parts.is_empty() {
                 out.push_str(&format!("{}. {} → (未选择)\n", i + 1, qtext));
             } else {
-                out.push_str(&format!("{}. {} → {}\n", i + 1, qtext, labels.join(", ")));
+                out.push_str(&format!("{}. {} → {}\n", i + 1, qtext, parts.join(" | ")));
+            }
+        } else if let Some(text) = resp.get("fill_in_text").and_then(Value::as_str) {
+            if text.is_empty() {
+                out.push_str(&format!("{}. {} → (用户未输入)\n", i + 1, qtext));
+            } else {
+                out.push_str(&format!("{}. {} → {}\n", i + 1, qtext, text));
             }
         } else {
             out.push_str(&format!("{}. {} → (未知回答格式)\n", i + 1, qtext));
@@ -288,6 +306,42 @@ mod tests {
         });
         let out = format_answer(&questions, &answer);
         assert!(out.contains("PostgreSQL"));
+    }
+
+    #[test]
+    fn format_choice_with_custom_text_only() {
+        // 前端「其他(手动输入)」:未选预置选项,仅输入自定义文本
+        let questions = vec![json!({
+            "id": "q1",
+            "type": "single_choice",
+            "question": "用哪个分支?",
+            "choices": [{"id": "main", "label": "main"}]
+        })];
+        let answer = json!({
+            "responses": [{"request_id": "q1", "selected_ids": [], "fill_in_text": "feature/xyz"}]
+        });
+        let out = format_answer(&questions, &answer);
+        assert!(out.contains("feature/xyz"));
+        assert!(!out.contains("自定义:"));
+        assert!(!out.contains("(未选择)"));
+    }
+
+    #[test]
+    fn format_multi_choice_with_options_and_custom() {
+        // 多选:预置选项 + 「其他」自定义文本并存,合并输出
+        let questions = vec![json!({
+            "id": "q1",
+            "type": "multi_choice",
+            "question": "要哪些功能?",
+            "choices": [{"id": "a", "label": "选项A"}]
+        })];
+        let answer = json!({
+            "responses": [{"request_id": "q1", "selected_ids": ["a"], "fill_in_text": "再加个开关"}]
+        });
+        let out = format_answer(&questions, &answer);
+        assert!(out.contains("选项A"));
+        assert!(out.contains("自定义:再加个开关"));
+        assert!(out.contains("选项A | 自定义:再加个开关"));
     }
 
     #[test]

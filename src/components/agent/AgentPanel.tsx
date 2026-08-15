@@ -4,7 +4,7 @@ import { FileEdit, Folder, Loader2, CircleAlert } from 'lucide-react';
 import { randomUUID } from '../../lib/clientId';
 import { useAgentStore } from '../../stores/agentStore';
 import { formatContextPrompt, type ContextItem } from '../../stores/contextStore';
-import { cancelAgent, sendAgentMessage } from '../../lib/api';
+import { cancelAgent, sendAgentMessage, answerQuestion } from '../../lib/api';
 import type { Api } from '../../lib/api/types';
 import { useSessionHistory } from '../../hooks/useSessions';
 import { useWorkspaceEvents } from '../../hooks/useWorkspaceEvents';
@@ -17,6 +17,7 @@ import { ComboOverlay, nextCombo, settleCombo } from './ComboOverlay';
 import { ChatEmptyState } from './ChatEmptyState';
 import { FileChangesPanel, type ChangeStatus } from './FileChangesPanel';
 import { TodoList } from './TodoList';
+import { QuestionCard } from './QuestionCard';
 import { extractFileToolCalls } from '../../lib/fileChanges';
 import { autoTitleFor, titleFromPrompt } from './autoTitle';
 import { ensureNotifyPermission } from '../../lib/notify';
@@ -41,6 +42,8 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
 
   const rt = useAgentStore((s) => (sessionId ? s.bySession[sessionId] : undefined));
   const todos = useAgentStore((s) => (sessionId ? s.todos[sessionId] : undefined) ?? EMPTY_TODOS);
+  const questionQueue = useAgentStore((s) => s.questionQueue);
+  const dismissQuestionBatch = useAgentStore((s) => s.dismissQuestionBatch);
   const hydrateMessages = useAgentStore((s) => s.hydrateMessages);
   const setQueued = useAgentStore((s) => s.setQueued);
   const [postError, setPostError] = useState<string | null>(null);
@@ -391,6 +394,16 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
             <span className="text-muted-foreground">{pendingCount} 个文件待审查</span>
             <span className="ml-auto text-brand">审查变更</span>
           </button>
+        )}
+        {/* 问题卡片(question 工具):非模态,优先于任务列表显示在输入坞上方 */}
+        {questionQueue[0] && workspaceId && (
+          <QuestionCard
+            batch={questionQueue[0]}
+            onResolve={async (answer) => {
+              await answerQuestion(workspaceId, answer);
+              dismissQuestionBatch(questionQueue[0].id);
+            }}
+          />
         )}
         {/* 任务列表 */}
         {sessionId && todos.length > 0 && <TodoList todos={todos} />}
