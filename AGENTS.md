@@ -95,6 +95,19 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
 
 ## Architecture & data flow
 
+- **Token 用量与自动压缩(compact)**:token 计数全部来自 **rig 原生 usage**
+  (`GetTokenUsage`,多轮工具循环中每次 completion 调用各自上报,serve 用 rig
+  `Usage` 的 `AddAssign` 累计整轮消耗)。`agent.rs::RunUsage` 同时携带最后一次
+  调用(input+output ≈ 当前上下文占用)与 run 累计(total_input/total_output);
+  finish part 与 `run_complete` 的 `usage` JSON 内嵌两者(`input_tokens`/
+  `output_tokens` + `total_*_tokens`,wire 向后兼容)。sqlite `conversations`
+  表新增 `context_tokens` 列(每次 run 结束由 `add_usage` 覆盖为最后一次调用的
+  input+output)。**compact 触发时机以此真实占用为准**(阈值 0.75×窗口),
+  `chars/3` 字符估算仅作 provider 不上报 usage 时的兜底——旧实现按估算触发,
+  中文会话误差 2~3 倍,常在超窗报错时仍未压缩。压缩完成后
+  `set_context_tokens` 重置占用避免旧值反复触发;摘要消息 `created_at` 取
+  "保留尾部第一条消息时间戳-1",保证 `list_messages`(按 created_at 升序)
+  中摘要在最近消息之前、注入 LLM 的历史顺序正确。
 - **File service** (`crates/combo-cli/src/fs.rs`): `GET .../files/list?path=`
   lists one directory (hidden files skipped, dirs first), `GET .../files/content`
   reads text (≤1MB, binary rejected), `PUT .../files/content` writes atomically.

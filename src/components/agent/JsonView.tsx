@@ -92,10 +92,26 @@ function JsonArray({ items, depth }: { items: unknown[]; depth: number }) {
   );
 }
 
-/** 把 JSON 值渲染成键值对/列表形式的结构化展示,替代原始 JSON 文本 */
-export function JsonView({ data, className }: { data: unknown; className?: string }) {
+/** 把 JSON 值渲染成键值对/列表形式的结构化展示,替代原始 JSON 文本。
+ * `inverted`:处于品牌色气泡(浅底)中时,内部卡片改为不透明深底,
+ * 保证 text-foreground/brand 等"深底浅字"配色与卡片背景的对比度。 */
+export function JsonView({
+  data,
+  className,
+  inverted = false,
+}: {
+  data: unknown;
+  className?: string;
+  inverted?: boolean;
+}) {
   return (
-    <div className={cn('max-h-[50vh] overflow-auto text-xs leading-relaxed', className)}>
+    <div
+      className={cn(
+        'max-h-[50vh] overflow-auto text-xs leading-relaxed',
+        inverted && 'rounded-md bg-background/95 p-0.5',
+        className,
+      )}
+    >
       <JsonValue data={data} depth={0} />
     </div>
   );

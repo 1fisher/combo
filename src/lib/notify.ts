@@ -6,9 +6,13 @@ import { playNotifyAttention, playNotifyDone } from './sfx';
 /**
  * 系统通知:任务结束 / 需要用户交互(确认、提问)时提醒用户。
  * 桌面模式走 tauri-plugin-notification,浏览器模式走 Web Notification API。
- * 窗口聚焦且正在查看对应会话时不打扰,其余情况(切走、最小化、
- * 看着别的会话)才发送;「通知音效」开启时同时播放提示音
- * (音效独立于系统通知权限,权限被拒也能听到)。
+ *
+ * - 任务结束:agent 处理完成(run 收尾)即发送,窗口聚焦也通知 —
+ *   任务完成是用户等待的确定性事件;不想被打扰可在设置中关闭。
+ * - 交互请求(确认/提问):保持免打扰 — 窗口聚焦且正看着该会话时不弹
+ *   (弹窗就在眼前,通知反而多余),切走/看别的会话时才提醒。
+ * - 「通知音效」开启时同时播放提示音(音效独立于系统通知权限,
+ *   权限被拒也能听到)。
  */
 
 function truncate(text: string, max = 120): string {
@@ -16,7 +20,7 @@ function truncate(text: string, max = 120): string {
   return clean.length > max ? `${clean.slice(0, max)}…` : clean;
 }
 
-/** 当前是否值得为该会话发通知:窗口未聚焦,或看的不是这个会话 */
+/** 当前是否值得为该会话发交互通知:窗口未聚焦,或看的不是这个会话 */
 function sessionNeedsNotification(sessionId?: string | null): boolean {
   if (typeof document !== 'undefined' && !document.hasFocus()) return true;
   if (sessionId && sessionId !== useAgentStore.getState().activeSessionId) return true;
@@ -68,10 +72,23 @@ async function sendNotification(title: string, body: string): Promise<void> {
   }
 }
 
+/**
+ * 预请求通知权限:浏览器只在用户手势内才允许弹权限框,所以在用户点击
+ * 「发送」时调用(doSend 内 fire-and-forget)。设置里两个通知开关都关
+ * 时不打扰用户;requestNotifyPermission 自身幂等(granted/denied 后
+ * 不会再弹窗),无需缓存。
+ */
+export function ensureNotifyPermission(): Promise<boolean> {
+  const prefs = useUIPreferences.getState();
+  if (!prefs.notifyRunComplete && !prefs.notifyInteraction) return Promise.resolve(false);
+  return requestNotifyPermission();
+}
+
 /** 任务结束(run 收尾)通知;error 非空表示运行出错 */
-export function notifyRunComplete(sessionId?: string | null, error?: string): void {
+export function notifyRunComplete(_sessionId?: string | null, error?: string): void {
   if (!useUIPreferences.getState().notifyRunComplete) return;
-  if (!sessionNeedsNotification(sessionId)) return;
+  // 任务完成总是通知:即使窗口聚焦且正在查看该会话 — 用户在等这个结果。
+  // (交互类通知仍做免打扰判断,见 notifyPermissionRequest/notifyQuestionRequest)
   const title = error ? '任务出错' : '任务已完成';
   const body = error ? truncate(error) : '会话任务已结束,点击返回查看结果';
   if (useUIPreferences.getState().notifySoundEnabled) playNotifyDone();

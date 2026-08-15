@@ -30,7 +30,7 @@ import { cn, usageColor } from '../../lib/utils';
 import { AttachmentPicker } from './AttachmentPicker';
 import { ProviderLogo } from './ProviderLogo';
 import { FlameWrap } from '../canvasui/FlameWrap';
-import { DEFAULT_CONTEXT_WINDOW, formatTokenCount, getContextUsage } from '../../lib/tokens';
+import { DEFAULT_CONTEXT_WINDOW, formatTokenCount, getContextUsage, getRealUsage } from '../../lib/tokens';
 
 /** 输入框的火焰特效参数(canvas-ui FlameWrap,参考组件默认值按输入框尺寸微调) */
 const FLAME_OPTIONS = {
@@ -322,6 +322,12 @@ export function Composer({
     [activeRuntime]
   );
   const contextPct = Math.min(100, Math.round((contextUsed / contextWindow) * 100));
+  // 最近一次 run 的真实消耗(rig 原生 usage,run 内全部 completion 调用累计)
+  const lastRunTokens = useMemo(() => {
+    if (!activeRuntime) return null;
+    const u = getRealUsage(activeRuntime.messages);
+    return u ? u.totalInput + u.totalOutput : null;
+  }, [activeRuntime]);
 
   // 当前会话的调用次数(assistant 消息数 ≈ API 调用次数)
   const callCount = useMemo(
@@ -890,7 +896,9 @@ export function Composer({
                 <div
                   className="flex items-center gap-2"
                   aria-label="上下文窗口用量"
-                  title={`上下文用量:${contextPct}%  ·  调用 ${callCount} 次`}
+                  title={`上下文用量:${contextPct}%  ·  调用 ${callCount} 次${
+                    lastRunTokens ? `  ·  上轮消耗 ${formatTokenCount(lastRunTokens)} tokens` : ''
+                  }`}
                 >
                   <div className="h-0.5 min-w-0 flex-1 overflow-hidden rounded-full bg-surface-hover">
                     <div

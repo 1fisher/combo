@@ -41,7 +41,14 @@ describe('formatTokenCount', () => {
 });
 
 describe('getRealUsage / getContextUsage', () => {
-  const withFinish = (usage?: { input_tokens: number; output_tokens: number }): MessageVM =>
+  const withFinish = (
+    usage?: {
+      input_tokens: number;
+      output_tokens: number;
+      total_input_tokens?: number;
+      total_output_tokens?: number;
+    },
+  ): MessageVM =>
     msg({
       role: 'assistant',
       parts: [
@@ -55,8 +62,31 @@ describe('getRealUsage / getContextUsage', () => {
       msg({ role: 'user', parts: [{ type: 'text', data: { text: 'hi' } }] }),
       withFinish({ input_tokens: 100, output_tokens: 30 }),
     ];
-    expect(getRealUsage(messages)).toEqual({ input: 100, output: 30 });
+    // 旧后端未上报 total 时,退回最后一次调用值
+    expect(getRealUsage(messages)).toEqual({
+      input: 100,
+      output: 30,
+      totalInput: 100,
+      totalOutput: 30,
+    });
     expect(getContextUsage(messages)).toBe(130);
+  });
+
+  it('新后端上报 total_*(run 内全部调用累计)时透传', () => {
+    const messages = [
+      withFinish({
+        input_tokens: 900,
+        output_tokens: 50,
+        total_input_tokens: 3000,
+        total_output_tokens: 120,
+      }),
+    ];
+    const u = getRealUsage(messages);
+    expect(u).not.toBeNull();
+    expect(u!.totalInput).toBe(3000);
+    expect(u!.totalOutput).toBe(120);
+    // 上下文占用仍取最后一次调用(input 含全部历史)
+    expect(getContextUsage(messages)).toBe(950);
   });
 
   it('finish 无 usage 时退回估算', () => {

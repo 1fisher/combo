@@ -58,21 +58,48 @@ function CodeBlock({
   );
 }
 
-/** 聊天气泡内的紧凑排版 */
-const CHAT_PROSE =
+/** 聊天气泡内的紧凑排版(纯排版规则,不含配色;配色见 CHAT_COLORS/CHAT_COLORS_INVERTED) */
+const CHAT_LAYOUT =
   'space-y-1 text-sm leading-relaxed ' +
   '[&_p]:my-1 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 ' +
   '[&_li]:my-0.5 [&_li:has(>input)]:list-none [&_li:has(>input)]:ml-0 [&_li:has(>input)]:pl-0 ' +
-  '[&_input[type=checkbox]]:mr-1.5 [&_input[type=checkbox]]:accent-primary ' +
+  '[&_input[type=checkbox]]:mr-1.5 ' +
   '[&_h1]:text-base [&_h1]:font-semibold [&_h1]:mt-3 [&_h1]:mb-1 ' +
   '[&_h2]:text-sm [&_h2]:font-semibold [&_h2]:mt-2 [&_h2]:mb-1 ' +
   '[&_h3]:text-sm [&_h3]:font-medium [&_h3]:mt-2 [&_h3]:mb-0.5 ' +
+  '[&_hr]:my-2 ' +
+  '[&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:px-2 [&_td]:py-1 ' +
+  '[&_th]:border [&_th]:px-2 [&_th]:py-1 [&_tr]:border';
+
+/** 普通气泡(透明/muted 底、页面背景色文字)的配色规则 */
+const CHAT_COLORS =
+  '[&_input[type=checkbox]]:accent-primary ' +
   '[&_a]:font-medium [&_a]:text-primary [&_a]:underline [&_a]:underline-offset-2 ' +
   '[&_blockquote]:border-l-2 [&_blockquote]:border-primary/40 [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground ' +
   '[&_del]:text-muted-foreground [&_del]:line-through ' +
-  '[&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-border [&_td]:px-2 [&_td]:py-1 ' +
-  '[&_th]:border [&_th]:border-border [&_th]:px-2 [&_th]:py-1 [&_th]:bg-muted [&_tr]:border-border ' +
-  '[&_hr]:my-2 [&_hr]:border-border';
+  '[&_th]:bg-muted [&_td]:border-border [&_th]:border-border [&_tr]:border-border ' +
+  '[&_hr]:border-border';
+
+/**
+ * 反色气泡(品牌色底 + 前景色文字,如用户消息的 bg-primary 气泡)的配色规则。
+ *
+ * 页面主题色 token(--muted/--primary/--muted-foreground 等)按"深色页面背景 +
+ * 浅色文字"设计,直接放进浅色的 primary 气泡会破坏前景/背景对比度:
+ * - 链接 text-primary 在浅蓝底上不可见;
+ * - 行内代码 bg-muted(深灰)叠上继承的深色文字不可见;
+ * - blockquote/th 的 muted 系颜色对比度不足。
+ * 因此这里文字统一 `text-inherit` 继承气泡前景色(保证对比度),底色/边框
+ * 改用 `primary-foreground`(与 primary 保证对比的前景 token)的半透明叠加。
+ * 注:不能用 text-inherit/75 之类的 opacity 修饰 —— inherit 关键字无法参与
+ * color-mix,Tailwind 会生成非法 CSS。
+ */
+const CHAT_COLORS_INVERTED =
+  '[&_input[type=checkbox]]:accent-primary-foreground ' +
+  '[&_a]:font-medium [&_a]:text-inherit [&_a]:underline [&_a]:underline-offset-2 [&_a]:decoration-primary-foreground/70 ' +
+  '[&_blockquote]:border-l-2 [&_blockquote]:border-primary-foreground/40 [&_blockquote]:pl-3 [&_blockquote]:text-inherit ' +
+  '[&_del]:text-inherit [&_del]:line-through ' +
+  '[&_th]:bg-primary-foreground/10 [&_td]:border-primary-foreground/25 [&_th]:border-primary-foreground/25 [&_tr]:border-primary-foreground/25 ' +
+  '[&_hr]:border-primary-foreground/25';
 
 /** 文件预览中的宽松文档排版 */
 const DOC_PROSE =
@@ -95,15 +122,24 @@ export function Markdown({
   text,
   streaming = false,
   variant = 'chat',
+  inverted = false,
 }: {
   text: string;
   streaming?: boolean;
   variant?: 'chat' | 'document';
+  /** 是否处于反色气泡(品牌色底 + 前景色文字)中:配色规则切换为
+   *  text-inherit + primary-foreground 半透明叠加,避免与气泡底色冲突。 */
+  inverted?: boolean;
 }) {
   // 流式时在末尾追加 ▍ 光标,提示内容仍在生成
   const body = streaming ? `${text}\u258D` : text;
+  // 排版与配色互斥拼接(而非叠加覆盖):同一元素的同类工具类并存时,
+  // 生效顺序取决于 CSS 生成顺序,不可靠,必须按 inverted 二选一。
+  const chatProse = inverted
+    ? `${CHAT_LAYOUT} ${CHAT_COLORS_INVERTED}`
+    : `${CHAT_LAYOUT} ${CHAT_COLORS}`;
   return (
-    <div className={cn(variant === 'document' ? DOC_PROSE : CHAT_PROSE)}>
+    <div className={cn(variant === 'document' ? DOC_PROSE : chatProse)}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[[rehypeHighlight, { detect: true, ignoreMissing: true }]]}
@@ -147,7 +183,10 @@ export function Markdown({
             return (
               <code
                 className={cn(
-                  'rounded bg-muted px-1 py-0.5 font-mono text-[0.85em]',
+                  'rounded px-1 py-0.5 font-mono text-[0.85em]',
+                  // 反色气泡:行内代码底色改用前景色半透明叠加,
+                  // 深色的 bg-muted 会与继承的深色文字失去对比
+                  inverted ? 'bg-primary-foreground/15' : 'bg-muted',
                   className
                 )}
               >

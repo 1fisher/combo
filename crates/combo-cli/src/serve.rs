@@ -13,7 +13,7 @@
 //! `MetaStore` 读取历史并还原成 rig 消息,支撑多轮上下文;运行过程中的
 //! 消息事件经 broadcast 广播。
 
-use crate::agent::{self, AskConfig, RunEvent};
+use crate::agent::{self, AskConfig, RunEvent, RunUsage};
 use crate::auth;
 use crate::compact;
 use crate::config::AppConfig;
@@ -679,62 +679,83 @@ async fn run_agent_ws(
 
     // 3.5 自动压缩:上下文接近模型窗口上限时,总结旧消息释放空间。
     //     仅在从 sqlite 加载历史时触发(client body 传来的历史无 ID 无法删除)。
-    if body.history.as_ref().map_or(true, |h| h.is_empty())
-        && compact::needs_compact(&cfg, &history)
-    {
-        let stored = state
+    //     触发信号优先用 rig 原生 usage 上报的真实上下文占用
+    //     (上次 run 结束时持久化的 context_tokens,含 preamble/工具定义/全部历史),
+    //     字符估算仅作 provider 未上报时的兜底——中文会话按 chars/3 估算
+    //     偏低 2~3 倍,旧实现常在超窗报错时仍未压缩。
+    if body.history.as_ref().map_or(true, |h| h.is_empty()) {
+        let ctx_tokens = state
             .meta
             .db()
-            .list_messages(&ws_id, &body.session_id)
-            .unwrap_or_default();
-        let ids: Vec<String> = stored.iter().map(|m| m.id.clone()).collect();
-        if ids.len() == history.len() {
-            match compact::compact(&cfg, &history, &ids).await {
-                Ok(Some(result)) => {
-                    let removed_ids = result.removed_ids.clone();
-                    let count = result.compacted_count;
-                    let tokens_before = result.tokens_before;
-                    let tokens_after = result.tokens_after;
-                    match compact::persist_compaction(
-                        &state.meta,
-                        &ws_id,
-                        &body.session_id,
-                        &result,
-                    ) {
-                        Ok(summary_id) => {
-                            // 广播:删除旧消息
-                            for id in &removed_ids {
-                                let _ = tx.send(msg_env(
-                                    "deleted",
-                                    json!({ "id": id, "session_id": &body.session_id }),
-                                ));
+            .get_context_tokens(&body.session_id)
+            .map(|t| t as u64);
+        if compact::needs_compact(&cfg, &history, ctx_tokens) {
+            let stored = state
+                .meta
+                .db()
+                .list_messages(&ws_id, &body.session_id)
+                .unwrap_or_default();
+            let ids: Vec<String> = stored.iter().map(|m| m.id.clone()).collect();
+            if ids.len() == history.len() {
+                match compact::compact(&cfg, &history, &ids, ctx_tokens).await {
+                    Ok(Some(result)) => {
+                        let removed_ids = result.removed_ids.clone();
+                        let count = result.compacted_count;
+                        let tokens_before = result.tokens_before;
+                        let tokens_after = result.tokens_after;
+                        // 摘要时间戳:排在保留尾部第一条消息之前(list_messages 按 created_at 升序)
+                        let summary_at = stored
+                            .get(count)
+                            .map(|m| m.created_at - 1)
+                            .unwrap_or_else(now_secs);
+                        match compact::persist_compaction(
+                            &state.meta,
+                            &ws_id,
+                            &body.session_id,
+                            &result,
+                            summary_at,
+                        ) {
+                            Ok(summary_id) => {
+                                // 重置上下文占用,避免旧值在后续轮次反复触发压缩
+                                let _ = state
+                                    .meta
+                                    .db()
+                                    .set_context_tokens(&body.session_id, tokens_after as i64);
+                                // 广播:删除旧消息
+                                for id in &removed_ids {
+                                    let _ = tx.send(msg_env(
+                                        "deleted",
+                                        json!({ "id": id, "session_id": &body.session_id }),
+                                    ));
+                                }
+                                // 广播:插入摘要消息
+                                let summary_msg = compact::summary_message_json(
+                                    &body.session_id,
+                                    &summary_id,
+                                    &result.summary,
+                                    count,
+                                    tokens_before,
+                                    tokens_after,
+                                    &cfg,
+                                    summary_at,
+                                );
+                                let _ = tx.send(msg_env("created", summary_msg));
+                                // 从压缩后的 sqlite 重建历史
+                                history = compact::load_compacted_history(
+                                    &state.meta,
+                                    &ws_id,
+                                    &body.session_id,
+                                );
+                                eprintln!(
+                                    "自动压缩完成: {count} 条消息, tokens {tokens_before} → {tokens_after}"
+                                );
                             }
-                            // 广播:插入摘要消息
-                            let summary_msg = compact::summary_message_json(
-                                &body.session_id,
-                                &summary_id,
-                                &result.summary,
-                                count,
-                                tokens_before,
-                                tokens_after,
-                                &cfg,
-                            );
-                            let _ = tx.send(msg_env("created", summary_msg));
-                            // 从压缩后的 sqlite 重建历史
-                            history = compact::load_compacted_history(
-                                &state.meta,
-                                &ws_id,
-                                &body.session_id,
-                            );
-                            eprintln!(
-                                "自动压缩完成: {count} 条消息, tokens {tokens_before} → {tokens_after}"
-                            );
+                            Err(e) => eprintln!("自动压缩持久化失败: {e}"),
                         }
-                        Err(e) => eprintln!("自动压缩持久化失败: {e}"),
                     }
+                    Ok(None) => {}
+                    Err(e) => eprintln!("自动压缩失败(已跳过): {e}"),
                 }
-                Ok(None) => {}
-                Err(e) => eprintln!("自动压缩失败(已跳过): {e}"),
             }
         }
     }
@@ -744,7 +765,16 @@ async fn run_agent_ws(
     let state2 = state.clone();
     tokio::spawn(async move {
         let session_id = body.session_id.clone();
-        let prompt = body.prompt.clone();
+        // 注入未完成的任务清单状态:上一轮中断(报错/取消)清单仍留在 TodoStore,
+        // 附带进度让 agent 开局即对准「当前第几项」。仅影响本次发往 LLM 的
+        // prompt;广播与落库的用户消息仍用 body.prompt 原文,不污染历史。
+        let prompt = match state2.todos.get(&body.session_id) {
+            Some(todos) => match crate::todo::todo_context_prompt(&todos) {
+                Some(ctx) => format!("{}\n\n{}", body.prompt, ctx),
+                None => body.prompt.clone(),
+            },
+            None => body.prompt.clone(),
+        };
         let run_id2 = run_id_for_task.clone();
         let assistant_id = uuid::Uuid::new_v4().to_string();
         let created_at = now_secs();
@@ -757,7 +787,7 @@ async fn run_agent_ws(
 
         let rig_history = history_to_messages(&history);
         let mut sparts = StreamParts::default();
-        let mut usage: Option<(u64, u64)> = None;
+        let mut usage: Option<RunUsage> = None;
         let tx_ev = tx.clone();
         // 收集工具调用摘要供响应日志使用
         let mut tool_call_summaries: Vec<crate::request_log::ToolCallSummary> = Vec::new();
@@ -826,7 +856,7 @@ async fn run_agent_ws(
                     let msg = tool_result_message_json(&session_id, &id, &name, &content);
                     let _ = tx_ev.send(msg_env("created", msg));
                 }
-                RunEvent::Usage { input, output } => usage = Some((input, output)),
+                RunEvent::Usage(u) => usage = Some(u),
             }
             let _ = tx_ev.send(msg_env(
                 "updated",
@@ -849,7 +879,7 @@ async fn run_agent_ws(
                 ("error", Some(msg.clone()), msg)
             }
         };
-        sparts.finish(reason, now_secs(), usage);
+        sparts.finish(reason, now_secs(), usage.as_ref());
         let _ = tx.send(msg_env(
             "updated",
             assistant_message_json(
@@ -869,24 +899,33 @@ async fn run_agent_ws(
             usage,
         ));
 
-        // 记录响应日志(agent 返回的内容)
+        // 记录响应日志(agent 返回的内容;usage 记 run 累计消耗)
         crate::request_log::log_response(
             &run_id2,
             &session_id,
             reason,
             &text,
             error.as_deref(),
-            usage,
+            usage.map(|u| (u.total_input, u.total_output)),
             &tool_call_summaries,
         );
 
-        // 累加 token 用量与花费到会话
-        if let Some((input, output)) = usage {
+        // 累加 token 用量与花费到会话:
+        // - prompt/completion 累计 run 内全部 completion 调用(rig 原生 Usage 求和);
+        // - context_tokens 记录最后一次调用的 input+output(当前上下文窗口占用,
+        //   驱动下一轮的 compact 触发判断与前端用量环)。
+        if let Some(u) = usage {
             let (pin, pout) =
                 crate::providers::get_model_pricing(&cfg.provider, &cfg.model);
             let cost =
-                (input as f64 / 1_000_000.0) * pin + (output as f64 / 1_000_000.0) * pout;
-            let _ = state2.meta.db().add_usage(&session_id, input as i64, output as i64, cost);
+                (u.total_input as f64 / 1_000_000.0) * pin + (u.total_output as f64 / 1_000_000.0) * pout;
+            let _ = state2.meta.db().add_usage(
+                &session_id,
+                u.total_input as i64,
+                u.total_output as i64,
+                cost,
+                u.context_tokens() as i64,
+            );
         }
     });
 
@@ -1011,10 +1050,24 @@ fn tool_result_message_json(
     })
 }
 
-fn finish_part(reason: &str, time: i64, usage: Option<(u64, u64)>) -> Value {
+/// finish part 内嵌的 usage JSON:rune 兼容的 `input_tokens/output_tokens`
+/// (最后一次 completion 调用,≈ 上下文占用)保持不变,追加
+/// `total_input_tokens/total_output_tokens`(本次 run 全部调用累计,
+/// rig 原生 Usage 求和)与缓存命中数,前端用量环与消耗统计取用。
+fn usage_json(u: &RunUsage) -> Value {
+    json!({
+        "input_tokens": u.input,
+        "output_tokens": u.output,
+        "total_input_tokens": u.total_input,
+        "total_output_tokens": u.total_output,
+        "cached_input_tokens": u.cached_input,
+    })
+}
+
+fn finish_part(reason: &str, time: i64, usage: Option<&RunUsage>) -> Value {
     let mut data = json!({ "reason": reason, "time": time });
-    if let Some((input, output)) = usage {
-        data["usage"] = json!({ "input_tokens": input, "output_tokens": output });
+    if let Some(u) = usage {
+        data["usage"] = usage_json(u);
     }
     json!({ "type": "finish", "data": data })
 }
@@ -1076,7 +1129,7 @@ fn run_complete_env(
     message_id: &str,
     text: &str,
     error: Option<&str>,
-    usage: Option<(u64, u64)>,
+    usage: Option<RunUsage>,
 ) -> Value {
     let mut payload = json!({
         "session_id": session_id,
@@ -1087,8 +1140,8 @@ fn run_complete_env(
     if let Some(e) = error {
         payload["error"] = Value::String(e.to_string());
     }
-    if let Some((input, output)) = usage {
-        payload["usage"] = json!({ "input_tokens": input, "output_tokens": output });
+    if let Some(u) = usage {
+        payload["usage"] = usage_json(&u);
     }
     json!({ "type": "run_complete", "payload": { "type": "updated", "payload": payload } })
 }
@@ -1172,7 +1225,7 @@ impl StreamParts {
         self.text_buf.clear();
     }
 
-    fn finish(&mut self, reason: &str, time: i64, usage: Option<(u64, u64)>) {
+    fn finish(&mut self, reason: &str, time: i64, usage: Option<&RunUsage>) {
         self.parts.push(finish_part(reason, time, usage));
     }
 
@@ -2335,11 +2388,22 @@ mod tests {
 
     #[test]
     fn finish_part_carries_real_usage_when_reported() {
-        // provider 上报 usage 时,finish part 的 data 内嵌 input/output tokens
-        let with_usage = finish_part("end_turn", 1, Some((128_000, 2048)));
+        // provider 上报 usage 时,finish part 的 data 内嵌 usage:
+        // input/output(最后一次调用 ≈ 上下文占用)+ total_*(run 累计)
+        let u = RunUsage {
+            input: 128_000,
+            output: 2048,
+            total_input: 300_000,
+            total_output: 4096,
+            cached_input: 64_000,
+        };
+        let with_usage = finish_part("end_turn", 1, Some(&u));
         assert_eq!(with_usage["type"], "finish");
         assert_eq!(with_usage["data"]["usage"]["input_tokens"], 128_000);
         assert_eq!(with_usage["data"]["usage"]["output_tokens"], 2048);
+        assert_eq!(with_usage["data"]["usage"]["total_input_tokens"], 300_000);
+        assert_eq!(with_usage["data"]["usage"]["total_output_tokens"], 4096);
+        assert_eq!(with_usage["data"]["usage"]["cached_input_tokens"], 64_000);
         // 未上报时不出现 usage 字段(保持旧 wire 形状)
         let without_usage = finish_part("cancelled", 1, None);
         assert!(without_usage["data"].get("usage").is_none());
@@ -2347,10 +2411,18 @@ mod tests {
 
     #[test]
     fn run_complete_env_carries_usage_when_reported() {
-        let env = run_complete_env("s1", "r1", "m1", "hi", None, Some((100, 20)));
+        let u = RunUsage {
+            input: 100,
+            output: 20,
+            total_input: 500,
+            total_output: 60,
+            cached_input: 0,
+        };
+        let env = run_complete_env("s1", "r1", "m1", "hi", None, Some(u));
         assert_eq!(env["type"], "run_complete");
         assert_eq!(env["payload"]["payload"]["usage"]["input_tokens"], 100);
         assert_eq!(env["payload"]["payload"]["usage"]["output_tokens"], 20);
+        assert_eq!(env["payload"]["payload"]["usage"]["total_input_tokens"], 500);
         let plain = run_complete_env("s1", "r1", "m1", "hi", Some("err"), None);
         assert!(plain["payload"]["payload"].get("usage").is_none());
     }

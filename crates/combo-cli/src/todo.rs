@@ -41,6 +41,47 @@ fn auto_start_first(todos: &mut [TodoItem]) {
     }
 }
 
+/// 状态继承:LLM 每次全量重写任务列表时,常会把之前已完成的任务又写成
+/// pending(丢失历史状态),导致进度倒退、前端「当前处理项」错位。这里按
+/// content 精确匹配,把旧列表中已完成、新列表中又退回 pending 的条目自动
+/// 恢复为 completed。返回被恢复的 (序号, 描述) 列表,供工具返回文本告知
+/// agent;agent 若确需重做某项,可修改该项任务描述后重新提交以绕过继承。
+///
+/// 仅在两个证据同时成立时才继承,防止误伤同会话的**新计划**:
+/// 1. 旧列表仍有未完成项(in_progress/pending),即计划还在进行中。已全部
+///    完成的旧清单属于上一个已结束的任务,同会话的下一个计划即使复用了
+///    相同的任务描述(如「运行测试」)也是全新计划,继承会把新计划的第一条
+///    (乃至全部)直接标成 completed,导致开局从下标 1 开始、跳过第一条;
+/// 2. 新列表仍覆盖旧列表的**全部**已完成条目(按 content 匹配)。同一计划
+///    的全量重写会保留所有条目;只命中个别同名条目(改写/删除了已完成项)
+///    视为计划已调整,不继承。
+fn inherit_completed(prev: &[TodoItem], next: &mut [TodoItem]) -> Vec<(usize, String)> {
+    let mut restored = Vec::new();
+    // 证据 1:旧计划仍在进行中(全部已完成 = 上一个任务已收尾,不继承)
+    if prev.iter().all(|t| t.status == TodoStatus::Completed) {
+        return restored;
+    }
+    let prev_completed: Vec<&str> = prev
+        .iter()
+        .filter(|t| t.status == TodoStatus::Completed)
+        .map(|t| t.content.as_str())
+        .collect();
+    // 证据 2:新列表覆盖旧计划全部已完成条目(同一计划的全量重写)
+    if !prev_completed
+        .iter()
+        .all(|c| next.iter().any(|t| t.content == *c))
+    {
+        return restored;
+    }
+    for (i, t) in next.iter_mut().enumerate() {
+        if t.status == TodoStatus::Pending && prev_completed.contains(&t.content.as_str()) {
+            t.status = TodoStatus::Completed;
+            restored.push((i + 1, t.content.clone()));
+        }
+    }
+    restored
+}
+
 /// 单个待办项。
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct TodoItem {
@@ -68,8 +109,7 @@ impl TodoStore {
             .insert(session_id.to_string(), todos);
     }
 
-    #[allow(dead_code)]
-    fn get(&self, session_id: &str) -> Option<Vec<TodoItem>> {
+    pub fn get(&self, session_id: &str) -> Option<Vec<TodoItem>> {
         self.sessions.lock().unwrap().get(session_id).cloned()
     }
 
@@ -89,13 +129,13 @@ pub fn todo_write_tool(
     DynamicTool::new(
         "todo_write",
         "管理任务列表(Todo List)。用于将多步骤工作拆分为可追踪的任务清单,实时展示进度。\
-每次调用传入**完整**的任务列表(全量覆盖,而非增量更新)。\
+每次调用传入**完整**的任务列表(全量覆盖,而非增量更新),且**必须保留之前已完成任务的 completed 状态**(漏标会导致进度倒退)。\
 规则:\
 (1) 仅在需要分步处理的多步骤任务时使用(3 步以上的工作),简单单步任务无需创建;\
 (2) 同一时刻只能有一个任务处于 in_progress 状态;\
-(3) 开始处理某个任务时,将其标记为 in_progress;\
-(4) 完成某个任务后立即将其标记为 completed;\
-(5) 如果计划发生变化(新增/删除/调整顺序),用更新后的完整列表再次调用。\
+(3) **开始**处理某个任务前,先调用本工具将其标记为 in_progress 再动手;\
+(4) **完成**某个任务后立即调用本工具将其标记为 completed(并把下一项标为 in_progress),不要攒几项一起更新;\
+(5) 如果计划发生变化(新增/删除/调整顺序),用更新后的完整列表再次调用(已完成的不受影响,保持 completed)。\
 注意:若提交的列表中没有任何 in_progress 且存在 pending,工具会自动把第一条 pending \
 标记为 in_progress(从第一条开始处理);agent 处理时按顺序逐条推进即可。",
         json!({
@@ -187,6 +227,11 @@ pub fn todo_write_tool(
                     )));
                 }
 
+                // 状态继承:LLM 重写列表时可能把之前已完成的任务又写成 pending,
+                // 这里按 content 匹配自动恢复 completed,防止进度倒退、当前项错位。
+                let prev = store.get(&session_id).unwrap_or_default();
+                let restored = inherit_completed(&prev, &mut todos);
+
                 // 自动从第一条开始处理:若列表中没有 in_progress 且存在 pending,
                 // 自动把第一个 pending 标记为 in_progress(agent 一次性提交完整列表时
                 // 通常不会自标状态,前端需要立即知道「正在处理第一条」)。
@@ -198,10 +243,9 @@ pub fn todo_write_tool(
                     .iter()
                     .filter(|t| t.status == TodoStatus::Completed)
                     .count();
-                let in_progress = todos
+                let current_idx = todos
                     .iter()
-                    .find(|t| t.status == TodoStatus::InProgress)
-                    .map(|t| t.content.clone());
+                    .position(|t| t.status == TodoStatus::InProgress);
 
                 store.set(&session_id, todos.clone());
 
@@ -226,13 +270,89 @@ pub fn todo_write_tool(
                     };
                     summary.push_str(&format!("  [{mark}] {}. {}\n", i + 1, t.content));
                 }
-                if let Some(current) = in_progress {
-                    summary.push_str(&format!("\n当前进行中:{current}"));
+                if !restored.is_empty() {
+                    let items = restored
+                        .iter()
+                        .map(|(i, _)| format!("第 {i} 项"))
+                        .collect::<Vec<_>>()
+                        .join("、");
+                    summary.push_str(&format!(
+                        "\n注意:{items}此前已完成,已自动保留 completed 状态(你提交的是 pending)。\
+如确需重做,请修改该项的任务描述后重新提交。\n"
+                    ));
+                }
+                if let Some(idx) = current_idx {
+                    summary.push_str(&format!(
+                        "\n当前进行中:第 {}/{} 项「{}」。",
+                        idx + 1,
+                        total,
+                        todos[idx].content
+                    ));
+                    // 下一步指引:明确告诉 agent 完成后该把哪一条标成什么,
+                    // 持续强化「即时更新 + 对准第几项」的纪律。
+                    match todos.iter().position(|t| t.status == TodoStatus::Pending) {
+                        Some(next) => summary.push_str(&format!(
+                            "\n提示:完成该项后立即调用 todo_write,将其标为 completed \
+并把第 {} 项标为 in_progress;提交时保留已完成任务的 completed 状态。",
+                            next + 1
+                        )),
+                        None => summary.push_str(
+                            "\n提示:这是最后一项;完成后调用 todo_write 将其标为 completed 即可。",
+                        ),
+                    }
+                } else if completed == total {
+                    summary.push_str("\n任务清单已全部完成,无需再更新。");
                 }
                 Ok(ToolOutput::text(summary))
             })
         },
     )
+}
+
+/// 为新一轮 run 的 prompt 生成「任务清单状态」上下文(清单存在且未全部完成时)。
+///
+/// 中断续跑场景:上一轮 agent 未跑完(报错/取消/用户中断),清单仍留在
+/// TodoStore 里;新一轮 run 若不注入,agent 只能从对话历史里猜「现在该做
+/// 第几项」,常导致进度错位。注入后 agent 开局即对准当前进度。
+pub fn todo_context_prompt(todos: &[TodoItem]) -> Option<String> {
+    if todos.is_empty() || todos.iter().all(|t| t.status == TodoStatus::Completed) {
+        return None;
+    }
+    let total = todos.len();
+    let completed = todos
+        .iter()
+        .filter(|t| t.status == TodoStatus::Completed)
+        .count();
+    let mut lines = vec![format!(
+        "[当前任务清单状态]({completed}/{total} 已完成,来自上一轮 todo_write,以本状态为准):"
+    )];
+    for (i, t) in todos.iter().enumerate() {
+        let mark = match t.status {
+            TodoStatus::Completed => "x",
+            TodoStatus::InProgress => ">",
+            TodoStatus::Pending => " ",
+        };
+        lines.push(format!("  [{mark}] {}. {}", i + 1, t.content));
+    }
+    if let Some(idx) = todos.iter().position(|t| t.status == TodoStatus::InProgress) {
+        lines.push(format!(
+            "当前进行中:第 {}/{} 项「{}」。",
+            idx + 1,
+            total,
+            todos[idx].content
+        ));
+    }
+    lines.push(
+        "- 若本次请求是继续该清单:从「当前进行中」的任务接着做;每完成一项立即调用 \
+todo_write 更新状态(完成标 completed、下一项标 in_progress),提交时保留已完成任务的 completed 状态。"
+            .into(),
+    );
+    lines.push(
+        "- 若计划需要调整:调用 todo_write 提交调整后的完整列表(已完成的不受影响,保持 completed)。"
+            .into(),
+    );
+    lines.push("- 若本次请求与该清单无关:忽略以上内容。".into());
+    Some(lines.join("\n"))
 }
 
 #[cfg(test)]
@@ -297,6 +417,147 @@ mod tests {
         ];
         auto_start_first(&mut todos);
         assert!(todos.iter().all(|t| t.status == TodoStatus::Completed));
+    }
+
+    fn item(content: &str, status: TodoStatus) -> TodoItem {
+        TodoItem { content: content.into(), status, active_form: None }
+    }
+
+    #[test]
+    fn inherit_completed_restores_lost_status() {
+        // LLM 重写列表丢了已完成状态 → 按 content 自动恢复
+        // (旧计划仍在进行中:还有 pending 项未做完)
+        let prev = vec![
+            item("安装依赖", TodoStatus::Completed),
+            item("编译项目", TodoStatus::Completed),
+            item("运行测试", TodoStatus::Pending),
+        ];
+        let mut next = vec![
+            item("安装依赖", TodoStatus::Pending),
+            item("编译项目", TodoStatus::Pending),
+            item("运行测试", TodoStatus::Pending),
+        ];
+        let restored = inherit_completed(&prev, &mut next);
+        assert_eq!(next[0].status, TodoStatus::Completed);
+        assert_eq!(next[1].status, TodoStatus::Completed);
+        // 未完成项不受影响
+        assert_eq!(next[2].status, TodoStatus::Pending);
+        assert_eq!(restored.len(), 2);
+        assert_eq!(restored[0], (1, "安装依赖".to_string()));
+        assert_eq!(restored[1], (2, "编译项目".to_string()));
+    }
+
+    #[test]
+    fn inherit_completed_noop_when_prev_plan_finished() {
+        // 旧清单已全部完成(上一个任务收尾),同会话的新计划即使复用了相同
+        // 任务描述也不能继承,否则新计划第一条被直接标成 completed、被跳过
+        let prev = vec![
+            item("分析需求", TodoStatus::Completed),
+            item("运行测试", TodoStatus::Completed),
+        ];
+        let mut next = vec![
+            item("分析需求", TodoStatus::Pending),
+            item("运行测试", TodoStatus::Pending),
+            item("部署上线", TodoStatus::Pending),
+        ];
+        assert!(inherit_completed(&prev, &mut next).is_empty());
+        auto_start_first(&mut next);
+        // 从第一条(下标 0)开始处理,不跳过
+        assert_eq!(next[0].status, TodoStatus::InProgress);
+        assert_eq!(next[1].status, TodoStatus::Pending);
+        assert_eq!(next[2].status, TodoStatus::Pending);
+    }
+
+    #[test]
+    fn inherit_completed_requires_full_coverage_of_prev_completed() {
+        // 旧计划进行中,但新列表改写了已完成条目的描述(未全覆盖)→ 不继承
+        let prev = vec![
+            item("安装依赖", TodoStatus::Completed),
+            item("编译项目", TodoStatus::Pending),
+        ];
+        let mut next = vec![
+            item("重新安装依赖", TodoStatus::Pending),
+            item("编译项目", TodoStatus::Pending),
+        ];
+        assert!(inherit_completed(&prev, &mut next).is_empty());
+        assert!(next.iter().all(|t| t.status == TodoStatus::Pending));
+    }
+
+    #[test]
+    fn inherit_completed_skips_modified_content() {
+        // agent 修改了任务描述(如重做)→ 不继承,尊重 agent 的新列表
+        let prev = vec![
+            item("实现功能 A", TodoStatus::Completed),
+            item("联调验证", TodoStatus::Pending),
+        ];
+        let mut next = vec![
+            item("重新实现功能 A", TodoStatus::Pending),
+            item("联调验证", TodoStatus::Pending),
+        ];
+        let restored = inherit_completed(&prev, &mut next);
+        assert!(restored.is_empty());
+        assert_eq!(next[0].status, TodoStatus::Pending);
+    }
+
+    #[test]
+    fn inherit_completed_noop_without_prev() {
+        // 首次提交(无旧列表)→ 不继承
+        let mut next = vec![item("任务1", TodoStatus::Pending)];
+        assert!(inherit_completed(&[], &mut next).is_empty());
+        assert_eq!(next[0].status, TodoStatus::Pending);
+    }
+
+    #[test]
+    fn inherit_completed_ignores_non_completed_prev() {
+        // 旧列表里是 in_progress(未完成)→ 不恢复为 completed
+        let prev = vec![item("任务1", TodoStatus::InProgress)];
+        let mut next = vec![item("任务1", TodoStatus::Pending)];
+        assert!(inherit_completed(&prev, &mut next).is_empty());
+        assert_eq!(next[0].status, TodoStatus::Pending);
+    }
+
+    #[test]
+    fn inherit_then_auto_start_resumes_correctly() {
+        // 继承 + 自动推进组合:丢状态的提交也能恢复到正确的「当前项」
+        let prev = vec![
+            item("任务1", TodoStatus::Completed),
+            item("任务2", TodoStatus::Completed),
+            item("任务4", TodoStatus::Pending),
+        ];
+        let mut next = vec![
+            item("任务1", TodoStatus::Pending),
+            item("任务2", TodoStatus::Pending),
+            item("任务3", TodoStatus::Pending),
+        ];
+        inherit_completed(&prev, &mut next);
+        auto_start_first(&mut next);
+        assert_eq!(next[0].status, TodoStatus::Completed);
+        assert_eq!(next[1].status, TodoStatus::Completed);
+        // 前两项已恢复完成,当前项应推进到第 3 项
+        assert_eq!(next[2].status, TodoStatus::InProgress);
+    }
+
+    #[test]
+    fn todo_context_prompt_injects_when_unfinished() {
+        let todos = vec![
+            item("任务1", TodoStatus::Completed),
+            item("任务2", TodoStatus::InProgress),
+            item("任务3", TodoStatus::Pending),
+        ];
+        let ctx = todo_context_prompt(&todos).unwrap();
+        assert!(ctx.contains("[当前任务清单状态](1/3 已完成"));
+        assert!(ctx.contains("当前进行中:第 2/3 项「任务2」"));
+        assert!(ctx.contains("保留已完成任务的 completed 状态"));
+    }
+
+    #[test]
+    fn todo_context_prompt_none_when_all_completed_or_empty() {
+        assert!(todo_context_prompt(&[]).is_none());
+        assert!(todo_context_prompt(&[
+            item("任务1", TodoStatus::Completed),
+            item("任务2", TodoStatus::Completed),
+        ])
+        .is_none());
     }
 
     #[test]

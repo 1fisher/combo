@@ -324,6 +324,51 @@ where
     Ok(out)
 }
 
+/// run 结束后的真实 token 用量(来自 rig 原生 `completion::Usage`,provider 上报)。
+///
+/// rig 的多轮流式循环中,每次 completion 调用都会重发全部历史并各自上报一份
+/// `Usage`(经 `GetTokenUsage` 读取);用 rig 的 `Add`/`AddAssign` 累计得到
+/// 整个 run 的真实消耗,同时保留最后一次调用的用量(其 input 即当前上下文
+//  窗口的实际占用,是触发 compact 的权威信号)。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RunUsage {
+    /// 最后一次 completion 调用的输入 token(含全部历史 + preamble + 工具定义,
+    /// ≈ 当前上下文窗口占用)。
+    pub input: u64,
+    /// 最后一次 completion 调用的输出 token。
+    pub output: u64,
+    /// 本次 run 全部 completion 调用的累计输入 token(agent 实际消耗)。
+    pub total_input: u64,
+    /// 本次 run 全部 completion 调用的累计输出 token(agent 实际消耗)。
+    pub total_output: u64,
+    /// 缓存命中的输入 token(cached + cache_creation,计价通常为 10%)。
+    pub cached_input: u64,
+}
+
+impl RunUsage {
+    /// 从 rig 原生 `Usage`(最后一次调用)与 run 累计值构造。
+    fn new(last: rig::completion::Usage, total: rig::completion::Usage) -> Self {
+        Self {
+            input: last.input_tokens,
+            output: last.output_tokens,
+            total_input: total.input_tokens,
+            total_output: total.output_tokens,
+            cached_input: total.cached_input_tokens + total.cache_creation_input_tokens,
+        }
+    }
+
+    /// 是否携带有效数值(rig 约定零值 = provider 未上报)。
+    pub fn has_values(&self) -> bool {
+        *self != Self::default()
+    }
+
+    /// 当前上下文窗口占用估算:最后一次调用的 input + output
+    /// (下一轮请求大致在此基础上追加新用户消息)。
+    pub fn context_tokens(&self) -> u64 {
+        self.input.saturating_add(self.output)
+    }
+}
+
 /// 流式运行事件(serve 模式转发为 SSE 事件)。
 #[derive(Clone, Debug)]
 pub enum RunEvent {
@@ -335,8 +380,8 @@ pub enum RunEvent {
     ToolCall { id: String, name: String, input: String },
     /// 工具执行结果。
     ToolResult { id: String, name: String, content: String },
-    /// run 结束后的真实 token 用量(provider 上报;输入含全部历史)。
-    Usage { input: u64, output: u64 },
+    /// run 结束后的真实 token 用量(rig 原生 Usage,含最后调用与 run 累计)。
+    Usage(RunUsage),
 }
 
 /// 流式运行一次 agent 对话(多轮,含工具调用与历史)。
@@ -406,9 +451,11 @@ where
 {
     let mut stream = agent.stream_chat(question, history.to_vec()).await;
     let mut out = String::new();
-    // 最后一次 completion 调用的 usage:每次调用都会重发全部历史,
-    // 因此最后一次的 input+output 即当前上下文窗口的消耗
-    let mut last_usage: Option<(u64, u64)> = None;
+    // token 用量(rig 原生 Usage):多轮工具循环中每次 completion 调用都会
+    // 重发全部历史并各自上报 usage,用 rig 的 AddAssign 累计整轮消耗;
+    // 最后一次调用的 input + output 即当前上下文窗口的实际占用。
+    let mut last_usage = rig::completion::Usage::new();
+    let mut total_usage = rig::completion::Usage::new();
     // tool_call id → 工具名,供 ToolResult 上报时配对
     let mut tool_names: HashMap<String, String> = HashMap::new();
     loop {
@@ -482,14 +529,15 @@ where
             MultiTurnStreamItem::CompletionCall(call) => {
                 // 零值 usage 是 rig 约定的"provider 未上报"哨兵
                 if call.usage.has_values() {
-                    last_usage = Some((call.usage.input_tokens, call.usage.output_tokens));
+                    total_usage += call.usage; // rig 原生累计(AddAssign)
+                    last_usage = call.usage;
                 }
             }
             _ => {}
         }
     }
-    if let Some((input, output)) = last_usage {
-        on_event(RunEvent::Usage { input, output });
+    if total_usage.has_values() {
+        on_event(RunEvent::Usage(RunUsage::new(last_usage, total_usage)));
     }
     Ok(Some(out))
 }

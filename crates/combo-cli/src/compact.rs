@@ -18,8 +18,10 @@ const COMPACT_THRESHOLD_RATIO: f64 = 0.75;
 /// 压缩后保留的最近消息条数。
 const KEEP_RECENT_MESSAGES: usize = 10;
 
-/// 至少需要这么多条消息才考虑压缩。
-const MIN_MESSAGES_TO_COMPACT: usize = 16;
+/// 至少需要这么多条消息才考虑压缩(必须 > KEEP_RECENT_MESSAGES,
+/// 否则压缩后保留条数反而变多)。真实 usage 超窗的短会话
+/// (少数超大工具输出即可耗尽窗口)也要能触发,因此不宜设得过大。
+const MIN_MESSAGES_TO_COMPACT: usize = 12;
 
 fn now_secs() -> i64 {
     std::time::SystemTime::now()
@@ -54,13 +56,22 @@ pub fn context_window(cfg: &AskConfig) -> u64 {
 }
 
 /// 判断是否需要压缩。
-pub fn needs_compact(cfg: &AskConfig, history: &[Value]) -> bool {
+///
+/// `context_tokens` 为 rig 原生 usage 上报的真实上下文占用
+/// (最后一次 completion 的 input+output,含 preamble/工具定义/全部历史),
+/// 是触发时机的权威信号——字符估算对中英混合内容误差可达数倍,
+/// 旧实现按估算触发常导致中文会话超窗报错时仍未压缩。
+/// provider 未上报 usage 时回退到本地估算。
+pub fn needs_compact(cfg: &AskConfig, history: &[Value], context_tokens: Option<u64>) -> bool {
     if history.len() < MIN_MESSAGES_TO_COMPACT {
         return false;
     }
     let window = context_window(cfg);
     let threshold = (window as f64 * COMPACT_THRESHOLD_RATIO) as u64;
-    estimate_tokens(history) >= threshold
+    let used = context_tokens
+        .filter(|t| *t > 0)
+        .unwrap_or_else(|| estimate_tokens(history));
+    used >= threshold
 }
 
 // ---------------------------------------------------------------------------
@@ -168,13 +179,15 @@ pub struct CompactResult {
 /// 执行上下文压缩:总结旧消息,保留最近几轮。
 ///
 /// `history` 为 role+parts 的 Value 数组,`ids` 为对应的消息 ID(长度须一致)。
+/// `context_tokens` 为真实上下文占用(rig usage;None 时用估算)。
 /// 返回 `Ok(None)` 表示无需压缩;`Ok(Some(result))` 表示压缩完成。
 pub async fn compact(
     cfg: &AskConfig,
     history: &[Value],
     ids: &[String],
+    context_tokens: Option<u64>,
 ) -> Result<Option<CompactResult>> {
-    if !needs_compact(cfg, history) {
+    if !needs_compact(cfg, history, context_tokens) {
         return Ok(None);
     }
     let total = history.len();
@@ -184,7 +197,9 @@ pub async fn compact(
 
     let split = total - KEEP_RECENT_MESSAGES;
     let old = &history[..split];
-    let tokens_before = estimate_tokens(history);
+    let tokens_before = context_tokens
+        .filter(|t| *t > 0)
+        .unwrap_or_else(|| estimate_tokens(history));
 
     let conversation_text = format_for_summary(old);
     let summary = summarize(cfg, &conversation_text).await?;
@@ -208,12 +223,18 @@ pub async fn compact(
 // ---------------------------------------------------------------------------
 
 /// 将压缩结果持久化到 sqlite:删除旧消息,插入摘要消息。
+///
+/// `summary_created_at` 为摘要消息的时间戳:必须早于保留尾部的第一条消息
+/// (list_messages 按 created_at 升序,若用当前时间,摘要会排到最近消息
+/// 之后,注入 LLM 的历史顺序错乱)。调用方一般传
+/// `stored[compacted_count].created_at - 1`。
 /// 返回摘要消息的 ID。
 pub fn persist_compaction(
     meta: &MetaStore,
     workspace_id: &str,
     session_id: &str,
     result: &CompactResult,
+    summary_created_at: i64,
 ) -> Result<String> {
     let db = meta.db();
 
@@ -233,21 +254,22 @@ pub fn persist_compaction(
         "type": "text",
         "data": { "text": summary_text }
     }]);
-    let now = now_secs();
     db.upsert_message(
         workspace_id,
         session_id,
         &summary_id,
         "user",
         &parts.to_string(),
-        now,
-        now,
+        summary_created_at,
+        summary_created_at,
     )?;
 
     Ok(summary_id)
 }
 
 /// 构建摘要消息的 SSE payload(与 user_message_json 结构一致)。
+/// `created_at` 用与持久化一致的 `summary_created_at`,保证前端
+/// 重新加载历史时顺序与压缩时一致。
 pub fn summary_message_json(
     session_id: &str,
     summary_id: &str,
@@ -256,6 +278,7 @@ pub fn summary_message_json(
     tokens_before: u64,
     tokens_after: u64,
     cfg: &AskConfig,
+    summary_created_at: i64,
 ) -> Value {
     let text = format!(
         "📋 **上下文已自动压缩**(约 {} → {} tokens,{} 条历史消息已总结)\n\n\
@@ -272,8 +295,8 @@ pub fn summary_message_json(
         }],
         "model": cfg.model,
         "provider": cfg.provider.id,
-        "created_at": now_secs(),
-        "updated_at": now_secs(),
+        "created_at": summary_created_at,
+        "updated_at": summary_created_at,
     })
 }
 
@@ -335,23 +358,36 @@ pub fn compact_tool(
                     .collect();
                 let ids: Vec<String> = stored.iter().map(|m| m.id.clone()).collect();
                 let msg_count = history.len();
+                // 真实上下文占用(rig usage 上报)优先,未上报时回退估算
+                let ctx_tokens = meta
+                    .db()
+                    .get_context_tokens(&sid)
+                    .map(|t| t as u64);
 
-                match compact(&cfg, &history, &ids).await {
+                match compact(&cfg, &history, &ids, ctx_tokens).await {
                     Ok(Some(result)) => {
                         let tokens_before = result.tokens_before;
                         let tokens_after = result.tokens_after;
                         let count = result.compacted_count;
                         let removed_ids = result.removed_ids.clone();
 
-                        let summary_id =
-                            match persist_compaction(&meta, &ws_id, &sid, &result) {
-                                Ok(id) => id,
-                                Err(e) => {
-                                    return Ok(ToolOutput::text(format!(
-                                        "压缩持久化失败: {e}"
-                                    )))
-                                }
-                            };
+                        // 摘要时间戳:排在保留尾部第一条消息之前
+                        let summary_at = stored
+                            .get(count)
+                            .map(|m| m.created_at - 1)
+                            .unwrap_or_else(now_secs);
+                        let summary_id = match persist_compaction(
+                            &meta, &ws_id, &sid, &result, summary_at,
+                        ) {
+                            Ok(id) => id,
+                            Err(e) => {
+                                return Ok(ToolOutput::text(format!(
+                                    "压缩持久化失败: {e}"
+                                )))
+                            }
+                        };
+                        // 重置上下文占用,避免旧值在下一轮反复触发压缩
+                        let _ = meta.db().set_context_tokens(&sid, tokens_after as i64);
 
                         // 广播:删除旧消息 + 插入摘要消息
                         for id in &removed_ids {
@@ -371,6 +407,7 @@ pub fn compact_tool(
                             tokens_before,
                             tokens_after,
                             &cfg,
+                            summary_at,
                         );
                         let _ = tx.send(json!({
                             "type": "message",
@@ -424,7 +461,7 @@ mod tests {
     fn needs_compact_false_for_short_history() {
         let cfg = test_cfg(128_000);
         let history: Vec<Value> = (0..5).map(|_| msg("user", "短消息")).collect();
-        assert!(!needs_compact(&cfg, &history));
+        assert!(!needs_compact(&cfg, &history, None));
     }
 
     #[test]
@@ -433,15 +470,38 @@ mod tests {
         let history: Vec<Value> = (0..20)
             .map(|i| msg("user", &format!("这是一段较长的测试消息内容 {i}")))
             .collect();
-        assert!(needs_compact(&cfg, &history));
+        assert!(needs_compact(&cfg, &history, None));
     }
 
     #[test]
     fn needs_compact_respects_min_message_threshold() {
         let cfg = test_cfg(1); // 极小窗口
         let history: Vec<Value> = (0..5).map(|_| msg("user", &"x".repeat(500))).collect();
-        // 少于 MIN_MESSAGES_TO_COMPACT(16),不应触发
-        assert!(!needs_compact(&cfg, &history));
+        // 少于 MIN_MESSAGES_TO_COMPACT(12),不应触发(即使真实 usage 超窗)
+        assert!(!needs_compact(&cfg, &history, Some(9_999_999)));
+    }
+
+    #[test]
+    fn needs_compact_prefers_real_usage_over_estimate() {
+        // 真实 usage 驱动:估算很小(短消息),但 rig 上报的上下文占用已超阈值。
+        // 旧实现按 chars/3 估算,中文会话误差 2~3 倍,常在超窗报错时仍未触发。
+        let cfg = test_cfg(128_000); // 阈值 0.75 * 128k = 96k
+        let history: Vec<Value> = (0..13).map(|_| msg("user", "短")).collect();
+        assert!(!needs_compact(&cfg, &history, None), "估算远低于阈值,不应触发");
+        assert!(needs_compact(&cfg, &history, Some(100_000)), "真实占用超阈值应触发");
+    }
+
+    #[test]
+    fn needs_compact_real_usage_below_threshold_blocks_estimate() {
+        // 真实 usage 低于阈值时,即使估算偏高也不触发(真实值优先):
+        // 窗口 1000 → 阈值 750;估算 39k 字符/3+5000 ≈ 18k(远超),
+        // 但 rig 上报真实占用仅 600 → 不应触发。
+        let cfg = test_cfg(1000);
+        let history: Vec<Value> = (0..13)
+            .map(|_| msg("assistant", &"x".repeat(3000)))
+            .collect();
+        assert!(needs_compact(&cfg, &history, None), "无真实值时按估算应触发");
+        assert!(!needs_compact(&cfg, &history, Some(600)), "真实值低于阈值应阻止触发");
     }
 
     #[test]

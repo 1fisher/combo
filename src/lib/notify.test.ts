@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { notifyPermissionRequest, notifyQuestionRequest, notifyRunComplete } from './notify';
+import {
+  ensureNotifyPermission,
+  notifyPermissionRequest,
+  notifyQuestionRequest,
+  notifyRunComplete,
+} from './notify';
 import { playNotifyAttention, playNotifyDone } from './sfx';
 import { useUIPreferences } from '../stores/uiPreferencesStore';
 import { useAgentStore } from '../stores/agentStore';
@@ -12,6 +17,7 @@ vi.mock('./sfx', () => ({
 
 class NotificationStub {
   static permission: NotificationPermission = 'granted';
+  static requestPermission: () => Promise<NotificationPermission> = vi.fn();
   title: string;
   options: NotificationOptions;
   onclick: ((this: Notification, ev: Event) => unknown) | null = null;
@@ -28,6 +34,7 @@ const created: NotificationStub[] = [];
 describe('notify', () => {
   beforeEach(() => {
     created.length = 0;
+    NotificationStub.permission = 'granted';
     vi.stubGlobal('Notification', NotificationStub);
     vi.spyOn(document, 'hasFocus').mockReturnValue(false);
     useUIPreferences.setState({
@@ -66,13 +73,15 @@ describe('notify', () => {
     expect(created).toHaveLength(0);
   });
 
-  it('窗口聚焦且正在看该会话时不打扰', () => {
+  it('窗口聚焦且正在看该会话时:任务结束仍通知,交互请求不打扰', () => {
     vi.spyOn(document, 'hasFocus').mockReturnValue(true);
     useAgentStore.setState({ activeSessionId: 's1' });
     notifyRunComplete('s1');
     notifyPermissionRequest({ session_id: 's1', tool_name: 'bash' });
     notifyQuestionRequest({ session_id: 's1', questions: [{ question: '继续吗' }] });
-    expect(created).toHaveLength(0);
+    // 任务完成是用户等待的确定性事件 → 总是通知
+    expect(created).toHaveLength(1);
+    expect(created[0].title).toBe('任务已完成');
   });
 
   it('聚焦但看的是其他会话时仍发送', () => {
@@ -109,10 +118,39 @@ describe('notify', () => {
     expect(playNotifyAttention).not.toHaveBeenCalled();
   });
 
-  it('窗口聚焦且查看该会话(不打扰场景)音效同样不播放', () => {
+  it('窗口聚焦且查看该会话:任务完成音效仍播放,交互音效不播放', () => {
     vi.spyOn(document, 'hasFocus').mockReturnValue(true);
     useAgentStore.setState({ activeSessionId: 's1' });
     notifyRunComplete('s1');
-    expect(playNotifyDone).not.toHaveBeenCalled();
+    notifyPermissionRequest({ session_id: 's1', tool_name: 'bash' });
+    expect(playNotifyDone).toHaveBeenCalledTimes(1);
+    expect(playNotifyAttention).not.toHaveBeenCalled();
+  });
+
+  it('ensureNotifyPermission:两个通知开关都关时不请求权限', async () => {
+    NotificationStub.permission = 'default';
+    const req = vi
+      .spyOn(NotificationStub, 'requestPermission')
+      .mockResolvedValue('granted');
+    useUIPreferences.setState({ notifyRunComplete: false, notifyInteraction: false });
+    await expect(ensureNotifyPermission()).resolves.toBe(false);
+    expect(req).not.toHaveBeenCalled();
+  });
+
+  it('ensureNotifyPermission:开关开启且权限未定时请求一次', async () => {
+    NotificationStub.permission = 'default';
+    const req = vi
+      .spyOn(NotificationStub, 'requestPermission')
+      .mockResolvedValue('granted');
+    await expect(ensureNotifyPermission()).resolves.toBe(true);
+    expect(req).toHaveBeenCalledTimes(1);
+  });
+
+  it('ensureNotifyPermission:权限已授予时不再弹请求', async () => {
+    const req = vi
+      .spyOn(NotificationStub, 'requestPermission')
+      .mockResolvedValue('granted');
+    await expect(ensureNotifyPermission()).resolves.toBe(true);
+    expect(req).not.toHaveBeenCalled();
   });
 });

@@ -19,6 +19,7 @@ import { FileChangesPanel, type ChangeStatus } from './FileChangesPanel';
 import { TodoList } from './TodoList';
 import { extractFileToolCalls } from '../../lib/fileChanges';
 import { autoTitleFor, titleFromPrompt } from './autoTitle';
+import { ensureNotifyPermission } from '../../lib/notify';
 import { cn } from '../../lib/utils';
 
 function basename(p: string): string {
@@ -231,10 +232,16 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
       void activateSession(sid!);
     }
     setQueued(sid!, true);
+    // 首次发送即请求通知权限:浏览器只允许在用户手势内弹权限框,
+    // 点击「发送」正是一次手势;权限已 granted/denied 时幂等不弹。
+    void ensureNotifyPermission();
+    // 先标记 running 再发 POST:SSE 事件可能在 POST 响应之前到达
+    // (agent 秒回/报错立即 finish),若此时 run 还不是 running,
+    // finish/run_complete 的 wasRunning 判断会漏掉任务结束通知。
+    st.markRun(sid!, runId, 'running');
     try {
       await sendAgentMessage(workspaceId, { sessionId: sid!, runId, prompt: sendPrompt, attachments });
-      console.debug(`[agent] 发送成功 markRun running sid="${sid}" runId="${runId}"`);
-      st.markRun(sid!, runId, 'running');
+      console.debug(`[agent] 发送成功 run running sid="${sid}" runId="${runId}"`);
       // 记录本轮发送时刻,用于连击(combo)判定
       pendingRef.current = { sid: sid!, sentAt: Date.now() };
       // 复用「新建任务」创建的占位会话时,自动更新任务名为本次需求
@@ -244,6 +251,8 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
       // 后端重启后会话丢失(404):若是复用的旧会话则自动重建后重试一次
       if (reused && err?.status === 404) {
         st.deleteMessage(sid!, `local-${runId}`);
+        // 旧会话已失效:收尾其 run,避免停留在 running
+        st.markRun(sid!, runId, 'done', '会话已在后端重建');
         try {
           const s = await createSessionIn(titleFromPrompt(sendPrompt));
           sid = s.id;
@@ -261,11 +270,12 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
           } as never);
           void activateSession(sid);
           setQueued(sid, true);
-          await sendAgentMessage(workspaceId, { sessionId: sid, runId: retryRunId, prompt: sendPrompt, attachments });
           st.markRun(sid, retryRunId, 'running');
+          await sendAgentMessage(workspaceId, { sessionId: sid, runId: retryRunId, prompt: sendPrompt, attachments });
           pendingRef.current = { sid, sentAt: Date.now() };
           return;
         } catch (e2) {
+          st.markRun(sid, randomUUID(), 'done', e2 instanceof Error ? e2.message : String(e2));
           await discardCreatedSession(createdSid);
           setPostError(e2 instanceof Error ? e2.message : String(e2));
           return;
@@ -274,6 +284,8 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
         }
       }
       const msg = e instanceof Error ? e.message : String(e);
+      // POST 失败:回滚提前标记的 running,避免 run 悬挂
+      st.markRun(sid!, runId, 'done', msg);
       setPostError(msg);
       st.deleteMessage(sid!, `local-${runId}`);
       await discardCreatedSession(createdSid);

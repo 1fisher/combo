@@ -1873,6 +1873,8 @@ export namespace Api {
     message_count: number;
     prompt_tokens: number;
     completion_tokens: number;
+    /** 最近一次 run 的上下文占用(rig usage 上报,最后一次调用的 input+output) */
+    context_tokens?: number;
     summary_message_id?: string;
     cost: number;
     todos?: { content: string; status: string; active_form: string }[];
@@ -1913,8 +1915,16 @@ export namespace Api {
     time?: number;
     message?: string;
     details?: string;
-    /** 本次 run 的真实 token 用量(provider 上报;input 含全部历史) */
-    usage?: { input_tokens: number; output_tokens: number };
+    /** 本次 run 的真实 token 用量(rig 原生 Usage 上报)。
+     * input/output 为最后一次 completion 调用(input 含全部历史,≈ 上下文占用);
+     * total_* 为本次 run 全部调用累计(agent 实际消耗)。 */
+    usage?: {
+      input_tokens: number;
+      output_tokens: number;
+      total_input_tokens?: number;
+      total_output_tokens?: number;
+      cached_input_tokens?: number;
+    };
   };
 
   export type ContentPart =

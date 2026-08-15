@@ -50,14 +50,26 @@ export function estimateSessionTokens(messages: MessageVM[]): number {
 }
 
 /** 从最后一条 assistant 消息的 finish part 提取真实 usage(无则返回 null)。 */
-export function getRealUsage(messages: MessageVM[]): { input: number; output: number } | null {
+export function getRealUsage(messages: MessageVM[]): {
+  input: number;
+  output: number;
+  totalInput: number;
+  totalOutput: number;
+} | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
     if (m.role !== 'assistant') continue;
     for (let j = m.parts.length - 1; j >= 0; j--) {
       const p = m.parts[j];
       if (p.type === 'finish' && p.data.usage) {
-        return { input: p.data.usage.input_tokens, output: p.data.usage.output_tokens };
+        const u = p.data.usage;
+        return {
+          input: u.input_tokens,
+          output: u.output_tokens,
+          // 旧后端未上报 total 时退回最后一次调用值
+          totalInput: u.total_input_tokens ?? u.input_tokens,
+          totalOutput: u.total_output_tokens ?? u.output_tokens,
+        };
       }
     }
   }

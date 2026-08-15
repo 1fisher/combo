@@ -58,12 +58,15 @@ pub struct ConversationMeta {
     pub message_count: i64,
     pub created_at: i64,
     pub updated_at: i64,
-    /// 累计输入 token(provider 上报)。
+    /// 累计输入 token(provider 上报,全部 completion 调用之和)。
     pub prompt_tokens: i64,
-    /// 累计输出 token(provider 上报)。
+    /// 累计输出 token(provider 上报,全部 completion 调用之和)。
     pub completion_tokens: i64,
     /// 累计花费(USD)。
     pub cost: f64,
+    /// 最近一次 run 的上下文占用(最后一次 completion 的 input+output,
+    /// rig 原生 usage;驱动 compact 触发判断与前端用量环)。
+    pub context_tokens: i64,
 }
 
 /// 单条消息的持久化记录(parts 为 JSON 字符串)。
@@ -127,7 +130,8 @@ impl ComboDb {
                 updated_at    INTEGER NOT NULL,
                 prompt_tokens      INTEGER NOT NULL DEFAULT 0,
                 completion_tokens  INTEGER NOT NULL DEFAULT 0,
-                cost               REAL    NOT NULL DEFAULT 0.0
+                cost               REAL    NOT NULL DEFAULT 0.0,
+                context_tokens     INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_conv_ws ON conversations(workspace_id);
             CREATE TABLE IF NOT EXISTS messages (
@@ -158,6 +162,7 @@ impl ComboDb {
             "ALTER TABLE conversations ADD COLUMN prompt_tokens INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE conversations ADD COLUMN completion_tokens INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE conversations ADD COLUMN cost REAL NOT NULL DEFAULT 0.0",
+            "ALTER TABLE conversations ADD COLUMN context_tokens INTEGER NOT NULL DEFAULT 0",
         ];
         for sql in &mig {
             let _ = conn.execute(sql, []);
@@ -311,8 +316,8 @@ impl ComboDb {
             .lock()
             .unwrap()
             .execute(
-                "INSERT INTO conversations (id, workspace_id, title, message_count, created_at, updated_at, prompt_tokens, completion_tokens, cost)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+                "INSERT INTO conversations (id, workspace_id, title, message_count, created_at, updated_at, prompt_tokens, completion_tokens, cost, context_tokens)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
                  ON CONFLICT(id) DO UPDATE SET
                      title=excluded.title,
                      message_count=excluded.message_count,
@@ -326,7 +331,8 @@ impl ComboDb {
                     c.updated_at,
                     c.prompt_tokens,
                     c.completion_tokens,
-                    c.cost
+                    c.cost,
+                    c.context_tokens
                 ],
             )?;
         Ok(())
@@ -336,7 +342,7 @@ impl ComboDb {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, workspace_id, title, message_count, created_at, updated_at,
-                    prompt_tokens, completion_tokens, cost
+                    prompt_tokens, completion_tokens, cost, context_tokens
              FROM conversations WHERE workspace_id=?1 ORDER BY updated_at DESC",
         )?;
         let rows = stmt.query_map(params![workspace_id], row_to_conv)?;
@@ -360,7 +366,7 @@ impl ComboDb {
         let placeholders = workspace_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!(
             "SELECT id, workspace_id, title, message_count, created_at, updated_at,
-                    prompt_tokens, completion_tokens, cost
+                    prompt_tokens, completion_tokens, cost, context_tokens
              FROM conversations WHERE workspace_id IN ({placeholders})
              ORDER BY updated_at DESC"
         );
@@ -395,21 +401,48 @@ impl ComboDb {
     }
 
     /// 累加 token 用量与花费到会话(每次 run 结束后调用)。
+    ///
+    /// `prompt_tokens`/`completion_tokens` 为本次 run 全部 completion 调用的
+    /// 累计(rig 原生 Usage 求和);`context_tokens` 为最后一次调用的
+    /// input+output,即当前上下文窗口占用(直接覆盖,不累加)。
     pub fn add_usage(
         &self,
         session_id: &str,
         prompt_tokens: i64,
         completion_tokens: i64,
         cost: f64,
+        context_tokens: i64,
     ) -> anyhow::Result<()> {
         self.conn.lock().unwrap().execute(
             "UPDATE conversations SET
                 prompt_tokens = prompt_tokens + ?1,
                 completion_tokens = completion_tokens + ?2,
                 cost = cost + ?3,
-                updated_at = ?4
-             WHERE id = ?5",
-            params![prompt_tokens, completion_tokens, cost, unix_secs(), session_id],
+                context_tokens = ?4,
+                updated_at = ?5
+             WHERE id = ?6",
+            params![prompt_tokens, completion_tokens, cost, context_tokens, unix_secs(), session_id],
+        )?;
+        Ok(())
+    }
+
+    /// 读取会话最近一次 run 的上下文占用(token;无会话或未上报时返回 None)。
+    pub fn get_context_tokens(&self, session_id: &str) -> Option<i64> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT context_tokens FROM conversations WHERE id=?1")
+            .ok()?;
+        let mut rows = stmt.query(params![session_id]).ok()?;
+        let row = rows.next().ok()??;
+        let v: i64 = row.get(0).ok()?;
+        (v > 0).then_some(v)
+    }
+
+    /// 直接设置会话的上下文占用(自动压缩完成后重置,避免旧值反复触发压缩)。
+    pub fn set_context_tokens(&self, session_id: &str, tokens: i64) -> anyhow::Result<()> {
+        self.conn.lock().unwrap().execute(
+            "UPDATE conversations SET context_tokens=?2 WHERE id=?1",
+            params![session_id, tokens],
         )?;
         Ok(())
     }
@@ -588,6 +621,7 @@ fn row_to_conv(r: &rusqlite::Row<'_>) -> rusqlite::Result<ConversationMeta> {
         prompt_tokens: r.get::<_, Option<i64>>(6)?.unwrap_or(0),
         completion_tokens: r.get::<_, Option<i64>>(7)?.unwrap_or(0),
         cost: r.get::<_, Option<f64>>(8)?.unwrap_or(0.0),
+        context_tokens: r.get::<_, Option<i64>>(9)?.unwrap_or(0),
     })
 }
 
@@ -633,6 +667,7 @@ mod tests {
             prompt_tokens: 0,
             completion_tokens: 0,
             cost: 0.0,
+            context_tokens: 0,
         }
     }
 
@@ -690,6 +725,29 @@ mod tests {
         db.rename_conversation("c1", "新标题").unwrap();
         let convs = db.list_conversations("w1").unwrap();
         assert_eq!(convs[0].title, "新标题");
+    }
+
+    #[test]
+    fn add_usage_accumulates_and_sets_context_tokens() {
+        let db = ComboDb::in_memory();
+        db.upsert_conversation(&conv("c1", "w1")).unwrap();
+        // 两次 run:累计 prompt/completion 消耗,context_tokens 覆盖为最后一次
+        db.add_usage("c1", 1000, 200, 0.01, 1200).unwrap();
+        db.add_usage("c1", 3000, 400, 0.02, 3400).unwrap();
+        let convs = db.list_conversations("w1").unwrap();
+        assert_eq!(convs[0].prompt_tokens, 4000);
+        assert_eq!(convs[0].completion_tokens, 600);
+        assert!((convs[0].cost - 0.03).abs() < 1e-9);
+        assert_eq!(convs[0].context_tokens, 3400);
+        // get_context_tokens:>0 时返回 Some
+        assert_eq!(db.get_context_tokens("c1"), Some(3400));
+        // 压缩后重置
+        db.set_context_tokens("c1", 500).unwrap();
+        assert_eq!(db.get_context_tokens("c1"), Some(500));
+        // 不存在的会话 / 未上报(0)→ None
+        assert_eq!(db.get_context_tokens("nope"), None);
+        db.upsert_conversation(&conv("c2", "w1")).unwrap();
+        assert_eq!(db.get_context_tokens("c2"), None);
     }
 
     #[test]

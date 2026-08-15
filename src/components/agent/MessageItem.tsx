@@ -65,6 +65,10 @@ export const MessageItem = memo(function MessageItem({
   if (visibleParts.length === 0) return null;
 
   const align = isToolProcess ? 'start' : isUser ? 'end' : 'start';
+  // 用户消息用品牌色气泡(bg-primary + 前景色文字),内部 markdown/JSON
+  // 需切换为反色配色(见 markdown.tsx),否则链接/行内代码/表格与气泡底色
+  // 失去前景-背景对比,无法看清。
+  const isInvertedBubble = !isToolProcess && isUser;
   const bubbleVariant = isToolProcess ? 'ghost' : isUser ? 'default' : 'muted';
   const roleLabel = isToolProcess ? '工具' : ROLE_LABEL[vm.role];
 
@@ -128,13 +132,14 @@ export const MessageItem = memo(function MessageItem({
                     // 非流式且内容为 JSON 对象/数组 → 结构化展示,不显示原始 JSON
                     const json = !vm.streaming ? tryParseJson(text) : null;
                     if (json !== null) {
-                      return <JsonView key={i} data={json} />;
+                      return <JsonView key={i} data={json} inverted={isInvertedBubble} />;
                     }
                     return (
                       <Markdown
                         key={i}
                         text={text}
                         streaming={vm.streaming && vm.role === 'assistant'}
+                        inverted={isInvertedBubble}
                       />
                     );
                   }
