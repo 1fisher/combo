@@ -467,6 +467,7 @@ async fn handle_ws_upgrade(
     let local_ws = match tokio_tungstenite::connect_async(req).await {
         Ok((stream, _)) => stream,
         Err(e) => {
+            eprintln!("COMBO_TUNNEL_WARN=本地 WS 连接失败 path={path}: {e}");
             let _ = send_desktop_msg(
                 &ws_tx,
                 DesktopMsg::WsError {

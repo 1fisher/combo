@@ -244,7 +244,8 @@ async fn tunnel_task(state: RelayState, token: String, socket: WebSocket) {
                 }
                 pending_ws.remove(&id);
             }
-            DesktopMsg::WsError { id, message: _ } => {
+            DesktopMsg::WsError { id, message } => {
+                warn!("桌面端 WS 连接失败: id={:.8} message={}", id, message);
                 if let Some(entry) = pending_ws.get(&id) {
                     let _ = entry.send(WsTunnelEvent::Close);
                 }
@@ -676,7 +677,9 @@ pub async fn ws_proxy_handler(
     ws: WebSocketUpgrade,
     req: Request,
 ) -> Response {
-    let token = match extract_token(&req) {
+    // 与 HTTP 转发(tunnel_forward_all)保持一致:优先精确匹配令牌,
+    // 单隧道场景下回退到唯一隧道,避免多令牌/令牌不一致时 WS 被 502。
+    let token = match state.resolve_token(&req) {
         Some(t) => t,
         None => return StatusCode::UNAUTHORIZED.into_response(),
     };

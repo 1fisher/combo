@@ -114,8 +114,13 @@ export function TerminalPanel({
         term.writeln('\r\n\x1b[31m连接错误\x1b[0m');
       };
 
-      socket.onclose = () => {
-        term.writeln('\r\n\x1b[33m终端已断开\x1b[0m');
+      socket.onclose = (ev) => {
+        const detail = ev.reason
+          ? `(原因: ${ev.reason})`
+          : ev.code !== 1000 && ev.code !== 1001
+            ? `(code ${ev.code})`
+            : '';
+        term.writeln(`\r\n\x1b[33m终端已断开${detail}\x1b[0m`);
       };
     });
 
