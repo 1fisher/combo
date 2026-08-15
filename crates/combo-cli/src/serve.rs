@@ -415,6 +415,9 @@ fn build_router(
         .route("/v1/auth/token/revoke", delete(auth::revoke_token))
         // ---- skills / 终端 / 隧道 ----
         .route("/v1/skills", get(skills_api::list))
+        .route("/v1/mcp", get(list_mcp).post(upsert_mcp))
+        .route("/v1/mcp/remove", post(remove_mcp))
+        .route("/v1/mcp/test", post(test_mcp))
         .route("/v1/stats/usage", get(usage_stats))
         .route("/v1/terminal", get(terminal::terminal_default))
         .route("/v1/workspaces/:id/terminal", get(terminal::terminal))
@@ -1596,6 +1599,140 @@ fn history_to_messages(history: &[Value]) -> Vec<Message> {
         out.truncate(idx);
     }
     out
+}
+
+// ---------- MCP server 管理 ----------
+
+/// 将配置文件中的 MCP 配置重新同步到运行时 `state.cfg`,使增删立即对
+/// 下一次 agent run 生效(与 `AskConfig::from_resolved` 的合并口径一致:
+/// command 与 args 合并为单个命令行,交给 `connect_one` 的 `shell_words` 拆分)。
+fn reload_mcp_into_runtime(state: &AppState) {
+    let config_path = AppConfig::load_or_create(&crate::config::default_config_path())
+        .unwrap_or_default();
+    let mut mcp_servers: Vec<(String, Option<String>, Option<String>)> = Vec::new();
+    for (name, srv) in &config_path.mcp {
+        let cmd = srv.command.clone().map(|c| {
+            if let Some(args) = &srv.args {
+                format!("{} {}", c, args.join(" "))
+            } else {
+                c
+            }
+        });
+        mcp_servers.push((name.clone(), cmd, srv.url.clone()));
+    }
+    state.cfg.lock().unwrap().mcp_servers = mcp_servers;
+}
+
+/// GET /v1/mcp — 返回配置文件中的 MCP server 列表。
+async fn list_mcp() -> Json<Value> {
+    let config_path = AppConfig::load_or_create(&crate::config::default_config_path())
+        .unwrap_or_default();
+    let arr: Vec<Value> = config_path
+        .mcp
+        .iter()
+        .map(|(name, srv)| {
+            json!({
+                "name": name,
+                "type": srv.transport,
+                "command": srv.command,
+                "args": srv.args,
+                "url": srv.url,
+            })
+        })
+        .collect();
+    Json(Value::Array(arr))
+}
+
+/// POST /v1/mcp — 新增或更新 MCP server。
+/// 请求体:`{ name, type: "stdio"|"http", command?, url? }`。
+#[derive(Deserialize)]
+struct McpUpsertReq {
+    name: String,
+    #[serde(rename = "type")]
+    transport: String,
+    command: Option<String>,
+    url: Option<String>,
+}
+
+async fn upsert_mcp(
+    State(state): State<AppState>,
+    Json(body): Json<McpUpsertReq>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    crate::config::upsert_mcp_server(
+        &crate::config::default_config_path(),
+        &body.name,
+        &body.transport,
+        body.command.as_deref(),
+        body.url.as_deref(),
+    )
+    .map_err(|e| (StatusCode::BAD_REQUEST, format!("保存 MCP 失败: {e}")))?;
+    reload_mcp_into_runtime(&state);
+    tracing::info!("已保存 MCP server `{}`", body.name);
+    Ok(Json(json!({ "ok": true, "name": body.name })))
+}
+
+/// POST /v1/mcp/remove — 删除 MCP server。请求体:`{ name }`。
+#[derive(Deserialize)]
+struct McpRemoveReq {
+    name: String,
+}
+
+async fn remove_mcp(
+    State(state): State<AppState>,
+    Json(body): Json<McpRemoveReq>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    crate::config::remove_mcp_server(&crate::config::default_config_path(), &body.name)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("删除 MCP 失败: {e}")))?;
+    reload_mcp_into_runtime(&state);
+    tracing::info!("已删除 MCP server `{}`", body.name);
+    Ok(Json(json!({ "ok": true, "name": body.name })))
+}
+
+/// POST /v1/mcp/test — 测试连接并列出可用工具。
+/// 请求体:`{ type: "stdio"|"http", command?, url? }`。
+#[derive(Deserialize)]
+struct McpTestReq {
+    #[serde(rename = "type")]
+    transport: String,
+    command: Option<String>,
+    url: Option<String>,
+}
+
+async fn test_mcp(Json(body): Json<McpTestReq>) -> Result<Json<Value>, (StatusCode, String)> {
+    let transport = body.transport.trim().to_ascii_lowercase();
+    if transport == "stdio" && body.command.is_none() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "stdio 类型需要 command(启动命令)".into(),
+        ));
+    }
+    if transport == "http" && body.url.is_none() {
+        return Err((StatusCode::BAD_REQUEST, "http 类型需要 URL".into()));
+    }
+    if body.command.is_none() && body.url.is_none() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "测试需要 command(stdio)或 url(http)".into(),
+        ));
+    }
+    let handle = crate::mcp::tool_server_with_builtin(&[]);
+    let conn = crate::mcp::connect_one(
+        "test",
+        body.command.as_deref(),
+        body.url.as_deref(),
+        handle.clone(),
+    )
+    .await
+    .map_err(|e| (StatusCode::BAD_REQUEST, format!("连接失败: {e}")))?;
+    // 保持连接存活直到读取工具列表(MCP 工具经 `is_live` 判定,提前 Drop 会被剔除)
+    let tools = handle
+        .get_tool_defs(None)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("读取工具列表失败: {e}")))?;
+    let names: Vec<String> = tools.into_iter().map(|t| t.name).collect();
+    let tool_count = names.len();
+    drop(conn);
+    Ok(Json(json!({ "ok": true, "tool_count": tool_count, "tools": names })))
 }
 
 // ---------- providers / model 切换 ----------

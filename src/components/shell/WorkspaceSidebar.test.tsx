@@ -29,6 +29,10 @@ vi.mock('../../lib/api', () => ({
   listSkills: vi.fn(async () => []),
   getWorkspaceConfig: vi.fn(async () => ({ options: {} })),
   setConfigKey: vi.fn(async () => undefined),
+  listMcpServers: vi.fn(async () => []),
+  upsertMcpServer: vi.fn(async () => ({ ok: true, name: '' })),
+  removeMcpServer: vi.fn(async () => ({ ok: true, name: '' })),
+  testMcpServer: vi.fn(async () => ({ ok: true, tool_count: 0, tools: [] })),
   listHostDirs: vi.fn(async (path?: string) => ({
     path: path ?? '/proj',
     parent: path ? '/proj' : null,

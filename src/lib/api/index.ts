@@ -378,6 +378,33 @@ export function listSkills(workspaceId?: string | null): Promise<Api.Skill[]> {
   });
 }
 
+// MCP server:combo-cli serve 本地端点,读写配置文件 [mcp.<name>]
+export function listMcpServers(): Promise<Api.McpServer[]> {
+  return apiRequest('/v1/mcp');
+}
+
+export function upsertMcpServer(
+  req: { name: string; type: string; command?: string; url?: string },
+): Promise<{ ok: boolean; name: string }> {
+  return apiRequest('/v1/mcp', {
+    method: 'POST',
+    body: { name: req.name, type: req.type, command: req.command, url: req.url },
+  });
+}
+
+export function removeMcpServer(name: string): Promise<{ ok: boolean; name: string }> {
+  return apiRequest('/v1/mcp/remove', { method: 'POST', body: { name } });
+}
+
+export function testMcpServer(
+  req: { type: string; command?: string; url?: string },
+): Promise<Api.McpTestResult> {
+  return apiRequest('/v1/mcp/test', {
+    method: 'POST',
+    body: { type: req.type, command: req.command, url: req.url },
+  });
+}
+
 // 服务器目录浏览:combo-cli serve 本地端点,供浏览器/移动端在远端打开服务器上的项目目录
 export interface HostDirEntry {
   name: string;

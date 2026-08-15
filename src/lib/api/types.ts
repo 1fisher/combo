@@ -2112,6 +2112,22 @@ export namespace Api {
     path: string;
   };
 
+  // MCP server(combo-cli serve 本地端点,读写配置文件 [mcp.<name>])
+  export type McpServer = {
+    name: string;
+    type: string; // stdio | http
+    command?: string | null;
+    args?: string[] | null;
+    url?: string | null;
+  };
+
+  // MCP 连接测试结果。
+  export type McpTestResult = {
+    ok: boolean;
+    tool_count?: number;
+    tools?: string[];
+  };
+
   // 配置(rune 透传)
   export type ConfigScope = 0 | 1; // 0=global, 1=workspace
   export type ConfigSetRequest = {

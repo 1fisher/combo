@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'rea
 import {
   Archive,
   BarChart3,
+  Boxes,
   CalendarClock,
   ChevronDown,
   ChevronRight,
@@ -43,6 +44,7 @@ import { createSession as createSessionApi } from '../../lib/api';
 import { ConversationList } from './ConversationList';
 import { SessionRow } from './SessionRow';
 import { SkillsPanel } from './SkillsPanel';
+import { McpPanel } from './McpPanel';
 import { DirectoryPicker } from './DirectoryPicker';
 import { SettingsDialog } from './SettingsDialog';
 import { SearchDialog } from './SearchDialog';
@@ -233,6 +235,7 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
   const [draftName, setDraftName] = useState('');
   const [sidebarError, setSidebarError] = useState<string | null>(null);
   const [skillsOpen, setSkillsOpen] = useState(false);
+  const [mcpOpen, setMcpOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [autoOpen, setAutoOpen] = useState(false);
@@ -490,6 +493,15 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
           >
             <WandSparkles className="size-4 shrink-0" />
             <span className="min-w-0 flex-1 truncate text-[13px]">技能</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setMcpOpen(true)}
+            className="flex h-8 w-full shrink-0 cursor-pointer items-center gap-2 overflow-hidden rounded-lg pl-2.5 pr-2.5 text-left transition-colors hover:bg-surface-hover hover:text-foreground"
+            title="MCP 工具"
+          >
+            <Boxes className="size-4 shrink-0" />
+            <span className="min-w-0 flex-1 truncate text-[13px]">MCP</span>
           </button>
           <button
             type="button"
@@ -842,6 +854,7 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
         </div>
       </div>
       <SkillsPanel open={skillsOpen} onOpenChange={setSkillsOpen} />
+      <McpPanel open={mcpOpen} onOpenChange={setMcpOpen} />
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
       <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} onNavigate={onNavigate} />
       <AutomationPanel open={autoOpen} onOpenChange={setAutoOpen} />

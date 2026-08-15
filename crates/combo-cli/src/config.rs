@@ -651,6 +651,62 @@ pub fn remove_provider(path: &PathBuf, provider_id: &str) -> Result<()> {
     write_config(path, &cfg)
 }
 
+/// 新增或更新一个 MCP server 配置(写入 `[mcp.<name>]` 段)。
+///
+/// name 仅允许字母/数字/`-`/`_`(TOML key 安全);`transport` 为 `stdio` / `http`。
+/// stdio 需要 `command`(完整启动命令,可含参数),http 需要 `url`。
+/// `command` 直接按原样落盘;运行时由 `AskConfig::from_resolved` 解析为 argv
+/// (合并 args 后经 `shell_words` 拆分),因此 UI 侧建议把参数一并写进 command。
+pub fn upsert_mcp_server(
+    path: &PathBuf,
+    name: &str,
+    transport: &str,
+    command: Option<&str>,
+    url: Option<&str>,
+) -> Result<()> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(anyhow::anyhow!("MCP server 名称不能为空"));
+    }
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err(anyhow::anyhow!("MCP server 名称仅支持字母、数字、`-`、`_`"));
+    }
+    let transport = transport.trim().to_ascii_lowercase();
+    if transport != "stdio" && transport != "http" {
+        return Err(anyhow::anyhow!("MCP 传输类型仅支持 stdio 或 http"));
+    }
+    let command = command.map(str::trim).filter(|s| !s.is_empty()).map(String::from);
+    let url = url.map(str::trim).filter(|s| !s.is_empty()).map(String::from);
+
+    if transport == "stdio" && command.is_none() {
+        return Err(anyhow::anyhow!("stdio 类型需要填写 command(启动命令)"));
+    }
+    if transport == "http" && url.is_none() {
+        return Err(anyhow::anyhow!("http 类型需要填写 URL"));
+    }
+
+    let mut cfg = load_config(path)?;
+    cfg.mcp.insert(
+        name.to_string(),
+        McpServerConfig {
+            transport,
+            command,
+            args: None,
+            url,
+        },
+    );
+    write_config(path, &cfg)
+}
+
+/// 删除配置文件中的 MCP server。
+pub fn remove_mcp_server(path: &PathBuf, name: &str) -> Result<()> {
+    let mut cfg = load_config(path)?;
+    if cfg.mcp.remove(name.trim()).is_none() {
+        return Err(anyhow::anyhow!("MCP server `{}` 未在配置文件中定义", name));
+    }
+    write_config(path, &cfg)
+}
+
 /// 写入默认配置文件模板。`overwrite=false` 时若文件已存在则不写。
 pub fn write_default(path: &PathBuf, overwrite: bool) -> Result<()> {
     if path.exists() && !overwrite {
@@ -1135,5 +1191,55 @@ mod tests {
         let info2 =
             crate::providers::ProviderInfo::from_config("my-relay", &ProviderConfig::default());
         assert_eq!(info2.name, None);
+    }
+
+    #[test]
+    fn mcp_server_upsert_and_remove() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("combo-cli.toml");
+
+        // stdio:写 command,args 置空
+        upsert_mcp_server(
+            &path,
+            "filesystem",
+            "stdio",
+            Some(" npx -y @modelcontextprotocol/server-filesystem /tmp "),
+            None,
+        )
+        .unwrap();
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        let srv = cfg.mcp.get("filesystem").unwrap();
+        assert_eq!(srv.transport, "stdio");
+        assert_eq!(
+            srv.command.as_deref(),
+            Some("npx -y @modelcontextprotocol/server-filesystem /tmp"),
+            "command 前后空白应被 trim"
+        );
+        assert!(srv.args.is_none());
+
+        // http:写 url
+        upsert_mcp_server(&path, "github", "http", None, Some(" http://127.0.0.1:3001/mcp "))
+            .unwrap();
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        assert_eq!(cfg.mcp.get("github").unwrap().url.as_deref(), Some("http://127.0.0.1:3001/mcp"));
+
+        // 覆盖更新
+        upsert_mcp_server(&path, "filesystem", "stdio", Some("npx other-server"), None).unwrap();
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        assert_eq!(cfg.mcp.get("filesystem").unwrap().command.as_deref(), Some("npx other-server"));
+
+        // 校验失败:空名称 / 非法字符 / 缺 command / 缺 url / 非法 transport
+        assert!(upsert_mcp_server(&path, "  ", "stdio", Some("x"), None).is_err());
+        assert!(upsert_mcp_server(&path, "bad name!", "stdio", Some("x"), None).is_err());
+        assert!(upsert_mcp_server(&path, "no-cmd", "stdio", None, None).is_err());
+        assert!(upsert_mcp_server(&path, "no-url", "http", None, None).is_err());
+        assert!(upsert_mcp_server(&path, "bad-type", "sse", Some("x"), None).is_err());
+
+        // 删除
+        remove_mcp_server(&path, "filesystem").unwrap();
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        assert!(!cfg.mcp.contains_key("filesystem"));
+        assert!(remove_mcp_server(&path, "filesystem").is_err());
+        assert!(remove_mcp_server(&path, "never-exists").is_err());
     }
 }
