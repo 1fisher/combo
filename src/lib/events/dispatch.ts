@@ -89,7 +89,13 @@ export function applyEvent(s: Store, env: EventEnvelope): void {
       const inner = env.payload as { type: string; payload: unknown };
       if (inner.type === 'updated') {
         const p = inner.payload as { session_id: string; todos: Api.TodoItem[] };
-        s.setTodos(p.session_id, p.todos);
+        // 归一化旧后端的 "inprogress"(serde lowercase 产物)为 "in_progress",
+        // 否则前端按 'in_progress' 匹配不到,当前项会错位到第一条 pending。
+        const todos = p.todos.map((t) => ({
+          ...t,
+          status: t.status === ('inprogress' as Api.TodoStatus) ? 'in_progress' : t.status,
+        }));
+        s.setTodos(p.session_id, todos);
       } else if (inner.type === 'deleted') {
         const p = inner.payload as { session_id: string };
         s.clearTodos(p.session_id);

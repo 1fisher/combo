@@ -140,6 +140,28 @@ describe('applyEvent', () => {
     expect(useAgentStore.getState().todos['s1']).toBeUndefined();
   });
 
+  it('normalizes legacy "inprogress" status from old backends', () => {
+    // 旧后端 serde lowercase 产出 "inprogress"(无下划线);不归一化的话
+    // TodoList 按 'in_progress' 匹配失败,当前项会错位到第一条 pending。
+    const s = useAgentStore.getState();
+    applyEvent(s, {
+      type: 'todo_update',
+      payload: {
+        type: 'updated',
+        payload: {
+          session_id: 's2',
+          todos: [
+            { content: '任务一', status: 'inprogress' as never },
+            { content: '任务二', status: 'pending' },
+          ],
+        },
+      },
+    });
+    const todos = useAgentStore.getState().todos['s2'];
+    expect(todos?.[0].status).toBe('in_progress');
+    expect(todos?.[1].status).toBe('pending');
+  });
+
   it('removes optimistic local- messages when real user text message arrives', () => {
     const s = useAgentStore.getState();
     // 模拟 doSend 乐观插入

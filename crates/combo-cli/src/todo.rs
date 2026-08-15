@@ -13,7 +13,10 @@ use tokio::sync::broadcast;
 
 /// 单个待办项的状态。
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "lowercase")]
+// snake_case:InProgress 序列化为 "in_progress"(与前端 Api.TodoStatus 一致)。
+// 此前用 lowercase 会产出 "inprogress",前端按 'in_progress' 匹配失败,
+// 退化为「第一条 pending」推导当前项,导致当前项错位到第二条。
+#[serde(rename_all = "snake_case")]
 pub enum TodoStatus {
     Pending,
     InProgress,
@@ -358,6 +361,25 @@ todo_write 更新状态(完成标 completed、下一项标 in_progress),提交�
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn todo_status_serializes_snake_case_wire_format() {
+        // SSE 下发的前端 Api.TodoStatus 期望 'pending' | 'in_progress' | 'completed';
+        // 若 serde 退回 lowercase(产出 "inprogress"),前端按 'in_progress'
+        // 匹配失败,「当前处理项」会错位到第一条 pending。
+        assert_eq!(
+            serde_json::to_value(TodoStatus::Pending).unwrap(),
+            serde_json::json!("pending")
+        );
+        assert_eq!(
+            serde_json::to_value(TodoStatus::InProgress).unwrap(),
+            serde_json::json!("in_progress")
+        );
+        assert_eq!(
+            serde_json::to_value(TodoStatus::Completed).unwrap(),
+            serde_json::json!("completed")
+        );
+    }
 
     #[test]
     fn todo_status_parse_variants() {
