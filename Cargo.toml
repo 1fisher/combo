@@ -2,6 +2,14 @@
 members = ["crates/combo-relay", "crates/combo-cli", "src-tauri"]
 resolver = "2"
 
+# 本地补丁版 rig-core(基于 0.41.0):
+# 修复 OpenAI 兼容 SSE 流收到 `data: [DONE]` 哨兵后不终结、
+# 要等 HTTP 连接关闭才结束 turn 的问题 —— 部分网关/中转会保持
+# 连接不关,导致最后一条流式消息长时间挂起。改动见
+# vendor/rig-core 下 `combo patch` 注释标记的三处流处理。
+[patch.crates-io]
+rig-core = { path = "vendor/rig-core" }
+
 [profile.release]
 opt-level = 2
 lto = "thin"

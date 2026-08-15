@@ -314,6 +314,16 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
 15. **serve 配置加载**:独立 `serve` 模式若有配置缺失(找不到 provider)会退出;
     Tauri 内嵌(`init_backend`)失败时回退内置 opencode provider,仅保证
     health/文件/会话等端点可用,agent 运行无 key 时以 finish(error) 收尾。
+16. **rig-core 本地补丁(vendor/rig-core)**:根 `Cargo.toml` 的
+    `[patch.crates-io]` 把 rig-core 0.41.0 指向 `vendor/rig-core`(从 crates.io
+    registry 拷贝,源码内 `combo patch` 注释标记改动)。修复:OpenAI 兼容 SSE 流
+    收到 `data: [DONE]` 哨兵后原实现只 continue,turn 要等 HTTP 连接真正关闭才
+    结束;部分网关/中转保持连接不关,导致最后一条流式消息长时间挂起(此前只能靠
+    `COMBO_STREAM_IDLE_TIMEOUT` 空闲超时兜底)。补丁改为收到 `[DONE]` 即 break
+    结束流(共三处:chat completions 兼容路径、openai responses_api 流式、cohere),
+    回归测试 `done_sentinel_ends_stream_even_when_transport_stays_open` 用
+    "发完 [DONE] 但连接永不关闭"的 mock 客户端锁定行为。升级 rig 版本时记得
+    重新 vendor 并重放补丁,或确认上游已修复后删掉 patch 与 vendor 目录。
 
 ## 远端 Web / 移动端支持
 
