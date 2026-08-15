@@ -16,9 +16,10 @@ use rig::completion::{CompletionModel, GetTokenUsage, Message};
 use rig::prelude::AgentClientExt;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingChat, StreamingPrompt};
 use rig::tool::DynamicTool;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// 组装一个 agent:内置工具 + 可选 MCP 工具。
 ///
@@ -436,6 +437,37 @@ where
     }
 }
 
+/// 等待模型响应阶段的空闲超时:`COMBO_STREAM_IDLE_TIMEOUT` 环境变量
+/// (秒)可覆盖,`0` 表示关闭;默认 300s——大上下文 prefill 实测可达
+/// 200s+,阈值需大于最坏合法延迟,只兜「永不返回」的挂死。
+fn idle_timeout(no_tools_running: bool) -> Option<Duration> {
+    if !no_tools_running {
+        return None;
+    }
+    let raw = std::env::var("COMBO_STREAM_IDLE_TIMEOUT").ok();
+    idle_timeout_from(raw.as_deref(), 300)
+}
+
+/// 纯函数版本(便于测试):None → 默认值;解析失败/空串 → 默认值;0 → 关闭。
+fn idle_timeout_from(raw: Option<&str>, default_secs: u64) -> Option<Duration> {
+    match raw.map(str::trim).filter(|s| !s.is_empty()) {
+        Some(s) => match s.parse::<u64>() {
+            Ok(0) => None,
+            Ok(secs) => Some(Duration::from_secs(secs)),
+            Err(_) => Some(Duration::from_secs(default_secs)),
+        },
+        None => Some(Duration::from_secs(default_secs)),
+    }
+}
+
+/// 超时等待 future:Some → 到点完成触发空闲中止;None → 永不完成。
+async fn idle_future(d: Option<Duration>) {
+    match d {
+        Some(d) => tokio::time::sleep(d).await,
+        None => std::future::pending::<()>().await,
+    }
+}
+
 /// 泛型流式执行:逐条消费 stream,文本增量与工具调用经 `on_event` 上报。
 async fn stream_one<M, F>(
     agent: &Agent<M>,
@@ -458,7 +490,15 @@ where
     let mut total_usage = rig::completion::Usage::new();
     // tool_call id → 工具名,供 ToolResult 上报时配对
     let mut tool_names: HashMap<String, String> = HashMap::new();
+    // 已发出 ToolCall、尚未收到 ToolResult 的 call id:非空说明工具在执行
+    // (question 等用户回答、长命令),此阶段不施加空闲超时。
+    let mut running_tools: HashSet<String> = HashSet::new();
     loop {
+        // 空闲超时兜底:仅在等待模型响应时启用。rig 的 openai 兼容流对
+        // `data: [DONE]` 只跳过不终结,turn 要等 HTTP 连接真正关闭才结束;
+        // 若 provider/网关保持连接不关,run 会永久挂起。超时触发即中止并报错,
+        // 而不是让前端无限等待。
+        let idle = idle_timeout(running_tools.is_empty());
         let item = tokio::select! {
             _ = cancel.changed() => {
                 if *cancel.borrow() {
@@ -466,7 +506,19 @@ where
                 }
                 continue;
             }
-            item = stream.next() => item,
+            item = stream.next() => Some(item),
+            // 无超时(工具执行中 / 显式关闭)时 pending 永不完成
+            _ = idle_future(idle) => None,
+        };
+        let item = match item {
+            Some(item) => item,
+            None => {
+                let secs = idle.map(|d| d.as_secs()).unwrap_or(0);
+                return Err(anyhow::anyhow!(
+                    "模型响应空闲超过 {secs} 秒仍未返回(可能是 provider 流未正常关闭),\
+                     已中止本次运行。可设置环境变量 COMBO_STREAM_IDLE_TIMEOUT 调整秒数,设 0 关闭"
+                ));
+            }
         };
         let Some(item) = item else { break };
         match item? {
@@ -495,6 +547,7 @@ where
             }) => {
                 let input = tool_call.function.arguments.to_string();
                 tool_names.insert(tool_call.id.clone(), tool_call.function.name.clone());
+                running_tools.insert(tool_call.id.clone());
                 on_event(RunEvent::ToolCall {
                     id: tool_call.id,
                     name: tool_call.function.name,
@@ -520,6 +573,7 @@ where
                     .get(&tool_result.id)
                     .cloned()
                     .unwrap_or_default();
+                running_tools.remove(&tool_result.id);
                 on_event(RunEvent::ToolResult {
                     id: tool_result.id,
                     name,
@@ -671,5 +725,42 @@ where
         }
         db.append_message(session_id, "assistant", &out)?;
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn idle_timeout_from_parses_env_override() {
+        // 未设置 → 默认 300s
+        assert_eq!(idle_timeout_from(None, 300), Some(Duration::from_secs(300)));
+        // 数字 → 覆盖
+        assert_eq!(
+            idle_timeout_from(Some("90"), 300),
+            Some(Duration::from_secs(90))
+        );
+        // 0 → 关闭(不设超时)
+        assert_eq!(idle_timeout_from(Some("0"), 300), None);
+        // 空串 / 纯空白 / 非法值 → 回退默认
+        assert_eq!(
+            idle_timeout_from(Some(""), 300),
+            Some(Duration::from_secs(300))
+        );
+        assert_eq!(
+            idle_timeout_from(Some("  "), 300),
+            Some(Duration::from_secs(300))
+        );
+        assert_eq!(
+            idle_timeout_from(Some("abc"), 300),
+            Some(Duration::from_secs(300))
+        );
+    }
+
+    #[test]
+    fn idle_timeout_disabled_while_tools_running() {
+        // 工具执行中(question 等待用户回答可能数分钟)不施加空闲超时
+        assert_eq!(idle_timeout(false), None);
     }
 }

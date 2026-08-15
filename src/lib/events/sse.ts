@@ -1,6 +1,7 @@
 import { getClientId } from '../clientId';
 import { getAccessToken } from '../authToken';
 import { ensureProxyBaseUrl } from '../connection';
+import { EventCoalescer } from './coalesce';
 import type { EventEnvelope } from './payloadTypes';
 
 export type OnPayload = (env: EventEnvelope) => void;
@@ -26,15 +27,18 @@ export class WorkspaceEventSource {
   /** 当前退避等待的 resolve 函数,外部可调用以跳过等待立即重连 */
   private resolveSleep: (() => void) | null = null;
   private cleanupFns: Array<() => void> = [];
+  /** message 帧合流:同一窗口内只把最新快照写入 store,降低流式渲染压力 */
+  private coalescer: EventCoalescer;
 
   constructor(
     private readonly workspaceId: string,
-    private readonly onPayload: OnPayload,
+    onPayload: OnPayload,
     opts?: EventSourceOpts
   ) {
     this.backoffMs = opts?.backoffMs ?? 1000;
     this.maxBackoffMs = opts?.maxBackoffMs ?? 30_000;
     this.onGone = opts?.onGone;
+    this.coalescer = new EventCoalescer(onPayload);
   }
 
   start(): void {
@@ -45,6 +49,8 @@ export class WorkspaceEventSource {
 
   stop(): void {
     this.stopped = true;
+    // 先冲刷合流挂起的帧,避免停止时丢最后的流式快照
+    this.coalescer.flush();
     this.cleanupFns.forEach((fn) => fn());
     this.cleanupFns = [];
     this.controller?.abort();
@@ -162,7 +168,7 @@ export class WorkspaceEventSource {
             console.debug(
               `[${ts}][sse] type="${env.type}" inner="${inner?.type}" data=${raw.trim().slice(0, 500)}`
             );
-            this.onPayload(env);
+            this.coalescer.push(env);
           } catch (e) {
             console.warn('[sse] 事件解析失败', e);
           }

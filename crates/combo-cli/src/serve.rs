@@ -1234,6 +1234,33 @@ impl StreamParts {
     }
 }
 
+/// 注入历史时单条 tool_result 的最大字符数:超出则保留头尾并标注省略量。
+/// 截断只影响发给 LLM 的历史(sqlite 落库与前端展示仍是全文),目的是控制
+/// 多轮工具循环每轮重发全量历史时的 prefill 体积——实测长会话最后一轮
+/// input_tokens 可达 87k,provider 对大上下文的 prefill 时间随历史增长,
+/// 表现为「最后一个 turn 迟迟不出字」。
+const HISTORY_TOOL_RESULT_LIMIT: usize = 4000;
+const HISTORY_TOOL_RESULT_HEAD: usize = 3000;
+const HISTORY_TOOL_RESULT_TAIL: usize = 500;
+
+/// 截断超长 tool_result:保留头尾,中间用省略标注替代,并告知 agent 原文长度,
+/// 避免模型误以为看到了完整输出。≤ 限制时原样返回。
+fn truncate_tool_result(content: &str) -> String {
+    let total = content.chars().count();
+    if total <= HISTORY_TOOL_RESULT_LIMIT {
+        return content.to_string();
+    }
+    let head: String = content.chars().take(HISTORY_TOOL_RESULT_HEAD).collect();
+    let tail: String = content
+        .chars()
+        .skip(total - HISTORY_TOOL_RESULT_TAIL)
+        .collect();
+    let omitted = total - HISTORY_TOOL_RESULT_HEAD - HISTORY_TOOL_RESULT_TAIL;
+    format!(
+        "{head}\n\n…[工具输出过长,已截断:原文 {total} 字符,此处省略 {omitted} 字符]…\n\n{tail}"
+    )
+}
+
 /// 把 proxy 注入的历史消息([{ role, parts }])还原为 rig Message 列表。
 /// text/tool_call/tool_result 各成一跳,便于 provider 正确消费多轮上下文。
 /// 孤立 tool_call(上次 run 失败残留、无配对 tool_result)直接丢弃,
@@ -1314,10 +1341,9 @@ fn history_to_messages(history: &[Value]) -> Vec<Message> {
                             }
                             out.push(Message::tool_result(
                                 id.clone(),
-                                data.get("content")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("")
-                                    .to_string(),
+                                truncate_tool_result(
+                                    data.get("content").and_then(Value::as_str).unwrap_or(""),
+                                ),
                             ));
                             // 该 assistant 回合的 call 全部有响应,回合完成
                             if matches!(&pending, Some((_, ids)) if ids.is_empty()) {
@@ -2022,6 +2048,64 @@ mod tests {
             }
             _ => panic!("expected user tool_result message"),
         }
+    }
+
+    #[test]
+    fn history_to_messages_truncates_huge_tool_results() {
+        // 超长 tool_result(bash 输出 10k 字符)注入历史时截断为头尾,
+        // 减小每轮 completion 的 prefill 体积(落库与展示不受影响)。
+        let big = "x".repeat(10_000);
+        let history = vec![
+            json!({ "role": "user", "parts": [part("text", r#"{"text":"跑一下"}"#)] }),
+            json!({
+                "role": "assistant",
+                "parts": [part("tool_call", r#"{"id":"c1","name":"bash","input":"{}"}"#)],
+            }),
+            json!({
+                "role": "user",
+                "parts": [part("tool_result", &format!(r#"{{"tool_call_id":"c1","content":"{big}"}}"#))],
+            }),
+        ];
+        let msgs = history_to_messages(&history);
+        // 找到 tool_result 的文本内容并断言截断生效
+        let mut injected = String::new();
+        for m in &msgs {
+            if let Message::User { content } = m {
+                for c in content.iter() {
+                    if let rig::completion::message::UserContent::ToolResult(r) = c {
+                        for rc in r.content.iter() {
+                            if let rig::completion::message::ToolResultContent::Text(t) = rc {
+                                injected.push_str(&t.text);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(injected.contains("已截断"));
+        assert!(injected.contains("10_000") || injected.contains("10000"));
+        // 头部保留 3000 字符、尾部 500 字符,总量远小于原文
+        assert!(injected.chars().count() < 4000);
+        assert!(injected.starts_with("xxxx"));
+    }
+
+    #[test]
+    fn history_to_messages_keeps_short_tool_results_intact() {
+        let history = vec![
+            json!({ "role": "user", "parts": [part("text", r#"{"text":"查一下"}"#)] }),
+            json!({
+                "role": "assistant",
+                "parts": [part("tool_call", r#"{"id":"c1","name":"bash","input":"{}"}"#)],
+            }),
+            json!({
+                "role": "user",
+                "parts": [part("tool_result", r#"{"tool_call_id":"c1","content":"/tmp/combo"}"#)],
+            }),
+        ];
+        let msgs = history_to_messages(&history);
+        let dbg = format!("{msgs:?}");
+        assert!(dbg.contains("/tmp/combo"));
+        assert!(!dbg.contains("已截断"));
     }
 
     #[test]
