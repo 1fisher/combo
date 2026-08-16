@@ -310,14 +310,14 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
   }
 
   return (
-    <div className="relative flex h-full min-h-0 w-full flex-1 flex-col">
+    <div className="relative flex flex-col flex-1 w-full h-full min-h-0">
       {postError && (
-        <div className="shrink-0 border-t border-destructive/30 bg-destructive/10 px-4 py-2 text-xs text-destructive">
+        <div className="bg-destructive/10 px-4 py-2 border-destructive/30 border-t text-destructive text-xs shrink-0">
           发送失败:{postError}
         </div>
       )}
       {/* 时间线 / 变更面板 */}
-      <div className={cn('min-h-0 flex-1', showChanges ? 'overflow-hidden' : 'overflow-y-auto')}>
+      <div className={cn('flex-1 min-h-0', showChanges ? 'overflow-hidden' : 'overflow-y-auto')}>
         {showChanges && workspaceId ? (
           <FileChangesPanel
             messages={messages}
@@ -327,7 +327,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
             onStatusesChange={setChangeStatuses}
           />
         ) : historyFetching ? (
-          <div className="flex h-full items-center justify-center">
+          <div className="flex justify-center items-center h-full">
             <div className="flex items-center gap-2 text-[13px] text-foreground-subtle">
               <Loader2 className="size-4 animate-spin" />
               加载会话…
@@ -347,9 +347,9 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
       {/* 连击特效层(会话区中央,拳皇连招风) */}
       <ComboOverlay combo={combo} />
       {/* 输入区 */}
-      <div className="relative z-20 w-full shrink-0">
+      <div className="z-20 relative w-full shrink-0">
         {rt?.run?.status === 'done' && rt?.run?.error && (
-          <div className="mx-4 mb-2 flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          <div className="flex items-start gap-2 bg-destructive/10 mx-4 mb-2 px-3 py-2 border border-destructive/30 rounded-xl text-destructive text-xs">
             <CircleAlert className="mt-0.5 size-3.5 shrink-0" />
             <div className="min-w-0 break-all whitespace-pre-wrap">
               运行失败:{rt.run.error}
@@ -357,8 +357,8 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
           </div>
         )}
         {wsMenuOpen && (
-          <div className="absolute bottom-full left-1/2 z-30 mb-2 w-64 -translate-x-1/2 rounded-xl border border-border bg-popover p-1.5 shadow-xl">
-            <div className="px-2 py-1 text-xs font-medium text-foreground-subtlest">选择项目</div>
+          <div className="bottom-full left-1/2 z-30 absolute bg-popover shadow-xl mb-2 p-1.5 border border-border rounded-xl w-64 -translate-x-1/2">
+            <div className="px-2 py-1 font-medium text-foreground-subtlest text-xs">选择项目</div>
             {workspaces?.map((w) => {
               const name = w.name?.trim() ? w.name : basename(w.path);
               return (
@@ -371,12 +371,12 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
                     void qc.invalidateQueries({ queryKey: ['sessions', w.id] });
                   }}
                   className={cn(
-                    'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-hover',
+                    'flex items-center gap-2 hover:bg-surface-hover px-2 py-1.5 rounded-lg w-full text-[13px] text-left transition-colors',
                     w.id === workspaceId && 'bg-surface-hover'
                   )}
                 >
-                  <Folder className="size-4 shrink-0 text-foreground-subtlest" />
-                  <span className="min-w-0 flex-1 truncate">{name}</span>
+                  <Folder className="size-4 text-foreground-subtlest shrink-0" />
+                  <span className="flex-1 min-w-0 truncate">{name}</span>
                 </button>
               );
             })}
@@ -386,17 +386,6 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
               </div>
             )}
           </div>
-        )}
-        {/* 变更栏 */}
-        {pendingCount > 0 && !showChanges && (
-          <button
-            onClick={() => setShowChanges(true)}
-            className="mx-4 mb-2 flex items-center gap-2 rounded-xl border border-border bg-surface/40 px-3 py-1.5 text-xs transition-colors hover:bg-surface-hover"
-          >
-            <FileEdit className="size-3.5 text-brand" />
-            <span className="text-muted-foreground">{pendingCount} 个文件待审查</span>
-            <span className="ml-auto text-brand">审查变更</span>
-          </button>
         )}
         {/* 问题卡片(question 工具):非模态,优先于任务列表显示在输入坞上方 */}
         {questionQueue[0] && workspaceId && (
@@ -410,6 +399,17 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
         )}
         {/* 任务列表 */}
         {sessionId && todos.length > 0 && <TodoList todos={todos} />}
+        {/* 变更栏 */}
+        {pendingCount > 0 && !showChanges && (
+          <button
+            onClick={() => setShowChanges(true)}
+            className="flex items-center gap-2 bg-surface/40 hover:bg-surface-hover mx-4 mb-2 px-3 py-1.5 border border-border rounded-xl text-xs transition-colors"
+          >
+            <FileEdit className="size-3.5 text-brand" />
+            <span className="text-muted-foreground">{pendingCount} 个文件待审查</span>
+            <span className="ml-auto text-brand">审查变更</span>
+          </button>
+        )}
         <Composer
           workspaceName={wsName}
           workspaceId={workspaceId ?? undefined}
