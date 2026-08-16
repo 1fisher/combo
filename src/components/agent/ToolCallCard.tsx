@@ -1,7 +1,9 @@
 import { FileText, Terminal, Wrench } from 'lucide-react';
 import { openFileInEditor } from '../../lib/openFile';
+import { langFromPath } from '../../lib/codeLang';
 import { JsonView, tryParseJson } from './JsonView';
 import { BashCode } from './BashCode';
+import { CodeView } from './CodeView';
 import { BASH_TOOLS, commandFromInput } from './bashTools';
 
 export interface ToolCallInfo {
@@ -38,6 +40,18 @@ export function ToolCallCard({
   // bash 类工具:命令是主体,提取后直接展示(不再按 JSON 树渲染)
   const isBash = BASH_TOOLS.has(call.name);
   const command = isBash ? commandFromInput(call.input) : null;
+  // write 工具:content 是完整文件内容,按目标文件类型语法高亮展示
+  const writeContent =
+    call.name === 'write' &&
+    inputJson &&
+    typeof inputJson === 'object' &&
+    typeof (inputJson as Record<string, unknown>).content === 'string'
+      ? {
+          path: toolPathFromInput(call.input) ?? '',
+          content: (inputJson as Record<string, unknown>).content as string,
+        }
+      : null;
+  const writeLang = writeContent ? langFromPath(writeContent.path) : null;
   // summary 上的命令摘要:折叠时也能一眼看到在跑什么(取首行,超长截断)
   const commandBrief = command
     ? command.split('\n')[0].trim().slice(0, 80) + (command.length > 80 ? '…' : '')
@@ -80,6 +94,13 @@ export function ToolCallCard({
       {command !== null ? (
         // bash 类工具:命令以 bash 语法高亮展示(与 markdown 代码块观感一致)
         <BashCode command={command} className="rounded-none border-t" />
+      ) : writeContent !== null ? (
+        // write 工具:文件内容按目标文件类型高亮(语言未识别时纯文本)
+        <CodeView
+          code={writeContent.content}
+          language={writeLang}
+          className="rounded-none border-t"
+        />
       ) : inputJson !== null ? (
         <JsonView data={inputJson} className="border-t border-border px-3 py-2" />
       ) : (

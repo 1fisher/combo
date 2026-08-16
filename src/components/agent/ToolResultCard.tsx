@@ -3,13 +3,19 @@ import { ChevronRight, CheckCircle, XCircle, Terminal } from 'lucide-react';
 import type { Api } from '../../lib/api/types';
 import { useAgentStore } from '../../stores/agentStore';
 import { countChanges, diffFromToolInput, type DiffLine } from '../../lib/fileChanges';
+import { langDisplayName, langFromPath, langFromShebang } from '../../lib/codeLang';
+import { parseReadOutput } from '../../lib/readOutput';
 import { DiffView } from './DiffView';
 import { TerminalOutput } from './TerminalOutput';
 import { JsonView, tryParseJson } from './JsonView';
 import { BashCode } from './BashCode';
 import { BASH_TOOLS, commandFromInput } from './bashTools';
+import { CodeView } from './CodeView';
+import { toolPathFromInput } from './ToolCallCard';
 
 const FILE_DIFF_TOOLS = new Set(['write', 'edit', 'multiedit']);
+/** 读取类工具:返回按文件类型语法高亮的文件内容 */
+const READ_TOOLS = new Set(['read']);
 const COLLAPSE_THRESHOLD = 600;
 
 /** 从 store 中查找 tool_call_id 对应的工具输入 */
@@ -53,6 +59,24 @@ export function ToolResultCard({
 
   const isFileTool = FILE_DIFF_TOOLS.has(name);
   const isBash = BASH_TOOLS.has(name) || name === 'bash';
+  const isRead = READ_TOOLS.has(name);
+  // 读取类工具:解析后端分页输出(带行号),并按文件路径推断语法高亮语言
+  const readView = useMemo(
+    () => (isRead ? parseReadOutput(content) : null),
+    [isRead, content],
+  );
+  const readPath = isRead
+    ? (toolCall ? toolPathFromInput(toolCall.input) : null) ?? readView?.path ?? null
+    : null;
+  const readLang = useMemo(() => {
+    if (!isRead) return null;
+    if (readPath) {
+      const lang = langFromPath(readPath);
+      if (lang) return lang;
+    }
+    // 无路径/无法映射:仅原始内容(非分页格式)时用 shebang 兜底
+    return readView ? null : langFromShebang(content);
+  }, [isRead, readPath, readView, content]);
   // bash 命令:显式传入优先(shell_command part 自带),否则从配对
   // tool_call 的输入 JSON 中提取
   const commandText =
@@ -78,14 +102,16 @@ export function ToolResultCard({
     [diffLines],
   );
 
-  // 非 diff 内容的格式化与折叠
-  const isJson = !isFileTool && !isBash && (() => {
-    const t = content.trim();
-    return (t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'));
-  })();
-  // JSON 内容解析为结构化展示(解析失败则回退原始文本)
+  // 非 diff 内容的格式化与折叠(read 结果走 CodeView,不参与 JSON/折叠判定)
+  const isJson =
+    !isFileTool && !isBash && !readView &&
+    (() => {
+      const t = content.trim();
+      return (t.startsWith('{') && t.endsWith('}')) || (t.startsWith('[') && t.endsWith(']'));
+    })();
   const parsedJson = isJson ? tryParseJson(content) : null;
-  const isLong = !diffLines && parsedJson === null && content.length > COLLAPSE_THRESHOLD;
+  const isLong =
+    !diffLines && !readView && parsedJson === null && content.length > COLLAPSE_THRESHOLD;
   const visibleContent = expanded || !isLong ? content : content.slice(0, COLLAPSE_THRESHOLD);
 
   // 提取 metadata 信息
@@ -108,7 +134,9 @@ export function ToolResultCard({
     ? `${name} 变更`
     : isBash
       ? (commandBrief ? `$ ${commandBrief}` : '终端输出')
-      : `${name} 返回`;
+      : isRead && readPath
+        ? `读取 ${readPath.length > 40 ? readPath.slice(0, 37) + '…' : readPath}`
+        : `${name} 返回`;
 
   return (
     <details className="group rounded-md border bg-muted/20" open={isError || !!diffLines}>
@@ -152,12 +180,41 @@ export function ToolResultCard({
             <TerminalOutput content={content} className="border-0" />
           </>
         )}
+        {/* read 结果 → 按文件类型语法高亮 + 行号列 */}
+        {!diffLines && !isBash && readView && (
+          <div>
+            <div className="flex items-center gap-2 border-b border-white/5 bg-white/5 px-3 py-1">
+              {readLang && (
+                <span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+                  {langDisplayName(readLang)}
+                </span>
+              )}
+              <span className="text-[10px] text-muted-foreground/60">
+                {readView.range
+                  ? `第 ${readView.range.start}-${readView.range.end} 行`
+                  : `${readView.lines.length} 行`}
+                {readView.total ? ` / 共 ${readView.total} 行` : ''}
+              </span>
+            </div>
+            <CodeView
+              code={readView.lines.join('\n')}
+              language={readLang}
+              lineNumbers={readView.lineNumbers}
+              className="rounded-none border-0"
+            />
+            {readView.footer && (
+              <div className="border-t border-border px-3 py-1 text-[10px] text-muted-foreground/60">
+                {readView.footer}
+              </div>
+            )}
+          </div>
+        )}
         {/* JSON → 结构化展示 */}
-        {!diffLines && !isBash && parsedJson !== null && (
+        {!diffLines && !isBash && !readView && parsedJson !== null && (
           <JsonView data={parsedJson} className="max-h-[60vh] border-0" />
         )}
         {/* 其他 → 普通 pre */}
-        {!diffLines && !isBash && parsedJson === null && (
+        {!diffLines && !isBash && !readView && parsedJson === null && (
           <pre className="max-h-[60vh] overflow-auto bg-background px-3 py-2 font-mono text-[11px] leading-relaxed text-foreground/80">
             {visibleContent}
             {isLong && !expanded && (

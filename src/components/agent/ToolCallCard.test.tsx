@@ -23,19 +23,37 @@ describe('ToolCallCard', () => {
     expect(document.querySelector('code.language-bash .hljs-built_in')).toBeTruthy();
   });
 
-  it('非 bash 工具:完成态仍显示扳手图标 + JsonView', () => {
+  it('write 工具:content 按目标文件类型语法高亮展示', () => {
     render(
       <ToolCallCard
         call={{
           id: 'tc3',
           name: 'write',
-          input: '{"path":"a.ts","content":"x"}',
+          input: '{"path":"a.ts","content":"const x: number = 1;"}',
           finished: true,
         }}
       />
     );
     expect(document.querySelector('svg.lucide-wrench')).toBeTruthy();
     expect(document.querySelector('code.language-bash')).toBeNull();
+    // write 的文件内容按 .ts → typescript 高亮
+    expect(document.querySelector('code.language-typescript .hljs-keyword')).toBeTruthy();
+  });
+
+  it('write 输入无 content 字段时回退 JsonView', () => {
+    render(
+      <ToolCallCard
+        call={{
+          id: 'tc4',
+          name: 'write',
+          input: '{"path":"a.ts"}',
+          finished: true,
+        }}
+      />
+    );
+    expect(document.querySelector('code.language-typescript')).toBeNull();
+    // JsonView 渲染输入 JSON 的键
+    expect(screen.getByText('path')).toBeTruthy();
   });
 
   it('shows gear icon while pending', () => {
