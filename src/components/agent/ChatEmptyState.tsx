@@ -30,30 +30,38 @@ export function ChatEmptyState({
   hasSession?: boolean;
 }) {
   return (
-    <div className="flex flex-col justify-center items-center gap-6 px-4 py-10 min-h-full text-foreground">
-      {/* 问候语 + 装饰背景(Combo 白色线框字,样式与动画见 index.css .combo-hero-*) */}
-      <div className="relative flex flex-col justify-center items-center gap-6 mb-10 sm:mb-8 w-full max-w-2xl">
-        <div
+    <div className="relative flex flex-col justify-center items-center gap-6 px-4 py-10 min-h-full text-foreground">
+      {/* 装饰背景:Combo 白色线框字,倾斜横贯首屏(样式/定位/动画见 index.css
+          .combo-hero-*);整词始终完整可见,不裁切、不产生横向滚动条 */}
+      <div
+        aria-hidden
+        className="combo-hero-bg absolute inset-0 overflow-hidden pointer-events-none [mask-image:linear-gradient(to_bottom,black_0%,black_60%,transparent_96%,transparent_100%)] [mask-repeat:no-repeat] [mask-size:100%_100%]"
+      >
+        {/* 宽度适配:svg 宽取容器宽(上限 88rem),而不是 vw——侧栏/编辑器分走
+            宽度后会话区远窄于视口,按 vw 定宽必然裁字;整词经 textLength 锁定在
+            画布 87% 宽,旋转 −11° 后外接框约占容器 89%,两端留边完整显示;
+            居中位移与倾斜在 .combo-hero-bg svg 的 transform 里统一处理 */}
+        <svg
           aria-hidden
-          className="combo-hero-bg top-1/2 left-1/2 absolute -mt-8 w-[min(88vw,27rem)] aspect-[46/19] -translate-x-1/2 -translate-y-1/2 pointer-events-none [mask-image:linear-gradient(to_bottom,black_0%,black_60%,transparent_95%,transparent_100%)] [mask-repeat:no-repeat] [mask-size:100%_100%]"
+          className="w-full max-w-[88rem]"
+          viewBox="0 0 460 190"
+          fill="none"
+          xmlns="http://www.w3.org/2000/svg"
         >
-          <svg
-            aria-hidden
-            className="w-full h-full"
-            viewBox="0 0 460 190"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-          >
-            {/* 线框文字:白色描边 + 0.3 透明度,样式见 index.css .combo-hero-word */}
-            <text x="230" y="140" textAnchor="middle" className="combo-hero-word">Combo</text>
-          </svg>
-        </div>
+          {/* 线框文字:白色描边 + 0.3 透明度,样式见 index.css .combo-hero-word;
+              textLength 把整词锁定为 400(viewBox 单位),字体回退变宽/变窄
+              也不会溢出画布,跨平台渲染一致 */}
+          <text x="230" y="140" textAnchor="middle" textLength="400" lengthAdjust="spacingAndGlyphs" className="combo-hero-word">Combo</text>
+        </svg>
+      </div>
+      {/* 问候语(压在背景字之上) */}
+      <div className="relative flex flex-col justify-center items-center gap-6 mb-10 sm:mb-8 w-full max-w-2xl">
         <p className="z-10 relative px-4 w-full font-medium max-md:text-xl text-3xl text-center">
           {hasSession ? '新任务已创建，输入消息开始对话' : '把复杂交给 AI，把时间留给自己'}
         </p>
       </div>
       {/* 订阅横幅 + 模板卡片 */}
-      <div className="flex flex-col gap-3 mt-6 w-full max-w-2xl">
+      <div className="relative z-10 flex flex-col gap-3 mt-6 w-full max-w-2xl">
         {!hasSession && (
         <div className="flex justify-between items-center">
           <div className="flex items-center gap-1 opacity-80 min-w-0 text-[13px] text-foreground-subtle">
