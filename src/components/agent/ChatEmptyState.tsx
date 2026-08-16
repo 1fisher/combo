@@ -31,7 +31,7 @@ export function ChatEmptyState({
 }) {
   return (
     <div className="flex flex-col justify-center items-center gap-6 px-4 py-10 min-h-full text-foreground">
-      {/* 问候语 + 装饰背景(Combo 描边卡通字,样式与动画见 index.css .combo-hero-*) */}
+      {/* 问候语 + 装饰背景(Combo 白色线框字,样式与动画见 index.css .combo-hero-*) */}
       <div className="relative flex flex-col justify-center items-center gap-6 mb-10 sm:mb-8 w-full max-w-2xl">
         <div
           aria-hidden
@@ -44,10 +44,8 @@ export function ChatEmptyState({
             fill="none"
             xmlns="http://www.w3.org/2000/svg"
           >
-            {/* 外层粗描边(圆角连接 + 硬投影,卡通贴纸感) */}
-            <text x="230" y="140" textAnchor="middle" className="combo-hero-word combo-hero-word-outer">Combo</text>
-            {/* 内层细描边勾边,与外层形成描边层次 */}
-            <text x="230" y="140" textAnchor="middle" className="combo-hero-word combo-hero-word-inner">Combo</text>
+            {/* 线框文字:白色描边 + 0.3 透明度,样式见 index.css .combo-hero-word */}
+            <text x="230" y="140" textAnchor="middle" className="combo-hero-word">Combo</text>
           </svg>
         </div>
         <p className="z-10 relative px-4 w-full font-medium max-md:text-xl text-3xl text-center">
