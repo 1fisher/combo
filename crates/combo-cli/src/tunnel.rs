@@ -429,28 +429,7 @@ async fn handle_ws_upgrade(
         format!("{}{}?{}", ws_base, path, query)
     };
 
-    // 连接本地 WS(透传必要的请求头,如 Authorization / Cookie)
-    let mut req_builder = tokio_tungstenite::tungstenite::http::Request::builder()
-        .uri(&local_url)
-        .header(
-            "host",
-            local_url
-                .splitn(4, '/')
-                .nth(2)
-                .unwrap_or("127.0.0.1"),
-        );
-    for (k, v) in &headers {
-        let lower = k.to_lowercase();
-        if lower == "host" || lower == "content-length" || lower == "upgrade" || lower == "connection" {
-            continue;
-        }
-        req_builder = req_builder.header(k.as_str(), v.as_str());
-    }
-    let req = match req_builder
-        .header("upgrade", "websocket")
-        .header("connection", "upgrade")
-        .body(())
-    {
+    let req = match build_local_ws_request(&local_url, &headers) {
         Ok(r) => r,
         Err(e) => {
             let _ = send_desktop_msg(
@@ -590,4 +569,103 @@ async fn handle_ws_close(ws_tunnels: WsTunnelMap, id: String) {
 fn send_desktop_msg(tx: &mpsc::UnboundedSender<Message>, msg: DesktopMsg) -> Result<(), ()> {
     let json = serde_json::to_string(&msg).map_err(|_| ())?;
     tx.send(Message::Text(json)).map_err(|_| ())
+}
+
+/// 生成本地 WS 握手的 Sec-WebSocket-Key 原始字节(16 随机字节)。
+/// 优先读 /dev/urandom,不可用时回退到 uuid v4(32 hex 字节取前 16)。
+fn generate_ws_key() -> [u8; 16] {
+    let mut buf = [0u8; 16];
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+        use std::io::Read;
+        if f.read_exact(&mut buf).is_ok() {
+            return buf;
+        }
+    }
+    let hex = uuid::Uuid::new_v4().simple().to_string();
+    for (i, b) in buf.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap_or(0);
+    }
+    buf
+}
+
+/// 构建发往本地 serve 的 WS 握手请求。
+///
+/// 透传必要的请求头(如 Authorization / Cookie),但逐跳握手头
+/// (host / upgrade / connection / sec-websocket-*)一律丢弃后重新生成:
+/// tungstenite 对自定义 Request 不会自动补握手头,缺少 Sec-WebSocket-Key 时
+/// connect_async 直接报 InvalidHeader,本地 WS 永远连不上
+/// (移动端经中转打开终端秒断 code 1005 的根因)。
+fn build_local_ws_request(
+    local_url: &str,
+    headers: &HashMap<String, String>,
+) -> Result<tokio_tungstenite::tungstenite::http::Request<()>, String> {
+    let host = local_url.splitn(4, '/').nth(2).unwrap_or("127.0.0.1");
+    let mut req_builder = tokio_tungstenite::tungstenite::http::Request::builder()
+        .uri(local_url)
+        .header("host", host);
+    for (k, v) in headers {
+        let lower = k.to_lowercase();
+        if lower == "host"
+            || lower == "content-length"
+            || lower == "upgrade"
+            || lower == "connection"
+            || lower.starts_with("sec-websocket-")
+        {
+            continue;
+        }
+        req_builder = req_builder.header(k.as_str(), v.as_str());
+    }
+    let ws_key = base64::engine::general_purpose::STANDARD.encode(generate_ws_key());
+    req_builder
+        .header("upgrade", "websocket")
+        .header("connection", "upgrade")
+        .header("sec-websocket-key", ws_key)
+        .header("sec-websocket-version", "13")
+        .body(())
+        .map_err(|e| format!("{e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 中转剥离 sec-websocket-key/version 后转发的浏览器握手头,
+    /// 本地重建的请求必须能通过 tungstenite 的握手校验。
+    /// 回归:此前缺少 Sec-WebSocket-Key 导致 connect_async 报
+    /// InvalidHeader,移动端终端经中转秒断(code 1005)。
+    #[test]
+    fn local_ws_request_passes_tungstenite_handshake_validation() {
+        let mut headers = HashMap::new();
+        headers.insert(
+            "authorization".to_string(),
+            "Bearer 749675f7f8e0".to_string(),
+        );
+        headers.insert("cookie".to_string(), "combo.token=abc".to_string());
+        headers.insert("origin".to_string(), "https://proxy.apesoft.cn".to_string());
+        // 中转剥离 key/version/extensions,但防御性假设它们被透传:
+        headers.insert("sec-websocket-key".to_string(), "browser-key".to_string());
+        headers.insert(
+            "sec-websocket-version".to_string(),
+            "13".to_string(),
+        );
+        headers.insert("host".to_string(), "proxy.apesoft.cn".to_string());
+        headers.insert("upgrade".to_string(), "websocket".to_string());
+        headers.insert("connection".to_string(), "Upgrade".to_string());
+
+        let req =
+            build_local_ws_request("ws://127.0.0.1:18237/v1/terminal?token=abc", &headers)
+                .expect("构建本地 WS 请求失败");
+        let (raw, key) =
+            tokio_tungstenite::tungstenite::handshake::client::generate_request(req)
+                .expect("tungstenite 握手校验失败");
+        let raw = String::from_utf8(raw).unwrap();
+        assert!(raw.contains("GET /v1/terminal?token=abc "), "原始请求行异常: {raw}");
+        assert!(
+            raw.to_ascii_lowercase().contains("sec-websocket-version: 13"),
+            "原始请求缺少 version 头: {raw}"
+        );
+        // key 必须是本地新生成的(16 字节 base64,24 字符),而不是浏览器侧透传值
+        assert_eq!(key.len(), 24, "Sec-WebSocket-Key 应为 16 字节 base64: {key}");
+        assert_ne!(key, "browser-key");
+    }
 }
