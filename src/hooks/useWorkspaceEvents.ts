@@ -2,7 +2,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect } from 'react';
 import { applyEvent } from '../lib/events/dispatch';
 import { WorkspaceEventSource } from '../lib/events/sse';
-import { notifyRunComplete } from '../lib/notify';
+import { notifyRunComplete, runCompleteSummary } from '../lib/notify';
 import { useAgentStore } from '../stores/agentStore';
 
 /**
@@ -39,8 +39,10 @@ export function useWorkspaceEvents(workspaceId: string | null) {
               console.debug(
                 `[${ts}][events] session.is_busy=false → markRun done session="${sess.id}"`
               );
+              // markRun 可能就地回收非当前会话的运行态,摘要需先于其提取
+              const summary = runCompleteSummary(sess.id);
               st.markRun(sess.id, rt.run.runId, 'done');
-              notifyRunComplete(sess.id);
+              notifyRunComplete(sess.id, undefined, summary);
             }
           } else if (sess.is_busy === true) {
             // run 启动/快照:本地无运行态时恢复(如刷新页面后重连、

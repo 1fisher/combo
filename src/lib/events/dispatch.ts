@@ -1,7 +1,7 @@
 import type { Api } from '../api/types';
 import type { useAgentStore } from '../../stores/agentStore';
 import type { EventEnvelope } from './payloadTypes';
-import { notifyPermissionRequest, notifyQuestionRequest, notifyRunComplete } from '../notify';
+import { notifyPermissionRequest, notifyQuestionRequest, notifyRunComplete, runCompleteSummary } from '../notify';
 
 type Store = ReturnType<typeof useAgentStore.getState>;
 
@@ -46,9 +46,11 @@ export function applyEvent(s: Store, env: EventEnvelope): void {
           `[${ts()}][dispatch] ✓ finish detected reason="${finishData?.reason ?? ''}" → markRun done`
         );
         const wasRunning = s.bySession[p.session_id]?.run?.status === 'running';
+        // markRun 可能就地回收非当前会话的运行态,摘要需先于其提取
+        const summary = wasRunning ? runCompleteSummary(p.session_id) : '';
         s.markRun(p.session_id, p.id, 'done');
         if (wasRunning) {
-          notifyRunComplete(p.session_id, finishData?.reason === 'error' ? '任务运行出错' : undefined);
+          notifyRunComplete(p.session_id, finishData?.reason === 'error' ? '任务运行出错' : undefined, summary);
         }
       }
       break;
@@ -68,8 +70,9 @@ export function applyEvent(s: Store, env: EventEnvelope): void {
         break;
       }
       const wasRunning = cur?.status === 'running';
+      const summary = wasRunning ? runCompleteSummary(p.session_id) : '';
       s.markRun(p.session_id, p.run_id || p.session_id, 'done', p.error);
-      if (wasRunning) notifyRunComplete(p.session_id, p.error);
+      if (wasRunning) notifyRunComplete(p.session_id, p.error, summary);
       break;
     }
     case 'permission_request': {

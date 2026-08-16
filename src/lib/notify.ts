@@ -84,13 +84,43 @@ export function ensureNotifyPermission(): Promise<boolean> {
   return requestNotifyPermission();
 }
 
-/** 任务结束(run 收尾)通知;error 非空表示运行出错 */
-export function notifyRunComplete(_sessionId?: string | null, error?: string): void {
+/**
+ * 提取会话最后一条 assistant 消息的首个非空文本行,作为完成通知的精简摘要。
+ * 必须在 markRun 之前调用:非当前会话的 run 结束时其运行态(含消息)会被就地回收。
+ */
+export function runCompleteSummary(sessionId?: string | null): string {
+  if (!sessionId) return '';
+  const rt = useAgentStore.getState().bySession[sessionId];
+  if (!rt) return '';
+  for (let i = rt.messages.length - 1; i >= 0; i--) {
+    const m = rt.messages[i];
+    if (m.role !== 'assistant') continue;
+    const text = m.parts
+      .filter((pt) => pt.type === 'text')
+      .map((pt) => pt.data.text)
+      .join('\n');
+    const firstLine = text
+      .split('\n')
+      .map((line) => line.trim().replace(/^#+\s*/, ''))
+      .find((line) => line.length > 0);
+    if (firstLine) return firstLine;
+  }
+  return '';
+}
+
+/** 任务结束(run 收尾)通知;error 非空表示运行出错,summary 为任务的精简完成情况 */
+export function notifyRunComplete(
+  _sessionId?: string | null,
+  error?: string,
+  summary?: string
+): void {
   if (!useUIPreferences.getState().notifyRunComplete) return;
   // 任务完成总是通知:即使窗口聚焦且正在查看该会话 — 用户在等这个结果。
   // (交互类通知仍做免打扰判断,见 notifyPermissionRequest/notifyQuestionRequest)
   const title = error ? '任务出错' : '任务已完成';
-  const body = error ? truncate(error) : '会话任务已结束,点击返回查看结果';
+  const body = error
+    ? truncate(error)
+    : truncate(summary || '会话任务已结束,点击返回查看结果');
   if (useUIPreferences.getState().notifySoundEnabled) playNotifyDone();
   void sendNotification(title, body);
 }

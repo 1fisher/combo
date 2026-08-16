@@ -4,6 +4,7 @@ import {
   notifyPermissionRequest,
   notifyQuestionRequest,
   notifyRunComplete,
+  runCompleteSummary,
 } from './notify';
 import { playNotifyAttention, playNotifyDone } from './sfx';
 import { useUIPreferences } from '../stores/uiPreferencesStore';
@@ -42,7 +43,7 @@ describe('notify', () => {
       notifyInteraction: true,
       notifySoundEnabled: true,
     });
-    useAgentStore.setState({ activeSessionId: null });
+    useAgentStore.setState({ activeSessionId: null, bySession: {} });
     vi.mocked(playNotifyDone).mockClear();
     vi.mocked(playNotifyAttention).mockClear();
   });
@@ -56,6 +57,49 @@ describe('notify', () => {
     notifyRunComplete('s1');
     expect(created).toHaveLength(1);
     expect(created[0].title).toBe('任务已完成');
+  });
+
+  it('完成通知正文优先使用任务完成情况摘要,无摘要时回退默认文案', () => {
+    notifyRunComplete('s1', undefined, '已修复登录校验并补齐单测');
+    expect(created[0].options.body).toBe('已修复登录校验并补齐单测');
+    notifyRunComplete('s1');
+    expect(created[1].options.body).toBe('会话任务已结束,点击返回查看结果');
+  });
+
+  it('runCompleteSummary 取最后一条 assistant 消息的首个非空文本行', () => {
+    useAgentStore.setState({
+      bySession: {
+        s1: {
+          messages: [
+            {
+              id: 'm1',
+              role: 'assistant',
+              parts: [{ type: 'text', data: { text: '旧一轮的回复' } }],
+              createdAt: 1,
+              updatedAt: 1,
+              streaming: false,
+            },
+            {
+              id: 'm2',
+              role: 'assistant',
+              parts: [
+                { type: 'reasoning', data: { thinking: '思考过程', signature: '' } },
+                { type: 'text', data: { text: '\n## 修复完成\n登录校验已修复,单测已补齐。' } },
+                { type: 'finish', data: { reason: 'stop' } },
+              ],
+              createdAt: 2,
+              updatedAt: 3,
+              streaming: false,
+            },
+          ],
+          run: null,
+          queued: false,
+        },
+      },
+    });
+    expect(runCompleteSummary('s1')).toBe('修复完成');
+    expect(runCompleteSummary('missing')).toBe('');
+    expect(runCompleteSummary(undefined)).toBe('');
   });
 
   it('任务出错时以错误标题与内容发送', () => {
