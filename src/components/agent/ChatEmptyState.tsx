@@ -1,4 +1,5 @@
 import { Megaphone, Moon, X } from 'lucide-react';
+import { HeroParticles } from './HeroParticles';
 
 const TEMPLATES: { icon: typeof Moon; title: string; desc: string; prompt: string }[] = [
   {
@@ -32,7 +33,8 @@ export function ChatEmptyState({
   return (
     <div className="relative flex flex-col justify-center items-center gap-6 px-4 py-10 min-h-full text-foreground">
       {/* 装饰背景:Combo 白色线框字,倾斜横贯首屏(样式/定位/动画见 index.css
-          .combo-hero-*);整词始终完整可见,不裁切、不产生横向滚动条 */}
+          .combo-hero-*);整词始终完整可见,不裁切、不产生横向滚动条。
+          叠加 HeroParticles 粒子层:粒子飘入聚合构成字形,品牌色流光周期扫过 */}
       <div
         aria-hidden
         className="combo-hero-bg absolute inset-0 overflow-hidden pointer-events-none [mask-image:linear-gradient(to_bottom,black_0%,black_60%,transparent_96%,transparent_100%)] [mask-repeat:no-repeat] [mask-size:100%_100%]"
@@ -53,6 +55,9 @@ export function ChatEmptyState({
               也不会溢出画布,跨平台渲染一致 */}
           <text x="230" y="140" textAnchor="middle" textLength="400" lengthAdjust="spacingAndGlyphs" className="combo-hero-word">Combo</text>
         </svg>
+        {/* 粒子聚合 + 流光层:置于线框字之上,plus-lighter 加法混合把流光
+            「加」在字与背景上;粒子目标点按同一姿态采样,与线框字对齐 */}
+        <HeroParticles />
       </div>
       {/* 问候语(压在背景字之上) */}
       <div className="relative flex flex-col justify-center items-center gap-6 mb-10 sm:mb-8 w-full max-w-2xl">
