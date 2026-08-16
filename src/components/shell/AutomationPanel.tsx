@@ -371,8 +371,8 @@ export function AutomationPanel() {
                     )}
                   </span>
 
-                  {/* 任务名 + 提示词预览 */}
-                  <div className="min-w-0 flex-1 md:flex-[1.8]">
+                  {/* 任务名 + 提示词预览(占主导宽度) */}
+                  <div className="min-w-0 flex-1 md:flex-[2.4]">
                     <div className="flex items-center gap-2">
                       <span className="truncate text-sm font-medium text-foreground">
                         {a.name}
@@ -385,7 +385,7 @@ export function AutomationPanel() {
                   </div>
 
                   {/* 项目 / 调度 */}
-                  <div className="min-w-0 md:w-48 lg:w-56">
+                  <div className="min-w-0 md:flex-1">
                     <p className="truncate text-[13px] text-foreground-subtle">
                       {a.workspace_name || '未知项目'}
                     </p>
@@ -395,7 +395,7 @@ export function AutomationPanel() {
                   </div>
 
                   {/* 运行状态 */}
-                  <div className="min-w-0 md:w-44 lg:w-52">
+                  <div className="min-w-0 md:flex-1">
                     <p className="truncate text-[13px] text-foreground-subtle">
                       {a.enabled
                         ? a.schedule.type === 'once' && !a.next_run_at
