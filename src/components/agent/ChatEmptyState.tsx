@@ -1,5 +1,18 @@
+import { useState } from 'react';
 import { Megaphone, Moon, X } from 'lucide-react';
 import { HeroParticles } from './HeroParticles';
+
+/** 订阅横幅关闭状态持久化 key(与 combo.agent/combo.clientId 同一命名约定) */
+const BANNER_DISMISSED_KEY = 'combo.bannerDismissed';
+
+function readBannerDismissed(): boolean {
+  try {
+    return localStorage.getItem(BANNER_DISMISSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 
 const TEMPLATES: { icon: typeof Moon; title: string; desc: string; prompt: string }[] = [
   {
@@ -30,6 +43,16 @@ export function ChatEmptyState({
   onPickTemplate: (prompt: string) => void;
   hasSession?: boolean;
 }) {
+  // 横幅关闭后写入 localStorage,刷新/重启后不再重复出现
+  const [bannerDismissed, setBannerDismissed] = useState(readBannerDismissed);
+  const dismissBanner = () => {
+    setBannerDismissed(true);
+    try {
+      localStorage.setItem(BANNER_DISMISSED_KEY, '1');
+    } catch {
+      // 忽略写入失败(隐私模式等),仅本次会话内隐藏
+    }
+  };
   return (
     <div className="relative flex flex-col justify-center items-center gap-6 px-4 py-10 min-h-full text-foreground">
       {/* 装饰背景(Combo 线框字 + 粒子流光),与会话/自动化首页共用,见 HeroParticles */}
@@ -42,7 +65,7 @@ export function ChatEmptyState({
       </div>
       {/* 订阅横幅 + 模板卡片 */}
       <div className="relative z-10 flex flex-col gap-3 mt-6 w-full max-w-2xl">
-        {!hasSession && (
+        {!hasSession && !bannerDismissed && (
         <div className="flex justify-between items-center">
           <div className="flex items-center gap-1 opacity-80 min-w-0 text-[13px] text-foreground-subtle">
             <span className="flex justify-center items-center size-8 shrink-0">
@@ -55,6 +78,7 @@ export function ChatEmptyState({
           <button
             type="button"
             aria-label="关闭"
+            onClick={dismissBanner}
             className="flex justify-center items-center hover:bg-surface-hover opacity-80 hover:opacity-100 rounded-md size-8 text-foreground-subtle shrink-0"
           >
             <X className="size-4" />
