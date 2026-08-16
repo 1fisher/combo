@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
 import { AppShell } from './components/shell/AppShell';
@@ -31,6 +31,17 @@ const liquidOptions = {
 
 function AppRoot() {
   const liquidEnabled = useUIPreferences((s) => s.liquidEnabled);
+  // 应用首帧实际绘制后,通知启动画面(public/splash.js)收尾:
+  // 粒子合并成图标 → 流光 combo → 淡出移除。双 rAF 确保 commit 后的
+  // 首帧已上屏,避免 splash 提前消失露出白屏。splash 不存在时无副作用。
+  useEffect(() => {
+    const raf = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        window.dispatchEvent(new Event('combo:app-ready'));
+      });
+    });
+    return () => cancelAnimationFrame(raf);
+  }, []);
   if (liquidEnabled) {
     return (
       <Liquid className="h-dvh w-full" {...liquidOptions}>
