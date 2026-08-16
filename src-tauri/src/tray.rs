@@ -62,14 +62,10 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
             }
         });
 
-    // 托盘图标:优先用内嵌默认窗口图标,缺失时回退打包的 32x32.png
-    let icon = app
-        .default_window_icon()
-        .cloned()
-        .or_else(|| tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png")).ok());
-    if let Some(icon) = icon {
-        builder = builder.icon(icon);
-    }
+    // 托盘图标:黑色圆角方块 + 白色 C 字形(icons/tray-icon.png),
+    // 与菜单栏其他应用的深色托盘图标风格一致
+    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))?;
+    builder = builder.icon(icon);
     builder.build(app)?;
 
     // 关闭主窗口 → 隐藏到托盘;真正退出走托盘菜单「退出 Combo」
