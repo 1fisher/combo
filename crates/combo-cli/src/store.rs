@@ -90,11 +90,23 @@ pub struct ComboDb {
 
 impl ComboDb {
     /// 打开(必要时创建)数据库文件。
+    ///
+    /// WAL + busy_timeout:桌面安装版、tauri dev、独立 serve 可能多个进程
+    /// 同时打开同一个 combo.db。默认 rollback journal 下跨进程读写立刻
+    /// 报 database is locked,文件被对端进程(如目录迁移)替换/截断后
+    /// 连接还会退化成 readonly;WAL 允许并发读 + 单写,busy_timeout 让
+    /// 写锁竞争自动等待而非立即失败。
     pub fn open(path: &Path) -> anyhow::Result<Self> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let conn = Connection::open(path)?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        // journal_mode 的写形式会返回结果行,不能用 execute_batch。
+        let _mode: String = conn
+            .query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))
+            .unwrap_or_default();
+        conn.execute_batch("PRAGMA synchronous=NORMAL;")?;
         Self::init(conn)
     }
 

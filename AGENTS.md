@@ -319,6 +319,10 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
     `POST .../sessions` 都由 `session.rs` 本地接管(从 sqlite 读/写)。
 12. **sqlite 用 `std::sync::Mutex<Connection>`**,`rusqlite` 连接不是 `Sync`;
     `list_*` 方法里 lock 的临时值要绑定到 `let`,否则借用检查报 E0716。
+    `ComboDb::open` 已启用 **WAL + busy_timeout(5s)**:桌面安装版、tauri dev、
+    独立 serve 可能多进程共享同一 combo.db,默认 rollback journal 下跨进程写
+    立刻报锁错,且文件被对端进程(目录迁移等)替换后旧连接会退化成 readonly
+    (表现为「创建会话失败: attempt to write a readonly database」)。
 13. **历史 `backend=crush` 数据自动迁移。** `BackendType::parse("crush")`
     归一化为 ComboCli;`AppState::new` 时 `reconcile_all` 会把 sqlite 里遗留的 crush
     workspace 迁移为 combo-cli,无需手工处理。
