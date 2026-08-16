@@ -6,6 +6,7 @@ import {
   Check,
   ChevronDown,
   FileText,
+  History,
   Loader2,
   Paperclip,
   Plus,
@@ -156,6 +157,8 @@ export function Composer({
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   const [modelErr, setModelErr] = useState('');
   const [modelSearch, setModelSearch] = useState('');
+  // 最近使用的模型(全局记录,持久化),用于菜单顶部快速切换
+  const recentModels = useAgentStore((s) => s.recentModels);
   // FlameWrap 原生(layoutsubtree)模式下外层 wrapper 无行内内容会塌陷为 0 高,
   // 需用输入框实际高度显式撑开;每帧渲染前同步测量,避免挂载时机导致高度缺失
   const boxRef = useRef<HTMLDivElement>(null);
@@ -370,12 +373,33 @@ export function Composer({
     return out;
   }, [modelGroups, modelSearch]);
 
+  // 最近使用的模型:解析回当前 provider 列表中的条目(已下线的模型不再展示),
+  // 同样受搜索过滤,置顶展示方便在常用模型间快速切换
+  const recentModelEntries = useMemo(() => {
+    const q = modelSearch.trim().toLowerCase();
+    const out: { id: string; name: string; providerId: string; providerName: string }[] = [];
+    for (const r of recentModels) {
+      const hit = modelList.find((m) => m.id === r.model && m.provider === r.provider);
+      if (!hit) continue;
+      if (q && !hit.id.toLowerCase().includes(q) && !hit.name.toLowerCase().includes(q)) continue;
+      out.push({
+        id: hit.id,
+        name: hit.name,
+        providerId: hit.provider,
+        providerName: hit.providerName,
+      });
+    }
+    return out;
+  }, [recentModels, modelList, modelSearch]);
+
   function handleModelChange(modelId: string, provider: string) {
     setModelMenuOpen(false);
     setModelErr('');
     if (workspaceId) {
       useAgentStore.getState().setModelSelection(workspaceId, { model: modelId, provider });
     }
+    // 记录最近使用,菜单顶部置顶展示
+    useAgentStore.getState().pushRecentModel({ model: modelId, provider });
     setModel.mutate(
       { model: { model: modelId, provider } },
       {
@@ -518,10 +542,10 @@ export function Composer({
   }
 
   return (
-    <div className="w-full shrink-0 px-4 pb-4 pt-12">
+    <div className="px-4 pb-2 w-full shrink-0">
       <div className="w-full">
         {banner}
-        <div className="w-full shrink-0 rounded-2xl bg-surface shadow-xl/5">
+        <div className="bg-surface shadow-xl/5 rounded-2xl w-full shrink-0">
           <form
             className="relative p-0"
             onSubmit={(e) => {
@@ -532,7 +556,7 @@ export function Composer({
             <FlameComposerBox alive={flameAlive} running={running} boxH={boxH} heat={flameHeat}>
             <div
               ref={boxRef}
-              className="relative flex flex-col gap-3 rounded-2xl border border-input-border bg-input p-3 transition-colors hover:border-input-border-hover focus-within:!border-input-border-focused focus-within:bg-input-focused"
+              className="relative flex flex-col gap-3 bg-input focus-within:bg-input-focused p-3 border border-input-border hover:border-input-border-hover focus-within:!border-input-border-focused rounded-2xl transition-colors"
             >
               {/* 附件 chips */}
               {(attachments.length > 0 || contextItems.length > 0) && (
@@ -540,17 +564,17 @@ export function Composer({
                   {attachments.map((a) => (
                     <span
                       key={a.file_path}
-                      className="group/att flex max-w-full min-w-0 items-center gap-1.5 rounded-lg border border-border bg-surface px-2 py-1 text-xs text-foreground"
+                      className="group/att flex items-center gap-1.5 bg-surface px-2 py-1 border border-border rounded-lg min-w-0 max-w-full text-foreground text-xs"
                       title={a.file_path}
                     >
-                      <Paperclip className="size-3 shrink-0 text-foreground-subtle" />
-                      <span className="min-w-0 max-w-[14rem] truncate font-mono">{a.file_name}</span>
+                      <Paperclip className="size-3 text-foreground-subtle shrink-0" />
+                      <span className="min-w-0 max-w-[14rem] font-mono truncate">{a.file_name}</span>
                       <button
                         type="button"
                         onClick={() =>
                           setAttachments((prev) => prev.filter((x) => x.file_path !== a.file_path))
                         }
-                        className="rounded p-0.5 text-foreground-subtlest transition-colors hover:bg-surface-hover hover:text-foreground"
+                        className="hover:bg-surface-hover p-0.5 rounded text-foreground-subtlest hover:text-foreground transition-colors"
                         aria-label={`移除附件 ${a.file_name}`}
                       >
                         <X className="size-3" />
@@ -560,7 +584,7 @@ export function Composer({
                   {contextItems.map((item) => (
                     <span
                       key={item.id}
-                      className="group/ctx flex max-w-full min-w-0 items-center gap-1.5 rounded-lg border border-brand/30 bg-brand/5 px-2 py-1 text-xs text-foreground"
+                      className="group/ctx flex items-center gap-1.5 bg-brand/5 px-2 py-1 border border-brand/30 rounded-lg min-w-0 max-w-full text-foreground text-xs"
                       title={
                         item.type === 'snippet'
                           ? `${item.filePath}:${item.startLine ?? ''}${item.endLine && item.endLine !== item.startLine ? `-${item.endLine}` : ''}`
@@ -568,11 +592,11 @@ export function Composer({
                       }
                     >
                       {item.type === 'snippet' ? (
-                        <Quote className="size-3 shrink-0 text-brand" />
+                        <Quote className="size-3 text-brand shrink-0" />
                       ) : (
-                        <FileText className="size-3 shrink-0 text-brand" />
+                        <FileText className="size-3 text-brand shrink-0" />
                       )}
-                      <span className="min-w-0 max-w-[12rem] truncate font-mono">
+                      <span className="min-w-0 max-w-[12rem] font-mono truncate">
                         {item.fileName}
                         {item.startLine != null && (
                           <span className="text-foreground-subtle">
@@ -586,7 +610,7 @@ export function Composer({
                       <button
                         type="button"
                         onClick={() => removeContextItem(item.id)}
-                        className="rounded p-0.5 text-foreground-subtlest transition-colors hover:bg-surface-hover hover:text-foreground"
+                        className="hover:bg-surface-hover p-0.5 rounded text-foreground-subtlest hover:text-foreground transition-colors"
                         aria-label={`移除上下文 ${item.fileName}`}
                       >
                         <X className="size-3" />
@@ -629,18 +653,18 @@ export function Composer({
                   }}
                   placeholder="向 combo 提问,@ 提及文件或文件夹,/ 使用命令或子智能体,$ 使用技能,# 关联对话"
                   disabled={disabled}
-                  className="min-h-10 w-full max-h-40 resize-none border-0 bg-transparent p-0 text-sm leading-5 text-foreground shadow-none outline-none placeholder:text-foreground-subtlest disabled:cursor-not-allowed disabled:opacity-50"
+                  className="bg-transparent disabled:opacity-50 shadow-none p-0 border-0 outline-none w-full min-h-10 max-h-40 text-foreground placeholder:text-foreground-subtlest text-sm leading-5 resize-none disabled:cursor-not-allowed"
                   aria-label="输入消息"
                 />
               </div>
               {/* 工具栏 */}
               <div className="flex items-end gap-3">
-                <div className="flex min-w-0 flex-1 items-center gap-1">
+                <div className="flex flex-1 items-center gap-1 min-w-0">
                   <Button
                     variant="ghost"
                     size="icon-sm"
                     onClick={() => setPickerOpen(true)}
-                    className="shrink-0 gap-1 rounded-lg text-foreground hover:text-foreground"
+                    className="gap-1 rounded-lg text-foreground hover:text-foreground shrink-0"
                     aria-label="添加附件"
                     title="添加附件"
                   >
@@ -653,24 +677,24 @@ export function Composer({
                       setModeMenuOpen((o) => !o);
                       setModelMenuOpen(false);
                     }}
-                    className="relative flex h-7 shrink-0 items-center justify-center gap-0 rounded-lg p-0 text-warning hover:bg-surface-hover hover:text-warning"
+                    className="relative flex justify-center items-center gap-0 hover:bg-surface-hover p-0 rounded-lg h-7 text-warning hover:text-warning shrink-0"
                     aria-label="切换模式"
                     title="切换模式"
                   >
-                    <ShieldAlert className="pointer-events-none size-4 text-warning" />
-                    <span className="hidden whitespace-nowrap pl-1 pr-0.5 text-[13px] @xl/composer:inline-flex">
+                    <ShieldAlert className="size-4 text-warning pointer-events-none" />
+                    <span className="hidden @xl/composer:inline-flex pr-0.5 pl-1 text-[13px] whitespace-nowrap">
                       {mode.label}
                     </span>
-                    <ChevronDown className="pointer-events-none hidden size-3.5 text-foreground-subtle" />
+                    <ChevronDown className="hidden size-3.5 text-foreground-subtle pointer-events-none" />
                   </button>
                   {modeMenuOpen && (
                     <>
                       <div
-                        className="fixed inset-0 z-40"
+                        className="z-40 fixed inset-0"
                         onClick={() => setModeMenuOpen(false)}
                       />
-                      <div className="absolute bottom-full left-0 z-50 mb-2 w-64 rounded-xl border border-border bg-popover p-1.5 shadow-xl">
-                        <div className="px-2 py-1 text-xs font-medium text-foreground-subtlest">
+                      <div className="bottom-full left-0 z-50 absolute bg-popover shadow-xl mb-2 p-1.5 border border-border rounded-xl w-64">
+                        <div className="px-2 py-1 font-medium text-foreground-subtlest text-xs">
                           Agent 模式
                         </div>
                         {MODES.map((m) => (
@@ -682,18 +706,18 @@ export function Composer({
                               setModeMenuOpen(false);
                             }}
                             className={cn(
-                              'flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-hover',
+                              'flex items-start gap-2 hover:bg-surface-hover px-2 py-1.5 rounded-lg w-full text-[13px] text-left transition-colors',
                               m.id === agentMode && 'bg-surface-hover'
                             )}
                           >
-                            <span className="flex min-w-0 flex-1 flex-col">
-                              <span className="truncate font-medium">{m.label}</span>
-                              <span className="truncate text-[11px] text-foreground-subtle">
+                            <span className="flex flex-col flex-1 min-w-0">
+                              <span className="font-medium truncate">{m.label}</span>
+                              <span className="text-[11px] text-foreground-subtle truncate">
                                 {m.desc}
                               </span>
                             </span>
                             {m.id === agentMode && (
-                              <Check className="size-3.5 shrink-0 text-brand" />
+                              <Check className="size-3.5 text-brand shrink-0" />
                             )}
                           </button>
                         ))}
@@ -712,7 +736,7 @@ export function Composer({
                         setThoughtMenuOpen(false);
                       }}
                       className={cn(
-                        'flex h-7 w-fit items-center justify-between gap-1 rounded-lg px-1.5 py-1.5 text-[13px] whitespace-nowrap transition-colors hover:bg-surface-hover',
+                        'flex justify-between items-center gap-1 hover:bg-surface-hover px-1.5 py-1.5 rounded-lg w-fit h-7 text-[13px] whitespace-nowrap transition-colors',
                         currentProvider?.has_api_key
                           ? 'text-foreground-subtle hover:text-foreground'
                           : 'text-warning hover:text-warning'
@@ -721,48 +745,50 @@ export function Composer({
                       title="切换模型"
                     >
                       {setModel.isPending ? (
-                        <Loader2 className="pointer-events-none size-4 animate-spin" />
+                        <Loader2 className="size-4 animate-spin pointer-events-none" />
                       ) : (
                         <ProviderLogo
                           providerId={currentProviderId}
                           name={currentProvider?.name}
-                          className="pointer-events-none size-4 shrink-0"
+                          className="size-4 pointer-events-none shrink-0"
                         />
                       )}
                       <span className="min-w-0 max-w-[8rem] truncate">
                         {currentModelId || '默认模型'}
                       </span>
-                      <ChevronDown className="pointer-events-none size-3.5 text-foreground-subtlest" />
+                      <ChevronDown className="size-3.5 text-foreground-subtlest pointer-events-none" />
                     </button>
                     {modelMenuOpen && (
                       <>
                         <div
-                          className="fixed inset-0 z-40"
+                          className="z-40 fixed inset-0"
                           onClick={() => setModelMenuOpen(false)}
                         />
-                        <div className="absolute bottom-full right-0 z-50 mb-2 max-h-80 w-72 overflow-y-auto rounded-xl border border-border bg-popover p-1.5 shadow-xl">
-                          <div className="flex items-center justify-between px-2 py-1 text-xs font-medium text-foreground-subtlest">
+                        {/* 弹层为 flex 纵向布局:标题 + 搜索框固定顶部,模型列表单独滚动,
+                            列表滚动时搜索框保持可见 */}
+                        <div className="right-0 bottom-full z-50 absolute flex flex-col bg-popover shadow-xl mb-2 p-1.5 border border-border rounded-xl w-72 max-h-80">
+                          <div className="flex justify-between items-center px-2 py-1 font-medium text-foreground-subtlest text-xs">
                             <span>选择模型</span>
                             {currentModelId && (
-                              <span className="truncate text-[11px] text-foreground-subtle">
+                              <span className="text-[11px] text-foreground-subtle truncate">
                                 当前: {currentModelId}
                               </span>
                             )}
                           </div>
                           <div className="px-1 pb-1">
-                            <div className="flex items-center gap-1.5 rounded-lg border border-border bg-surface px-2 py-1">
-                              <Search className="size-3.5 shrink-0 text-foreground-subtlest" />
+                            <div className="flex items-center gap-1.5 bg-surface px-2 py-1 border border-border rounded-lg">
+                              <Search className="size-3.5 text-foreground-subtlest shrink-0" />
                               <input
                                 value={modelSearch}
                                 onChange={(e) => setModelSearch(e.target.value)}
                                 placeholder="搜索模型"
-                                className="w-full bg-transparent text-[13px] text-foreground outline-none placeholder:text-foreground-subtlest"
+                                className="bg-transparent outline-none w-full text-[13px] text-foreground placeholder:text-foreground-subtlest"
                               />
                               {modelSearch && (
                                 <button
                                   type="button"
                                   onClick={() => setModelSearch('')}
-                                  className="shrink-0 text-foreground-subtlest transition-colors hover:text-foreground"
+                                  className="text-foreground-subtlest hover:text-foreground transition-colors shrink-0"
                                   aria-label="清空搜索"
                                 >
                                   <X className="size-3.5" />
@@ -770,16 +796,53 @@ export function Composer({
                               )}
                             </div>
                           </div>
-                          {filteredModelGroups.length === 0 ? (
-                            <div className="px-2 py-2 text-[13px] text-foreground-subtle">
-                              {modelGroups.length === 0
-                                ? '暂无可用的模型。可在「设置」中配置 API Key 后拉取模型。'
-                                : '未找到匹配的模型。'}
-                            </div>
-                          ) : (
+                          <div data-testid="model-menu-list" className="flex-1 min-h-0 overflow-y-auto">
+                            {/* 最近使用的模型置顶,方便在常用模型间快速切换 */}
+                            {recentModelEntries.length > 0 && (
+                              <div className="pb-1">
+                                <div className="flex items-center gap-1.5 px-2 pt-1 pb-0.5 font-medium text-[11px] text-foreground-subtlest">
+                                  <History className="size-3" />
+                                  <span>最近使用</span>
+                                </div>
+                                {recentModelEntries.map((m) => {
+                                  const isSelected =
+                                    m.id === currentModelId && m.providerId === currentProviderId;
+                                  return (
+                                    <button
+                                      key={`recent-${m.providerId}/${m.id}`}
+                                      type="button"
+                                      onClick={() => handleModelChange(m.id, m.providerId)}
+                                      className={cn(
+                                        'flex items-center gap-2 hover:bg-surface-hover px-2 py-1.5 rounded-lg w-full text-[13px] text-left transition-colors',
+                                        isSelected && 'bg-surface-hover'
+                                      )}
+                                    >
+                                      <span className="flex-1 min-w-0 font-medium truncate">
+                                        {m.name || m.id}
+                                      </span>
+                                      {/* 最近使用跨 provider,补充展示 provider 名便于区分同名模型 */}
+                                      <span className="max-w-24 text-[11px] text-foreground-subtlest truncate shrink-0">
+                                        {m.providerName}
+                                      </span>
+                                      {isSelected && (
+                                        <Check className="size-3.5 text-brand shrink-0" />
+                                      )}
+                                    </button>
+                                  );
+                                })}
+                                <div className="mx-2 mt-1 border-border border-t" />
+                              </div>
+                            )}
+                            {filteredModelGroups.length === 0 ? (
+                              <div className="px-2 py-2 text-[13px] text-foreground-subtle">
+                                {modelGroups.length === 0
+                                  ? '暂无可用的模型。可在「设置」中配置 API Key 后拉取模型。'
+                                  : '未找到匹配的模型。'}
+                              </div>
+                            ) : (
                             filteredModelGroups.map((g) => (
                               <div key={g.providerId}>
-                                <div className="flex items-center gap-1.5 px-2 pt-1.5 pb-0.5 text-[11px] font-medium text-foreground-subtlest">
+                                <div className="flex items-center gap-1.5 px-2 pt-1.5 pb-0.5 font-medium text-[11px] text-foreground-subtlest">
                                   <ProviderLogo
                                     providerId={g.providerId}
                                     name={g.providerName}
@@ -799,22 +862,23 @@ export function Composer({
                                       type="button"
                                       onClick={() => handleModelChange(m.id, g.providerId)}
                                       className={cn(
-                                        'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-hover',
+                                        'flex items-center gap-2 hover:bg-surface-hover px-2 py-1.5 rounded-lg w-full text-[13px] text-left transition-colors',
                                         isSelected && 'bg-surface-hover'
                                       )}
                                     >
-                                      <span className="min-w-0 flex-1 truncate font-medium">
+                                      <span className="flex-1 min-w-0 font-medium truncate">
                                         {m.name || m.id}
                                       </span>
                                       {isSelected && (
-                                        <Check className="size-3.5 shrink-0 text-brand" />
+                                        <Check className="size-3.5 text-brand shrink-0" />
                                       )}
                                     </button>
                                   );
                                 })}
                               </div>
                             ))
-                          )}
+                            )}
+                          </div>
                         </div>
                       </>
                     )}
@@ -827,22 +891,22 @@ export function Composer({
                         setThoughtMenuOpen((o) => !o);
                         setModelMenuOpen(false);
                       }}
-                      className="flex h-7 w-fit items-center justify-between gap-1 rounded-lg px-1.5 py-1.5 text-[13px] whitespace-nowrap transition-colors hover:bg-surface-hover text-foreground-subtle hover:text-foreground"
+                      className="flex justify-between items-center gap-1 hover:bg-surface-hover px-1.5 py-1.5 rounded-lg w-fit h-7 text-[13px] text-foreground-subtle hover:text-foreground whitespace-nowrap transition-colors"
                       aria-label="思考等级"
                       title="思考等级"
                     >
-                      <Brain className="pointer-events-none size-4 text-current" />
+                      <Brain className="size-4 text-current pointer-events-none" />
                       <span className="whitespace-nowrap">{thought.label}</span>
-                      <ChevronDown className="pointer-events-none size-3.5 text-foreground-subtlest" />
+                      <ChevronDown className="size-3.5 text-foreground-subtlest pointer-events-none" />
                     </button>
                     {thoughtMenuOpen && (
                       <>
                         <div
-                          className="fixed inset-0 z-40"
+                          className="z-40 fixed inset-0"
                           onClick={() => setThoughtMenuOpen(false)}
                         />
-                        <div className="absolute bottom-full right-0 z-50 mb-2 w-40 rounded-xl border border-border bg-popover p-1.5 shadow-xl">
-                          <div className="px-2 py-1 text-xs font-medium text-foreground-subtlest">
+                        <div className="right-0 bottom-full z-50 absolute bg-popover shadow-xl mb-2 p-1.5 border border-border rounded-xl w-40">
+                          <div className="px-2 py-1 font-medium text-foreground-subtlest text-xs">
                             思考等级
                           </div>
                           {THOUGHT_LEVELS.map((t) => (
@@ -851,15 +915,15 @@ export function Composer({
                               type="button"
                               onClick={() => handleThoughtChange(t.id)}
                               className={cn(
-                                'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-hover',
+                                'flex items-center gap-2 hover:bg-surface-hover px-2 py-1.5 rounded-lg w-full text-[13px] text-left transition-colors',
                                 t.id === currentThoughtId && 'bg-surface-hover'
                               )}
                             >
-                              <span className="min-w-0 flex-1 truncate font-medium">
+                              <span className="flex-1 min-w-0 font-medium truncate">
                                 {t.label}
                               </span>
                               {t.id === currentThoughtId && (
-                                <Check className="size-3.5 shrink-0 text-brand" />
+                                <Check className="size-3.5 text-brand shrink-0" />
                               )}
                             </button>
                           ))}
@@ -873,11 +937,11 @@ export function Composer({
                       type="button"
                       size="icon-sm"
                       onClick={onStop}
-                      className="shrink-0 gap-1 rounded-lg bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                      className="gap-1 bg-destructive hover:bg-destructive/90 rounded-lg text-destructive-foreground shrink-0"
                       aria-label="停止"
                       title="停止"
                     >
-                      <Square className="size-3.5 fill-current" />
+                      <Square className="fill-current size-3.5" />
                       <span className="sr-only">停止</span>
                     </Button>
                   ) : (
@@ -885,7 +949,7 @@ export function Composer({
                       type="submit"
                       size="icon-sm"
                       disabled={(!value.trim() && attachments.length === 0 && contextItems.length === 0) || disabled}
-                      className="shrink-0 gap-1 rounded-lg bg-brand text-foreground-inverse hover:bg-brand/80"
+                      className="gap-1 bg-brand hover:bg-brand/80 rounded-lg text-foreground-inverse shrink-0"
                       aria-label="发送"
                       title="发送"
                     >
@@ -904,9 +968,9 @@ export function Composer({
                     lastRunTokens ? `  ·  上轮消耗 ${formatTokenCount(lastRunTokens)} tokens` : ''
                   }`}
                 >
-                  <div className="h-0.5 min-w-0 flex-1 overflow-hidden rounded-full bg-surface-hover">
+                  <div className="flex-1 bg-surface-hover rounded-full min-w-0 h-0.5 overflow-hidden">
                     <div
-                      className="h-full rounded-full transition-[width] duration-500"
+                      className="rounded-full h-full transition-[width] duration-500"
                       style={{
                         width: `${contextPct}%`,
                         backgroundColor: usageColor(contextPct / 100),
@@ -914,13 +978,13 @@ export function Composer({
                     />
                   </div>
                   <span
-                    className="shrink-0 text-[10px] leading-none tabular-nums"
+                    className="tabular-nums text-[10px] leading-none shrink-0"
                     style={{ color: usageColor(contextPct / 100) }}
                   >
                     {formatTokenCount(contextUsed)} / {formatTokenCount(contextWindow)}
                   </span>
                   <span
-                    className="shrink-0 text-[10px] leading-none tabular-nums"
+                    className="tabular-nums text-[10px] leading-none shrink-0"
                     style={{ color: usageColor(callCount / 100) }}
                     title={`调用次数:${callCount}`}
                   >
@@ -929,7 +993,7 @@ export function Composer({
                 </div>
               )}
               {modelErr && (
-                <p className="px-1 text-xs text-destructive" role="alert">
+                <p className="px-1 text-destructive text-xs" role="alert">
                   {modelErr}
                 </p>
               )}
@@ -1004,10 +1068,10 @@ function MentionPopover({
 
   return (
     <div
-      className="fixed z-[100] max-h-64 overflow-y-auto rounded-xl border border-border bg-popover p-1 shadow-xl"
+      className="z-[100] fixed bg-popover shadow-xl p-1 border border-border rounded-xl max-h-64 overflow-y-auto"
       style={{ left: popoverPos.left, bottom: popoverPos.bottom, width: popoverPos.width }}
     >
-      <div className="px-2 py-1 text-xs font-medium text-foreground-subtlest">
+      <div className="px-2 py-1 font-medium text-foreground-subtlest text-xs">
         {type === 'file' ? '提及文件' : type === 'skill' ? '使用技能' : type === 'command' ? '使用命令' : '关联对话'}
       </div>
       {results.map((r, i) => (
@@ -1017,29 +1081,29 @@ function MentionPopover({
           onMouseEnter={() => setActiveIndex(i)}
           onClick={() => onSelect(r)}
           className={cn(
-            'flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors',
+            'flex items-center gap-2 px-2 py-1.5 rounded-lg w-full text-[13px] text-left transition-colors',
             i === activeIndex ? 'bg-surface-hover' : 'hover:bg-surface-hover',
           )}
         >
           {type === 'file' ? (
-            <FileText className="size-3.5 shrink-0 text-muted-foreground" />
+            <FileText className="size-3.5 text-muted-foreground shrink-0" />
           ) : type === 'skill' ? (
-            <Sparkles className="size-3.5 shrink-0 text-brand" />
+            <Sparkles className="size-3.5 text-brand shrink-0" />
           ) : type === 'command' ? (
-            <Zap className="size-3.5 shrink-0 text-warning" />
+            <Zap className="size-3.5 text-warning shrink-0" />
           ) : (
-            <Brain className="size-3.5 shrink-0 text-foreground-subtle" />
+            <Brain className="size-3.5 text-foreground-subtle shrink-0" />
           )}
-          <span className="flex min-w-0 flex-1 flex-col">
-            <span className="truncate font-medium">{r.label}</span>
+          <span className="flex flex-col flex-1 min-w-0">
+            <span className="font-medium truncate">{r.label}</span>
             {r.description && (
-              <span className="truncate text-[11px] text-foreground-subtle">
+              <span className="text-[11px] text-foreground-subtle truncate">
                 {r.description}
               </span>
             )}
           </span>
           {i === activeIndex && (
-            <Check className="size-3.5 shrink-0 text-brand" />
+            <Check className="size-3.5 text-brand shrink-0" />
           )}
         </button>
       ))}

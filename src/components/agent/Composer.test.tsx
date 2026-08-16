@@ -71,6 +71,7 @@ describe('Composer 模型选择', () => {
       modelSelections: {
         'ws-1': { model: 'same-model', provider: 'deepseek' },
       },
+      recentModels: [],
     });
   });
 
@@ -107,5 +108,69 @@ describe('Composer 模型选择', () => {
 
     const after = screen.getAllByRole('button', { name: 'same-model' });
     expect(after.filter((b) => b.querySelector('svg'))).toHaveLength(1);
+  });
+
+  it('搜索框固定在弹层顶部,不随模型列表滚动', async () => {
+    const user = userEvent.setup();
+    renderComposer();
+    await user.click(screen.getByRole('button', { name: '切换模型' }));
+
+    // 模型列表为独立滚动容器,搜索框位于其外(滚动列表时搜索框保持可见)
+    const list = screen.getByTestId('model-menu-list');
+    expect(list.className).toContain('overflow-y-auto');
+    const search = screen.getByPlaceholderText('搜索模型');
+    expect(list.contains(search)).toBe(false);
+  });
+
+  it('切换模型后,「最近使用」分区置顶展示最新选择', async () => {
+    const user = userEvent.setup();
+    renderComposer();
+    await user.click(screen.getByRole('button', { name: '切换模型' }));
+    // 初始没有最近使用记录,不显示该分区
+    expect(screen.queryByText('最近使用')).toBeNull();
+
+    // 切换到 opencode 的同名模型
+    await user.click(screen.getAllByRole('button', { name: 'same-model' })[1]);
+    expect(useAgentStore.getState().recentModels).toEqual([
+      { model: 'same-model', provider: 'opencode' },
+    ]);
+
+    // 重新打开:顶部出现「最近使用」,条目带 provider 名便于区分同名模型
+    await user.click(screen.getByRole('button', { name: '切换模型' }));
+    expect(screen.getByText('最近使用')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'same-model OpenCode Zen' })).toBeTruthy();
+  });
+
+  it('点击「最近使用」中的模型可直接切换', async () => {
+    useAgentStore.setState({
+      recentModels: [{ model: 'same-model', provider: 'opencode' }],
+    });
+    const user = userEvent.setup();
+    renderComposer();
+    await user.click(screen.getByRole('button', { name: '切换模型' }));
+
+    await user.click(screen.getByRole('button', { name: 'same-model OpenCode Zen' }));
+    const sel = useAgentStore.getState().modelSelections['ws-1'];
+    expect(sel).toEqual({ model: 'same-model', provider: 'opencode' });
+  });
+
+  it('搜索时「最近使用」分区随关键词过滤,无匹配则整体隐藏', async () => {
+    useAgentStore.setState({
+      recentModels: [{ model: 'same-model', provider: 'opencode' }],
+    });
+    const user = userEvent.setup();
+    renderComposer();
+    await user.click(screen.getByRole('button', { name: '切换模型' }));
+    expect(screen.getByText('最近使用')).toBeTruthy();
+
+    // 命中模型名:分区保留
+    await user.type(screen.getByPlaceholderText('搜索模型'), 'same');
+    expect(screen.getByText('最近使用')).toBeTruthy();
+
+    // 无匹配:分区隐藏并提示未找到
+    await user.clear(screen.getByPlaceholderText('搜索模型'));
+    await user.type(screen.getByPlaceholderText('搜索模型'), 'zzz');
+    expect(screen.queryByText('最近使用')).toBeNull();
+    expect(screen.getByText('未找到匹配的模型。')).toBeTruthy();
   });
 });

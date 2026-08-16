@@ -285,3 +285,38 @@ describe('agentStore 会话运行态回收(内存防泄漏)', () => {
     expect(useAgentStore.getState().bySession['s1'].run?.status).toBe('running');
   });
 });
+
+describe('agentStore 最近使用模型', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useAgentStore.setState({ recentModels: [] });
+  });
+
+  it('pushRecentModel 去重、最新置顶并限制条数', () => {
+    const push = useAgentStore.getState().pushRecentModel;
+    push({ model: 'a', provider: 'p1' });
+    push({ model: 'b', provider: 'p1' });
+    // 同 provider+model 视为同一条:置顶且不重复;不同 provider 的同名模型保留
+    push({ model: 'a', provider: 'p1' });
+    push({ model: 'a', provider: 'p2' });
+    expect(useAgentStore.getState().recentModels).toEqual([
+      { model: 'a', provider: 'p2' },
+      { model: 'a', provider: 'p1' },
+      { model: 'b', provider: 'p1' },
+    ]);
+
+    // 超出上限丢弃最旧的
+    for (let i = 0; i < 10; i++) push({ model: `m${i}`, provider: 'p3' });
+    const list = useAgentStore.getState().recentModels;
+    expect(list).toHaveLength(6);
+    expect(list[0]).toEqual({ model: 'm9', provider: 'p3' });
+  });
+
+  it('最近使用模型持久化到 localStorage', () => {
+    useAgentStore.getState().pushRecentModel({ model: 'glm-5', provider: 'zhipu' });
+    const saved = JSON.parse(localStorage.getItem('combo.agent')!) as {
+      state: { recentModels: { model: string; provider: string }[] };
+    };
+    expect(saved.state.recentModels).toEqual([{ model: 'glm-5', provider: 'zhipu' }]);
+  });
+});

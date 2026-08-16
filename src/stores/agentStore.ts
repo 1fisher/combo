@@ -52,6 +52,15 @@ export interface ModelSelection {
   reasoningEffort?: string;
 }
 
+/** 最近使用过的模型(全局共享,provider+model 唯一),用于模型菜单顶部快速切换 */
+export interface RecentModel {
+  model: string;
+  provider: string;
+}
+
+/** 最近使用模型最多保留条数 */
+export const RECENT_MODELS_MAX = 6;
+
 interface AgentState {
   activeWorkspaceId: string | null;
   /** 上次选中项目的路径(后端重启后 ID 可能变化,用路径做恢复) */
@@ -73,6 +82,9 @@ interface AgentState {
   contextOverrides: Record<string, number>;
   setContextOverride: (modelId: string, tokens: number) => void;
   clearContextOverride: (modelId: string) => void;
+  /** 最近使用的模型(全局,最近在前,最多 RECENT_MODELS_MAX 个),跨重启保留 */
+  recentModels: RecentModel[];
+  pushRecentModel: (entry: RecentModel) => void;
 
   bySession: Record<string, SessionRuntime>;
   permissionQueue: Api.PermissionRequest[];
@@ -145,6 +157,15 @@ export const useAgentStore = create<AgentState>()(
     set((st) => {
       const { [modelId]: _drop, ...rest } = st.contextOverrides;
       return { contextOverrides: rest };
+    }),
+  recentModels: [],
+  pushRecentModel: (entry) =>
+    set((st) => {
+      // 去重(provider+model 唯一),最新放到最前,超出上限丢弃最旧的
+      const rest = st.recentModels.filter(
+        (m) => !(m.model === entry.model && m.provider === entry.provider)
+      );
+      return { recentModels: [entry, ...rest].slice(0, RECENT_MODELS_MAX) };
     }),
   activeSessionId: null,
   setActiveSessionId: (id) =>
@@ -361,6 +382,7 @@ export const useAgentStore = create<AgentState>()(
         agentMode: s.agentMode,
         modelSelections: s.modelSelections,
         contextOverrides: s.contextOverrides,
+        recentModels: s.recentModels,
       }),
     }
   )
