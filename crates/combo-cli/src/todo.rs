@@ -133,6 +133,23 @@ impl TodoStore {
             m.remove(session_id);
         }
     }
+
+    /// run 成功结束(end_turn)时的兜底:agent 干完活却忘了调用 todo_write
+    /// 把清单收尾(最后一项仍 in_progress、甚至还有 pending)是高频疏漏,
+    /// 清单会永远停留在「进行中」,前端的任务归档也因此被卡住。
+    /// 把未完成项全部置为 completed 并返回更新后的清单,供调用方广播
+    /// todo_update 让前端收敛到终态;无清单或本就全部完成时返回 None。
+    pub(crate) fn finalize_completed(&self, session_id: &str) -> Option<Vec<TodoItem>> {
+        let mut m = self.sessions.lock().unwrap();
+        let todos = m.get_mut(session_id)?;
+        if todos.iter().all(|t| t.status == TodoStatus::Completed) {
+            return None;
+        }
+        for t in todos.iter_mut() {
+            t.status = TodoStatus::Completed;
+        }
+        Some(todos.clone())
+    }
 }
 
 /// 构建 `todo_write` 工具:agent 调用时更新任务列表并广播给前端。
@@ -630,5 +647,36 @@ mod tests {
         store.clear("s1");
         assert!(store.get("s1").is_none());
         assert!(store.get("s2").is_some());
+    }
+
+    #[test]
+    fn finalize_completed_marks_unfinished_as_completed() {
+        // run 成功结束的兜底:最后一项停在 in_progress(甚至还有 pending)
+        // 时全部收敛为 completed,返回更新后的清单供广播
+        let store = TodoStore::new();
+        store.set(
+            "s1",
+            vec![
+                item("任务1", TodoStatus::Completed),
+                item("任务2", TodoStatus::InProgress),
+                item("任务3", TodoStatus::Pending),
+            ],
+        );
+        let finalized = store.finalize_completed("s1").unwrap();
+        assert!(finalized.iter().all(|t| t.status == TodoStatus::Completed));
+        assert_eq!(finalized.len(), 3);
+        // 存储内同步更新,后续 clear_completed 能正常回收
+        assert!(store.get("s1").unwrap().iter().all(|t| t.status == TodoStatus::Completed));
+        store.clear_completed("s1");
+        assert!(store.get("s1").is_none());
+    }
+
+    #[test]
+    fn finalize_completed_none_when_all_completed_or_missing() {
+        // 已全部完成或无清单 → 无需广播
+        let store = TodoStore::new();
+        store.set("s1", vec![item("任务1", TodoStatus::Completed)]);
+        assert!(store.finalize_completed("s1").is_none());
+        assert!(store.finalize_completed("missing").is_none());
     }
 }

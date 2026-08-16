@@ -608,6 +608,22 @@ pub(crate) async fn start_agent_run(
             usage,
         ));
 
+        // 兜底:run 正常结束(end_turn)但任务清单仍有未完成项——agent 干完活
+        // 却忘了把最后一项标成 completed,清单会永远停在 in_progress(前端的
+        // 任务归档也要求全部 completed,会被一并卡住)。这里统一收敛为全部
+        // 完成并广播终态;随后 RunGuard 的 clear_completed 会回收清单。
+        if reason == "end_turn" {
+            if let Some(todos) = state2.todos.finalize_completed(&session_id) {
+                let _ = tx.send(json!({
+                    "type": "todo_update",
+                    "payload": {
+                        "type": "updated",
+                        "payload": { "session_id": session_id.clone(), "todos": todos }
+                    }
+                }));
+            }
+        }
+
         // run 真正结束:通知调用方(自动化任务据此落运行结果)。
         if let Some(cb) = on_finish {
             cb(&reason, error.clone());
