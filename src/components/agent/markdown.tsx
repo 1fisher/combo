@@ -6,6 +6,15 @@ import { cn } from '../../lib/utils';
 import { openExternal } from '../../lib/openExternal';
 import 'highlight.js/styles/github-dark.css';
 
+/** 语言别名归一:同一终端语言的多种标注统一显示(shell 家族 → bash) */
+const LANG_DISPLAY: Record<string, string> = {
+  sh: 'bash',
+  shell: 'bash',
+  zsh: 'bash',
+  shellscript: 'bash',
+  console: 'bash',
+};
+
 /** 递归提取 React 节点树中的纯文本(用于代码块复制按钮) */
 function extractText(node: ReactNode): string {
   if (node === null || node === undefined) return '';
@@ -42,7 +51,7 @@ function CodeBlock({
     <div className="my-2 overflow-hidden rounded-lg border bg-[#0d1117]">
       <div className="flex items-center justify-between border-b border-white/10 bg-white/5 px-3 py-1">
         <span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
-          {lang || 'code'}
+          {LANG_DISPLAY[lang] || lang || 'text'}
         </span>
         <button
           onClick={copy}
@@ -142,7 +151,12 @@ export function Markdown({
     <div className={cn(variant === 'document' ? DOC_PROSE : chatProse)}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
-        rehypePlugins={[[rehypeHighlight, { detect: true, ignoreMissing: true }]]}
+        rehypePlugins={
+          // ignoreMissing:未标注语言或语言未注册时按纯文本渲染。
+          // 不能开 detect:highlight.js 的自动检测会把 git 提交输出、
+          // 终端日志等无语言代码块误判成 css 等语言,着出错误的高亮。
+          [[rehypeHighlight, { ignoreMissing: true }]]
+        }
         components={{
           a({ href, children }) {
             return (

@@ -6,9 +6,10 @@ import { countChanges, diffFromToolInput, type DiffLine } from '../../lib/fileCh
 import { DiffView } from './DiffView';
 import { TerminalOutput } from './TerminalOutput';
 import { JsonView, tryParseJson } from './JsonView';
+import { BashCode } from './BashCode';
+import { BASH_TOOLS, commandFromInput } from './bashTools';
 
 const FILE_DIFF_TOOLS = new Set(['write', 'edit', 'multiedit']);
-const BASH_TOOLS = new Set(['bash', 'run_shell_command']);
 const COLLAPSE_THRESHOLD = 600;
 
 /** 从 store 中查找 tool_call_id 对应的工具输入 */
@@ -30,7 +31,14 @@ function useToolCallInput(toolCallId: string): { name: string; input: string } |
   }, [messages, toolCallId]);
 }
 
-export function ToolResultCard({ result }: { result: Api.ToolResult }) {
+export function ToolResultCard({
+  result,
+  /** bash 类工具的命令文本:有值时摘要标题展示命令、展开区顶部高亮渲染 */
+  command,
+}: {
+  result: Api.ToolResult;
+  command?: string;
+}) {
   const [expanded, setExpanded] = useState(false);
   const isError = result.is_error ?? false;
   const content =
@@ -45,6 +53,19 @@ export function ToolResultCard({ result }: { result: Api.ToolResult }) {
 
   const isFileTool = FILE_DIFF_TOOLS.has(name);
   const isBash = BASH_TOOLS.has(name) || name === 'bash';
+  // bash 命令:显式传入优先(shell_command part 自带),否则从配对
+  // tool_call 的输入 JSON 中提取
+  const commandText =
+    command ?? (isBash && toolCall ? commandFromInput(toolCall.input) : null);
+  // 展开区是否渲染完整命令:仅显式传入时(shell_command part 无配对的
+  // ToolCallCard 展示命令);tool_result 场景配对的 ToolCallCard 已渲染,
+  // 不再重复一份
+  const showCommandBody = command != null && command.trim() !== '';
+  // 摘要标题上的命令:折叠时也能一眼看到跑了什么
+  const commandBrief = commandText
+    ? commandText.split('\n')[0].trim().slice(0, 80) +
+      (commandText.length > 80 ? '…' : '')
+    : null;
 
   // 对文件修改工具计算 diff
   const diffLines = useMemo<DiffLine[] | null>(() => {
@@ -86,7 +107,7 @@ export function ToolResultCard({ result }: { result: Api.ToolResult }) {
   const titleLabel = isFileTool
     ? `${name} 变更`
     : isBash
-      ? '终端输出'
+      ? (commandBrief ? `$ ${commandBrief}` : '终端输出')
       : `${name} 返回`;
 
   return (
@@ -122,9 +143,14 @@ export function ToolResultCard({ result }: { result: Api.ToolResult }) {
             className="max-h-[60vh] overflow-auto border-0"
           />
         )}
-        {/* bash 输出 → TerminalOutput(diff 着色) */}
+        {/* bash 输出 → 顶部命令(bash 高亮,仅独立 shell_command)+ 输出(diff 着色) */}
         {!diffLines && isBash && (
-          <TerminalOutput content={content} className="border-0" />
+          <>
+            {showCommandBody && commandText && (
+              <BashCode command={commandText} className="rounded-none" />
+            )}
+            <TerminalOutput content={content} className="border-0" />
+          </>
         )}
         {/* JSON → 结构化展示 */}
         {!diffLines && !isBash && parsedJson !== null && (

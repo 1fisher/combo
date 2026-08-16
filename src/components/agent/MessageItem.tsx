@@ -191,6 +191,7 @@ export const MessageItem = memo(function MessageItem({
                     return (
                       <div key={i}>
                         <ToolResultCard
+                          command={sc.command}
                           result={{
                             tool_call_id: `shell-${i}`,
                             name: 'bash',
