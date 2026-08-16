@@ -26,7 +26,7 @@ pub fn show_main_window(app: &AppHandle) {
 /// 初始化系统托盘,并把主窗口的「关闭」改为隐藏到托盘。
 pub fn init(app: &AppHandle) -> tauri::Result<()> {
     let new_task = MenuItem::with_id(app, "new-task", "新建任务", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出 Combo", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let menu = Menu::with_items(app, &[&new_task, &separator, &quit])?;
 
