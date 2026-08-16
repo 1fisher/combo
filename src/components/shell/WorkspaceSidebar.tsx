@@ -290,6 +290,26 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // 托盘菜单「新建任务」(仅 Tauri 桌面端;后端已先唤起主窗口)
+  useEffect(() => {
+    if (!isTauri()) return;
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    void import('@tauri-apps/api/event')
+      .then(({ listen }) =>
+        listen('tray-new-task', () => onNewTaskRef.current()).then((fn) => {
+          if (disposed) fn();
+          else unlisten = fn;
+        })
+      )
+      // Tauri 内部 API 不可用(测试环境/旧版本)时静默跳过
+      .catch(() => {});
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
   // 排序菜单外部点击关闭
   useEffect(() => {
     if (!sortMenuOpen) return;

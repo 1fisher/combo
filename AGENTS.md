@@ -36,6 +36,11 @@ Three components, three languages/dirs:
   加载 combo 配置、构造 `combo_cli::serve::AppState`、绑定 `127.0.0.1:18236`
   (被占用自动 +1,与独立 serve 行为一致)、spawn `serve_listener`(同进程内嵌,无子进程)。
   端口经 Tauri events `proxy-ready` (`{port}`) 与 `rune-status` (`{connected}`) 推给前端。
+  **系统托盘**(`src/tray.rs`,macOS/Windows,tauri features `tray-icon`+`image-png`):
+  右键菜单[新建任务/退出 Combo],左键点击切换主窗口显隐;
+  「新建任务」先唤起窗口再 emit `tray-new-task`,`WorkspaceSidebar` 监听后复用
+  `onNewTaskRef`(与 ⌘N 同路径);主窗口「关闭」被拦截为隐藏到托盘,真正退出走
+  托盘菜单(macOS 另处理 `RunEvent::Reopen`,Dock 图标点击可重新显示窗口)。
 - **`src/`** (React 19 + Vite + TS, shadcn/ui) — the frontend. TanStack Query
   for REST data, **Zustand** (`stores/agentStore.ts`) for SSE-driven live state,
   keyed by `sessionId`.

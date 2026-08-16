@@ -2,6 +2,8 @@ use serde::Serialize;
 use std::sync::Mutex;
 use tauri::{Emitter, Manager};
 
+mod tray;
+
 #[derive(Clone, Serialize)]
 pub struct ProxyReady {
     pub port: u16,
@@ -54,14 +56,34 @@ pub fn run() {
                     let _ = w.open_devtools();
                 }
             }
+            // 系统托盘(macOS/Windows):右键菜单 + 左键切换窗口 + 关闭到托盘。
+            // 失败仅记录,不影响主窗口启动(如无托盘的环境)。
+            if let Err(e) = tray::init(app.handle()) {
+                eprintln!("系统托盘初始化失败: {e:?}");
+            }
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 init_backend(&handle).await;
             });
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            // macOS:窗口全部隐藏(关闭到托盘)时,点击 Dock 图标重新显示主窗口
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } = event
+            {
+                if !has_visible_windows {
+                    tray::show_main_window(app);
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = (app, event);
+        });
 }
 
 /// 读取 combo-cli 配置并解析出 AskConfig(与 CLI 相同的流程,无命令行参数)。
