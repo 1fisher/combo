@@ -39,7 +39,7 @@ import { useActiveWorkspaceId } from '../../hooks/useActiveWorkspaceId';
 import { useAgentStore } from '../../stores/agentStore';
 import { useConnectionStore } from '../../stores/connectionStore';
 import { isTauri } from '../../lib/connection';
-import { confirmDialog } from '../../lib/confirm';
+import { deleteSessionWithConfirm } from './sessionDelete';
 import { createSession as createSessionApi } from '../../lib/api';
 import { ConversationList } from './ConversationList';
 import { SessionRow } from './SessionRow';
@@ -192,11 +192,7 @@ function WorkspaceGroup({
                 onNavigate?.();
               }}
               onRename={(title) => rename({ id: s.id, title })}
-              onDelete={() =>
-                void confirmDialog('确定删除此会话?').then((ok) => {
-                  if (ok) void remove(s.id);
-                })
-              }
+              onDelete={() => void deleteSessionWithConfirm(s, remove)}
             />
           ))}
           {!sessions?.length && (

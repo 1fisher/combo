@@ -406,12 +406,21 @@ impl ComboDb {
         Ok(())
     }
 
+    /// 会话列表。`message_count` 不读 conversations 表的静态列(建会话后
+    /// 从不更新,恒为 0),而是 LEFT JOIN messages 实时统计——前端据此
+    /// 识别「新建后未发过消息」的空会话(删除时免确认)。
+    /// 关联只按 session_id(session ID 全局唯一,与 list_messages 一致,
+    /// 忽略 workspace_id 在后端重启别名变化后的差异)。
     pub fn list_conversations(&self, workspace_id: &str) -> anyhow::Result<Vec<ConversationMeta>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, workspace_id, title, message_count, created_at, updated_at,
-                    prompt_tokens, completion_tokens, cost, context_tokens
-             FROM conversations WHERE workspace_id=?1 ORDER BY updated_at DESC",
+            "SELECT c.id, c.workspace_id, c.title, COUNT(m.id), c.created_at, c.updated_at,
+                    c.prompt_tokens, c.completion_tokens, c.cost, c.context_tokens
+             FROM conversations c
+             LEFT JOIN messages m ON m.session_id = c.id
+             WHERE c.workspace_id=?1
+             GROUP BY c.id
+             ORDER BY c.updated_at DESC",
         )?;
         let rows = stmt.query_map(params![workspace_id], row_to_conv)?;
         let mut out = Vec::new();
@@ -433,10 +442,13 @@ impl ComboDb {
         let conn = self.conn.lock().unwrap();
         let placeholders = workspace_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!(
-            "SELECT id, workspace_id, title, message_count, created_at, updated_at,
-                    prompt_tokens, completion_tokens, cost, context_tokens
-             FROM conversations WHERE workspace_id IN ({placeholders})
-             ORDER BY updated_at DESC"
+            "SELECT c.id, c.workspace_id, c.title, COUNT(m.id), c.created_at, c.updated_at,
+                    c.prompt_tokens, c.completion_tokens, c.cost, c.context_tokens
+             FROM conversations c
+             LEFT JOIN messages m ON m.session_id = c.id
+             WHERE c.workspace_id IN ({placeholders})
+             GROUP BY c.id
+             ORDER BY c.updated_at DESC"
         );
         let params: Vec<&dyn rusqlite::ToSql> = workspace_ids
             .iter()
@@ -1003,6 +1015,39 @@ mod tests {
         db.rename_conversation("c1", "新标题").unwrap();
         let convs = db.list_conversations("w1").unwrap();
         assert_eq!(convs[0].title, "新标题");
+    }
+
+    #[test]
+    fn list_conversations_counts_messages() {
+        // message_count 来自 messages 表的实时统计(conversations 表静态列恒 0):
+        // 空会话为 0,有消息的会话为实际条数;同 id 消息 upsert 不重复计数。
+        let db = ComboDb::in_memory();
+        db.upsert_conversation(&conv("c1", "w1")).unwrap();
+        db.upsert_conversation(&conv("c2", "w1")).unwrap();
+        db.upsert_message("w1", "c1", "m1", "user", "[]", 100, 100).unwrap();
+        db.upsert_message("w1", "c1", "m2", "assistant", "[]", 200, 200).unwrap();
+        // 快照更新不新增行
+        db.upsert_message("w1", "c1", "m1", "user", "[]", 100, 150).unwrap();
+        // 别的 workspace 的消息不计入 c2
+        db.upsert_message("w9", "c3", "mx", "user", "[]", 300, 300).unwrap();
+
+        let convs = db.list_conversations("w1").unwrap();
+        let by_id = |id: &str| convs.iter().find(|c| c.id == id).unwrap();
+        assert_eq!(by_id("c1").message_count, 2);
+        assert_eq!(by_id("c2").message_count, 0);
+
+        // multi 版本同样带真实计数
+        let ids = vec!["w1".to_string(), "w9".to_string()];
+        let convs = db.list_conversations_multi(&ids).unwrap();
+        let by_id = |id: &str| convs.iter().find(|c| c.id == id).unwrap();
+        assert_eq!(by_id("c1").message_count, 2);
+        assert_eq!(by_id("c2").message_count, 0);
+
+        // 删除会话的消息后计数归零
+        db.delete_messages_by_session("w1", "c1").unwrap();
+        let convs = db.list_conversations("w1").unwrap();
+        let by_id = |id: &str| convs.iter().find(|c| c.id == id).unwrap();
+        assert_eq!(by_id("c1").message_count, 0);
     }
 
     #[test]

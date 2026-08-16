@@ -1,7 +1,7 @@
 import { useSessions } from '../../hooks/useSessions';
 import { useActiveWorkspaceId } from '../../hooks/useActiveWorkspaceId';
 import { useAgentStore } from '../../stores/agentStore';
-import { confirmDialog } from '../../lib/confirm';
+import { deleteSessionWithConfirm } from './sessionDelete';
 import { SessionRow } from './SessionRow';
 
 export type SortMode = 'recent' | 'name';
@@ -67,11 +67,7 @@ export function ConversationList({
             onNavigate?.();
           }}
           onRename={(title) => rename({ id: s.id, title })}
-          onDelete={() =>
-            void confirmDialog('确定删除此会话?').then((ok) => {
-              if (ok) void remove(s.id);
-            })
-          }
+          onDelete={() => void deleteSessionWithConfirm(s, remove)}
         />
       ))}
       {!isLoading && showList.length === 0 && (
