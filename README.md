@@ -89,6 +89,24 @@ Three components:
 
 ## Installation & Usage
 
+### Option 0: CLI only (install the `combo` command)
+
+Install the CLI binary into `~/.cargo/bin` (make sure it's on your `PATH`),
+then use `combo` directly from any terminal:
+
+```bash
+git clone https://github.com/1fisher/combo.git
+cd combo
+make install                        # = cargo install --path crates/combo-cli
+
+combo --help
+combo ask "你好"                    # one-shot question
+combo chat                          # interactive multi-turn chat
+combo serve --port 18236            # run the full backend (REST + SSE)
+combo sessions list                 # manage chat history
+combo config path                   # show/edit ~/.config/combo/combo-cli.toml
+```
+
 ### Option 1: Desktop app (Tauri)
 
 ```bash
@@ -150,6 +168,7 @@ npm test                    # vitest run (jsdom environment)
 npm run test:e2e            # Playwright (auto-skipped unless COMBO_CLI_BIN is set)
 npm run gen:api             # regenerate src/lib/api/types.ts from swagger/swagger.json
 cargo test -p combo-cli     # Rust unit tests
+combo serve --port 18236    # installed CLI (make install); default 18236, auto-increment if taken
 cargo run -p combo-cli -- serve --port 18236   # run the backend standalone (default 18236, auto-increment if taken)
 ```
 

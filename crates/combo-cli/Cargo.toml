@@ -6,7 +6,7 @@ license = "MIT"
 description = "combo 自有 agent CLI:基于 rig 的多 provider 智能体命令行工具"
 
 [[bin]]
-name = "combo-cli"
+name = "combo"
 path = "src/main.rs"
 
 [dependencies]

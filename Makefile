@@ -1,4 +1,5 @@
 .PHONY: help dev dev-proxy build build-cli build-relay build-desktop bundle dmg tsc \
+	install \
 	version version-patch version-minor version-major \
 	release release-patch release-minor release-major \
 	tag push clean
@@ -21,14 +22,14 @@ build: ## 一键构建: 前端 + combo-cli / combo-relay / 桌面端
 	cargo build --release --workspace --exclude combo
 	cargo build --release -p combo --features tauri/custom-protocol
 
-build-cli: ## 仅编译 combo-cli
+build-cli: ## 仅编译 combo-cli (产出 target/release/combo)
 	cargo build --release -p combo-cli
 
 build-relay: ## 仅编译 combo-relay
 	cargo build --release -p combo-relay
 
 
-build-desktop: ## 编译桌面端,内嵌前端资源 (target/release/combo)
+build-desktop: ## 编译桌面端,内嵌前端资源 (target/release/combo-app)
 	npm run build
 	cargo build --release -p combo --features tauri/custom-protocol
 
@@ -43,6 +44,9 @@ dmg: ## 打包 macOS DMG 安装镜像 (仅 DMG, 跳过 .app 独立包)
 
 tsc: ## TypeScript 类型检查 (tsc -b)
 	npm run tsc
+
+install: ## 安装 combo 命令到 ~/.cargo/bin (cargo install,全局可用)
+	cargo install --path crates/combo-cli --force
 
 ##@ 测试
 

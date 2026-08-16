@@ -61,7 +61,8 @@ npm run test:e2e            # Playwright; SKIPS itself unless COMBO_CLI_BIN is s
 npm run gen:api             # regenerate src/lib/api/types.ts from swagger/swagger.json
 cargo run -p combo-cli -- serve --port 18236                # 后端独立运行(combo 全部 API;默认 18236,被占用自动 +1)
 bash scripts/dev-backend.sh    # 一步:编译 combo-cli → serve 模式跑在 :18236(可传参)
-cargo run -p combo-cli --bin combo-cli -- ask "你好"         # 自有 agent CLI(rig 驱动)
+cargo run -p combo-cli -- ask "你好"                          # 自有 agent CLI(rig 驱动)
+make install                   # 安装 `combo` 命令到 ~/.cargo/bin,之后全局可用 `combo ask/serve/...`
 cargo test -p combo-cli     # combo-cli 单元测试
 cargo test -p combo         # src-tauri 单元测试
 ```
@@ -86,7 +87,7 @@ cargo test -p combo         # src-tauri 单元测试
 
 **Browser dev workflow (recommended):** terminal 1 `bash scripts/dev-proxy.sh`,
 terminal 2 `bash scripts/dev-backend.sh`(一步编译 combo-cli 并以 serve 模式跑在
-:18236,等价于 `cargo build -p combo-cli` 后运行 `target/debug/combo-cli serve
+:18236,等价于 `cargo build -p combo-cli` 后运行 `target/debug/combo serve
 --port 18236`),then open http://localhost:5173.
 
 **Tauri desktop mode:** the README says `npm run tauri dev`, but **that does not

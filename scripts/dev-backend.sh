@@ -18,7 +18,7 @@ cargo build -p combo-cli
 echo "==> 启动 combo-cli serve 127.0.0.1:${PORT}"
 if [[ "${STATIC:-}" == "1" && -d "$ROOT/dist" ]]; then
   echo "==> 静态资源: $ROOT/dist (tunnel-all 模式)"
-  exec "$ROOT/target/debug/combo-cli" serve --port "$PORT" --static-dir "$ROOT/dist"
+  exec "$ROOT/target/debug/combo" serve --port "$PORT" --static-dir "$ROOT/dist"
 else
-  exec "$ROOT/target/debug/combo-cli" serve --port "$PORT"
+  exec "$ROOT/target/debug/combo" serve --port "$PORT"
 fi

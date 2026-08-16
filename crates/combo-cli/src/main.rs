@@ -8,7 +8,7 @@ use combo_cli::{agent, config, db, lsp, paths, providers, serve, skills};
 
 #[derive(Parser)]
 #[command(
-    name = "combo-cli",
+    name = "combo",
     version,
     about = "combo 自有 agent CLI(rig 驱动)"
 )]

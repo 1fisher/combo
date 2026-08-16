@@ -74,6 +74,23 @@ Tauri v2 桌面端 + React 19 / TypeScript 前端,直接内嵌 combo-cli 的
 
 ## 安装与使用
 
+### 方式零:只用命令行(安装 `combo` 命令)
+
+安装 CLI 到 `~/.cargo/bin`(确保其在 PATH 中),之后任意终端直接使用 `combo`:
+
+```bash
+git clone https://github.com/1fisher/combo.git
+cd combo
+make install                        # = cargo install --path crates/combo-cli
+
+combo --help
+combo ask "你好"                    # 单轮问答
+combo chat                          # 交互式多轮会话
+combo serve --port 18236            # 启动完整后端(REST + SSE)
+combo sessions list                 # 管理会话历史
+combo config path                   # 查看/编辑 ~/.config/combo/combo-cli.toml
+```
+
 ### 方式一:桌面应用(Tauri)
 
 ```bash
@@ -132,6 +149,7 @@ npm test                    # vitest run(jsdom 环境)
 npm run test:e2e            # Playwright(未设 COMBO_CLI_BIN 时自动跳过)
 npm run gen:api             # 由 swagger/swagger.json 重新生成 src/lib/api/types.ts
 cargo test -p combo-cli     # Rust 单元测试
+combo serve --port 18236    # 已安装的 CLI(make install);默认 18236,被占用自动 +1
 cargo run -p combo-cli -- serve --port 18236   # 后端独立运行(默认 18236,被占用自动 +1)
 ```
 
