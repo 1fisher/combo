@@ -1,23 +1,15 @@
 //! combo-cli 的 sqlite 持久化:本地会话(conversations)与消息(messages)。
-//! 沿用 serve 的存储约定(`COMBO_DATA_DIR` 或 `XDG_DATA_HOME/combo`),
+//! 沿用 serve 的存储约定(`COMBO_DATA_DIR` 或统一目录 `~/.config/combo`),
 //! 但表名加 `cli_` 前缀,与 serve 的 ComboDb 表隔离。
 
 use rusqlite::{Connection, params};
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-/// 数据库路径:`COMBO_DATA_DIR` 或 `XDG_DATA_HOME/combo/combo-cli.db`。
+/// 数据库路径:`COMBO_DATA_DIR` 或 `~/.config/combo/combo-cli.db`
+/// (见 `paths::default_data_dir`)。
 pub fn default_db_path() -> PathBuf {
-    if let Ok(dir) = std::env::var("COMBO_DATA_DIR") {
-        return PathBuf::from(dir).join("combo-cli.db");
-    }
-    let base = std::env::var("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-            PathBuf::from(home).join(".local/share")
-        });
-    base.join("combo").join("combo-cli.db")
+    crate::paths::default_data_dir().join("combo-cli.db")
 }
 
 /// 会话元数据。

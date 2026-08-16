@@ -38,7 +38,10 @@ pub fn default_skills_paths() -> Vec<String> {
     vec![
         "./.combo/skills".to_string(),
         "./.agents/skills".to_string(),
-        format!("{home}/.config/combo/skills"),
+        crate::paths::default_config_dir()
+            .join("skills")
+            .to_string_lossy()
+            .into_owned(),
         format!("{home}/.agents/skills"),
     ]
 }
@@ -185,6 +188,8 @@ mod tests {
 
     #[test]
     fn default_paths_include_all_dirs() {
+        // 路径读取 COMBO_CONFIG_DIR,与其他改写该变量的测试串行
+        let _env = crate::paths::ENV_LOCK.lock().unwrap();
         let paths = default_skills_paths();
         assert_eq!(paths.len(), 4);
         // 项目级优先,用户级在后

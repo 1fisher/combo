@@ -106,6 +106,9 @@ fn fallback_cfg() -> combo_cli::agent::AskConfig {
 async fn init_backend(app: &tauri::AppHandle) {
     use combo_cli::serve::{AppState, serve_listener};
 
+    // 旧版数据目录(~/.local/share/combo)一次性迁移到统一目录 ~/.config/combo
+    combo_cli::paths::migrate_legacy_data_dir();
+
     // 初始化 tracing:打包后看不到 stderr,日志写到文件方便诊断。
     // 开发模式(终端运行)时 stderr 仍有输出。
     init_tracing();
@@ -219,7 +222,7 @@ fn resolve_static_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     None
 }
 
-/// 初始化 tracing 日志:打包后写文件到 combo 数据目录的 logs/ 下,
+/// 初始化 tracing 日志:打包后写文件到 combo 统一数据目录的 logs/ 下,
 /// 开发模式(stderr 可见)时也输出到终端。
 fn init_tracing() {
     use tracing_subscriber::{fmt, EnvFilter, prelude::*};
@@ -227,15 +230,8 @@ fn init_tracing() {
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("combo_cli=info,tower_http=warn,info"));
 
-    // 尝试日志文件路径:COMBO_DATA_DIR/logs/combo-desktop.log
-    let log_dir = std::env::var("COMBO_DATA_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| {
-            dirs::data_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join("combo")
-        })
-        .join("logs");
+    // 尝试日志文件路径:统一目录(~/.config/combo)/logs/combo-desktop.log
+    let log_dir = combo_cli::paths::default_data_dir().join("logs");
 
     let _ = std::fs::create_dir_all(&log_dir);
 

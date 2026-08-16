@@ -1,7 +1,7 @@
 //! Agent 请求/响应日志:把每次发送给 agent 接口的请求与返回结果
 //! 以 JSON Lines 格式追加写入日志文件,便于调试与审计。
 //!
-//! 日志目录:`$COMBO_DATA_DIR/logs/` 或 `~/.local/share/combo/logs/`。
+//! 日志目录:`$COMBO_DATA_DIR/logs/` 或 `~/.config/combo/logs/`。
 //! 每天一个文件:`agent-YYYY-MM-DD.log`。
 //! 每行一个 JSON 对象(`request` / `event` / `response`),通过 `run_id` 关联。
 
@@ -13,21 +13,10 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-/// 返回日志目录(`$COMBO_DATA_DIR/logs` 或 `$XDG_DATA_HOME/combo/logs`
-/// 或 `~/.local/share/combo/logs`)。
+/// 返回日志目录(`$COMBO_DATA_DIR/logs` 或统一目录 `~/.config/combo/logs`,
+/// 见 `paths::default_data_dir`)。
 fn log_dir() -> PathBuf {
-    let base = if let Ok(dir) = std::env::var("COMBO_DATA_DIR") {
-        PathBuf::from(dir)
-    } else {
-        let xdg = std::env::var("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-                PathBuf::from(home).join(".local/share")
-            });
-        xdg.join("combo")
-    };
-    base.join("logs")
+    crate::paths::default_data_dir().join("logs")
 }
 
 /// 返回今天的日志文件路径。
@@ -358,6 +347,7 @@ mod tests {
 
     #[test]
     fn log_dir_uses_env_var() {
+        let _env = crate::paths::ENV_LOCK.lock().unwrap();
         std::env::set_var("COMBO_DATA_DIR", "/tmp/combo-test-logs");
         let dir = log_dir();
         assert_eq!(dir, PathBuf::from("/tmp/combo-test-logs/logs"));

@@ -4,7 +4,7 @@
 //! (进程守护式管理,health + control 端点,直接承担 combo 全部 API)。
 
 use clap::{Parser, Subcommand};
-use combo_cli::{agent, config, db, lsp, providers, serve, skills};
+use combo_cli::{agent, config, db, lsp, paths, providers, serve, skills};
 
 #[derive(Parser)]
 #[command(
@@ -129,6 +129,8 @@ enum LspAction {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    // 旧版本数据目录(~/.local/share/combo)一次性迁移到统一目录 ~/.config/combo
+    paths::migrate_legacy_data_dir();
     // 自动加载/生成配置文件(用户目录),命令行参数优先于文件
     let config_path = cli
         .config
@@ -161,16 +163,22 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("使用配置文件:{}", config_path.display());
     }
 
-    let provider_id = resolved.provider.clone();
-    // 解析 provider:自定义配置列表 → combo providers.json → 内置
-    let provider = providers::find_provider(&provider_id, &resolved.providers)?;
-    let cfg = agent::AskConfig::from_resolved(&resolved, provider);
+    // 解析 provider:自定义配置列表 → combo providers.json → 内置。
+    // 延迟到真正需要调用 agent 的子命令(ask/chat/serve)才解析:
+    // config/sessions/skills/lsp 不依赖 provider,冷环境(尚未配置任何
+    // provider)也能执行,便于用 `config path|init|import` 自救。
+    let resolve_cfg = || -> anyhow::Result<agent::AskConfig> {
+        let provider = providers::find_provider(&resolved.provider, &resolved.providers)?;
+        Ok(agent::AskConfig::from_resolved(&resolved, provider))
+    };
 
     match &cli.command {
         Command::Ask { question } => {
+            let cfg = resolve_cfg()?;
             agent::ask_with(&cfg, question).await?;
         }
         Command::Chat => {
+            let cfg = resolve_cfg()?;
             agent::chat_loop(&cfg).await?;
         }
         Command::Sessions { action } => match action {
@@ -179,6 +187,7 @@ async fn main() -> anyhow::Result<()> {
             SessionsAction::Rm { id } => db::rm_session(id)?,
         },
         Command::Serve { port, host, static_dir } => {
+            let cfg = resolve_cfg()?;
             serve::run(&cfg, host.clone(), *port, static_dir.clone()).await?;
         }
         Command::Config { action } => match action {

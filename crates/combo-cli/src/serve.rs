@@ -2872,6 +2872,7 @@ mod tests {
             Json(serde_json::from_value(v).unwrap())
         }
         // 隔离配置目录,避免读写真实 ~/.config/combo/combo-cli.toml
+        let _env = crate::paths::ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let prev = std::env::var_os("COMBO_CONFIG_DIR");
         std::env::set_var("COMBO_CONFIG_DIR", dir.path());

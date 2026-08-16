@@ -95,11 +95,11 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
 | Var | Meaning |
 |---|---|
 | `COMBO_IT_DIR` | E2E workspace directory (default `/tmp/combo-e2e`). |
-| `COMBO_DATA_DIR` | combo sqlite 数据目录(默认 `$XDG_DATA_HOME/combo`,macOS 无 XDG 时 `~/.local/share/combo`)。combo-cli 的 providers.json 也在此目录。 |
+| `COMBO_DATA_DIR` | combo 数据目录(默认与配置目录同为 `~/.config/combo`;macOS/Linux 一致,不再用 `~/.local/share/combo`)。combo.db、combo-cli.db、providers.json、logs 都在此目录;启动时自动把旧 `~/.local/share/combo` 的内容迁移过来。 |
 | `VITE_PROXY_URL` | Proxy base URL for browser mode (e.g. `http://127.0.0.1:18236`). combo-cli serve 默认监听 18236,被占用自动 +1;Tauri 模式取内嵌 serve 事件端口;连接失败时前端自动扫描本机 18236+ 端口匹配 combo-cli。 |
 | `COMBO_HOST` | serve 监听地址(默认 `127.0.0.1`)。域名部署时设 `0.0.0.0` 对外开放;命令行 `--host` 优先级更高。 |
 | `COMBO_CLI_BIN` | E2E 开关:设置后 Playwright spec 才运行(验证真实 agent 工作流)。 |
-| `COMBO_CONFIG_DIR` | combo-cli 配置文件目录(默认 `~/.config/combo`,文件 `combo-cli.toml`)。 |
+| `COMBO_CONFIG_DIR` | combo-cli 配置文件目录(默认 `~/.config/combo`,文件 `combo-cli.toml`)。未设 `COMBO_DATA_DIR` 时数据文件也落在此目录。 |
 | `COMBO_SKILLS_DIR` | 覆盖 combo 专属技能目录(默认 `~/.config/combo/skills`)。技能扫描共四个目录,项目级优先:项目 `.combo/skills`、项目 `.agents/skills`、combo 专属、通用 `~/.agents/skills`,同名 skill 靠前的路径优先。 |
 
 ## Architecture & data flow
@@ -124,7 +124,8 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   `MetaStore`. Frontend: `src/lib/api` wrappers +
   `stores/editorStore.ts` + `FileExplorer`/`EditorPane`.
 - **Sqlite 持久化** (`crates/combo-cli/src/store.rs`): combo 自有元数据落盘在
-  sqlite(默认 `~/.local/share/combo/combo.db`,`COMBO_DATA_DIR` 可覆盖)。
+  sqlite(默认 `~/.config/combo/combo.db`,与配置同目录,`COMBO_DATA_DIR` 可覆盖;
+  首次启动自动从旧 `~/.local/share/combo` 迁移,见 `paths.rs`)。
   表 `workspaces`(项目元数据,含可重命名的 `name`)与 `conversations`
   (会话的本地镜像)。`MetaStore` (`meta.rs`)是 sqlite-backed:
   `WorkspaceMeta.name` 创建时默认取目录 basename,`PATCH /v1/workspaces/{id}`
@@ -236,7 +237,7 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
    `ProviderInfo`/`ModelInfo`,字段:id/name/api_key/api_endpoint/type/
    default_large_model_id/default_small_model_id/models)。`--provider` 按 id
    解析,**查找顺序:配置文件内嵌 providers 数组(`config.rs` 的
-   `providers` 字段)→ `~/.local/share/combo/providers.json`
+   `providers` 字段)→ `~/.config/combo/providers.json`
    (`providers.rs::load_combo_providers`,`COMBO_DATA_DIR` 可覆盖)→ 内置
    定义(`providers.rs::builtin_providers`)**,支持 40 个 provider
    (opencode-zen/opencode-go/zai/deepseek/xai/zhipu/…)。`api_key`/`api_endpoint`
@@ -250,7 +251,7 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
    或 `combo-cli config import` 一键导入到 combo 配置(provider=opencode)。
    子命令:
    `ask`(单轮流式)、`chat`(交互多轮流式,历史
-   持久化 `COMBO_DATA_DIR`/`XDG_DATA_HOME/combo/combo-cli.db`,表
+   持久化 `COMBO_DATA_DIR`/`~/.config/combo/combo-cli.db`,表
    `cli_conversations`/`cli_messages` 与 serve 的表隔离)、`sessions list|show|rm`、
    `serve`(进程守护,stdout 输出 `COMBO_CLI_PORT=` 供外部脚本解析;
    `GET /v1/health` + `POST /v1/control` 优雅关闭 + **rune 兼容协议**:
@@ -294,7 +295,7 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
    的 disabled_skills 落 sqlite `workspace_config` 表,`run_agent_ws` 运行时
    合并全局禁用后经 `AskConfig::with_disabled_skills` 重建 preamble)。
    provider 查找顺序:`config.providers` map →
-   `~/.local/share/combo/providers.json` → 内置;配置未写
+   `~/.config/combo/providers.json` → 内置;配置未写
    `default_large_model_id` 时从 combo providers.json 合并默认模型。
 
 1. `npm run tauri dev` (README) is wrong as-is — no tauri npm script/CLI installed.

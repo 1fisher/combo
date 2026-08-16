@@ -13,6 +13,7 @@ pub mod host;
 pub mod lsp;
 pub mod mcp;
 pub mod meta;
+pub mod paths;
 pub mod providers;
 pub mod question;
 pub mod relay;

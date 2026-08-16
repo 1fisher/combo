@@ -35,18 +35,10 @@ impl BackendType {
     }
 }
 
-/// 默认数据库路径:`COMBO_DATA_DIR` 或 `XDG_DATA_HOME/combo/combo.db`。
+/// 默认数据库路径:`COMBO_DATA_DIR` 或统一目录 `~/.config/combo/combo.db`
+/// (见 `paths::default_data_dir`)。
 pub fn default_db_path() -> PathBuf {
-    if let Ok(dir) = std::env::var("COMBO_DATA_DIR") {
-        return PathBuf::from(dir).join("combo.db");
-    }
-    let base = std::env::var("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-            PathBuf::from(home).join(".local/share")
-        });
-    base.join("combo").join("combo.db")
+    crate::paths::default_data_dir().join("combo.db")
 }
 
 /// conversation 元数据(rune session 的镜像)。

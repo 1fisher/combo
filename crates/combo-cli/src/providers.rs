@@ -1,6 +1,6 @@
 //! provider 结构为 JSON 数组格式(每个元素含 id/name/api_key 等)。
 //!
-//! combo 的 `~/.local/share/combo/providers.json` 是 JSON 数组,每个元素:
+//! combo 的 `~/.config/combo/providers.json` 是 JSON 数组,每个元素:
 //! `{ id, name, api_key, api_endpoint, type, default_large_model_id,
 //!    default_small_model_id, models: [{ id, name, ... }] }`。
 //! 本模块定义兼容的 `ProviderInfo`/`ModelInfo`,并保留内置 provider 快捷方式。
@@ -304,18 +304,9 @@ pub fn load_combo_providers() -> Result<Vec<ProviderInfo>> {
     Ok(provs)
 }
 
-/// combo providers.json 路径(与 opencode 一致的 data 目录规则)。
+/// combo providers.json 路径(统一目录 `~/.config/combo`,见 `paths::default_data_dir`)。
 pub fn combo_providers_path() -> std::path::PathBuf {
-    if let Ok(dir) = std::env::var("COMBO_DATA_DIR") {
-        return std::path::PathBuf::from(dir).join("providers.json");
-    }
-    let base = std::env::var("XDG_DATA_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-            std::path::PathBuf::from(home).join(".local/share")
-        });
-    base.join("combo").join("providers.json")
+    crate::paths::default_data_dir().join("providers.json")
 }
 
 /// 本地模型缓存条目:仅 id + 模型列表,不回存 key 等敏感字段。
@@ -662,6 +653,7 @@ mod tests {
     #[test]
     fn cached_models_roundtrip_upserts_by_id() {
         // 用临时数据目录隔离,避免写真实 providers.json 同级文件
+        let _env = crate::paths::ENV_LOCK.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let prev = std::env::var_os("COMBO_DATA_DIR");
         std::env::set_var("COMBO_DATA_DIR", dir.path());

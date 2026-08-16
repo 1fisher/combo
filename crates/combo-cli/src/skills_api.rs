@@ -42,14 +42,12 @@ fn skills_dirs(workspace_root: Option<&Path>) -> Vec<PathBuf> {
             dirs.push(PathBuf::from("./.agents/skills"));
         }
     }
-    // combo 专属目录(支持 COMBO_SKILLS_DIR 覆盖)
+    // combo 专属目录(支持 COMBO_SKILLS_DIR 覆盖;默认随统一配置目录
+    // `~/.config/combo/skills`,COMBO_CONFIG_DIR 同样生效)
     if let Ok(dir) = std::env::var("COMBO_SKILLS_DIR") {
         dirs.push(PathBuf::from(dir));
     } else {
-        let config_base = std::env::var("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(&home).join(".config"));
-        dirs.push(config_base.join("combo").join("skills"));
+        dirs.push(crate::paths::default_config_dir().join("skills"));
     }
     // 通用技能目录(所有 agent 共享)
     dirs.push(PathBuf::from(&home).join(".agents").join("skills"));

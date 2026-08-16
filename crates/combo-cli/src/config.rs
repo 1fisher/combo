@@ -131,11 +131,7 @@ pub struct LspServerConfig {
 /// 配置文件路径。优先级:`COMBO_CONFIG_DIR` > `~/.config`。
 /// 默认固定为 `~/.config/combo/combo-cli.toml`(不走 XDG_CONFIG_HOME)。
 pub fn default_config_path() -> PathBuf {
-    if let Ok(dir) = std::env::var("COMBO_CONFIG_DIR") {
-        return PathBuf::from(dir).join("combo-cli.toml");
-    }
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join(".config").join("combo").join("combo-cli.toml")
+    crate::paths::default_config_dir().join("combo-cli.toml")
 }
 
 /// 加载配置文件同目录下的 `.env` 到进程环境,供 `$ENV_VAR` 形式的
@@ -254,7 +250,8 @@ fn expand_vars(s: &str) -> String {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppConfig {
-    /// 默认提供商 id(如 openai / anthropic / deepseek / opencode-zen)
+    /// 默认提供商 id(如 opencode / deepseek / zhipu / openrouter);
+    /// 未设置时回退内置 opencode(zen,免 key 可从 opencode auth.json 自动导入)
     pub provider: Option<String>,
     /// 默认模型名(未设置时用 provider 的 default_large_model_id)
     pub model: Option<String>,
@@ -316,11 +313,12 @@ impl AppConfig {
         cli_mcp_command: Option<&str>,
         cli_mcp_url: Option<&str>,
     ) -> ResolvedConfig {
-        // 默认 provider 也参考 models.large(若配置了 provider 引用)
+        // 默认 provider 也参考 models.large(若配置了 provider 引用);
+        // 兜底取内置 opencode(zen)——openai 不在内置列表,冷环境会解析失败
         let provider = cli_provider
             .or(self.provider.as_deref())
             .or_else(|| self.models.large.as_ref().and_then(|m| m.provider.as_deref()))
-            .unwrap_or("openai")
+            .unwrap_or("opencode")
             .to_string();
         // 默认模型:CLI > 配置 model > models.large.model > provider 默认
         let model = cli_model
@@ -715,8 +713,9 @@ pub fn write_default(path: &PathBuf, overwrite: bool) -> Result<()> {
     let template = r#"# combo-cli 配置文件(自动生成)
 # 优先级:命令行参数 > 本文件 > 内置默认值
 
-# 默认提供商 id(openai / anthropic / deepseek / opencode-zen / ...)
-# provider = "openai"
+# 默认提供商 id(opencode / deepseek / zhipu / openrouter / ...);
+# 未设置时默认用内置 opencode(zen)
+# provider = "opencode"
 
 # 默认模型名(留空则按提供商取默认,或参考 [models])
 # model = "gpt-4o"
@@ -730,7 +729,7 @@ pub fn write_default(path: &PathBuf, overwrite: bool) -> Result<()> {
 # ========== 多 API key 配置 ==========
 # 每个 provider 一个表,key = provider id;api_key 可为明文或 $ENV_VAR。
 # 未在此定义的 provider 会依次回退到 combo providers.json
-# (~/.local/share/combo/providers.json)与内置定义。
+# (~/.config/combo/providers.json)与内置定义。
 # 提示:同目录的 .env 文件会在启动时加载到环境变量,建议把
 # DEEPSEEK_API_KEY 等敏感值放 .env(KEY=value,一行一个),
 # 这里用 $DEEPSEEK_API_KEY 引用即可。
@@ -956,7 +955,14 @@ mod tests {
     fn resolve_falls_back_to_defaults() {
         let cfg = AppConfig::default();
         let r = cfg.resolve(None, None, None, None, None, None);
-        assert_eq!(r.provider, "openai");
+        assert_eq!(r.provider, "opencode");
+        // 默认 provider 必须能被 find_provider 解析(内置列表包含 opencode),
+        // 否则冷环境任何子命令都会报「未知提供商」
+        let default_provider = r.provider.clone();
+        assert!(
+            crate::providers::find_provider(&default_provider, &r.providers).is_ok(),
+            "默认 provider {default_provider} 应存在于内置列表"
+        );
         assert!(r.model.is_none());
         assert_eq!(r.preamble, "你是 combo 内置的智能助手。");
         assert!(r.tools);
