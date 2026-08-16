@@ -516,7 +516,11 @@ async fn run_ripgrep(
     context: usize,
     max_results: usize,
 ) -> anyhow::Result<Option<String>> {
-    let mut cmd = Command::new("rg");
+    // 先解析 rg(PATH + 常见安装目录,GUI 进程 PATH 不含 homebrew 也能找到)
+    let Some(rg) = crate::binpath::resolve_rg() else {
+        return Ok(None);
+    };
+    let mut cmd = Command::new(rg);
     cmd.current_dir(cwd)
         .arg("--line-number")
         .arg("--no-heading")
@@ -1733,10 +1737,9 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn run_ripgrep_returns_none_when_not_installed() {
-        // 通过覆盖 PATH 为空来模拟 rg 不存在(如果系统装了 rg 也能测到 None)
-        // 注意:此测试仅验证 NotFound → None 的逻辑路径
-        // 如果 rg 恰好在测试环境可用且 PATH 不为空,此测试会被跳过(结果非 None)
-        let has_rg = which::which("rg").is_ok();
+        // 仅当系统完全找不到 rg(PATH 与常见安装目录均无)时才验证 None 路径;
+        // 装了 rg 的环境跳过(结果非 None)。
+        let has_rg = crate::binpath::resolve_rg().is_some();
         if has_rg {
             return; // 系统有 rg,跳过此测试
         }
@@ -1759,7 +1762,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn run_ripgrep_searches_files() {
-        if which::which("rg").is_err() {
+        if crate::binpath::resolve_rg().is_none() {
             eprintln!("跳过:系统未安装 rg");
             return;
         }
@@ -1792,7 +1795,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn run_ripgrep_literal_search() {
-        if which::which("rg").is_err() {
+        if crate::binpath::resolve_rg().is_none() {
             eprintln!("跳过:系统未安装 rg");
             return;
         }
@@ -1822,7 +1825,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn run_ripgrep_case_insensitive() {
-        if which::which("rg").is_err() {
+        if crate::binpath::resolve_rg().is_none() {
             eprintln!("跳过:系统未安装 rg");
             return;
         }
@@ -1852,7 +1855,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn run_ripgrep_include_glob() {
-        if which::which("rg").is_err() {
+        if crate::binpath::resolve_rg().is_none() {
             eprintln!("跳过:系统未安装 rg");
             return;
         }
@@ -1883,7 +1886,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn run_ripgrep_context_lines() {
-        if which::which("rg").is_err() {
+        if crate::binpath::resolve_rg().is_none() {
             eprintln!("跳过:系统未安装 rg");
             return;
         }
@@ -1913,7 +1916,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn run_ripgrep_no_match() {
-        if which::which("rg").is_err() {
+        if crate::binpath::resolve_rg().is_none() {
             eprintln!("跳过:系统未安装 rg");
             return;
         }
@@ -1942,7 +1945,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn run_ripgrep_invalid_regex_returns_error() {
-        if which::which("rg").is_err() {
+        if crate::binpath::resolve_rg().is_none() {
             eprintln!("跳过:系统未安装 rg");
             return;
         }

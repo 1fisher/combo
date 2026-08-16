@@ -5,6 +5,7 @@ pub mod agent;
 pub mod agents_md;
 pub mod auth;
 pub mod automation;
+pub mod binpath;
 pub mod compact;
 pub mod config;
 pub mod db;

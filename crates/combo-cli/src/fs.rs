@@ -423,7 +423,11 @@ async fn run_rg_content_search(
     literal: bool,
     max_results: usize,
 ) -> Result<Vec<Value>, ()> {
-    let mut cmd = TokioCommand::new("rg");
+    // 先解析 rg(PATH + 常见安装目录,GUI 进程 PATH 不含 homebrew 也能找到)
+    let Some(rg) = crate::binpath::resolve_rg() else {
+        return Err(());
+    };
+    let mut cmd = TokioCommand::new(rg);
     cmd.current_dir(search_dir)
         .arg("--json")
         .arg("--no-heading")
