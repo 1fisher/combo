@@ -166,28 +166,15 @@ export function McpPanel({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[80vh] flex-col gap-0 p-0 sm:max-w-lg">
         <DialogHeader className="border-b px-4 py-3">
-          <div className="flex items-center justify-between">
-            <DialogTitle className="flex items-center gap-2">
-              <Boxes className="size-4 text-brand" />
-              MCP 工具
-            </DialogTitle>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => {
-                setShowAdd((v) => !v);
-                resetForm();
-              }}
-            >
-              <Plus className="size-3.5" />
-              {showAdd ? '收起' : '添加'}
-            </Button>
-          </div>
+          <DialogTitle className="flex items-center gap-2">
+            <Boxes className="size-4 text-brand" />
+            MCP 工具
+          </DialogTitle>
         </DialogHeader>
 
-        {/* 搜索栏 */}
-        <div className="border-b px-4 py-2">
-          <div className="flex items-center gap-2 rounded-lg bg-surface-hover px-2.5 py-1.5">
+        {/* 搜索栏 + 添加/收起按钮 */}
+        <div className="flex items-center gap-2 border-b px-4 py-2">
+          <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg bg-surface-hover px-2.5 py-1.5">
             <Search className="size-3.5 shrink-0 text-foreground-subtlest" />
             <input
               value={filter}
@@ -196,6 +183,18 @@ export function McpPanel({
               className="w-full bg-transparent text-[13px] outline-none placeholder:text-foreground-subtlest"
             />
           </div>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="shrink-0"
+            onClick={() => {
+              setShowAdd((v) => !v);
+              resetForm();
+            }}
+          >
+            <Plus className="size-3.5" />
+            {showAdd ? '收起' : '添加'}
+          </Button>
         </div>
 
         {/* 新增表单 */}
@@ -277,7 +276,7 @@ export function McpPanel({
           {!isLoading && filtered.length === 0 && (
             <div className="px-2.5 py-4 text-center text-[13px] text-foreground-subtle">
               {servers?.length === 0
-                ? '还没有 MCP server,点击右上角「添加」配置一个。'
+                ? '还没有 MCP server,点击「添加」配置一个。'
                 : '没有匹配的 MCP server'}
             </div>
           )}
