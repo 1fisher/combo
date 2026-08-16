@@ -17,7 +17,7 @@ export const LABEL_CLS = 'mb-1.5 block text-[13px] font-medium text-foreground-s
 /** 视图外层:占满高度 + 独立滚动区 */
 export function ViewScroll({ children }: { children: ReactNode }) {
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
+    <div className="flex h-full w-full min-h-0 flex-col bg-background">
       <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
     </div>
   );
