@@ -154,6 +154,43 @@ describe('Composer 模型选择', () => {
     expect(sel).toEqual({ model: 'same-model', provider: 'opencode' });
   });
 
+  it('可从最近使用中删除单个条目,不影响当前选中模型', async () => {
+    useAgentStore.setState({
+      recentModels: [
+        { model: 'same-model', provider: 'opencode' },
+        { model: 'same-model', provider: 'deepseek' },
+      ],
+    });
+    const user = userEvent.setup();
+    renderComposer();
+    await user.click(screen.getByRole('button', { name: '切换模型' }));
+    expect(screen.getByText('最近使用')).toBeTruthy();
+
+    // 删除 opencode 条目:同名模型靠 provider 区分,deepseek 条目保留
+    await user.click(
+      screen.getByRole('button', { name: '从最近使用中移除 same-model(OpenCode Zen)' })
+    );
+    expect(useAgentStore.getState().recentModels).toEqual([
+      { model: 'same-model', provider: 'deepseek' },
+    ]);
+    expect(screen.getByText('最近使用')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'same-model DeepSeek' })).toBeTruthy();
+
+    // 删除最后一条:分区整体隐藏;菜单保持打开,分组列表不受影响
+    await user.click(
+      screen.getByRole('button', { name: '从最近使用中移除 same-model(DeepSeek)' })
+    );
+    expect(useAgentStore.getState().recentModels).toEqual([]);
+    expect(screen.queryByText('最近使用')).toBeNull();
+    expect(screen.getByText('DeepSeek')).toBeTruthy();
+
+    // 删除操作不触发模型切换,选中态不变
+    expect(useAgentStore.getState().modelSelections['ws-1']).toEqual({
+      model: 'same-model',
+      provider: 'deepseek',
+    });
+  });
+
   it('搜索时「最近使用」分区随关键词过滤,无匹配则整体隐藏', async () => {
     useAgentStore.setState({
       recentModels: [{ model: 'same-model', provider: 'opencode' }],

@@ -319,4 +319,22 @@ describe('agentStore 最近使用模型', () => {
     };
     expect(saved.state.recentModels).toEqual([{ model: 'glm-5', provider: 'zhipu' }]);
   });
+
+  it('removeRecentModel 只删除匹配 provider+model 的单条', () => {
+    useAgentStore.setState({
+      recentModels: [
+        { model: 'a', provider: 'p2' },
+        { model: 'a', provider: 'p1' },
+        { model: 'b', provider: 'p1' },
+      ],
+    });
+    useAgentStore.getState().removeRecentModel({ model: 'a', provider: 'p1' });
+    expect(useAgentStore.getState().recentModels).toEqual([
+      { model: 'a', provider: 'p2' },
+      { model: 'b', provider: 'p1' },
+    ]);
+    // 删除不存在的条目无副作用
+    useAgentStore.getState().removeRecentModel({ model: 'zzz', provider: 'p9' });
+    expect(useAgentStore.getState().recentModels).toHaveLength(2);
+  });
 });

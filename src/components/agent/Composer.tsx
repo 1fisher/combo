@@ -808,26 +808,45 @@ export function Composer({
                                   const isSelected =
                                     m.id === currentModelId && m.providerId === currentProviderId;
                                   return (
-                                    <button
+                                    // 行容器:主体是「切换模型」按钮,右侧附「从最近使用移除」按钮。
+                                    // 删除按钮悬停行时显示(触屏无 hover,保持常驻),点击不关闭菜单可连续删除
+                                    <div
                                       key={`recent-${m.providerId}/${m.id}`}
-                                      type="button"
-                                      onClick={() => handleModelChange(m.id, m.providerId)}
                                       className={cn(
-                                        'flex items-center gap-2 hover:bg-surface-hover px-2 py-1.5 rounded-lg w-full text-[13px] text-left transition-colors',
+                                        'group/recent flex items-center gap-1 rounded-lg transition-colors hover:bg-surface-hover',
                                         isSelected && 'bg-surface-hover'
                                       )}
                                     >
-                                      <span className="flex-1 min-w-0 font-medium truncate">
-                                        {m.name || m.id}
-                                      </span>
-                                      {/* 最近使用跨 provider,补充展示 provider 名便于区分同名模型 */}
-                                      <span className="max-w-24 text-[11px] text-foreground-subtlest truncate shrink-0">
-                                        {m.providerName}
-                                      </span>
-                                      {isSelected && (
-                                        <Check className="size-3.5 text-brand shrink-0" />
-                                      )}
-                                    </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleModelChange(m.id, m.providerId)}
+                                        className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors"
+                                      >
+                                        <span className="min-w-0 flex-1 truncate font-medium">
+                                          {m.name || m.id}
+                                        </span>
+                                        {/* 最近使用跨 provider,补充展示 provider 名便于区分同名模型 */}
+                                        <span className="max-w-24 shrink-0 truncate text-[11px] text-foreground-subtlest">
+                                          {m.providerName}
+                                        </span>
+                                        {isSelected && (
+                                          <Check className="size-3.5 shrink-0 text-brand" />
+                                        )}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          useAgentStore
+                                            .getState()
+                                            .removeRecentModel({ model: m.id, provider: m.providerId })
+                                        }
+                                        aria-label={`从最近使用中移除 ${m.name || m.id}(${m.providerName})`}
+                                        title="从最近使用中移除"
+                                        className="mr-1 shrink-0 rounded-md p-1 text-foreground-subtlest opacity-60 transition-all hover:bg-surface hover:text-foreground focus-visible:opacity-100 md:opacity-0 md:group-hover/recent:opacity-100 md:focus-visible:opacity-100"
+                                      >
+                                        <X className="size-3" />
+                                      </button>
+                                    </div>
                                   );
                                 })}
                                 <div className="mx-2 mt-1 border-border border-t" />

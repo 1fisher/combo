@@ -85,6 +85,8 @@ interface AgentState {
   /** 最近使用的模型(全局,最近在前,最多 RECENT_MODELS_MAX 个),跨重启保留 */
   recentModels: RecentModel[];
   pushRecentModel: (entry: RecentModel) => void;
+  /** 从最近使用列表中删除单条(provider+model 唯一定位) */
+  removeRecentModel: (entry: RecentModel) => void;
 
   bySession: Record<string, SessionRuntime>;
   permissionQueue: Api.PermissionRequest[];
@@ -167,6 +169,12 @@ export const useAgentStore = create<AgentState>()(
       );
       return { recentModels: [entry, ...rest].slice(0, RECENT_MODELS_MAX) };
     }),
+  removeRecentModel: (entry) =>
+    set((st) => ({
+      recentModels: st.recentModels.filter(
+        (m) => !(m.model === entry.model && m.provider === entry.provider)
+      ),
+    })),
   activeSessionId: null,
   setActiveSessionId: (id) =>
     set((st) => {
