@@ -188,6 +188,13 @@ export function HeroParticles({ className }: { className?: string }) {
     let disposed = false;
     let scene: Scene | null = null;
     let last = 0;
+    // 离屏 band:光带先画在这,用字形 mask 裁剪(destination-in)后再加回主画布;
+    // band 与主画布同像素尺寸,叠加时 1:1 对应,文字外保持透明
+    let dpr = 1;
+    let band: HTMLCanvasElement | null = null;
+    let bandCtx: CanvasRenderingContext2D | null = null;
+    /** 字形 natural 宽度(与 sampleTargets 同字体),textLength=400 等效缩放用 */
+    let wordNatural = 1;
 
     const drawParticles = (t: number) => {
       if (!scene) return;
@@ -210,20 +217,37 @@ export function HeroParticles({ className }: { className?: string }) {
       const sin = Math.sin(TILT_RAD);
       const bandW = Math.max(70, Math.min(150, w * 0.11));
 
-      // 光带本体(斜向品牌色渐变,与字同角度,加法混合下扫亮线框字)
-      if (sweepX !== Number.MAX_VALUE) {
-        ctx.save();
-        ctx.translate(w / 2, h * 0.54);
-        ctx.translate(0, ORIGIN_DY * scene.scale);
-        ctx.rotate(TILT_RAD);
-        ctx.translate(0, -ORIGIN_DY * scene.scale);
-        const g = ctx.createLinearGradient(sweepX - bandW / 2, 0, sweepX + bandW / 2, 0);
+      // 光带本体:先在离屏 band 上以字姿态画斜向渐变光带,再用字形作 mask
+      // (destination-in)裁掉文字外的光,最后 lighter 加回主画布 —— 流光只沿文字显示
+      if (sweepX !== Number.MAX_VALUE && band && bandCtx) {
+        const b = bandCtx;
+        const s = scene.scale;
+        const fs = 112 * s;
+        b.setTransform(dpr, 0, 0, dpr, 0, 0);
+        b.clearRect(0, 0, w, h);
+        b.translate(w / 2, h * 0.54);
+        b.translate(0, ORIGIN_DY * s);
+        b.rotate(TILT_RAD);
+        b.translate(0, -ORIGIN_DY * s);
+        const g = b.createLinearGradient(sweepX - bandW / 2, 0, sweepX + bandW / 2, 0);
         g.addColorStop(0, `rgba(${br},${bg},${bb},0)`);
         g.addColorStop(0.5, `rgba(${br},${bg},${bb},0.16)`);
         g.addColorStop(1, `rgba(${br},${bg},${bb},0)`);
-        ctx.fillStyle = g;
-        ctx.fillRect(sweepX - bandW / 2, -h, bandW, h * 2);
-        ctx.restore();
+        b.fillStyle = g;
+        b.fillRect(sweepX - bandW / 2, -h, bandW, h * 2);
+        // 字形 mask:与采样完全一致的姿态绘制填充字,destination-in 只保留笔画内的光
+        b.globalCompositeOperation = 'destination-in';
+        b.font = `italic 900 ${fs}px 'Geist Variable', sans-serif`;
+        b.textAlign = 'center';
+        b.textBaseline = 'alphabetic';
+        b.scale((WORD_LEN * s) / wordNatural, 1);
+        b.fillStyle = '#fff';
+        b.fillText(WORD, 0, BASELINE * s);
+        b.globalCompositeOperation = 'source-over';
+        // 加法叠加回主画布:文字外区域全透明,不会产生文字外的光
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.drawImage(band, 0, 0, w, h);
+        ctx.globalCompositeOperation = 'source-over';
       }
 
       // 粒子:白色星尘底 + 流光处的品牌色点亮(颜色随 glow 连续插值)
@@ -281,11 +305,20 @@ export function HeroParticles({ className }: { className?: string }) {
       const w = canvas.clientWidth;
       const h = canvas.clientHeight;
       if (w < 40 || h < 40) return;
-      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      dpr = Math.min(2, window.devicePixelRatio || 1);
       canvas.width = Math.ceil(w * dpr);
       canvas.height = Math.ceil(h * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       scene = buildParticles(w, h, dpr);
+      // 重建离屏 band(与主画布同像素尺寸)
+      band = document.createElement('canvas');
+      band.width = canvas.width;
+      band.height = canvas.height;
+      bandCtx = band.getContext('2d');
+      // 预计算字形 natural 宽度(与 sampleTargets 相同字体),供 mask 的 textLength 等效缩放
+      const fs = 112 * (w / VB_W);
+      ctx.font = `italic 900 ${fs}px 'Geist Variable', sans-serif`;
+      wordNatural = ctx.measureText(WORD).width || 1;
       if (reduced) {
         // 静态帧:粒子直接落位,只画一次呼吸相位各异的星尘
         for (const p of scene.particles) {
