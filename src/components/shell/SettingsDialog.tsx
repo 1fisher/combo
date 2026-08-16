@@ -39,7 +39,7 @@ interface SettingsDialogProps {
  * 设置对话框:
  * 1. 模型 Provider 配置 — 为各 provider 填入 API Key 并拉取可用模型。
  * 2. 特效与音效 — Liquid 流体特效 / Combo 连击气泡音。
- * 3. 系统通知 — 任务结束 / 需要交互时发送系统通知(可选同时播放提示音)。
+ * 3. 系统通知 — 免打扰 / 任务结束 / 需要交互时发送系统通知(可选同时播放提示音)。
  * 4. 外部访问域名 — 域名部署时填写公开访问地址。
  * 5. 代理地址 — 前后端分离部署时指定 combo-cli serve 服务地址。
  */
@@ -56,6 +56,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const setLiquidEnabled = useUIPreferences((s) => s.setLiquidEnabled);
   const comboSoundEnabled = useUIPreferences((s) => s.comboSoundEnabled);
   const setComboSoundEnabled = useUIPreferences((s) => s.setComboSoundEnabled);
+  const dndEnabled = useUIPreferences((s) => s.dndEnabled);
+  const setDndEnabled = useUIPreferences((s) => s.setDndEnabled);
   const notifyRunComplete = useUIPreferences((s) => s.notifyRunComplete);
   const setNotifyRunComplete = useUIPreferences((s) => s.setNotifyRunComplete);
   const notifyInteraction = useUIPreferences((s) => s.notifyInteraction);
@@ -154,40 +156,86 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
           <div className="flex flex-col gap-2">
             <div className="flex items-center justify-between">
               <div className="flex flex-col gap-0.5">
-                <label className="text-[13px] font-medium text-foreground">任务结束通知</label>
+                <label className="text-[13px] font-medium text-foreground">免打扰模式</label>
+                <span className="text-[12px] text-foreground-subtle">
+                  开启后暂停任务结束与交互请求的全部通知及提示音,下方通知开关暂不生效
+                </span>
+              </div>
+              <Switch
+                checked={dndEnabled}
+                onCheckedChange={setDndEnabled}
+                aria-label="免打扰模式"
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-0.5">
+                <label
+                  className={cn(
+                    'text-[13px] font-medium',
+                    dndEnabled ? 'text-foreground-subtle' : 'text-foreground',
+                  )}
+                >
+                  任务结束通知
+                </label>
                 <span className="text-[12px] text-foreground-subtle">
                   任务运行结束时发送系统通知
+                  {dndEnabled && (
+                    <span className="text-amber-500">(免打扰模式开启期间不生效)</span>
+                  )}
                 </span>
               </div>
               <Switch
                 checked={notifyRunComplete}
                 onCheckedChange={(v) => void toggleNotify(v, setNotifyRunComplete)}
+                disabled={dndEnabled}
                 aria-label="任务结束通知"
               />
             </div>
             <div className="flex items-center justify-between">
               <div className="flex flex-col gap-0.5">
-                <label className="text-[13px] font-medium text-foreground">交互请求通知</label>
+                <label
+                  className={cn(
+                    'text-[13px] font-medium',
+                    dndEnabled ? 'text-foreground-subtle' : 'text-foreground',
+                  )}
+                >
+                  交互请求通知
+                </label>
                 <span className="text-[12px] text-foreground-subtle">
                   需要确认工具或回答问题时发送系统通知
+                  {dndEnabled && (
+                    <span className="text-amber-500">(免打扰模式开启期间不生效)</span>
+                  )}
                 </span>
               </div>
               <Switch
                 checked={notifyInteraction}
                 onCheckedChange={(v) => void toggleNotify(v, setNotifyInteraction)}
+                disabled={dndEnabled}
                 aria-label="交互请求通知"
               />
             </div>
             <div className="flex items-center justify-between">
               <div className="flex flex-col gap-0.5">
-                <label className="text-[13px] font-medium text-foreground">通知音效</label>
+                <label
+                  className={cn(
+                    'text-[13px] font-medium',
+                    dndEnabled ? 'text-foreground-subtle' : 'text-foreground',
+                  )}
+                >
+                  通知音效
+                </label>
                 <span className="text-[12px] text-foreground-subtle">
                   发送系统通知时同时播放提示音(任务完成与交互提醒音色不同)
+                  {dndEnabled && (
+                    <span className="text-amber-500">(免打扰模式开启期间不生效)</span>
+                  )}
                 </span>
               </div>
               <Switch
                 checked={notifySoundEnabled}
                 onCheckedChange={setNotifySoundEnabled}
+                disabled={dndEnabled}
                 aria-label="通知音效"
               />
             </div>

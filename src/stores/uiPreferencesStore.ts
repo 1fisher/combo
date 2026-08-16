@@ -8,6 +8,9 @@ interface UIPreferencesState {
   /** Combo 连击特效音效(默认开启):连击弹出/增长时播放气泡音 */
   comboSoundEnabled: boolean;
   setComboSoundEnabled: (enabled: boolean) => void;
+  /** 免打扰模式(默认关闭):开启后暂停任务结束/交互请求的全部通知与提示音 */
+  dndEnabled: boolean;
+  setDndEnabled: (enabled: boolean) => void;
   /** 任务结束通知(默认开启) */
   notifyRunComplete: boolean;
   setNotifyRunComplete: (enabled: boolean) => void;
@@ -26,6 +29,8 @@ export const useUIPreferences = create<UIPreferencesState>()(
       setLiquidEnabled: (enabled) => set({ liquidEnabled: enabled }),
       comboSoundEnabled: true,
       setComboSoundEnabled: (enabled) => set({ comboSoundEnabled: enabled }),
+      dndEnabled: false,
+      setDndEnabled: (enabled) => set({ dndEnabled: enabled }),
       notifyRunComplete: true,
       setNotifyRunComplete: (enabled) => set({ notifyRunComplete: enabled }),
       notifyInteraction: true,

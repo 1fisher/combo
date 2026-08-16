@@ -42,6 +42,7 @@ describe('notify', () => {
       notifyRunComplete: true,
       notifyInteraction: true,
       notifySoundEnabled: true,
+      dndEnabled: false,
     });
     useAgentStore.setState({ activeSessionId: null, bySession: {} });
     vi.mocked(playNotifyDone).mockClear();
@@ -133,6 +134,16 @@ describe('notify', () => {
     useAgentStore.setState({ activeSessionId: 'other' });
     notifyRunComplete('s1');
     expect(created).toHaveLength(1);
+  });
+
+  it('免打扰模式开启时全部通知静音(优先级最高,失焦也不提醒)', () => {
+    useUIPreferences.setState({ dndEnabled: true });
+    notifyRunComplete('s1', undefined, '已完成');
+    notifyPermissionRequest({ session_id: 's1', tool_name: 'bash' });
+    notifyQuestionRequest({ session_id: 's1', questions: [{ question: '继续吗' }] });
+    expect(created).toHaveLength(0);
+    expect(playNotifyDone).not.toHaveBeenCalled();
+    expect(playNotifyAttention).not.toHaveBeenCalled();
   });
 
   it('权限确认与提问通知包含工具名/问题文本', () => {

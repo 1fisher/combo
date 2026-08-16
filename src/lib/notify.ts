@@ -9,8 +9,12 @@ import { playNotifyAttention, playNotifyDone } from './sfx';
  *
  * - 任务结束:agent 处理完成(run 收尾)即发送,窗口聚焦也通知 —
  *   任务完成是用户等待的确定性事件;不想被打扰可在设置中关闭。
+ * - 免打扰模式:设置中一键开启后,任务结束/交互请求的全部通知与提示音
+ *   静默(优先级最高),关闭时恢复上述各开关的提醒行为。
  * - 交互请求(确认/提问):保持免打扰 — 窗口聚焦且正看着该会话时不弹
  *   (弹窗就在眼前,通知反而多余),切走/看别的会话时才提醒。
+ *   焦点判定优先用 Tauri 原生窗口事件:macOS WKWebView 在应用切后台时
+ *   document.hasFocus() 仍可能返回 true,会把「切走」误判成「正在看」。
  * - 「通知音效」开启时同时播放提示音(音效独立于系统通知权限,
  *   权限被拒也能听到)。
  */
@@ -20,9 +24,45 @@ function truncate(text: string, max = 120): string {
   return clean.length > max ? `${clean.slice(0, max)}…` : clean;
 }
 
+/** Tauri 原生窗口焦点状态;null = 原生事件尚未就绪/不可用,退回 DOM 信号 */
+let nativeFocused: boolean | null = null;
+let nativeFocusInitStarted = false;
+
+/**
+ * 订阅 Tauri 原生窗口焦点事件。macOS WKWebView 在应用切到后台时
+ * document.hasFocus() 仍可能返回 true(visibilityState 也停在 visible),
+ * 免打扰逻辑会把「已切走」误判成「正看着当前会话」而吞掉交互通知;
+ * 原生 onFocusChanged 走 NSWindow key 状态,后台时可靠返回 false。
+ */
+function initNativeFocusTracking(): void {
+  if (nativeFocusInitStarted || typeof window === 'undefined' || !isTauri()) return;
+  nativeFocusInitStarted = true;
+  void (async () => {
+    try {
+      const { getCurrentWindow } = await import('@tauri-apps/api/window');
+      const win = getCurrentWindow();
+      // 先订阅再读初值:两步之间发生的焦点事件由回调兜住,不会被旧值覆盖
+      await win.onFocusChanged(({ payload }) => {
+        nativeFocused = payload;
+      });
+      nativeFocused = await win.isFocused();
+    } catch {
+      /* 原生事件不可用(非桌面/旧版本):保持 null,退回 document.hasFocus() */
+    }
+  })();
+}
+
+/** 窗口是否聚焦:优先 Tauri 原生事件,不可用时回退 document.hasFocus()(浏览器模式可靠) */
+function windowFocused(): boolean {
+  return nativeFocused !== null ? nativeFocused : document.hasFocus();
+}
+
+// 模块加载即订阅,避免首个交互事件早于异步订阅完成而踩回旧信号
+initNativeFocusTracking();
+
 /** 当前是否值得为该会话发交互通知:窗口未聚焦,或看的不是这个会话 */
 function sessionNeedsNotification(sessionId?: string | null): boolean {
-  if (typeof document !== 'undefined' && !document.hasFocus()) return true;
+  if (typeof document !== 'undefined' && !windowFocused()) return true;
   if (sessionId && sessionId !== useAgentStore.getState().activeSessionId) return true;
   return false;
 }
@@ -108,12 +148,18 @@ export function runCompleteSummary(sessionId?: string | null): string {
   return '';
 }
 
+/** 免打扰模式开启时全部通知静音(优先级高于各类开关) */
+function dndMuted(): boolean {
+  return useUIPreferences.getState().dndEnabled;
+}
+
 /** 任务结束(run 收尾)通知;error 非空表示运行出错,summary 为任务的精简完成情况 */
 export function notifyRunComplete(
   _sessionId?: string | null,
   error?: string,
   summary?: string
 ): void {
+  if (dndMuted()) return;
   if (!useUIPreferences.getState().notifyRunComplete) return;
   // 任务完成总是通知:即使窗口聚焦且正在查看该会话 — 用户在等这个结果。
   // (交互类通知仍做免打扰判断,见 notifyPermissionRequest/notifyQuestionRequest)
@@ -130,6 +176,7 @@ export function notifyPermissionRequest(p: {
   session_id: string;
   tool_name: string;
 }): void {
+  if (dndMuted()) return;
   if (!useUIPreferences.getState().notifyInteraction) return;
   if (!sessionNeedsNotification(p.session_id)) return;
   if (useUIPreferences.getState().notifySoundEnabled) playNotifyAttention();
@@ -141,6 +188,7 @@ export function notifyQuestionRequest(p: {
   session_id: string;
   questions?: { question?: string }[];
 }): void {
+  if (dndMuted()) return;
   if (!useUIPreferences.getState().notifyInteraction) return;
   if (!sessionNeedsNotification(p.session_id)) return;
   if (useUIPreferences.getState().notifySoundEnabled) playNotifyAttention();
