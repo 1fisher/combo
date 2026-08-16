@@ -255,6 +255,48 @@
     filter: drop-shadow(0 3px 0 rgba(0, 0, 0, 0.9))
       drop-shadow(0 0 26px hsl(var(--combo-hue) 90% 60% / 0.7));
   }
+
+  /* ---- 首屏空会话背景:Combo 描边卡通字(ChatEmptyState) ----
+     双层 SVG text 实现卡通空心描边:
+     - 外层:粗描边 + 圆角连接(stroke-linejoin/linecap: round)+ 零模糊硬投影,
+       贴纸/漫画感;内层:细描边勾边,形成描边层次;
+     - 字体沿用 Geist 900 斜体,与连击特效(.combo-pop)的拳皇风一脉相承;
+     - 颜色全部由主题 token 派生(--brand 与前景灰阶 color-mix),亮/暗主题自动
+       搭配:亮色下勾边偏深蓝、暗色下偏亮蓝,与背景保持对比又不过分抢眼;
+     - svg 承载轻微浮动 + 摆动(combo-hero-float),外层容器负责定位 translate,
+       互不冲突;prefers-reduced-motion 时静止。 */
+  .combo-hero-word {
+    font-family: var(--font-sans);
+    font-size: 112px;
+    font-style: italic;
+    font-weight: 900;
+    fill: none;
+    stroke-linejoin: round;
+    stroke-linecap: round;
+  }
+  .combo-hero-word-outer {
+    /* 外层粗描边:品牌色混弱前景,柔和低调 */
+    stroke: color-mix(in oklab, var(--brand) 55%, var(--foreground-subtlest));
+    stroke-width: 9;
+    opacity: 0.45;
+    /* 硬投影(零模糊)营造卡通贴纸感 */
+    filter: drop-shadow(0 5px 0 color-mix(in oklab, var(--brand) 16%, transparent));
+  }
+  .combo-hero-word-inner {
+    /* 内层细描边:品牌色混前景,亮色主题下偏深、暗色主题下偏亮,勾边清晰 */
+    stroke: color-mix(in oklab, var(--brand) 70%, var(--foreground));
+    stroke-width: 2.5;
+    opacity: 0.7;
+  }
+  .combo-hero-bg svg {
+    animation: combo-hero-float 7s ease-in-out infinite;
+    transform-origin: 50% 60%;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .combo-hero-bg svg {
+      animation: none;
+    }
+  }
 }
 @keyframes combo-pop-in {
   0%   { transform: scale(0.2) rotate(-8deg); opacity: 0; }
@@ -311,4 +353,11 @@
 @keyframes run-shimmer-sweep {
   0%   { transform: translateX(0) skewX(-16deg); }
   100% { transform: translateX(380%) skewX(-16deg); }
+}
+
+/* 首屏 Combo 描边卡通字:轻微上下浮动 + 摆动(±1.5% 位移、−2°~−0.6° 倾斜),
+   幅度刻意很小,活泼但不干扰前景问候语;transform-origin 偏下,摆动时重心稳 */
+@keyframes combo-hero-float {
+  0%, 100% { transform: translateY(-1.5%) rotate(-2deg); }
+  50%      { transform: translateY(1.5%) rotate(-0.6deg); }
 }

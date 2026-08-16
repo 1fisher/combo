@@ -31,25 +31,23 @@ export function ChatEmptyState({
 }) {
   return (
     <div className="flex flex-col justify-center items-center gap-6 px-4 py-10 min-h-full text-foreground">
-      {/* 问候语 + 装饰背景 */}
+      {/* 问候语 + 装饰背景(Combo 描边卡通字,样式与动画见 index.css .combo-hero-*) */}
       <div className="relative flex flex-col justify-center items-center gap-6 mb-10 sm:mb-8 w-full max-w-2xl">
         <div
           aria-hidden
-          className="top-1/2 left-1/2 absolute opacity-70 -mt-10 w-[min(72vw,25rem)] aspect-[5/4] text-foreground-subtlest -translate-x-1/2 -translate-y-1/2 pointer-events-none [mask-image:linear-gradient(to_bottom,black_0%,transparent_70%,transparent_100%)] [mask-repeat:no-repeat] [mask-size:100%_100%]"
+          className="combo-hero-bg top-1/2 left-1/2 absolute -mt-8 w-[min(88vw,27rem)] aspect-[46/19] -translate-x-1/2 -translate-y-1/2 pointer-events-none [mask-image:linear-gradient(to_bottom,black_0%,black_60%,transparent_95%,transparent_100%)] [mask-repeat:no-repeat] [mask-size:100%_100%]"
         >
           <svg
             aria-hidden
             className="w-full h-full"
-            width="400"
-            height="320"
-            viewBox="0 0 400 320"
+            viewBox="0 0 460 190"
             fill="none"
             xmlns="http://www.w3.org/2000/svg"
           >
-            <path
-              d="M398.97 0.5L147.576 319.5H1.03027L37.5996 273.081L120.167 169.603L120.171 169.598L215.342 47.5605L215.343 47.5615L252.424 0.5H398.97ZM264.544 273.271H372.527L336.082 319.498H189.886L202.642 303.307C217.584 284.34 240.398 273.271 264.544 273.271ZM209.164 0.5L202.786 8.58887C183.782 32.6885 154.782 46.752 124.091 46.752H25.9805L62.4268 0.5H209.164Z"
-              stroke="currentColor"
-            />
+            {/* 外层粗描边(圆角连接 + 硬投影,卡通贴纸感) */}
+            <text x="230" y="140" textAnchor="middle" className="combo-hero-word combo-hero-word-outer">Combo</text>
+            {/* 内层细描边勾边,与外层形成描边层次 */}
+            <text x="230" y="140" textAnchor="middle" className="combo-hero-word combo-hero-word-inner">Combo</text>
           </svg>
         </div>
         <p className="z-10 relative px-4 w-full font-medium max-md:text-xl text-3xl text-center">
