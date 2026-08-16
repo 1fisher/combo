@@ -168,7 +168,7 @@ export function SearchView({ onNavigate }: { onNavigate?: () => void }) {
   }, [activeIndex]);
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col bg-background">
+    <div className="relative flex h-full w-full min-h-0 flex-col bg-background">
       {/* hero 背景:仅首页(空查询)显示 */}
       {!searching && <HeroBackdrop />}
 
