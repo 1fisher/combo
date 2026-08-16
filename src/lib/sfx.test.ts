@@ -85,23 +85,33 @@ describe('sfx', () => {
     }).not.toThrow();
   });
 
-  it('playComboHit 合成低频闷咚 + 低通气声,combo 越高越饱满', async () => {
+  it('playComboHit 合成气泡音(主音上滑 + 二次谐波 + 破裂瞬态),combo 越高气泡越大越饱满', async () => {
     const { mod, ctx } = await loadSfxWithStub();
     mod.playComboHit(1);
     let c = ctx();
-    expect(c.createOscillator).toHaveBeenCalledTimes(1);
+    expect(c.createOscillator).toHaveBeenCalledTimes(2);
     expect(c.createBufferSource).toHaveBeenCalledTimes(1);
-    const thump = c.createOscillator.mock.results[0].value as FakeOscillatorNode;
-    expect(thump.type).toBe('sine');
-    expect(thump.frequency.setValueAtTime).toHaveBeenCalledWith(110.5, 0);
+    const blip = c.createOscillator.mock.results[0].value as FakeOscillatorNode;
+    expect(blip.type).toBe('sine');
+    // combo=1:小气泡,起始 ~418Hz,指数上滑到 ~783Hz(气泡上浮的「啵」)
+    expect(blip.frequency.setValueAtTime.mock.calls[0][0]).toBeCloseTo(418.2, 3);
+    expect(blip.frequency.exponentialRampToValueAtTime.mock.calls[0][0]).toBeCloseTo(782.6, 3);
+    // 二次谐波同步上滑(2 倍频),提供水润质感
+    const harm = c.createOscillator.mock.results[1].value as FakeOscillatorNode;
+    expect(harm.frequency.setValueAtTime.mock.calls[0][0]).toBeCloseTo(836.4, 3);
+    // 破裂瞬态:白噪声过带通
+    expect(c.createBiquadFilter).toHaveBeenCalledTimes(1);
+    const bp = c.createBiquadFilter.mock.results[0].value as FakeBiquadFilterNode;
+    expect(bp.type).toBe('bandpass');
 
     mod.playComboHit(100);
     c = ctx();
-    const thump100 = c.createOscillator.mock.results[1].value as FakeOscillatorNode;
-    // 100 连击 → 起跳 160Hz,更饱满但仍柔和(低频缓降 + 低通气声)
-    expect(thump100.frequency.setValueAtTime).toHaveBeenCalledWith(160, 0);
-    expect(thump100.start).toHaveBeenCalled();
-    expect(thump100.stop).toHaveBeenCalled();
+    const blip100 = c.createOscillator.mock.results[2].value as FakeOscillatorNode;
+    // 100 连击:大气泡,起始降至 240Hz、上滑终点升至 1040Hz,更饱满
+    expect(blip100.frequency.setValueAtTime).toHaveBeenCalledWith(240, 0);
+    expect(blip100.frequency.exponentialRampToValueAtTime.mock.calls[0][0]).toBeCloseTo(1040, 3);
+    expect(blip100.start).toHaveBeenCalled();
+    expect(blip100.stop).toHaveBeenCalled();
   });
 
   it('playNotifyDone 是双音上行(A5 → E6)', async () => {

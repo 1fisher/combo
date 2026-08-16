@@ -38,7 +38,7 @@ interface SettingsDialogProps {
 /**
  * 设置对话框:
  * 1. 模型 Provider 配置 — 为各 provider 填入 API Key 并拉取可用模型。
- * 2. 特效与音效 — Liquid 流体特效 / Combo 连击打击音。
+ * 2. 特效与音效 — Liquid 流体特效 / Combo 连击气泡音。
  * 3. 系统通知 — 任务结束 / 需要交互时发送系统通知(可选同时播放提示音)。
  * 4. 外部访问域名 — 域名部署时填写公开访问地址。
  * 5. 代理地址 — 前后端分离部署时指定 combo-cli serve 服务地址。
@@ -140,7 +140,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
             <div className="flex flex-col gap-0.5">
               <label className="text-[13px] font-medium text-foreground">Combo 特效音效</label>
               <span className="text-[12px] text-foreground-subtle">
-                连击特效弹出与增长时播放打击音,连击越高音色越烈
+                连击特效弹出与增长时播放气泡音,连击越高气泡越大越饱满
               </span>
             </div>
             <Switch

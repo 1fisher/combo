@@ -65,7 +65,7 @@ export function ComboOverlay({ combo }: { combo: number }) {
     // 出现/重新出现 → 放大弹出;已展示 → 保持放大态
     setPhase((p) => (p === 'hidden' || p === 'shrink' ? 'shown' : 'shown'));
     // 连续增长:整体倾斜摆动 + 数字自身膨胀(节流),不回缩;
-    // 打击音效与视觉摆动共用同一节流(600ms),连续高频更新不会变成机关枪
+    // 气泡音效与视觉摆动共用同一节流(600ms),连续高频更新不会连成一串水声
     const now = Date.now();
     if (now - lastBumpRef.current >= BUMP_THROTTLE_MS) {
       lastBumpRef.current = now;

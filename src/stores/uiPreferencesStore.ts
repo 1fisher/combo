@@ -5,7 +5,7 @@ interface UIPreferencesState {
   /** Liquid 流体特效开关(默认开启) */
   liquidEnabled: boolean;
   setLiquidEnabled: (enabled: boolean) => void;
-  /** Combo 连击特效音效(默认开启):连击弹出/增长时播放打击音 */
+  /** Combo 连击特效音效(默认开启):连击弹出/增长时播放气泡音 */
   comboSoundEnabled: boolean;
   setComboSoundEnabled: (enabled: boolean) => void;
   /** 任务结束通知(默认开启) */

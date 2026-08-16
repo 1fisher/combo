@@ -1,7 +1,8 @@
 /**
  * 音效:Web Audio 程序化合成,不依赖任何音频资源文件。
- * - playComboHit:连击打击音(柔和风)——低频圆润闷咚 + 低通白噪声气声,
- *   饱满度随 combo 数值(1→100)递增,与特效的绿→红渐变呼应;
+ * - playComboHit:连击气泡音——模拟水泡上浮的「啵」(正弦频率指数上滑,
+ *   Minnaert 气泡共振的经典配方)+ 二次谐波的水润感 + 极短带通噪声的
+ *   破裂瞬态;气泡随 combo 数值(1→100)变大变饱满,与特效的绿→红渐变呼应;
  * - playNotifyDone:任务完成提示音(双音上行,轻快);
  * - playNotifyAttention:需要交互的提醒音(双短音,略急促)。
  *
@@ -11,7 +12,7 @@
  */
 
 let ctx: AudioContext | null = null;
-/** 缓存的白噪声 buffer(打击音的脆响成分复用) */
+/** 缓存的白噪声 buffer(气泡破裂瞬态复用) */
 let noiseBuf: AudioBuffer | null = null;
 
 function audioCtx(): AudioContext | null {
@@ -74,7 +75,7 @@ function tone(
   o.stop(at + dur + 0.02);
 }
 
-/** 连击打击音(柔和):combo 越高越饱满,低频气声铺垫,不刺耳 */
+/** 连击气泡音:combo 越高气泡越大(起始更低)、越饱满,不刺耳 */
 export function playComboHit(combo: number): void {
   const c = audioCtx();
   if (!c) return;
@@ -82,34 +83,54 @@ export function playComboHit(combo: number): void {
     const t = c.currentTime;
     const out = masterOut(c, t);
     const k = Math.max(0, Math.min(100, combo)) / 100;
-    // 低频闷咚(soft thump):正弦缓降,起音放缓、音量收敛,圆润不炸
-    const thump = c.createOscillator();
-    const tg = c.createGain();
-    thump.type = 'sine';
-    thump.frequency.setValueAtTime(110 + k * 50, t);
-    thump.frequency.exponentialRampToValueAtTime(55, t + 0.2);
-    tg.gain.setValueAtTime(0.0001, t);
-    tg.gain.exponentialRampToValueAtTime(0.45 + 0.2 * k, t + 0.02);
-    tg.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
-    thump.connect(tg);
-    tg.connect(out);
-    thump.start(t);
-    thump.stop(t + 0.3);
-    // 气声垫(soft puff):白噪声过低通只留空气感,去掉了原来的高频脆响
+    // 气泡越大(combo 越高)起始频率越低、上滑终点越高、余韵略长
+    const f0 = 420 - k * 180; // combo=1 → ~418Hz 小气泡;100 → 240Hz 大气泡
+    const f1 = 780 + k * 260; // 上滑终点 ~783Hz → 1040Hz
+    const dur = 0.16 + k * 0.08;
+
+    // 主音(blub):正弦指数上滑——气泡上浮时体积胀大、共振频率升高,即「啵」
+    const blip = c.createOscillator();
+    const bg = c.createGain();
+    blip.type = 'sine';
+    blip.frequency.setValueAtTime(f0, t);
+    blip.frequency.exponentialRampToValueAtTime(f1, t + dur * 0.55);
+    bg.gain.setValueAtTime(0.0001, t);
+    bg.gain.exponentialRampToValueAtTime(0.42 + 0.18 * k, t + 0.008);
+    bg.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    blip.connect(bg);
+    bg.connect(out);
+    blip.start(t);
+    blip.stop(t + dur + 0.02);
+
+    // 二次谐波:同步上滑但衰减更快,给气泡加「水润」质感
+    const harm = c.createOscillator();
+    const hg = c.createGain();
+    harm.type = 'sine';
+    harm.frequency.setValueAtTime(f0 * 2, t);
+    harm.frequency.exponentialRampToValueAtTime(f1 * 2, t + dur * 0.55);
+    hg.gain.setValueAtTime(0.0001, t);
+    hg.gain.exponentialRampToValueAtTime(0.14 + 0.07 * k, t + 0.006);
+    hg.gain.exponentialRampToValueAtTime(0.0001, t + dur * 0.6);
+    harm.connect(hg);
+    hg.connect(out);
+    harm.start(t);
+    harm.stop(t + dur * 0.6 + 0.02);
+
+    // 破裂瞬态(pop):极短带通噪声,模拟气泡冒出水面的一瞬
     const noise = noiseSource(c);
-    const lp = c.createBiquadFilter();
-    lp.type = 'lowpass';
-    lp.frequency.value = 380 + k * 320;
-    lp.Q.value = 0.5;
+    const bp = c.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = f1 * 1.5;
+    bp.Q.value = 2;
     const ng = c.createGain();
     ng.gain.setValueAtTime(0.0001, t);
-    ng.gain.exponentialRampToValueAtTime(0.16 + 0.1 * k, t + 0.015);
-    ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
-    noise.connect(lp);
-    lp.connect(ng);
+    ng.gain.exponentialRampToValueAtTime(0.1 + 0.08 * k, t + 0.004);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
+    noise.connect(bp);
+    bp.connect(ng);
     ng.connect(out);
     noise.start(t);
-    noise.stop(t + 0.18);
+    noise.stop(t + 0.06);
   } catch {
     /* 音频失败不影响主流程 */
   }

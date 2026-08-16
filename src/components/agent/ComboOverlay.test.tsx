@@ -62,7 +62,7 @@ describe('ComboOverlay 音效', () => {
     useUIPreferences.setState({ comboSoundEnabled: true });
   });
 
-  it('连击出现时播放打击音效,连续增长被节流不重复播放', () => {
+  it('连击出现时播放气泡音效,连续增长被节流不重复播放', () => {
     const { rerender } = render(<ComboOverlay combo={3} />);
     expect(playComboHit).toHaveBeenCalledTimes(1);
     expect(playComboHit).toHaveBeenCalledWith(3);
