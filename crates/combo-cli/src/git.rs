@@ -224,6 +224,27 @@ enum DiffScope {
     Head,
 }
 
+/// 用 `git diff --no-index /dev/null <file>` 生成未跟踪(全新)文件的全新增 diff。
+/// 注意 `--no-index` 在有差异时 exit code 为 1,与失败区分开。
+fn git_diff_no_index(root: &FsPath, abs: &FsPath) -> Result<String, String> {
+    let output = Command::new("git")
+        .current_dir(root)
+        .args(["diff", "--no-index", "--", "/dev/null"])
+        .arg(abs)
+        .output()
+        .map_err(|e| format!("无法执行 git: {e}"))?;
+    if !output.status.success() && output.status.code() != Some(1) {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr.trim();
+        return Err(if stderr.is_empty() {
+            format!("git diff --no-index 失败 (exit {})", output.status.code().unwrap_or(-1))
+        } else {
+            stderr.to_string()
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 fn diff_impl(
     state: &AppState,
     id: &str,
@@ -241,23 +262,63 @@ fn diff_impl(
         DiffScope::Head => args.push("HEAD".into()),
         DiffScope::WorkTree => {}
     }
+    let mut rel_opt: Option<String> = None;
     if let Some(p) = path {
         if !p.is_empty() {
             match safe_join(&root, p) {
                 Ok(abs) => {
                     if let Ok(rel) = abs.strip_prefix(&root) {
-                        args.push("--".into());
-                        args.push(rel.to_string_lossy().into_owned());
+                        rel_opt = Some(rel.to_string_lossy().into_owned());
                     }
                 }
                 Err(e) => return error(StatusCode::BAD_REQUEST, &e.to_string()),
             }
         }
     }
-    match git_output(&root, &args) {
-        Ok(diff_text) => ok_json(json!({ "diff": diff_text })),
-        Err(msg) => error(StatusCode::INTERNAL_SERVER_ERROR, &msg),
+    if let Some(rel) = &rel_opt {
+        args.push("--".into());
+        args.push(rel.clone());
     }
+    let diff_text = match git_output(&root, &args) {
+        Ok(t) => t,
+        Err(msg) => return error(StatusCode::INTERNAL_SERVER_ERROR, &msg),
+    };
+
+    // git diff 不包含未跟踪文件:指定单文件且无差异时,若该文件未跟踪,
+    // 回退为生成全新增 diff(staged diff 只反映暂存区,不做回退)。
+    let diff_text = if !matches!(scope, DiffScope::Staged) && diff_text.trim().is_empty() {
+        if let Some(rel) = rel_opt.as_ref() {
+            let untracked = git_output(
+                &root,
+                ["ls-files", "--others", "--exclude-standard", "--", rel],
+            )
+            .map(|o| !o.trim().is_empty())
+            .unwrap_or(false);
+            if untracked {
+                if let Ok(abs) = safe_join(&root, rel) {
+                    // 输出头是绝对路径(git 会去掉前导 /,如 a/tmp/...),
+                    // 重写为仓库相对路径,与常规 git diff 一致
+                    if let Ok(t) = git_diff_no_index(&root, &abs) {
+                        let abs_no_slash = abs.to_string_lossy();
+                        let abs_no_slash = abs_no_slash.trim_start_matches('/');
+                        t.replace(abs_no_slash, rel)
+                    } else {
+                        diff_text
+                    }
+                } else {
+                    diff_text
+                }
+            } else {
+                diff_text
+            }
+        } else {
+            diff_text
+        }
+    } else {
+        diff_text
+    };
+
+    ok_json(json!({ "diff": diff_text }))
 }
 
 /// GET /v1/workspaces/{id}/git/diff?path=<可选>
@@ -851,5 +912,44 @@ mod tests {
         assert_eq!(entries[0]["path"], "new.ts");
         assert_eq!(entries[0]["oldPath"], "old.ts");
         assert_eq!(entries[0]["indexStatus"], "renamed");
+    }
+
+    /// 未跟踪(全新)文件应生成全新增 diff,而不是空 diff。
+    /// 覆盖 git_diff_no_index 与 diff_impl 的未跟踪回退路径。
+    #[test]
+    fn untracked_file_diff_shows_full_addition() {
+        let dir = std::env::temp_dir().join(format!("combo-git-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        git_output(&dir, ["init", "-q"]).unwrap();
+        git_output(&dir, ["commit", "-q", "--allow-empty", "-m", "init"])
+            .unwrap();
+        let file = dir.join("new_file.ts");
+        std::fs::write(&file, "line1\nline2\n").unwrap();
+
+        // git diff(HEAD/工作区)对未跟踪文件输出为空
+        let plain = git_output(&dir, ["diff", "HEAD", "--", "new_file.ts"]).unwrap();
+        assert!(plain.trim().is_empty());
+
+        // 未跟踪识别:ls-files --others 输出非空
+        let untracked = git_output(
+            &dir,
+            ["ls-files", "--others", "--exclude-standard", "--", "new_file.ts"],
+        )
+        .unwrap();
+        assert!(!untracked.trim().is_empty());
+
+        // --no-index 生成全新增 diff(exit 1 视为成功),路径重写为相对路径
+        let diff = git_diff_no_index(&dir, &file).unwrap();
+        assert!(diff.contains("@@ -0,0 +1,2 @@"), "缺少全新增 hunk: {diff}");
+        assert!(diff.contains("+line1"));
+        assert!(diff.contains("+line2"));
+        let rewritten = diff.replace(
+            file.to_string_lossy().trim_start_matches('/'),
+            "new_file.ts",
+        );
+        assert!(rewritten.contains("+++ b/new_file.ts"), "路径未重写: {rewritten}");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
