@@ -137,7 +137,8 @@ pub fn question_tool(
             let registry = registry.clone();
             let mut cancel_rx = cancel_rx.clone();
             Box::pin(async move {
-                let raw_questions = args.get("questions").cloned().unwrap_or(Value::Array(vec![]));
+                let raw_questions =
+                    coerce_questions(args.get("questions").cloned().unwrap_or(Value::Array(vec![])));
                 let confirm_title = args
                     .get("confirm_title")
                     .and_then(Value::as_str)
@@ -152,17 +153,12 @@ pub fn question_tool(
                     _ => return Ok(ToolOutput::text("错误: questions 不能为空")),
                 };
 
-                // 给每个问题补 id(LLM 可能不生成)
+                // 规范化每个问题:补 id、归一 type/choices(LLM 常漏 type 或写错字段名,
+                // 前端按 type 分支渲染,漏了 type 选项就不会显示)
                 let questions: Vec<Value> = questions_arr
                     .iter()
                     .enumerate()
-                    .map(|(i, q)| {
-                        let mut q = q.clone();
-                        if q.get("id").and_then(Value::as_str).is_none() {
-                            q["id"] = json!(format!("q{}", i + 1));
-                        }
-                        q
-                    })
+                    .map(|(i, q)| normalize_question(q.clone(), i))
                     .collect();
 
                 let batch_id = uuid::Uuid::new_v4().to_string();
@@ -220,6 +216,78 @@ pub fn question_tool(
             })
         },
     )
+}
+
+/// `questions` 参数容错:数组原样返回;JSON 字符串(部分模型沿用其他工具的
+/// 字符串传参习惯)解析为数组;其余置为空数组。
+fn coerce_questions(v: Value) -> Value {
+    match v {
+        Value::String(s) => serde_json::from_str(&s).unwrap_or(Value::Array(vec![])),
+        Value::Array(_) => v,
+        _ => Value::Array(vec![]),
+    }
+}
+
+/// 规范化单个问题条目,容错 LLM 常见偏差:
+/// - 补 `id`(LLM 可能不生成)
+/// - `options` → `choices`(字段名混用)
+/// - 纯字符串选项 → `{id, label}`;对象缺 id 时按序号补
+/// - `type` 别名归一(single/multi/boolean/text…);缺失时有选项默认
+///   `single_choice`,无选项默认 `free_text`(前端按 type 分支渲染,
+///   漏了 type 选项区会整个不显示)
+fn normalize_question(mut q: Value, idx: usize) -> Value {
+    if !q.is_object() {
+        return q;
+    }
+    if q.get("id").and_then(Value::as_str).is_none() {
+        q["id"] = json!(format!("q{}", idx + 1));
+    }
+    if q.get("choices").map_or(true, Value::is_null) {
+        if let Some(opts) = q.get("options").cloned() {
+            q["choices"] = opts;
+        }
+    }
+    if let Some(arr) = q.get_mut("choices").and_then(Value::as_array_mut) {
+        for (i, c) in arr.iter_mut().enumerate() {
+            if let Some(s) = c.as_str() {
+                let label = s.to_string();
+                *c = json!({ "id": format!("opt{}", i + 1), "label": label });
+            } else if c.is_object() {
+                if c.get("id").and_then(Value::as_str).is_none() {
+                    c["id"] = json!(format!("opt{}", i + 1));
+                }
+            } else if !c.is_null() {
+                let label = c.to_string();
+                *c = json!({ "id": format!("opt{}", i + 1), "label": label });
+            }
+        }
+    }
+    let has_choices = q
+        .get("choices")
+        .and_then(Value::as_array)
+        .map_or(false, |a| !a.is_empty());
+    let canonical = match q
+        .get("type")
+        .and_then(Value::as_str)
+        .map(|t| t.trim().to_lowercase())
+        .as_deref()
+    {
+        Some("single_choice" | "single" | "choice" | "radio") => "single_choice",
+        Some("multi_choice" | "multi" | "multiple_choice" | "multi_select" | "checkbox") => {
+            "multi_choice"
+        }
+        Some("yes_no" | "yesno" | "yes/no" | "boolean" | "bool" | "confirm") => "yes_no",
+        Some("free_text" | "text" | "free" | "input" | "string") => "free_text",
+        _ => {
+            if has_choices {
+                "single_choice"
+            } else {
+                "free_text"
+            }
+        }
+    };
+    q["type"] = json!(canonical);
+    q
 }
 
 /// 将用户回答格式化为 agent 可读的文本。
@@ -376,6 +444,62 @@ mod tests {
         let answer = json!({"responses": [{"request_id": "q1", "fill_in_text": "combo"}]});
         let out = format_answer(&questions, &answer);
         assert!(out.contains("combo"));
+    }
+
+    #[test]
+    fn normalize_adds_missing_type_and_id() {
+        // LLM 漏 type:有 choices → single_choice;无 choices → free_text;同时补 id
+        let q = normalize_question(
+            json!({"question": "选哪个?", "choices": [{"id": "a", "label": "A"}]}),
+            0,
+        );
+        assert_eq!(q["type"], "single_choice");
+        assert_eq!(q["id"], "q1");
+        let q = normalize_question(json!({"question": "名字?"}), 1);
+        assert_eq!(q["type"], "free_text");
+        assert_eq!(q["id"], "q2");
+    }
+
+    #[test]
+    fn normalize_maps_type_aliases() {
+        for (raw, want) in [
+            ("single", "single_choice"),
+            ("Multi", "multi_choice"),
+            ("boolean", "yes_no"),
+            ("text", "free_text"),
+        ] {
+            let q = normalize_question(json!({"type": raw, "question": "q"}), 0);
+            assert_eq!(q["type"], want, "alias {}", raw);
+        }
+    }
+
+    #[test]
+    fn normalize_moves_options_and_fixes_choices() {
+        // options → choices;纯字符串选项转 {id, label};对象缺 id 补序号
+        let q = normalize_question(
+            json!({"type": "single", "question": "选?", "options": ["甲", "乙"]}),
+            0,
+        );
+        assert_eq!(q["choices"][0]["id"], "opt1");
+        assert_eq!(q["choices"][0]["label"], "甲");
+        assert_eq!(q["choices"][1]["label"], "乙");
+        let q = normalize_question(
+            json!({"type": "single", "question": "选?", "choices": [{"label": "只有label"}]}),
+            0,
+        );
+        assert_eq!(q["choices"][0]["id"], "opt1");
+        assert_eq!(q["choices"][0]["label"], "只有label");
+    }
+
+    #[test]
+    fn coerce_questions_parses_json_string() {
+        let v = coerce_questions(Value::String(
+            r#"[{"type":"yes_no","question":"继续?"}]"#.to_string(),
+        ));
+        assert_eq!(v.as_array().map(Vec::len), Some(1));
+        // 非法字符串与其他类型 → 空数组
+        assert!(coerce_questions(json!("not json")).as_array().unwrap().is_empty());
+        assert!(coerce_questions(json!({"a": 1})).as_array().unwrap().is_empty());
     }
 
     #[test]

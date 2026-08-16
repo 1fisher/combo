@@ -8,6 +8,18 @@ import { cn } from '../../lib/utils';
 const OTHER_ID = '__other__';
 
 /**
+ * 问题渲染类型:type 缺失/未知时兜底——有选项按单选、无选项按自由输入。
+ * (后端 question.rs 已归一 type,这里防旧后端或异常数据导致选项不渲染)
+ */
+function kindOf(q: Api.QuestionItem): 'yes_no' | 'multi' | 'single' | 'text' {
+  if (q.type === 'yes_no') return 'yes_no';
+  if (q.type === 'multi_choice') return 'multi';
+  if (q.type === 'free_text') return 'text';
+  if (q.type === 'single_choice' || (q.choices?.length ?? 0) > 0) return 'single';
+  return 'text';
+}
+
+/**
  * 问题卡片(question 工具):非模态,显示在输入坞上方(与任务进度卡片同级样式)。
  *
  * - 单选/多选问题在选项末尾追加「其他(手动输入)」;选中后展开输入框,
@@ -28,7 +40,7 @@ export function QuestionCard({
   function toggleChoice(q: Api.QuestionItem, id: string) {
     setSelected((s) => {
       const cur = s[q.id] ?? [];
-      if (q.type === 'single_choice') return { ...s, [q.id]: [id] };
+      if (kindOf(q) !== 'multi') return { ...s, [q.id]: [id] };
       const on = cur.includes(id);
       return { ...s, [q.id]: on ? cur.filter((x) => x !== id) : [...cur, id] };
     });
@@ -39,10 +51,11 @@ export function QuestionCard({
       batch_request_id: batch.id,
       responses: batch.questions.map((q) => {
         const sel = selected[q.id] ?? [];
-        if (q.type === 'yes_no') {
+        const kind = kindOf(q);
+        if (kind === 'yes_no') {
           return { request_id: q.id, yes: sel[0] === 'yes' };
         }
-        if (q.type === 'free_text') {
+        if (kind === 'text') {
           return { request_id: q.id, fill_in_text: fills[q.id] ?? '' };
         }
         // 单选/多选:真实选项进 selected_ids;「其他」的自定义文本进 fill_in_text
@@ -95,6 +108,7 @@ export function QuestionCard({
       <div className="flex max-h-72 flex-col gap-3 overflow-y-auto overscroll-contain border-t border-border/50 px-3 py-2.5">
         {batch.questions.map((q, qi) => {
           const sel = selected[q.id] ?? [];
+          const kind = kindOf(q);
           const otherOn = sel.includes(OTHER_ID);
           return (
             <div key={q.id}>
@@ -110,7 +124,7 @@ export function QuestionCard({
                 </div>
               </div>
               <div className="mt-1.5 flex flex-col gap-1 pl-4">
-                {q.type === 'yes_no' && (
+                {kind === 'yes_no' && (
                   <div className="flex gap-2">
                     <Button
                       size="sm"
@@ -128,15 +142,15 @@ export function QuestionCard({
                     </Button>
                   </div>
                 )}
-                {(q.type === 'single_choice' || q.type === 'multi_choice') && (
+                {(kind === 'single' || kind === 'multi') && (
                   <div className="flex flex-col gap-1">
                     {q.choices?.map((c) => {
                       const on = sel.includes(c.id);
                       return (
                         <label key={c.id} className={choiceRow(on)}>
                           <input
-                            type={q.type === 'single_choice' ? 'radio' : 'checkbox'}
-                            name={q.type === 'single_choice' ? `q-${q.id}` : undefined}
+                            type={kind === 'single' ? 'radio' : 'checkbox'}
+                            name={kind === 'single' ? `q-${q.id}` : undefined}
                             className="mt-0.5"
                             checked={on}
                             onChange={() => toggleChoice(q, c.id)}
@@ -155,8 +169,8 @@ export function QuestionCard({
                     {/* 其他(手动输入):选项都不合适时自由作答 */}
                     <label className={choiceRow(otherOn)}>
                       <input
-                        type={q.type === 'single_choice' ? 'radio' : 'checkbox'}
-                        name={q.type === 'single_choice' ? `q-${q.id}` : undefined}
+                        type={kind === 'single' ? 'radio' : 'checkbox'}
+                        name={kind === 'single' ? `q-${q.id}` : undefined}
                         className="mt-0.5"
                         checked={otherOn}
                         onChange={() => toggleChoice(q, OTHER_ID)}
@@ -173,7 +187,7 @@ export function QuestionCard({
                     )}
                   </div>
                 )}
-                {q.type === 'free_text' && (
+                {kind === 'text' && (
                   <textarea
                     className="w-full resize-none rounded-md border border-border/50 bg-transparent px-2.5 py-1.5 text-xs outline-none focus:border-primary focus:ring-1 focus:ring-primary"
                     rows={2}

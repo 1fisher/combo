@@ -114,4 +114,46 @@ describe('QuestionCard', () => {
     await userEvent.click(screen.getByText('让 agent 自行决定'));
     expect(answer).toEqual({ batch_request_id: 'q4', responses: [], skipped: true });
   });
+
+  it('type 缺失但有 choices → 按单选兜底渲染,选项可选中并提交', async () => {
+    const batch: Api.QuestionRequest = {
+      ...base,
+      id: 'q5',
+      questions: [
+        {
+          id: 'qq1',
+          type: '',
+          question: '切走期间收到音效/通知了吗?',
+          choices: [
+            { id: 'both', label: '音效 + 系统通知都有' },
+            { id: 'none', label: '都没有' },
+          ],
+        },
+      ],
+    };
+    let answer: Api.QuestionAnswer | null = null;
+    render(<QuestionCard batch={batch} onResolve={(a) => (answer = a)} />);
+    await userEvent.click(screen.getByText('音效 + 系统通知都有'));
+    await userEvent.click(screen.getByRole('button', { name: '提交回答' }));
+    expect(answer).toMatchObject({
+      batch_request_id: 'q5',
+      responses: [{ request_id: 'qq1', selected_ids: ['both'] }],
+    });
+  });
+
+  it('type 缺失且无 choices → 按自由输入兜底,fill_in_text 回传', async () => {
+    const batch: Api.QuestionRequest = {
+      ...base,
+      id: 'q6',
+      questions: [{ id: 'qq1', type: '', question: '项目名?' }],
+    };
+    let answer: Api.QuestionAnswer | null = null;
+    render(<QuestionCard batch={batch} onResolve={(a) => (answer = a)} />);
+    await userEvent.type(screen.getByPlaceholderText('请输入…'), 'combo');
+    await userEvent.click(screen.getByRole('button', { name: '提交回答' }));
+    expect(answer).toMatchObject({
+      batch_request_id: 'q6',
+      responses: [{ request_id: 'qq1', fill_in_text: 'combo' }],
+    });
+  });
 });
