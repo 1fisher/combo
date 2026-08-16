@@ -57,7 +57,7 @@ pub struct ConversationMeta {
     /// 累计花费(USD)。
     pub cost: f64,
     /// 最近一次 run 的上下文占用(最后一次 completion 的 input+output,
-    /// rig 原生 usage;驱动 compact 触发判断与前端用量环)。
+    /// rig 原生 usage;供前端用量环展示)。
     pub context_tokens: i64,
 }
 

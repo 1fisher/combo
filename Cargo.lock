@@ -7183,6 +7183,7 @@ dependencies = [
  "rig-fastembed",
  "rig-helixdb",
  "rig-lancedb",
+ "rig-memory",
  "rig-milvus",
 ]
 
@@ -7294,6 +7295,16 @@ dependencies = [
  "rig-core",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "rig-memory"
+version = "0.41.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59fa88ea51d431f7eecdc7d05885c684d92f6dd604522deb4a03abf6fa69b93f"
+dependencies = [
+ "rig-core",
+ "tracing",
 ]
 
 [[package]]

@@ -117,10 +117,15 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   finish part 与 `run_complete` 的 `usage` JSON 内嵌两者(`input_tokens`/
   `output_tokens` + `total_*_tokens`,wire 向后兼容)。sqlite `conversations`
   表新增 `context_tokens` 列(每次 run 结束由 `add_usage` 覆盖为最后一次调用的
-  input+output)。**compact 触发时机以此真实占用为准**(阈值 0.75×窗口),
-  `chars/3` 字符估算仅作 provider 不上报 usage 时的兜底——旧实现按估算触发,
-  中文会话误差 2~3 倍,常在超窗报错时仍未压缩。压缩完成后
-  `set_context_tokens` 重置占用避免旧值反复触发;摘要消息 `created_at` 取
+  input+output,仅供前端用量环展示)。**compact 触发与切分由 rig 自动压缩窗口
+  策略决定**(`rig` crate `memory` feature → `rig-memory` 的 `TokenWindowMemory` +
+  `HeuristicTokenCounter`,`compact.rs::plan_compaction`):每次从 sqlite 加载
+  历史时逐消息统计 token(中文按 3 字节/token 保守估算,parts 全部内容含
+  tool_call/tool_result 计入),预算 = context_window×0.75 − 5000 固定开销,
+  从最新往旧累计、预算耗尽处切分,超出预算的前缀总结为摘要并删除。旧实现按
+  「上次 run 真实占用 + chars/3 估算 + 固定保留 10 条 + 12 条门槛」触发,中文
+  会话误差 2~3 倍、短会话大消息漏压,常在超窗报错时仍未压缩。压缩完成后
+  `set_context_tokens` 重置占用避免用量环显示旧值;摘要消息 `created_at` 取
   "保留尾部第一条消息时间戳-1",保证 `list_messages`(按 created_at 升序)
   中摘要在最近消息之前、注入 LLM 的历史顺序正确。
 - **File service** (`crates/combo-cli/src/fs.rs`): `GET .../files/list?path=`

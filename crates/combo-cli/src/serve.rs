@@ -372,19 +372,15 @@ pub(crate) async fn start_agent_run(
         history.len(),
     );
 
-    // 3.5 自动压缩:上下文接近模型窗口上限时,总结旧消息释放空间。
+    // 3.5 自动压缩(rig TokenWindowMemory 策略):每次加载历史时逐消息
+    //     统计 token,超出 context_window × 0.75 预算(再预留 preamble/
+    //     工具定义开销)的旧消息前缀被总结为摘要并删除,释放上下文空间。
     //     仅在从 sqlite 加载历史时触发(client body 传来的历史无 ID 无法删除)。
-    //     触发信号优先用 rig 原生 usage 上报的真实上下文占用
-    //     (上次 run 结束时持久化的 context_tokens,含 preamble/工具定义/全部历史),
-    //     字符估算仅作 provider 未上报时的兜底——中文会话按 chars/3 估算
-    //     偏低 2~3 倍,旧实现常在超窗报错时仍未压缩。
+    //     触发与切分由 rig 策略按消息粒度逐条判定,不再依赖上一轮 run 的
+    //     usage 上报或 chars/3 字符估算(中文偏低 2~3 倍,常在超窗报错时
+    //     仍未压缩)。
     if req.history.as_ref().map_or(true, |h| h.is_empty()) {
-        let ctx_tokens = state
-            .meta
-            .db()
-            .get_context_tokens(&req.session_id)
-            .map(|t| t as u64);
-        if compact::needs_compact(&cfg, &history, ctx_tokens) {
+        if let Some(count) = compact::plan_compaction(&cfg, &history) {
             let stored = state
                 .meta
                 .db()
@@ -392,7 +388,7 @@ pub(crate) async fn start_agent_run(
                 .unwrap_or_default();
             let ids: Vec<String> = stored.iter().map(|m| m.id.clone()).collect();
             if ids.len() == history.len() {
-                match compact::compact(&cfg, &history, &ids, ctx_tokens).await {
+                match compact::compact(&cfg, &history, &ids, count).await {
                     Ok(Some(result)) => {
                         let removed_ids = result.removed_ids.clone();
                         let count = result.compacted_count;
@@ -631,7 +627,8 @@ pub(crate) async fn start_agent_run(
         // 累加 token 用量与花费到会话:
         // - prompt/completion 累计 run 内全部 completion 调用(rig 原生 Usage 求和);
         // - context_tokens 记录最后一次调用的 input+output(当前上下文窗口占用,
-        //   驱动下一轮的 compact 触发判断与前端用量环)。
+        //   供前端用量环展示;compact 触发已改由 rig TokenWindowMemory 策略
+        //   逐消息判定,不再依赖此值)。
         if let Some(u) = usage {
             let (pin, pout) =
                 crate::providers::get_model_pricing(&cfg.provider, &cfg.model);
