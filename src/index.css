@@ -256,45 +256,6 @@
       drop-shadow(0 0 26px hsl(var(--combo-hue) 90% 60% / 0.7));
   }
 
-  /* ---- 首屏空会话背景:Combo 线框字(ChatEmptyState) ----
-     空心描边文字:1px 白色细线 + 0.3 透明度,克制低调;Geist 900 斜体保留动感;
-     应用为固定深色主题(index.html 锁定 dark),白线在深色背景上柔和可辨。
-     宽度适配:svg 宽取容器宽(上限 88rem)而非 vw——侧栏/编辑器分走宽度后
-     会话区远窄于视口,按 vw 定宽必然把字裁掉;整词由 textLength 锁定在画布
-     87% 宽,旋转 −11° 后外接框约占容器 89%,任何容器/字体宽度下都完整可见。
-     居中位移(-50%,-50%)与倾斜合并写入 transform,动画帧用同一组 transform
-     展开轻微浮动摆动,不会互相覆盖;prefers-reduced-motion 时静止(保留基准倾斜姿态)。 */
-  .combo-hero-word {
-    font-family: var(--font-sans);
-    font-size: 112px;
-    font-style: italic;
-    font-weight: 900;
-    fill: none;
-    stroke: #fff;
-    stroke-width: 1;
-    stroke-linejoin: round;
-    stroke-linecap: round;
-    /* vector-effect: 描边恒为 1px 屏幕像素。svg 宽随容器缩放(viewBox 固定
-       460),描边默认随缩放变粗,不锁定的话 1px 实际会渲染成 2~3px */
-    vector-effect: non-scaling-stroke;
-    opacity: 0.3;
-  }
-  .combo-hero-bg svg {
-    position: absolute;
-    left: 50%;
-    /* 中心略下移:问候语压在字的上半部,底部 mask 渐隐避让卡片区 */
-    top: 54%;
-    /* 基准姿态:居中 + 倾斜 −11°(动画静止/禁用时以此为准) */
-    transform: translate(-50%, -50%) rotate(-11deg);
-    transform-origin: 50% 60%;
-    animation: combo-hero-float 8s ease-in-out infinite;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .combo-hero-bg svg {
-      animation: none;
-    }
-  }
-}
 @keyframes combo-pop-in {
   0%   { transform: scale(0.2) rotate(-8deg); opacity: 0; }
   20%  { transform: scale(1.38) rotate(3deg);  opacity: 1; }
@@ -352,11 +313,5 @@
   100% { transform: translateX(380%) skewX(-16deg); }
 }
 
-/* 首屏 Combo 线框字:满屏倾斜铺底,轻微上下浮动 + 摆动(±1.2% 位移、
-   −11.5°~−9.5° 倾斜),幅度刻意很小,活泼但不干扰前景问候语。
-   居中位移(-50%,-50%)必须合并进每一帧,否则动画 transform 会覆盖静态定位
-   导致字跳到右下角;transform-origin 偏下,摆动时重心稳 */
-@keyframes combo-hero-float {
-  0%, 100% { transform: translate(-50%, -50%) translateY(-1.2%) rotate(-11.5deg); }
-  50%      { transform: translate(-50%, -50%) translateY(1.2%) rotate(-9.5deg); }
-}
+/* 首屏 Combo 线框字与粒子流光已全部改由 canvas 渲染
+   (HeroParticles.tsx,含浮动动画),不再使用这里的 CSS 动画 */

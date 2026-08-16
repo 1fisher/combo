@@ -1,5 +1,5 @@
 import { Megaphone, Moon, X } from 'lucide-react';
-import { HeroBackdrop } from './HeroBackdrop';
+import { HeroParticles } from './HeroParticles';
 
 const TEMPLATES: { icon: typeof Moon; title: string; desc: string; prompt: string }[] = [
   {
@@ -32,8 +32,8 @@ export function ChatEmptyState({
 }) {
   return (
     <div className="relative flex flex-col justify-center items-center gap-6 px-4 py-10 min-h-full text-foreground">
-      {/* 装饰背景(Combo 线框字 + 粒子流光),与会话/自动化首页共用,见 HeroBackdrop */}
-      <HeroBackdrop />
+      {/* 装饰背景(Combo 线框字 + 粒子流光),与会话/自动化首页共用,见 HeroParticles */}
+      <HeroParticles />
       {/* 问候语(压在背景字之上) */}
       <div className="relative flex flex-col justify-center items-center gap-6 mb-10 sm:mb-8 w-full max-w-2xl">
         <p className="z-10 relative px-4 w-full font-medium max-md:text-xl text-3xl text-center">

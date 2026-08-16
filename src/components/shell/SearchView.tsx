@@ -4,7 +4,7 @@ import { CornerDownLeft, Folder, Loader2, MessageSquare, Search, X } from 'lucid
 import { listWorkspaces, listSessions } from '../../lib/api';
 import { useAgentStore } from '../../stores/agentStore';
 import { cn } from '../../lib/utils';
-import { HeroBackdrop } from '../agent/HeroBackdrop';
+import { HeroParticles } from '../agent/HeroParticles';
 import { PAGE } from './PageShell';
 import type { Api } from '../../lib/api/types';
 
@@ -170,7 +170,7 @@ export function SearchView({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <div className="relative flex h-full w-full min-h-0 flex-col bg-background">
       {/* hero 背景:仅首页(空查询)显示 */}
-      {!searching && <HeroBackdrop />}
+      {!searching && <HeroParticles />}
 
       <div className="relative flex min-h-0 flex-1 flex-col">
         {/* 问候语(仅首页;搜索时此槽渲染 null,输入框 DOM 不受影响) */}

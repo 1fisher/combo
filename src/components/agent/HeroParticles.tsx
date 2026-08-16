@@ -2,23 +2,31 @@ import { useEffect, useRef } from 'react';
 import { cn } from '@/lib/utils';
 
 /**
- * 首屏背景粒子层(ChatEmptyState 装饰):粒子从容器各处飘入,弹簧缓动
- * 聚合成 "Combo" 字形;品牌色流光周期性沿字的倾斜走向扫过,扫到的粒子
- * 被点亮、放大并泛起光晕,随后缓缓回落 —— 静时是低透明星尘,扫过时星河流动。
+ * 首屏 hero 装饰背景:Combo 白色线框字倾斜横贯首屏 + 粒子聚合流光层。
+ * 会话首页(ChatEmptyState)、自动化首页(AutomationPanel)与搜索首页(SearchView)共用。
  *
- * 对齐原理:离屏 canvas 以与 .combo-hero-bg svg 完全一致的姿态
+ * 全部内容(线框字、流光、粒子)在同一 canvas 内渲染:
+ * - 线框字:strokeText 白色 1px 描边 + 0.3 透明度,绕中心 −11° 倾斜,
+ *   整词锁定容器宽 87%(等效 svg textLength=400),任何容器宽度下都完整可见;
+ * - 浮动动画:等效原 svg 的 combo-hero-float(translateY ±1.2%、
+ *   倾斜 −11.5°~−9.5° 摆动、8s 周期),线框字/光带/粒子同帧同变换,
+ *   彼此对齐不受浮动影响;prefers-reduced-motion 时静止在基准姿态;
+ * - 粒子动效:粒子从容器各处飘入,弹簧缓动聚合成 "Combo" 字形;品牌色流光
+ *   周期性沿字的倾斜走向扫过,扫到的粒子被点亮、放大并泛起光晕,随后缓缓回落
+ *   —— 静时是低透明星尘,扫过时星河流动。
+ *
+ * 对齐原理:离屏 canvas 以与线框字完全一致的姿态
  * (原点 = 容器宽 1/2 × 高 54%、绕 (50%,60%) 即原点下方 19/190 字高处旋转 −11°、
- * 字宽锁定 400/460 容器宽,等价于 svg 的 textLength=400)绘制填充字,
+ * 字宽锁定 400/460 容器宽)绘制填充字,
  * 按网格采样非透明像素得到目标点集。粒子只做「飞向目标点 + 正弦微漂浮」
- * 的弹簧运动,不需要与 SVG 的浮动动画逐帧同步 —— 粒子自带漂浮,
- * 观感上天然跟上线框字的浮动节奏。
+ * 的弹簧运动,叠加在同一浮动变换下,观感上与线框字同步浮动。
  *
  * 性能与可访问性:
  * - 粒子数随容器面积自适应(约 220~520),单层圆点 + globalAlpha 绘制;
  * - resize 防抖 150ms 后重建(粒子重新飞聚一次,本身就是聚合动效的彩蛋);
  * - dt 钳制 50ms,页面隐藏时 rAF 自动暂停,回来不跳变;
- * - prefers-reduced-motion:静态绘制一帧(粒子全数落在字形上,无流光无漂浮);
- * - canvas 以 mix-blend-mode: plus-lighter 叠加,流光「加」在线框字与背景上;
+ * - prefers-reduced-motion:静态绘制一帧(粒子全数落在字形上,无流光无浮动);
+ * - canvas 以 mix-blend-mode: plus-lighter 叠加,流光「加」在背景上;
  *   不支持的引擎退化为普通透明合成,观感依然成立。
  */
 
@@ -32,6 +40,12 @@ const ORIGIN_DY = 19;
 const TILT_RAD = (-11 * Math.PI) / 180;
 /** svg textLength=400:整词锁定宽度(viewBox 单位) */
 const WORD_LEN = 400;
+
+/** 浮动动画周期(ms),等效原 svg combo-hero-float(8s ease-in-out) */
+const FLOAT_PERIOD = 8000;
+/** svg 元素高等于宽×190/460,translateY ±1.2% 以此换算像素幅度 */
+const VB_RATIO = 190 / 460;
+const DEG_RAD = Math.PI / 180;
 
 /** 一轮流光周期(s):前 62% 时间扫过,其余时间在屏外休整 */
 const SWEEP_PERIOD = 4600;
@@ -102,7 +116,7 @@ function sampleTargets(w: number, h: number, dpr: number): { x: number; y: numbe
   c.setTransform(dpr, 0, 0, dpr, 0, 0);
   const s = w / VB_W;
 
-  // 与 .combo-hero-bg svg 相同的定位与倾斜:中心 (w/2, h·54%),绕 50%/60% 旋转
+  // 与线框字相同的定位与倾斜:中心 (w/2, h·54%),绕 50%/60% 旋转
   c.translate(w / 2, h * 0.54);
   c.translate(0, ORIGIN_DY * s);
   c.rotate(TILT_RAD);
@@ -198,8 +212,39 @@ export function HeroParticles({ className }: { className?: string }) {
 
     const drawParticles = (t: number) => {
       if (!scene) return;
-      const { w, h, ox, oy, particles } = scene;
+      const { w, h, ox, oy, scale: s, particles } = scene;
       ctx.clearRect(0, 0, w, h);
+
+      // 浮动姿态(等效原 svg combo-hero-float):translateY ±1.2%,倾斜在
+      // −11.5°~−9.5°(bob=−1~+1)间摆动;采样基准是 −11°,此处只叠加差量
+      // (0.5+bob)度。线框字、光带、粒子在同一变换下绘制,对齐不受浮动影响;
+      // prefers-reduced-motion 时差量为 0,静止在基准姿态
+      const bob = reduced ? 0 : Math.sin(((t % FLOAT_PERIOD) / FLOAT_PERIOD) * Math.PI * 2);
+      ctx.save();
+      ctx.translate(0, bob * w * VB_RATIO * 0.012);
+      ctx.translate(ox, oy);
+      ctx.rotate((reduced ? 0 : 0.5 + bob) * DEG_RAD);
+      ctx.translate(-ox, -oy);
+
+      // 线框字本体:与采样完全一致的姿态 strokeText —— 白色 1px 描边 +
+      // 0.3 透明度(等效原 svg 的 fill:none + non-scaling-stroke);
+      // lineWidth 除以横向压缩比,抵消 ctx.scale 对竖向笔画描边的放大
+      ctx.save();
+      ctx.translate(w / 2, h * 0.54);
+      ctx.translate(0, ORIGIN_DY * s);
+      ctx.rotate(TILT_RAD);
+      ctx.translate(0, -ORIGIN_DY * s);
+      ctx.font = `italic 900 ${112 * s}px 'Geist Variable', sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'alphabetic';
+      const xScale = (WORD_LEN * s) / wordNatural;
+      ctx.scale(xScale, 1);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+      ctx.lineWidth = 1 / xScale;
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.strokeText(WORD, 0, BASELINE * s);
+      ctx.restore();
 
       // 流光相位:字坐标系内的光带中心 x;屏外(Number.MAX_VALUE)即不点亮
       let sweepX = Number.MAX_VALUE;
@@ -221,7 +266,6 @@ export function HeroParticles({ className }: { className?: string }) {
       // (destination-in)裁掉文字外的光,最后 lighter 加回主画布 —— 流光只沿文字显示
       if (sweepX !== Number.MAX_VALUE && band && bandCtx) {
         const b = bandCtx;
-        const s = scene.scale;
         const fs = 112 * s;
         b.setTransform(dpr, 0, 0, dpr, 0, 0);
         b.clearRect(0, 0, w, h);
@@ -281,6 +325,7 @@ export function HeroParticles({ className }: { className?: string }) {
         ctx.fill();
       }
       ctx.globalAlpha = 1;
+      ctx.restore(); // 结束浮动变换
     };
 
     const step = (now: number) => {
@@ -361,10 +406,18 @@ export function HeroParticles({ className }: { className?: string }) {
   }, []);
 
   return (
-    <canvas
-      ref={canvasRef}
+    <div
       aria-hidden
-      className={cn('absolute inset-0 size-full pointer-events-none [mix-blend-mode:plus-lighter]', className)}
-    />
+      className={cn(
+        'absolute inset-0 overflow-hidden pointer-events-none [mask-image:linear-gradient(to_bottom,black_0%,black_60%,transparent_96%,transparent_100%)] [mask-repeat:no-repeat] [mask-size:100%_100%]',
+        className
+      )}
+    >
+      {/* 线框字 + 流光 + 粒子全部画在这一个 canvas 里,见 drawParticles */}
+      <canvas
+        ref={canvasRef}
+        className="absolute inset-0 size-full pointer-events-none [mix-blend-mode:plus-lighter]"
+      />
+    </div>
   );
 }

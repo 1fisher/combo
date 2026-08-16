@@ -1,5 +1,5 @@
 import type { ComponentType, ReactNode } from 'react';
-import { HeroBackdrop } from '../agent/HeroBackdrop';
+import { HeroParticles } from '../agent/HeroParticles';
 
 /**
  * 全尺寸视图共享脚手架:自动化/搜索/技能/MCP/统计等主内容区独立视图
@@ -63,8 +63,8 @@ export function HeroEmpty({
 }) {
   return (
     <div className="relative flex min-h-full flex-col items-center justify-center gap-6 px-4 py-10 text-foreground">
-      {/* 装饰背景(与会话首页共用,见 HeroBackdrop) */}
-      <HeroBackdrop />
+      {/* 装饰背景(与会话首页共用,见 HeroParticles) */}
+      <HeroParticles />
 
       {/* 问候语(压在背景字之上) */}
       <div className="relative z-10 flex w-full max-w-2xl flex-col items-center gap-5">
