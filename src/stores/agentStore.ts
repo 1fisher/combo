@@ -110,11 +110,19 @@ export const useAgentStore = create<AgentState>()(
   activeWorkspaceId: null,
   lastWorkspacePath: null,
   setActiveWorkspace: (id) =>
-    set((st) => ({
-      activeWorkspaceId: id,
-      // 切换项目时清空会话,避免把上一个项目的会话带到新项目
-      ...(id !== st.activeWorkspaceId ? { activeSessionId: null } : {}),
-    })),
+    set((st) => {
+      if (id === st.activeWorkspaceId) return { activeWorkspaceId: id };
+      // 切换项目时清空会话,避免把上一个项目的会话带到新项目;
+      // 同时回收全部会话运行态与任务清单(SSE 只订阅当前项目,旧项目的
+      // 运行态不会再更新;消息已持久化在服务端,切回时由 busy 快照 +
+      // 历史拉取恢复),防止内存随浏览的项目/会话只增不减
+      return {
+        activeWorkspaceId: id,
+        activeSessionId: null,
+        bySession: {},
+        todos: {},
+      };
+    }),
   setLastWorkspacePath: (path) => set({ lastWorkspacePath: path }),
   agentMode: 'yolo' as AgentMode,
   setAgentMode: (mode) => set({ agentMode: mode }),
@@ -139,7 +147,20 @@ export const useAgentStore = create<AgentState>()(
       return { contextOverrides: rest };
     }),
   activeSessionId: null,
-  setActiveSessionId: (id) => set({ activeSessionId: id }),
+  setActiveSessionId: (id) =>
+    set((st) => {
+      const prev = st.activeSessionId;
+      if (prev === id) return st;
+      // 切走会话:已结束(且未排队)的运行态就地回收,防止多会话
+      // 并发/浏览时消息只增不减;running 中的保留(继续接收 SSE 更新,
+      // 结束后由 markRun 的回收路径处理)
+      const prevRt = prev ? st.bySession[prev] : undefined;
+      if (prev && prevRt && prevRt.run?.status !== 'running' && !prevRt.queued) {
+        const { [prev]: _drop, ...bySession } = st.bySession;
+        return { activeSessionId: id, bySession };
+      }
+      return { activeSessionId: id };
+    }),
 
   bySession: {},
   permissionQueue: [],
@@ -243,24 +264,35 @@ export const useAgentStore = create<AgentState>()(
 
   markRun: (sessionId, runId, status, error) =>
     set((st) => {
-      const rt = st.bySession[sessionId] ?? emptyRuntime();
+      const rt = st.bySession[sessionId];
       const ts = new Date().toISOString().slice(11, 23);
+      // 仅有收尾事件而无本地运行态(如重连后的过期收尾):不再新建条目,
+      // 避免会话 map 只增不减
+      if (!rt && status === 'done') return st;
+      const cur = rt ?? emptyRuntime();
       console.debug(
-        `[${ts}][store] markRun status="${status}" prev="${rt.run?.status ?? 'none'}" session="${sessionId}" msgCount=${rt.messages.length}`
+        `[${ts}][store] markRun status="${status}" prev="${cur.run?.status ?? 'none'}" session="${sessionId}" msgCount=${cur.messages.length}`
       );
+      // 非当前会话的 run 结束:回收其运行态与任务清单(消息已持久化在
+      // 服务端,切回时按需重新拉取),防止多会话并发时内存只增不减
+      if (status === 'done' && st.activeSessionId !== sessionId) {
+        const { [sessionId]: _drop, ...bySession } = st.bySession;
+        const { [sessionId]: _td, ...todos } = st.todos;
+        return { bySession, todos };
+      }
       const messages =
         status === 'done'
-          ? rt.messages.map((m) => ({ ...m, streaming: false }))
-          : rt.messages;
+          ? cur.messages.map((m) => ({ ...m, streaming: false }))
+          : cur.messages;
       // 进入 running 记录起点(输入坞上方「正在执行」耗时展示);
       // 收尾为 done 时保留原起点,便于需要时回看本轮耗时
       const startedAt =
-        status === 'running' ? Date.now() : rt.run?.startedAt;
+        status === 'running' ? Date.now() : cur.run?.startedAt;
       return {
         bySession: {
           ...st.bySession,
           [sessionId]: {
-            ...rt,
+            ...cur,
             run: {
               runId,
               status,

@@ -13,11 +13,18 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tokio::sync::{broadcast, oneshot, watch};
 
-/// 待回答问题的注册表:batch_id → oneshot sender。
+/// 待回答问题条目:携带所属 session,run 结束时可按会话批量回收
+/// (接收端已随任务销毁,残留的 sender 只会无限累积)。
+struct PendingQuestion {
+    session_id: String,
+    tx: oneshot::Sender<Value>,
+}
+
+/// 待回答问题的注册表:batch_id → 待答条目。
 /// 通过 AppState 共享,`question_answer` handler 按 batch_id 唤醒。
 #[derive(Default)]
 pub struct QuestionRegistry {
-    pending: Mutex<HashMap<String, oneshot::Sender<Value>>>,
+    pending: Mutex<HashMap<String, PendingQuestion>>,
 }
 
 impl QuestionRegistry {
@@ -25,19 +32,22 @@ impl QuestionRegistry {
         Arc::new(Self::default())
     }
 
-    fn register(&self, batch_id: &str) -> oneshot::Receiver<Value> {
+    fn register(&self, batch_id: &str, session_id: &str) -> oneshot::Receiver<Value> {
         let (tx, rx) = oneshot::channel();
-        self.pending
-            .lock()
-            .unwrap()
-            .insert(batch_id.to_string(), tx);
+        self.pending.lock().unwrap().insert(
+            batch_id.to_string(),
+            PendingQuestion {
+                session_id: session_id.to_string(),
+                tx,
+            },
+        );
         rx
     }
 
     /// 唤醒待回答问题;返回 true 表示找到并已唤醒。
     pub fn resolve(&self, batch_id: &str, answer: Value) -> bool {
-        if let Some(tx) = self.pending.lock().unwrap().remove(batch_id) {
-            let _ = tx.send(answer);
+        if let Some(p) = self.pending.lock().unwrap().remove(batch_id) {
+            let _ = p.tx.send(answer);
             true
         } else {
             false
@@ -46,6 +56,14 @@ impl QuestionRegistry {
 
     fn cancel(&self, batch_id: &str) {
         self.pending.lock().unwrap().remove(batch_id);
+    }
+
+    /// 回收指定会话全部未被回答的问题条目(run 结束/会话删除时调用)。
+    pub(crate) fn cancel_pending(&self, session_id: &str) {
+        self.pending
+            .lock()
+            .unwrap()
+            .retain(|_, p| p.session_id != session_id);
     }
 }
 
@@ -163,7 +181,7 @@ pub fn question_tool(
                     "payload": { "type": "created", "payload": request }
                 }));
 
-                let rx = registry.register(&batch_id);
+                let rx = registry.register(&batch_id, &session_id);
                 tokio::pin!(rx);
 
                 let answer = loop {
@@ -363,7 +381,7 @@ mod tests {
     #[test]
     fn registry_resolve_wakes_waiter() {
         let reg = QuestionRegistry::default();
-        let rx = reg.register("batch-1");
+        let rx = reg.register("batch-1", "s1");
         assert!(reg.resolve("batch-1", json!({"ok": true})));
         let val = rx.blocking_recv().unwrap();
         assert_eq!(val["ok"], true);
@@ -373,5 +391,17 @@ mod tests {
     fn registry_resolve_missing_returns_false() {
         let reg = QuestionRegistry::default();
         assert!(!reg.resolve("nope", json!({})));
+    }
+
+    #[test]
+    fn registry_cancel_pending_drops_only_that_session() {
+        let reg = QuestionRegistry::default();
+        let rx1 = reg.register("b1", "s1");
+        let rx2 = reg.register("b2", "s2");
+        // run 结束回收 s1 的待答问题:s1 的接收端收到关闭,s2 不受影响
+        reg.cancel_pending("s1");
+        assert!(rx1.blocking_recv().is_err());
+        assert!(reg.resolve("b2", json!({"ok": true})));
+        assert_eq!(rx2.blocking_recv().unwrap()["ok"], true);
     }
 }

@@ -116,8 +116,22 @@ impl TodoStore {
         self.sessions.lock().unwrap().get(session_id).cloned()
     }
 
-    fn clear(&self, session_id: &str) {
+    pub(crate) fn clear(&self, session_id: &str) {
         self.sessions.lock().unwrap().remove(session_id);
+    }
+
+    /// 回收已全部完成的任务清单(run 结束时调用;已完成清单对下一轮
+    /// 无注入价值,保留只会随会话数无限累积)。未完成的清单保留,
+    /// 供下一轮 run 注入 prompt 让 agent 接着做。
+    pub(crate) fn clear_completed(&self, session_id: &str) {
+        let mut m = self.sessions.lock().unwrap();
+        let all_completed = m
+            .get(session_id)
+            .map(|todos| todos.iter().all(|t| t.status == TodoStatus::Completed))
+            .unwrap_or(false);
+        if all_completed {
+            m.remove(session_id);
+        }
     }
 }
 

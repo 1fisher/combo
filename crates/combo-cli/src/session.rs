@@ -86,6 +86,10 @@ pub async fn delete(
 ) -> Response {
     let _ = state.meta.db().delete_conversation(&sid);
     let _ = state.meta.db().delete_messages_by_session(&id, &sid);
+    // 回收该会话的服务端内存态:任务清单与未被回答的问题条目
+    // (否则会随会话增删无限累积)。
+    state.todos.clear(&sid);
+    state.questions.cancel_pending(&sid);
     json_ok(&json!({ "deleted": true }))
 }
 

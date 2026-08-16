@@ -137,13 +137,14 @@ impl AppState {
     }
 }
 
-/// 运行态:按 workspace 广播事件,按 session 取消运行,并跟踪每个
-/// session 当前是否有进行中的 run(多会话并发的基础)。
+/// 运行态:按 workspace 广播事件,并跟踪每个 session 当前是否有
+/// 进行中的 run(多会话并发的基础)。取消信号挂在 run 上而非 session
+/// 上:run 结束随 active entry 一并释放,不会随会话数无限累积,
+/// 也避免复用旧 channel 时 watch 对相同值去重导致后续取消失效。
 #[derive(Default)]
 pub struct RunState {
     broadcasts: Mutex<HashMap<String, broadcast::Sender<Value>>>,
-    cancels: Mutex<HashMap<String, watch::Sender<bool>>>,
-    /// 正在运行的 run:session_id → (workspace_id, run_id)。
+    /// 正在运行的 run:session_id → run 信息(含该 run 专属的取消信号)。
     /// 同一 session 同时只允许一个 run(并发发送返回 409)。
     active: Mutex<HashMap<String, ActiveRun>>,
 }
@@ -153,6 +154,8 @@ pub struct RunState {
 pub struct ActiveRun {
     pub ws_id: String,
     pub run_id: String,
+    /// 本 run 专属的取消信号:cancel() 置 true,run 结束随 entry 释放。
+    cancel_tx: watch::Sender<bool>,
 }
 
 impl RunState {
@@ -163,37 +166,43 @@ impl RunState {
             .clone()
     }
 
-    fn cancel_tx(&self, session_id: &str) -> watch::Sender<bool> {
-        let mut m = self.cancels.lock().unwrap();
-        m.entry(session_id.to_string())
-            .or_insert_with(|| watch::channel(false).0)
-            .clone()
+    /// 删除 workspace 时移除其广播 channel(SSE 订阅者已关闭,
+    /// 残留的 channel 会随项目增删无限累积)。
+    pub(crate) fn remove_broadcast(&self, ws_id: &str) {
+        self.broadcasts.lock().unwrap().remove(ws_id);
     }
 
     fn cancel(&self, session_id: &str) {
-        if let Some(tx) = self.cancels.lock().unwrap().get(session_id) {
-            let _ = tx.send(true);
+        // 先移除 entry 再发送:取消后立即重启的新 run 登记的是全新
+        // channel,不会被旧 run 的取消信号波及。
+        if let Some(run) = self.active.lock().unwrap().remove(session_id) {
+            let _ = run.cancel_tx.send(true);
         }
-        // 取消即释放 busy 标记,用户可立刻在同会话重新发起(残留的后台
-        // 任务收尾时会再广播最终消息,前端按 run_id 忽略过期收尾)。
-        self.active.lock().unwrap().remove(session_id);
     }
 
-    /// 标记 session 开始运行;已有进行中的 run 时返回 false(调用方回 409),
-    /// 且不覆盖已登记的 run 信息。
-    fn start_run(&self, ws_id: &str, session_id: &str, run_id: &str) -> bool {
+    /// 标记 session 开始运行,返回该 run 专属的取消信号接收端;
+    /// 已有进行中的 run 时返回 None(调用方回 409),且不覆盖已登记的
+    /// run 信息。
+    fn start_run(
+        &self,
+        ws_id: &str,
+        session_id: &str,
+        run_id: &str,
+    ) -> Option<watch::Receiver<bool>> {
         let mut m = self.active.lock().unwrap();
         if m.contains_key(session_id) {
-            return false;
+            return None;
         }
+        let (cancel_tx, cancel_rx) = watch::channel(false);
         m.insert(
             session_id.to_string(),
             ActiveRun {
                 ws_id: ws_id.to_string(),
                 run_id: run_id.to_string(),
+                cancel_tx,
             },
         );
-        true
+        Some(cancel_rx)
     }
 
     /// 结束运行:仅当 run_id 匹配当前活跃 run 时移除,避免旧任务的收尾
@@ -688,14 +697,14 @@ async fn run_agent_ws(
     let run_id = body.run_id.clone().unwrap_or_else(|| body.session_id.clone());
     let run_id_for_task = run_id.clone();
     // 同一 session 同时只允许一个 run(多会话并发,单会话串行)。
-    if !state.runs.start_run(&ws_id, &body.session_id, &run_id) {
+    // 取消信号按 run 生成:run 结束随 active entry 释放,不随会话累积。
+    let Some(cancel_rx) = state.runs.start_run(&ws_id, &body.session_id, &run_id) else {
         return Err((
             StatusCode::CONFLICT,
             "该会话已有正在进行的任务,请等待完成或先停止".into(),
         ));
-    }
+    };
     let tx = state.runs.broadcast(&ws_id);
-    let cancel_rx = state.runs.cancel_tx(&body.session_id).subscribe();
     // 广播 busy=true(携带 run_id):订阅方据此恢复运行态(前端 markRun running)。
     let _ = tx.send(session_busy_env(&body.session_id, true, Some(&run_id)));
 
@@ -1265,6 +1274,11 @@ struct RunGuard {
 impl Drop for RunGuard {
     fn drop(&mut self) {
         self.state.runs.finish_run(&self.session_id, &self.run_id);
+        // 回收本 run 的服务端内存态:已全部完成的任务清单、未被消费的
+        // 待答问题(接收端已随任务结束销毁,留在注册表只会无限累积)。
+        // 未完成的清单保留,供下一轮 run 注入 prompt 继续。
+        self.state.todos.clear_completed(&self.session_id);
+        self.state.questions.cancel_pending(&self.session_id);
         let _ = self.tx.send(session_busy_env(&self.session_id, false, None));
     }
 }
@@ -2900,12 +2914,12 @@ mod tests {
     #[test]
     fn runstate_active_run_lifecycle() {
         let runs = RunState::default();
-        assert!(runs.start_run("ws1", "s1", "r1"));
+        assert!(runs.start_run("ws1", "s1", "r1").is_some());
         // 同一 session 的第二个 run 被拒绝(409 的来源)
-        assert!(!runs.start_run("ws1", "s1", "r2"));
+        assert!(runs.start_run("ws1", "s1", "r2").is_none());
         // 其它 session 互不影响
-        assert!(runs.start_run("ws1", "s2", "r3"));
-        assert!(runs.start_run("ws2", "s3", "r4"));
+        assert!(runs.start_run("ws1", "s2", "r3").is_some());
+        assert!(runs.start_run("ws2", "s3", "r4").is_some());
 
         assert!(runs.is_busy("s1"));
         let active = runs.workspace_active_runs("ws1");
@@ -2925,6 +2939,32 @@ mod tests {
         assert_eq!(runs.workspace_active_runs("ws2").len(), 1);
     }
 
+    #[test]
+    fn runstate_cancel_channel_scoped_to_run() {
+        // 取消信号按 run 生成:旧 run 取消后,同 session 的新 run 拿到
+        // 全新的 false 信号,不受旧 channel 残留的 true 影响(旧实现复用
+        // 同一 channel,第二次 send(true) 被 watch 去重而失效)。
+        let runs = RunState::default();
+        let rx1 = runs.start_run("ws", "s", "r1").unwrap();
+        runs.cancel("s");
+        assert!(*rx1.borrow(), "被取消的 run 应收到 true");
+
+        let rx2 = runs.start_run("ws", "s", "r2").unwrap();
+        assert!(!*rx2.borrow(), "新 run 的取消信号应为全新 false");
+        // 旧 run 收尾(run_id 不匹配)不影响新 run 的取消能力
+        runs.finish_run("s", "r1");
+        assert!(runs.is_busy("s"));
+        runs.cancel("s");
+        assert!(*rx2.borrow(), "新 run 仍可被取消");
+
+        // run 正常结束:entry 移除,取消信号随之一并释放,不随会话残留
+        let rx3 = runs.start_run("ws", "s", "r3").unwrap();
+        runs.finish_run("s", "r3");
+        assert!(!runs.is_busy("s"));
+        drop(runs);
+        drop(rx3);
+    }
+
     fn multi_session_test_state() -> AppState {
         let meta = Arc::new(MetaStore::new());
         meta.insert(crate::meta::WorkspaceMeta {
@@ -2940,7 +2980,7 @@ mod tests {
     async fn run_agent_ws_rejects_second_run_in_same_session() {
         let state = multi_session_test_state();
         // 预置一个进行中的 run(不真正启动 agent,避免依赖 provider)
-        assert!(state.runs.start_run("ws_t", "busy-sid", "run-1"));
+        assert!(state.runs.start_run("ws_t", "busy-sid", "run-1").is_some());
 
         fn req(v: Value) -> Json<AgentReq> {
             Json(serde_json::from_value(v).unwrap())
@@ -3025,7 +3065,7 @@ mod tests {
             context_tokens: 0,
         };
         state.meta.db().upsert_conversation(&conv).unwrap();
-        assert!(state.runs.start_run("ws_t", "s_busy", "r1"));
+        assert!(state.runs.start_run("ws_t", "s_busy", "r1").is_some());
 
         let resp = crate::session::list(State(state.clone()), Path("ws_t".into())).await;
         let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();

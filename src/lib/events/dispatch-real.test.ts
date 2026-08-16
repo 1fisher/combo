@@ -16,6 +16,8 @@ const payloads = [
 
 describe('applyEvent with real payloads', () => {
   it('applies all captured events without throwing', () => {
+    // 回放的是用户正在查看的会话:非当前会话的 run 收尾会回收运行态
+    useAgentStore.setState({ activeSessionId: 'cd1a775a', bySession: {} });
     for (const env of payloads) {
       applyEvent(useAgentStore.getState(), env as never);
     }

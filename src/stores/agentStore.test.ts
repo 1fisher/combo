@@ -230,3 +230,58 @@ describe('agentStore hydrateMessages 历史加载', () => {
     expect(rt.messages.map((m) => m.id)).toEqual(['h1', 'live-stream']);
   });
 });
+
+describe('agentStore 会话运行态回收(内存防泄漏)', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useAgentStore.setState({
+      activeWorkspaceId: 'w1',
+      lastWorkspacePath: null,
+      activeSessionId: 's1',
+      bySession: {},
+      permissionQueue: [],
+      questionQueue: [],
+      modelSelections: {},
+      contextOverrides: {},
+      todos: {},
+    });
+  });
+
+  it('切走的会话若已结束则回收运行态,running/排队中的保留', () => {
+    const st = useAgentStore.getState();
+    st.upsertMessage('s1', mkMsg('m1', 'user', 'hi'));
+    st.markRun('s1', 'r1', 'done');
+    st.upsertMessage('s2', mkMsg('m2', 'user', 'running...'));
+    st.markRun('s2', 'r2', 'running');
+    // 切到 s2:s1 已结束 → 回收;s2 是目标会话保留
+    st.setActiveSessionId('s2');
+    const after = useAgentStore.getState();
+    expect(after.bySession['s1']).toBeUndefined();
+    expect(after.bySession['s2']).toBeDefined();
+    expect(after.bySession['s2'].run?.status).toBe('running');
+
+    // running 中的会话切走不回收(继续接收 SSE 更新)
+    st.setActiveSessionId(null);
+    expect(useAgentStore.getState().bySession['s2']).toBeDefined();
+  });
+
+  it('切换项目清空全部会话运行态与任务清单', () => {
+    const st = useAgentStore.getState();
+    st.upsertMessage('s1', mkMsg('m1', 'user', 'hi'));
+    st.setTodos('s1', [{ content: '任务一', status: 'pending' }]);
+    st.setActiveWorkspace('w2');
+    const after = useAgentStore.getState();
+    expect(after.activeWorkspaceId).toBe('w2');
+    expect(after.activeSessionId).toBeNull();
+    expect(after.bySession).toEqual({});
+    expect(after.todos).toEqual({});
+  });
+
+  it('无本地运行态的 done 收尾不再新建条目', () => {
+    useAgentStore.getState().markRun('ghost', 'r9', 'done', 'err');
+    expect(useAgentStore.getState().bySession['ghost']).toBeUndefined();
+    // running 收尾(busy 快照恢复)仍会建立条目
+    useAgentStore.getState().markRun('s1', 'r10', 'running');
+    expect(useAgentStore.getState().bySession['s1'].run?.status).toBe('running');
+  });
+});

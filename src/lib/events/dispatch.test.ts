@@ -5,6 +5,8 @@ import { useAgentStore } from '../../stores/agentStore';
 describe('applyEvent', () => {
   beforeEach(() =>
     useAgentStore.setState({
+      // 测试场景均为正在查看 s1 的用户:非当前会话的 run 收尾会回收运行态
+      activeSessionId: 's1',
       bySession: {},
       permissionQueue: [],
       questionQueue: [],
@@ -290,5 +292,23 @@ describe('applyEvent', () => {
       status: 'done',
       startedAt: expect.any(Number),
     });
+  });
+
+  it('非当前会话的 run 结束会回收其运行态(内存回收)', () => {
+    // 用户已切到 s2,后台 s1 的 run 收尾:消息已持久化在服务端,
+    // s1 的本地运行态应整体回收而非永久驻留
+    useAgentStore.setState({ activeSessionId: 's2' });
+    const s = useAgentStore.getState();
+    s.markRun('s1', 'r1', 'running');
+    s.setTodos('s1', [{ content: '任务一', status: 'completed' }]);
+    applyEvent(s, {
+      type: 'run_complete',
+      payload: {
+        type: 'updated',
+        payload: { session_id: 's1', run_id: 'r1', message_id: 'm1', text: 'ok' },
+      },
+    });
+    expect(useAgentStore.getState().bySession['s1']).toBeUndefined();
+    expect(useAgentStore.getState().todos['s1']).toBeUndefined();
   });
 });
