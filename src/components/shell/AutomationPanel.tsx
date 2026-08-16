@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
 import {
   AlarmClock,
+  Calendar,
   CalendarClock,
+  CalendarDays,
+  CalendarRange,
   ChevronLeft,
   Clock,
   History,
@@ -30,6 +33,23 @@ import { HeroCard, HeroEmpty, INPUT_CLS, LABEL_CLS, PAGE, ViewScroll } from './P
 import type { Api } from '../../lib/api/types';
 
 const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+
+/** quarterly:季度内第几个月(1..3)对应的展示文案与绝对月份。 */
+const QUARTER_MONTHS = [
+  '第一个月(1/4/7/10 月)',
+  '第二个月(2/5/8/11 月)',
+  '第三个月(3/6/9/12 月)',
+];
+
+/** yearly:1..12 月。 */
+const MONTHS = Array.from({ length: 12 }, (_, i) => `${i + 1} 月`);
+
+/** monthly / quarterly / yearly:每月几号(1..31)。 */
+const DAY_OPTIONS = Array.from({ length: 31 }, (_, i) => i + 1);
+
+/** 下拉选择框通用样式(与表单内其他 select 一致)。 */
+const SELECT_CLS =
+  'h-9 w-full appearance-none rounded-lg border border-border bg-surface-hover px-3 text-sm text-foreground outline-none transition-colors focus:border-ring/60 focus:ring-1 focus:ring-ring/40';
 
 function formatTime(ts: number | null | undefined): string {
   if (!ts) return '—';
@@ -60,6 +80,12 @@ function scheduleDesc(s: Api.AutomationSchedule): string {
       return `每天 ${s.time ?? '—'}`;
     case 'weekly':
       return `每周${WEEKDAYS[(((s.weekday ?? 1) - 1) % 7 + 7) % 7]} ${s.time ?? '—'}`;
+    case 'monthly':
+      return `每月 ${s.day ?? '—'} 日 ${s.time ?? '—'}`;
+    case 'quarterly':
+      return `每季度第${s.month ?? 1}个月 ${s.day ?? '—'} 日 ${s.time ?? '—'}`;
+    case 'yearly':
+      return `每年 ${s.month ?? '—'} 月 ${s.day ?? '—'} 日 ${s.time ?? '—'}`;
     default:
       return '';
   }
@@ -99,10 +125,14 @@ type Draft = {
   runAt: string;
   /** interval:分钟数(字符串) */
   every: string;
-  /** daily / weekly:HH:MM */
+  /** daily / weekly / monthly / quarterly / yearly:HH:MM */
   time: string;
   /** weekly:1..7 */
   weekday: string;
+  /** monthly / quarterly / yearly:每月几号(1..31) */
+  day: string;
+  /** quarterly:季度内第几个月(1..3);yearly:几月(1..12) */
+  month: string;
 };
 
 function toDatetimeLocal(ts: number): string {
@@ -125,6 +155,8 @@ function emptyDraft(): Draft {
     every: '60',
     time: '09:00',
     weekday: '1',
+    day: '1',
+    month: '1',
   };
 }
 
@@ -138,6 +170,8 @@ function draftFromAutomation(a: Api.Automation): Draft {
     every: String(Math.max(1, Math.round((a.schedule.every_seconds ?? 3600) / 60))),
     time: a.schedule.time ?? '09:00',
     weekday: String(a.schedule.weekday ?? 1),
+    day: String(a.schedule.day ?? 1),
+    month: String(a.schedule.month ?? 1),
   };
 }
 
@@ -156,6 +190,9 @@ const SCHEDULE_OPTIONS: {
   { value: 'interval', label: '固定间隔', desc: '从现在起按固定间隔重复运行', icon: Repeat },
   { value: 'daily', label: '每天', desc: '每天在固定时间运行', icon: Clock },
   { value: 'weekly', label: '每周', desc: '每周在指定日子的固定时间运行', icon: CalendarClock },
+  { value: 'monthly', label: '每月', desc: '每月在指定日子的固定时间运行', icon: CalendarDays },
+  { value: 'quarterly', label: '每季度', desc: '每季度在指定月份与日子的固定时间运行', icon: CalendarRange },
+  { value: 'yearly', label: '每年', desc: '每年在指定日期的固定时间运行', icon: Calendar },
 ];
 
 /** 首页模板卡片(与会话首页任务模板同构):点击直接进入表单并预填 */
@@ -244,6 +281,25 @@ export function AutomationPanel() {
           weekday: parseInt(d.weekday, 10) || 1,
           time: d.time || '09:00',
         };
+      case 'monthly': {
+        const day = parseInt(d.day, 10);
+        if (!Number.isFinite(day) || day < 1 || day > 31) return null;
+        return { type: 'monthly', day, time: d.time || '09:00' };
+      }
+      case 'quarterly': {
+        const day = parseInt(d.day, 10);
+        const month = parseInt(d.month, 10);
+        if (!Number.isFinite(day) || day < 1 || day > 31) return null;
+        if (!Number.isFinite(month) || month < 1 || month > 3) return null;
+        return { type: 'quarterly', month, day, time: d.time || '09:00' };
+      }
+      case 'yearly': {
+        const day = parseInt(d.day, 10);
+        const month = parseInt(d.month, 10);
+        if (!Number.isFinite(day) || day < 1 || day > 31) return null;
+        if (!Number.isFinite(month) || month < 1 || month > 12) return null;
+        return { type: 'yearly', month, day, time: d.time || '09:00' };
+      }
     }
   }
 
@@ -366,6 +422,12 @@ export function AutomationPanel() {
                       <Repeat className="size-5 text-brand" />
                     ) : a.schedule.type === 'weekly' ? (
                       <CalendarClock className="size-5 text-brand" />
+                    ) : a.schedule.type === 'monthly' ? (
+                      <CalendarDays className="size-5 text-brand" />
+                    ) : a.schedule.type === 'quarterly' ? (
+                      <CalendarRange className="size-5 text-brand" />
+                    ) : a.schedule.type === 'yearly' ? (
+                      <Calendar className="size-5 text-brand" />
                     ) : (
                       <Clock className="size-5 text-brand" />
                     )}
@@ -394,17 +456,24 @@ export function AutomationPanel() {
                     </p>
                   </div>
 
-                  {/* 运行状态 */}
+                  {/* 运行状态:标签 + 时间分两行,时间超长换行而非截断 */}
                   <div className="min-w-0 md:flex-1">
-                    <p className="truncate text-[13px] text-foreground-subtle">
-                      {a.enabled
-                        ? a.schedule.type === 'once' && !a.next_run_at
-                          ? '已执行完成'
-                          : `下次运行: ${formatTime(a.next_run_at)}`
-                        : '已暂停'}
-                    </p>
+                    {a.enabled ? (
+                      a.schedule.type === 'once' && !a.next_run_at ? (
+                        <p className="text-[13px] text-foreground-subtle">已执行完成</p>
+                      ) : (
+                        <>
+                          <p className="text-[13px] text-foreground-subtle">下次运行</p>
+                          <p className="mt-0.5 break-words text-[13px] leading-snug text-foreground-subtle">
+                            {formatTime(a.next_run_at)}
+                          </p>
+                        </>
+                      )
+                    ) : (
+                      <p className="text-[13px] text-foreground-subtle">已暂停</p>
+                    )}
                     {a.last_run_at && (
-                      <p className="mt-0.5 truncate text-[13px] text-foreground-subtlest">
+                      <p className="mt-0.5 break-words text-[13px] leading-snug text-foreground-subtlest">
                         上次: {formatTime(a.last_run_at)}
                       </p>
                     )}
@@ -644,7 +713,7 @@ export function AutomationPanel() {
                           星期
                         </label>
                         <select
-                          className="h-9 w-full appearance-none rounded-lg border border-border bg-surface-hover px-3 text-sm text-foreground outline-none transition-colors focus:border-ring/60 focus:ring-1 focus:ring-ring/40"
+                          className={SELECT_CLS}
                           value={draft.weekday}
                           onChange={(e) => setDraft({ ...draft, weekday: e.target.value })}
                         >
@@ -666,6 +735,130 @@ export function AutomationPanel() {
                           onChange={(e) => setDraft({ ...draft, time: e.target.value })}
                         />
                       </div>
+                    </div>
+                  )}
+                  {draft.scheduleType === 'monthly' && (
+                    <div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className={LABEL_CLS}>每月几号</label>
+                          <select
+                            className={SELECT_CLS}
+                            value={draft.day}
+                            onChange={(e) => setDraft({ ...draft, day: e.target.value })}
+                          >
+                            {DAY_OPTIONS.map((d) => (
+                              <option key={d} value={String(d)}>
+                                {d} 日
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className={LABEL_CLS}>执行时间</label>
+                          <input
+                            type="time"
+                            className={INPUT_CLS}
+                            value={draft.time}
+                            onChange={(e) => setDraft({ ...draft, time: e.target.value })}
+                          />
+                        </div>
+                      </div>
+                      <p className="mt-1.5 text-xs text-foreground-subtlest">
+                        按本机时区每月触发;当月天数不足时取当月最后一天(如 31 日在 2 月取月末)。
+                      </p>
+                    </div>
+                  )}
+                  {draft.scheduleType === 'quarterly' && (
+                    <div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className={LABEL_CLS}>季度内月份</label>
+                          <select
+                            className={SELECT_CLS}
+                            value={draft.month}
+                            onChange={(e) => setDraft({ ...draft, month: e.target.value })}
+                          >
+                            {QUARTER_MONTHS.map((m, i) => (
+                              <option key={m} value={String(i + 1)}>
+                                {m}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className={LABEL_CLS}>日期</label>
+                          <select
+                            className={SELECT_CLS}
+                            value={draft.day}
+                            onChange={(e) => setDraft({ ...draft, day: e.target.value })}
+                          >
+                            {DAY_OPTIONS.map((d) => (
+                              <option key={d} value={String(d)}>
+                                {d} 日
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                      <div className="mt-3">
+                        <label className={LABEL_CLS}>执行时间</label>
+                        <input
+                          type="time"
+                          className={INPUT_CLS}
+                          value={draft.time}
+                          onChange={(e) => setDraft({ ...draft, time: e.target.value })}
+                        />
+                      </div>
+                      <p className="mt-1.5 text-xs text-foreground-subtlest">
+                        按本机时区每季度触发;当月天数不足时取当月最后一天。
+                      </p>
+                    </div>
+                  )}
+                  {draft.scheduleType === 'yearly' && (
+                    <div>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className={LABEL_CLS}>月份</label>
+                          <select
+                            className={SELECT_CLS}
+                            value={draft.month}
+                            onChange={(e) => setDraft({ ...draft, month: e.target.value })}
+                          >
+                            {MONTHS.map((m, i) => (
+                              <option key={m} value={String(i + 1)}>
+                                {m}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className={LABEL_CLS}>日期</label>
+                          <select
+                            className={SELECT_CLS}
+                            value={draft.day}
+                            onChange={(e) => setDraft({ ...draft, day: e.target.value })}
+                          >
+                            {DAY_OPTIONS.map((d) => (
+                              <option key={d} value={String(d)}>
+                                {d} 日
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+                      <div className="mt-3">
+                        <label className={LABEL_CLS}>执行时间</label>
+                        <input
+                          type="time"
+                          className={INPUT_CLS}
+                          value={draft.time}
+                          onChange={(e) => setDraft({ ...draft, time: e.target.value })}
+                        />
+                      </div>
+                      <p className="mt-1.5 text-xs text-foreground-subtlest">
+                        按本机时区每年触发;当月天数不足时取当月最后一天(如 2 月 29 日在平年取 28 日)。
+                      </p>
                     </div>
                   )}
                 </div>

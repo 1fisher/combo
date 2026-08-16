@@ -1,10 +1,15 @@
 //! 自动化(定时任务):combo 后台定时触发 agent 运行。
 //!
 //! 调度模型:
-//! - `once`    一次性,指定 run_at(unix 秒)执行一次,执行后不再调度;
-//! - `interval` 每隔 every_seconds 秒执行一次;
-//! - `daily`   每天 HH:MM 执行一次;
-//! - `weekly`  每周 weekday(1=周一..7=周日)的 HH:MM 执行一次。
+//! - `once`      一次性,指定 run_at(unix 秒)执行一次,执行后不再调度;
+//! - `interval`  每隔 every_seconds 秒执行一次;
+//! - `daily`     每天 HH:MM 执行一次;
+//! - `weekly`    每周 weekday(1=周一..7=周日)的 HH:MM 执行一次;
+//! - `monthly`   每月 day 日(1..31)的 HH:MM 执行一次;
+//! - `quarterly` 每季度 month(1..3,季度内第几个月)的 day 日 HH:MM 执行一次;
+//! - `yearly`    每年 month 月(1..12)day 日的 HH:MM 执行一次。
+//!   monthly/quarterly/yearly 的 day 超过当月实际天数时取当月最后一天
+//!   (如每月 31 日,2 月取 28/29 日)。
 //!
 //! 调度器(`AutomationScheduler`)随 serve 启动,后台每 15 秒扫描一次到期的
 //! 任务,到期后在目标 workspace 新建会话并复用 `serve::start_agent_run`
@@ -36,6 +41,9 @@ pub enum ScheduleType {
     Interval,
     Daily,
     Weekly,
+    Monthly,
+    Quarterly,
+    Yearly,
 }
 
 /// 一条自动化任务的调度配置。
@@ -46,10 +54,14 @@ pub struct Schedule {
     pub run_at: Option<i64>,
     /// interval:间隔秒数(> 0)。
     pub every_seconds: Option<i64>,
-    /// daily / weekly:触发时刻 "HH:MM"(24 小时制)。
+    /// daily / weekly / monthly / quarterly / yearly:触发时刻 "HH:MM"(24 小时制)。
     pub time: Option<String>,
     /// weekly:星期几(1=周一 .. 7=周日)。
     pub weekday: Option<u32>,
+    /// monthly / quarterly / yearly:每月几号(1..31;超过当月天数取当月最后一天)。
+    pub day: Option<u32>,
+    /// quarterly:季度内第几个月(1..3);yearly:几月(1..12)。
+    pub month: Option<u32>,
 }
 
 impl Schedule {
@@ -67,6 +79,8 @@ impl Schedule {
                     every_seconds: None,
                     time: None,
                     weekday: None,
+                    day: None,
+                    month: None,
                 })
             }
             "interval" => {
@@ -81,6 +95,8 @@ impl Schedule {
                     every_seconds: Some(secs),
                     time: None,
                     weekday: None,
+                    day: None,
+                    month: None,
                 })
             }
             "daily" => {
@@ -96,6 +112,8 @@ impl Schedule {
                     every_seconds: None,
                     time: Some(time),
                     weekday: None,
+                    day: None,
+                    month: None,
                 })
             }
             "weekly" => {
@@ -117,9 +135,64 @@ impl Schedule {
                     every_seconds: None,
                     time: Some(time),
                     weekday: Some(weekday),
+                    day: None,
+                    month: None,
                 })
             }
-            other => Err(format!("未知的调度类型: {other}(可选 once/interval/daily/weekly)")),
+            "monthly" => {
+                let day = parse_day(v)?;
+                let time = required_time(v, "monthly")?;
+                Ok(Schedule {
+                    schedule_type: ScheduleType::Monthly,
+                    run_at: None,
+                    every_seconds: None,
+                    time: Some(time),
+                    weekday: None,
+                    day: Some(day),
+                    month: None,
+                })
+            }
+            "quarterly" => {
+                let month = v
+                    .get("month")
+                    .and_then(Value::as_u64)
+                    .map(|m| m as u32)
+                    .filter(|m| (1..=3).contains(m))
+                    .ok_or("quarterly 调度需要 month(1..3,季度内第几个月)")?;
+                let day = parse_day(v)?;
+                let time = required_time(v, "quarterly")?;
+                Ok(Schedule {
+                    schedule_type: ScheduleType::Quarterly,
+                    run_at: None,
+                    every_seconds: None,
+                    time: Some(time),
+                    weekday: None,
+                    day: Some(day),
+                    month: Some(month),
+                })
+            }
+            "yearly" => {
+                let month = v
+                    .get("month")
+                    .and_then(Value::as_u64)
+                    .map(|m| m as u32)
+                    .filter(|m| (1..=12).contains(m))
+                    .ok_or("yearly 调度需要 month(1..12,几月)")?;
+                let day = parse_day(v)?;
+                let time = required_time(v, "yearly")?;
+                Ok(Schedule {
+                    schedule_type: ScheduleType::Yearly,
+                    run_at: None,
+                    every_seconds: None,
+                    time: Some(time),
+                    weekday: None,
+                    day: Some(day),
+                    month: Some(month),
+                })
+            }
+            other => Err(format!(
+                "未知的调度类型: {other}(可选 once/interval/daily/weekly/monthly/quarterly/yearly)"
+            )),
         }
     }
 
@@ -135,6 +208,9 @@ impl Schedule {
             ScheduleType::Interval => "interval",
             ScheduleType::Daily => "daily",
             ScheduleType::Weekly => "weekly",
+            ScheduleType::Monthly => "monthly",
+            ScheduleType::Quarterly => "quarterly",
+            ScheduleType::Yearly => "yearly",
         }});
         if let Some(t) = self.run_at {
             v["run_at"] = json!(t);
@@ -148,6 +224,12 @@ impl Schedule {
         if let Some(w) = self.weekday {
             v["weekday"] = json!(w);
         }
+        if let Some(d) = self.day {
+            v["day"] = json!(d);
+        }
+        if let Some(m) = self.month {
+            v["month"] = json!(m);
+        }
         v
     }
 
@@ -155,7 +237,11 @@ impl Schedule {
     /// - once:run_at 在未来则返回它,已过返回 None(不再调度);
     /// - interval:from + every_seconds;
     /// - daily:当天 HH:MM(已过则次日);
-    /// - weekly:最近一个匹配 weekday 的 HH:MM(当天且未过则当天)。
+    /// - weekly:最近一个匹配 weekday 的 HH:MM(当天且未过则当天);
+    /// - monthly:最近一个月份的 day 日 HH:MM(已过则下月);
+    /// - quarterly:最近一个季度内目标月份的 day 日 HH:MM;
+    /// - yearly:今年 month 月 day 日 HH:MM(已过则明年)。
+    ///   day 超过当月天数时取当月最后一天。
     pub fn next_after(&self, from: DateTime<Local>) -> Option<DateTime<Local>> {
         match self.schedule_type {
             ScheduleType::Once => {
@@ -186,6 +272,50 @@ impl Schedule {
                 }
                 Some(dt)
             }
+            ScheduleType::Monthly => {
+                let (h, m) = parse_time(self.time.as_deref()?).ok()?;
+                let day = self.day?;
+                let mut ym = (from.year(), from.month());
+                loop {
+                    if let Some(dt) = month_day_at(ym.0, ym.1, day, h, m) {
+                        if dt > from {
+                            return Some(dt);
+                        }
+                    }
+                    ym = next_month(ym);
+                }
+            }
+            ScheduleType::Quarterly => {
+                let (h, m) = parse_time(self.time.as_deref()?).ok()?;
+                let day = self.day?;
+                // 季度内第几个月(1..3):绝对月份满足 (month - 1) % 3 == month - 1
+                let target = (self.month? - 1) % 3;
+                let mut ym = (from.year(), from.month());
+                loop {
+                    if (ym.1 - 1) % 3 == target {
+                        if let Some(dt) = month_day_at(ym.0, ym.1, day, h, m) {
+                            if dt > from {
+                                return Some(dt);
+                            }
+                        }
+                    }
+                    ym = next_month(ym);
+                }
+            }
+            ScheduleType::Yearly => {
+                let (h, m) = parse_time(self.time.as_deref()?).ok()?;
+                let day = self.day?;
+                let month = self.month?;
+                let mut year = from.year();
+                loop {
+                    if let Some(dt) = month_day_at(year, month, day, h, m) {
+                        if dt > from {
+                            return Some(dt);
+                        }
+                    }
+                    year += 1;
+                }
+            }
         }
     }
 }
@@ -202,6 +332,49 @@ fn parse_time(s: &str) -> Result<(u32, u32), String> {
         return Err(format!("time 超出范围: {s}"));
     }
     Ok((h, m))
+}
+
+/// 解析调度 JSON 中的 day(每月几号,1..31)。
+fn parse_day(v: &Value) -> Result<u32, String> {
+    v.get("day")
+        .and_then(Value::as_u64)
+        .map(|d| d as u32)
+        .filter(|d| (1..=31).contains(d))
+        .ok_or_else(|| "调度需要 day(1..31,每月几号)".to_string())
+}
+
+/// 解析调度 JSON 中必填的 time(HH:MM),错误信息带上调度类型名。
+fn required_time(v: &Value, ty: &str) -> Result<String, String> {
+    let time = v
+        .get("time")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{ty} 调度需要 time(HH:MM)"))?;
+    let time = time.to_string();
+    parse_time(&time)?;
+    Ok(time)
+}
+
+/// (年, 月) 推进到下一个月。
+fn next_month(ym: (i32, u32)) -> (i32, u32) {
+    if ym.1 == 12 {
+        (ym.0 + 1, 1)
+    } else {
+        (ym.0, ym.1 + 1)
+    }
+}
+
+/// 在某年某月构造 day 日 HH:MM 的 Local 时刻;day 超过当月天数时取当月
+/// 最后一天(如每月 31 日,2 月取 28/29 日)。DST 歧义时取首个。
+fn month_day_at(year: i32, month: u32, day: u32, h: u32, m: u32) -> Option<DateTime<Local>> {
+    // 下月 1 号的前一天即当月最后一天
+    let first_of_next = if month == 12 {
+        NaiveDate::from_ymd_opt(year + 1, 1, 1)?
+    } else {
+        NaiveDate::from_ymd_opt(year, month + 1, 1)?
+    };
+    let day = day.min(first_of_next.pred_opt()?.day());
+    let date = NaiveDate::from_ymd_opt(year, month, day)?;
+    day_at(&date, h, m)
 }
 
 /// 在某天构造 HH:MM 的 Local 时刻;DST 导致时间不存在/重复时取首个(尽力而为)。
@@ -682,7 +855,7 @@ fn unix_secs() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{Duration as ChronoDuration, Local, Timelike};
+    use chrono::{Datelike, Duration as ChronoDuration, Local, Timelike};
 
     fn schedule_json(v: Value) -> Schedule {
         Schedule::from_json(&v).unwrap()
@@ -695,6 +868,9 @@ mod tests {
             json!({ "type": "interval", "every_seconds": 3600 }),
             json!({ "type": "daily", "time": "09:30" }),
             json!({ "type": "weekly", "weekday": 5, "time": "18:00" }),
+            json!({ "type": "monthly", "day": 15, "time": "09:30" }),
+            json!({ "type": "quarterly", "month": 2, "day": 1, "time": "10:00" }),
+            json!({ "type": "yearly", "month": 12, "day": 31, "time": "23:59" }),
         ] {
             let s = schedule_json(v.clone());
             let back = Schedule::from_json(&s.to_json()).unwrap();
@@ -713,6 +889,13 @@ mod tests {
         assert!(Schedule::from_json(&json!({ "type": "weekly", "weekday": 8, "time": "09:00" })).is_err());
         assert!(Schedule::from_json(&json!({ "type": "weekly", "weekday": 0, "time": "09:00" })).is_err());
         assert!(Schedule::from_json(&json!({ "type": "once" })).is_err());
+        assert!(Schedule::from_json(&json!({ "type": "monthly", "day": 0, "time": "09:00" })).is_err());
+        assert!(Schedule::from_json(&json!({ "type": "monthly", "day": 32, "time": "09:00" })).is_err());
+        assert!(Schedule::from_json(&json!({ "type": "monthly", "day": 15 })).is_err());
+        assert!(Schedule::from_json(&json!({ "type": "quarterly", "month": 0, "day": 1, "time": "09:00" })).is_err());
+        assert!(Schedule::from_json(&json!({ "type": "quarterly", "month": 4, "day": 1, "time": "09:00" })).is_err());
+        assert!(Schedule::from_json(&json!({ "type": "yearly", "month": 0, "day": 1, "time": "09:00" })).is_err());
+        assert!(Schedule::from_json(&json!({ "type": "yearly", "month": 13, "day": 1, "time": "09:00" })).is_err());
     }
 
     #[test]
@@ -771,6 +954,67 @@ mod tests {
         assert_eq!(next.weekday().num_days_from_monday(), 0);
         assert!(next > from);
         assert!((next - from).num_days() <= 7);
+    }
+
+    #[test]
+    fn monthly_next_is_day_and_time_this_or_next_month() {
+        let s = schedule_json(json!({ "type": "monthly", "day": 15, "time": "09:00" }));
+        let from = Local::now();
+        let next = s.next_after(from).unwrap();
+        assert_eq!(next.hour(), 9);
+        assert_eq!(next.minute(), 0);
+        assert_eq!(next.day(), 15);
+        assert!(next > from);
+        let diff_days = (next.date_naive() - from.date_naive()).num_days();
+        assert!((0..=31).contains(&diff_days));
+    }
+
+    #[test]
+    fn month_day_at_clamps_day_to_month_length() {
+        // 2024 闰年 2 月 29 天、2023 平年 28 天:day=31 取月末
+        let dt = month_day_at(2024, 2, 31, 9, 0).unwrap();
+        assert_eq!((dt.month(), dt.day()), (2, 29));
+        let dt = month_day_at(2023, 2, 31, 9, 0).unwrap();
+        assert_eq!((dt.month(), dt.day()), (2, 28));
+        // 长月份不受影响
+        let dt = month_day_at(2024, 1, 31, 9, 0).unwrap();
+        assert_eq!((dt.month(), dt.day()), (1, 31));
+        // 12 月跨年取下年 1 月 1 号的前一天
+        let dt = month_day_at(2024, 12, 31, 9, 0).unwrap();
+        assert_eq!((dt.month(), dt.day()), (12, 31));
+    }
+
+    #[test]
+    fn quarterly_next_matches_quarter_month() {
+        // 季度内第 1 个月 → 1/4/7/10 月的 1 号 09:00
+        let s = schedule_json(json!({ "type": "quarterly", "month": 1, "day": 1, "time": "09:00" }));
+        let from = Local::now();
+        let next = s.next_after(from).unwrap();
+        assert!([1, 4, 7, 10].contains(&next.month()));
+        assert_eq!(next.day(), 1);
+        assert!(next > from);
+        assert!((next - from).num_days() <= 93);
+    }
+
+    #[test]
+    fn quarterly_month_2_targets_feb_may_aug_nov() {
+        let s = schedule_json(json!({ "type": "quarterly", "month": 2, "day": 10, "time": "09:00" }));
+        let from = Local::now();
+        let next = s.next_after(from).unwrap();
+        assert!([2, 5, 8, 11].contains(&next.month()));
+        assert_eq!(next.day(), 10);
+        assert!(next > from);
+    }
+
+    #[test]
+    fn yearly_next_is_target_month_day() {
+        let s = schedule_json(json!({ "type": "yearly", "month": 12, "day": 31, "time": "23:59" }));
+        let from = Local::now();
+        let next = s.next_after(from).unwrap();
+        assert_eq!(next.month(), 12);
+        assert_eq!(next.day(), 31);
+        assert!(next > from);
+        assert!((next - from).num_days() <= 366);
     }
 
     #[test]

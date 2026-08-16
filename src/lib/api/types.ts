@@ -2202,8 +2202,15 @@ export namespace Api {
 
   // ---------- 自动化(定时任务) ----------
 
-  /** 调度类型:once 一次性 / interval 间隔 / daily 每天 / weekly 每周。 */
-  export type AutomationScheduleType = 'once' | 'interval' | 'daily' | 'weekly';
+  /** 调度类型:once 一次性 / interval 间隔 / daily 每天 / weekly 每周 / monthly 每月 / quarterly 每季度 / yearly 每年。 */
+  export type AutomationScheduleType =
+    | 'once'
+    | 'interval'
+    | 'daily'
+    | 'weekly'
+    | 'monthly'
+    | 'quarterly'
+    | 'yearly';
 
   /** 调度配置(与后端 automation.rs::Schedule 对应)。 */
   export type AutomationSchedule = {
@@ -2212,10 +2219,14 @@ export namespace Api {
     run_at?: number | null;
     /** interval:间隔秒数。 */
     every_seconds?: number | null;
-    /** daily / weekly:触发时刻 "HH:MM"。 */
+    /** daily / weekly / monthly / quarterly / yearly:触发时刻 "HH:MM"。 */
     time?: string | null;
     /** weekly:星期几(1=周一 .. 7=周日)。 */
     weekday?: number | null;
+    /** monthly / quarterly / yearly:每月几号(1..31;超过当月天数时取当月最后一天)。 */
+    day?: number | null;
+    /** quarterly:季度内第几个月(1..3);yearly:几月(1..12)。 */
+    month?: number | null;
     [key: string]: unknown;
   };
 
