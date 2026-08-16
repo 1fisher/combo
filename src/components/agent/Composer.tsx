@@ -542,7 +542,7 @@ export function Composer({
   }
 
   return (
-    <div className="px-4 pb-2 w-full shrink-0">
+    <div className="px-4 py-2 w-full shrink-0">
       <div className="w-full">
         {banner}
         <div className="bg-surface shadow-xl/5 rounded-2xl w-full shrink-0">
@@ -813,24 +813,24 @@ export function Composer({
                                     <div
                                       key={`recent-${m.providerId}/${m.id}`}
                                       className={cn(
-                                        'group/recent flex items-center gap-1 rounded-lg transition-colors hover:bg-surface-hover',
+                                        'group/recent flex items-center gap-1 hover:bg-surface-hover rounded-lg transition-colors',
                                         isSelected && 'bg-surface-hover'
                                       )}
                                     >
                                       <button
                                         type="button"
                                         onClick={() => handleModelChange(m.id, m.providerId)}
-                                        className="flex min-w-0 flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors"
+                                        className="flex flex-1 items-center gap-2 px-2 py-1.5 rounded-lg min-w-0 text-[13px] text-left transition-colors"
                                       >
-                                        <span className="min-w-0 flex-1 truncate font-medium">
+                                        <span className="flex-1 min-w-0 font-medium truncate">
                                           {m.name || m.id}
                                         </span>
                                         {/* 最近使用跨 provider,补充展示 provider 名便于区分同名模型 */}
-                                        <span className="max-w-24 shrink-0 truncate text-[11px] text-foreground-subtlest">
+                                        <span className="max-w-24 text-[11px] text-foreground-subtlest truncate shrink-0">
                                           {m.providerName}
                                         </span>
                                         {isSelected && (
-                                          <Check className="size-3.5 shrink-0 text-brand" />
+                                          <Check className="size-3.5 text-brand shrink-0" />
                                         )}
                                       </button>
                                       <button
@@ -842,7 +842,7 @@ export function Composer({
                                         }
                                         aria-label={`从最近使用中移除 ${m.name || m.id}(${m.providerName})`}
                                         title="从最近使用中移除"
-                                        className="mr-1 shrink-0 rounded-md p-1 text-foreground-subtlest opacity-60 transition-all hover:bg-surface hover:text-foreground focus-visible:opacity-100 md:opacity-0 md:group-hover/recent:opacity-100 md:focus-visible:opacity-100"
+                                        className="hover:bg-surface opacity-60 md:focus-visible:opacity-100 md:group-hover/recent:opacity-100 md:opacity-0 focus-visible:opacity-100 mr-1 p-1 rounded-md text-foreground-subtlest hover:text-foreground transition-all shrink-0"
                                       >
                                         <X className="size-3" />
                                       </button>

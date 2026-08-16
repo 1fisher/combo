@@ -30,16 +30,16 @@ export function ChatEmptyState({
   hasSession?: boolean;
 }) {
   return (
-    <div className="flex min-h-full flex-col items-center justify-center gap-6 px-4 py-10 text-foreground">
+    <div className="flex flex-col justify-center items-center gap-6 px-4 py-10 min-h-full text-foreground">
       {/* 问候语 + 装饰背景 */}
-      <div className="relative mb-10 flex w-full max-w-2xl flex-col items-center justify-center gap-6 sm:mb-8">
+      <div className="relative flex flex-col justify-center items-center gap-6 mb-10 sm:mb-8 w-full max-w-2xl">
         <div
           aria-hidden
-          className="pointer-events-none absolute left-1/2 top-1/2 aspect-[5/4] w-[min(72vw,25rem)] -mt-10 -translate-x-1/2 -translate-y-1/2 text-foreground-subtlest opacity-70 [mask-image:linear-gradient(to_bottom,black_0%,transparent_70%,transparent_100%)] [mask-repeat:no-repeat] [mask-size:100%_100%]"
+          className="top-1/2 left-1/2 absolute opacity-70 -mt-10 w-[min(72vw,25rem)] aspect-[5/4] text-foreground-subtlest -translate-x-1/2 -translate-y-1/2 pointer-events-none [mask-image:linear-gradient(to_bottom,black_0%,transparent_70%,transparent_100%)] [mask-repeat:no-repeat] [mask-size:100%_100%]"
         >
           <svg
             aria-hidden
-            className="h-full w-full"
+            className="w-full h-full"
             width="400"
             height="320"
             viewBox="0 0 400 320"
@@ -52,46 +52,46 @@ export function ChatEmptyState({
             />
           </svg>
         </div>
-        <p className="relative z-10 w-full px-4 text-center text-3xl font-medium max-md:text-xl">
+        <p className="z-10 relative px-4 w-full font-medium max-md:text-xl text-3xl text-center">
           {hasSession ? '新任务已创建，输入消息开始对话' : '把复杂交给 AI，把时间留给自己'}
         </p>
       </div>
       {/* 订阅横幅 + 模板卡片 */}
-      <div className="mt-6 flex w-full max-w-2xl flex-col gap-3">
+      <div className="flex flex-col gap-3 mt-6 w-full max-w-2xl">
         {!hasSession && (
-        <div className="flex items-center justify-between">
-          <div className="flex min-w-0 items-center gap-1 text-[13px] text-foreground-subtle opacity-80">
-            <span className="flex size-8 shrink-0 items-center justify-center">
+        <div className="flex justify-between items-center">
+          <div className="flex items-center gap-1 opacity-80 min-w-0 text-[13px] text-foreground-subtle">
+            <span className="flex justify-center items-center size-8 shrink-0">
               <Megaphone className="size-4" />
             </span>
-            <span className="min-w-0 cursor-default leading-snug">
-              combo 是开源免费的 Agent IDE，喜欢就分享给朋友，一起体验 AI 编程的乐趣。
+            <span className="min-w-0 leading-snug cursor-default">
+              Combo 是开源免费的 Agent IDE，喜欢就分享给朋友，一起体验 AI 编程的乐趣。
             </span>
           </div>
           <button
             type="button"
             aria-label="关闭"
-            className="flex size-8 shrink-0 items-center justify-center rounded-md text-foreground-subtle opacity-80 hover:bg-surface-hover hover:opacity-100"
+            className="flex justify-center items-center hover:bg-surface-hover opacity-80 hover:opacity-100 rounded-md size-8 text-foreground-subtle shrink-0"
           >
             <X className="size-4" />
           </button>
         </div>
         )}
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="gap-4 grid grid-cols-1 sm:grid-cols-3">
           {TEMPLATES.map((t) => (
             <button
               key={t.title}
               type="button"
               onClick={() => onPickTemplate(t.prompt)}
-              className="flex flex-col gap-2 rounded-2xl border border-card-border bg-background p-3 text-left transition-colors hover:bg-surface-hover"
+              className="flex flex-col gap-2 bg-background hover:bg-surface-hover p-3 border border-card-border rounded-2xl text-left transition-colors"
             >
               <div className="flex items-center gap-1.5">
-                <span className="flex size-5 shrink-0 items-center justify-center">
+                <span className="flex justify-center items-center size-5 shrink-0">
                   <t.icon className="size-4 text-foreground-subtle" />
                 </span>
-                <span className="truncate text-[13px] leading-5 text-foreground">{t.title}</span>
+                <span className="text-[13px] text-foreground truncate leading-5">{t.title}</span>
               </div>
-              <p className="line-clamp-3 text-xs leading-snug text-foreground-subtle">{t.desc}</p>
+              <p className="text-foreground-subtle text-xs line-clamp-3 leading-snug">{t.desc}</p>
             </button>
           ))}
         </div>
