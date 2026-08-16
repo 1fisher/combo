@@ -172,6 +172,8 @@ pub async fn delete(State(state): State<AppState>, Path(id): Path<String>) -> Re
     for alias_id in &aliases {
         let _ = state.meta.db().delete_conversations_by_workspace(alias_id);
         let _ = state.meta.db().delete_messages_by_workspace(alias_id);
+        // 级联清理该项目的自动化任务与运行历史
+        let _ = state.meta.db().delete_automations_by_workspace(alias_id);
         state.meta.remove(alias_id);
         // 回收该项目的广播 channel,避免随项目增删无限累积。
         state.runs.remove_broadcast(alias_id);

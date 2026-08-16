@@ -1,5 +1,5 @@
 import { Megaphone, Moon, X } from 'lucide-react';
-import { HeroParticles } from './HeroParticles';
+import { HeroBackdrop } from './HeroBackdrop';
 
 const TEMPLATES: { icon: typeof Moon; title: string; desc: string; prompt: string }[] = [
   {
@@ -32,33 +32,8 @@ export function ChatEmptyState({
 }) {
   return (
     <div className="relative flex flex-col justify-center items-center gap-6 px-4 py-10 min-h-full text-foreground">
-      {/* 装饰背景:Combo 白色线框字,倾斜横贯首屏(样式/定位/动画见 index.css
-          .combo-hero-*);整词始终完整可见,不裁切、不产生横向滚动条。
-          叠加 HeroParticles 粒子层:粒子飘入聚合构成字形,品牌色流光周期扫过 */}
-      <div
-        aria-hidden
-        className="combo-hero-bg absolute inset-0 overflow-hidden pointer-events-none [mask-image:linear-gradient(to_bottom,black_0%,black_60%,transparent_96%,transparent_100%)] [mask-repeat:no-repeat] [mask-size:100%_100%]"
-      >
-        {/* 宽度适配:svg 宽取容器宽(上限 88rem),而不是 vw——侧栏/编辑器分走
-            宽度后会话区远窄于视口,按 vw 定宽必然裁字;整词经 textLength 锁定在
-            画布 87% 宽,旋转 −11° 后外接框约占容器 89%,两端留边完整显示;
-            居中位移与倾斜在 .combo-hero-bg svg 的 transform 里统一处理 */}
-        <svg
-          aria-hidden
-          className="w-full max-w-[88rem]"
-          viewBox="0 0 460 190"
-          fill="none"
-          xmlns="http://www.w3.org/2000/svg"
-        >
-          {/* 线框文字:白色描边 + 0.3 透明度,样式见 index.css .combo-hero-word;
-              textLength 把整词锁定为 400(viewBox 单位),字体回退变宽/变窄
-              也不会溢出画布,跨平台渲染一致 */}
-          <text x="230" y="140" textAnchor="middle" textLength="400" lengthAdjust="spacingAndGlyphs" className="combo-hero-word">Combo</text>
-        </svg>
-        {/* 粒子聚合 + 流光层:置于线框字之上,plus-lighter 加法混合把流光
-            「加」在字与背景上;粒子目标点按同一姿态采样,与线框字对齐 */}
-        <HeroParticles />
-      </div>
+      {/* 装饰背景(Combo 线框字 + 粒子流光),与会话/自动化首页共用,见 HeroBackdrop */}
+      <HeroBackdrop />
       {/* 问候语(压在背景字之上) */}
       <div className="relative flex flex-col justify-center items-center gap-6 mb-10 sm:mb-8 w-full max-w-2xl">
         <p className="z-10 relative px-4 w-full font-medium max-md:text-xl text-3xl text-center">

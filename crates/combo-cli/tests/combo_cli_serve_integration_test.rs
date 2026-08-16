@@ -7,6 +7,7 @@
 
 use axum::http::StatusCode;
 use combo_cli::agent::AskConfig;
+use combo_cli::automation::AutomationScheduler;
 use combo_cli::meta::{MetaStore, WorkspaceMeta};
 use combo_cli::providers::ProviderInfo;
 use combo_cli::relay::RelayManager;
@@ -65,6 +66,7 @@ fn make_state() -> AppState {
         local_port: 0,
         questions: combo_cli::question::QuestionRegistry::new(),
         todos: combo_cli::todo::TodoStore::new(),
+        automations: Arc::new(AutomationScheduler::new()),
     }
 }
 
@@ -326,6 +328,7 @@ async fn git_repos_discovers_root_and_subdir_repos() {
         local_port: 0,
         questions: combo_cli::question::QuestionRegistry::new(),
         todos: combo_cli::todo::TodoStore::new(),
+        automations: Arc::new(AutomationScheduler::new()),
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -502,4 +505,159 @@ async fn question_answer_missing_batch_id_returns_false() {
     assert_eq!(v["ok"], false);
 
     task.abort();
+}
+
+#[tokio::test]
+async fn automation_crud_run_now_and_history() {
+    let (base, _task) = start_server().await;
+    let client = reqwest::Client::new();
+
+    // 0. 校验:workspace 不存在
+    let resp = client
+        .post(format!("{base}/v1/automations"))
+        .json(&serde_json::json!({
+            "workspace_id": "nope",
+            "name": "x",
+            "prompt": "y",
+            "schedule": { "type": "daily", "time": "09:00" },
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // 1. 创建(ws_cli 由 make_state 预置)
+    let resp = client
+        .post(format!("{base}/v1/automations"))
+        .json(&serde_json::json!({
+            "workspace_id": "ws_cli",
+            "name": "每日晨会摘要",
+            "prompt": "请汇总昨日工作并生成晨会摘要",
+            "schedule": { "type": "daily", "time": "09:00" },
+            "enabled": true,
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let created: serde_json::Value = resp.json().await.unwrap();
+    let id = created["id"].as_str().unwrap().to_string();
+    assert_eq!(created["name"].as_str().unwrap(), "每日晨会摘要");
+    assert_eq!(created["workspace_name"].as_str().unwrap(), "cli");
+    assert_eq!(created["schedule"]["type"].as_str().unwrap(), "daily");
+    assert!(created["next_run_at"].as_i64().unwrap() > 0);
+    assert_eq!(created["enabled"], true);
+
+    // 2. 列表可见
+    let list: serde_json::Value = client
+        .get(format!("{base}/v1/automations"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(list.as_array().unwrap().iter().any(|a| a["id"] == id));
+
+    // 3. 更新:禁用 → next_run_at 保留(已排的未来时间不受影响)
+    let resp = client
+        .patch(format!("{base}/v1/automations/{id}"))
+        .json(&serde_json::json!({ "enabled": false }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let got: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(got["enabled"], false);
+
+    // 4. 更新:改调度 → next_run_at 重算且仍是未来
+    let resp = client
+        .patch(format!("{base}/v1/automations/{id}"))
+        .json(&serde_json::json!({
+            "schedule": { "type": "weekly", "weekday": 5, "time": "18:00" },
+        }))
+        .send()
+        .await
+        .unwrap();
+    let got: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(got["schedule"]["type"].as_str().unwrap(), "weekly");
+    assert_eq!(got["schedule"]["weekday"].as_i64().unwrap(), 5);
+    assert!(got["next_run_at"].as_i64().unwrap() > 0);
+
+    // 5. 非法调度被拒绝
+    let resp = client
+        .patch(format!("{base}/v1/automations/{id}"))
+        .json(&serde_json::json!({ "schedule": { "type": "hourly" } }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    // 6. 手动触发:无 API key → agent 立即 error 收尾,运行记录落库
+    let resp = client
+        .post(format!("{base}/v1/automations/{id}/run"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // 等待后台 run 收尾(running → error)
+    let mut runs: serde_json::Value = serde_json::Value::Null;
+    for _ in 0..100 {
+        runs = client
+            .get(format!("{base}/v1/automations/{id}/runs"))
+            .send()
+            .await
+            .unwrap()
+            .json()
+            .await
+            .unwrap();
+        let arr = runs.as_array().unwrap();
+        if arr.len() == 1 && arr[0]["status"] != "running" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(30)).await;
+    }
+    let arr = runs.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "应有一条运行记录: {runs}");
+    assert_eq!(arr[0]["status"].as_str().unwrap(), "error");
+    assert!(arr[0]["finished_at"].is_i64());
+    assert!(!arr[0]["error"].as_str().unwrap_or("").is_empty());
+
+    // 手动触发不推进排期:next_run_at 仍是原计划
+    let got: serde_json::Value = client
+        .get(format!("{base}/v1/automations/{id}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(got["next_run_at"].as_i64().unwrap() > 0);
+
+    // 7. 删除(级联运行历史)
+    let resp = client
+        .delete(format!("{base}/v1/automations/{id}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let list: serde_json::Value = client
+        .get(format!("{base}/v1/automations"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(!list.as_array().unwrap().iter().any(|a| a["id"] == id));
+    let runs: serde_json::Value = client
+        .get(format!("{base}/v1/automations/{id}/runs"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(runs.as_array().unwrap().is_empty());
 }

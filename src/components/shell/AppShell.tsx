@@ -1,9 +1,19 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { lazy, Suspense, useEffect, useRef, useState, type PointerEvent } from 'react';
-import { ArrowLeft, ArrowRight, CircleHelp, PanelLeftClose, PanelRight, SquareTerminal, X } from 'lucide-react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  CalendarClock,
+  CircleHelp,
+  PanelLeftClose,
+  PanelRight,
+  SquareTerminal,
+  X,
+} from 'lucide-react';
 import { connectLoop } from '../../lib/connection';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
+import { AutomationPanel } from './AutomationPanel';
 import { AgentPanel } from '../agent/AgentPanel';
 // xterm / CodeMirror 体量大,按需加载并各自独立成 chunk
 const TerminalPanel = lazy(() =>
@@ -59,7 +69,7 @@ function AppShellInner() {
   const [collapsed, setCollapsed] = useState(
     () => typeof window === 'undefined' || window.innerWidth < 768
   );
-  const [view, setView] = useState<'agent' | 'terminal' | 'editor'>('agent');
+  const [view, setView] = useState<'agent' | 'terminal' | 'editor' | 'automation'>('agent');
   // 面板首次切换过去才挂载(lazy 按需拉取),挂载后保持不卸载以保留终端/编辑器状态
   const [paneMounted, setPaneMounted] = useState({ terminal: false, editor: false });
   const [helpOpen, setHelpOpen] = useState(false);
@@ -118,7 +128,17 @@ function AppShellInner() {
                   </Button>
                 </div>
                 <div className="min-h-0 flex-1">
-                  <WorkspaceSidebar onNavigate={() => setCollapsed(true)} />
+                  <WorkspaceSidebar
+                    onNavigate={() => {
+                      setCollapsed(true);
+                      if (view === 'automation') setView('agent');
+                    }}
+                    onOpenAutomation={() => {
+                      setCollapsed(true);
+                      setView('automation');
+                    }}
+                    autoActive={view === 'automation'}
+                  />
                 </div>
               </div>
             </>
@@ -133,7 +153,13 @@ function AppShellInner() {
               )}
               style={{ width: collapsed ? undefined : width }}
             >
-              <WorkspaceSidebar />
+              <WorkspaceSidebar
+                onNavigate={() => {
+                  if (view === 'automation') setView('agent');
+                }}
+                onOpenAutomation={() => setView('automation')}
+                autoActive={view === 'automation'}
+              />
             </div>
             {/* 调整侧边栏宽度 */}
             {!collapsed && (
@@ -182,6 +208,12 @@ function AppShellInner() {
               >
                 <CircleHelp className="size-4" />
               </Button>
+              <Button variant="ghost" size="icon-sm" aria-label="自动化" title="自动化"
+                onClick={() => setView('automation')}
+                className={cn(view === 'automation' && 'bg-surface-hover text-brand')}
+              >
+                <CalendarClock className="size-4" />
+              </Button>
               <Button variant="ghost" size="icon-sm" aria-label="切换终端" title="切换终端"
                 onClick={() => setView((v) => (v === 'terminal' ? 'agent' : 'terminal'))}
                 className={cn(view === 'terminal' && 'bg-surface-hover text-brand')}
@@ -205,6 +237,9 @@ function AppShellInner() {
                     <TerminalPanel workspaceId={workspaceId} onClose={() => setView('agent')} />
                   </Suspense>
                 )}
+              </div>
+              <div className={cn('flex min-h-0 w-full flex-1', view !== 'automation' && 'hidden')}>
+                <AutomationPanel />
               </div>
               <div className={cn('flex min-h-0 w-full flex-1', view !== 'editor' && 'hidden')}>
                 {workspaceId ? (

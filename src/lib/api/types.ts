@@ -2199,4 +2199,55 @@ export namespace Api {
     custom?: boolean;
     [key: string]: unknown;
   };
+
+  // ---------- 自动化(定时任务) ----------
+
+  /** 调度类型:once 一次性 / interval 间隔 / daily 每天 / weekly 每周。 */
+  export type AutomationScheduleType = 'once' | 'interval' | 'daily' | 'weekly';
+
+  /** 调度配置(与后端 automation.rs::Schedule 对应)。 */
+  export type AutomationSchedule = {
+    type: AutomationScheduleType;
+    /** once:触发时间(unix 秒)。 */
+    run_at?: number | null;
+    /** interval:间隔秒数。 */
+    every_seconds?: number | null;
+    /** daily / weekly:触发时刻 "HH:MM"。 */
+    time?: string | null;
+    /** weekly:星期几(1=周一 .. 7=周日)。 */
+    weekday?: number | null;
+    [key: string]: unknown;
+  };
+
+  /** 一条自动化(定时)任务。 */
+  export type Automation = {
+    id: string;
+    workspace_id: string;
+    workspace_name?: string;
+    name: string;
+    prompt: string;
+    schedule: AutomationSchedule;
+    enabled: boolean;
+    next_run_at: number | null;
+    last_run_at: number | null;
+    /** success | error | cancelled | skipped */
+    last_status: 'success' | 'error' | 'cancelled' | 'skipped' | null;
+    last_error: string | null;
+    created_at: number;
+    updated_at: number;
+  };
+
+  /** 一次自动化运行记录。 */
+  export type AutomationRun = {
+    id: string;
+    automation_id: string;
+    workspace_id: string;
+    session_id: string;
+    run_id: string;
+    /** running | success | error | cancelled */
+    status: 'running' | 'success' | 'error' | 'cancelled';
+    started_at: number;
+    finished_at: number | null;
+    error: string | null;
+  };
 }

@@ -792,3 +792,53 @@ export function getUsageStats(): Promise<UsageStats> {
   return apiRequest('/v1/stats/usage');
 }
 
+// ---------- 自动化(定时任务) ----------
+
+export type AutomationInput = {
+  workspace_id: string;
+  name: string;
+  prompt: string;
+  schedule: Api.AutomationSchedule;
+  enabled?: boolean;
+};
+
+/** 列出全部自动化任务(可选按项目过滤)。 */
+export function listAutomations(workspaceId?: string): Promise<Api.Automation[]> {
+  return apiRequest('/v1/automations', {
+    query: workspaceId ? { workspace_id: workspaceId } : undefined,
+  });
+}
+
+/** 获取单个自动化任务。 */
+export function getAutomation(id: string): Promise<Api.Automation> {
+  return apiRequest(`/v1/automations/${id}`);
+}
+
+/** 创建自动化任务。 */
+export function createAutomation(input: AutomationInput): Promise<Api.Automation> {
+  return apiRequest('/v1/automations', { method: 'POST', body: input });
+}
+
+/** 更新自动化任务(部分字段)。 */
+export function updateAutomation(
+  id: string,
+  input: Partial<AutomationInput>
+): Promise<Api.Automation> {
+  return apiRequest(`/v1/automations/${id}`, { method: 'PATCH', body: input });
+}
+
+/** 删除自动化任务(含运行历史)。 */
+export function deleteAutomation(id: string): Promise<void> {
+  return apiRequest(`/v1/automations/${id}`, { method: 'DELETE' });
+}
+
+/** 手动立即触发一次自动化任务(不推进原排期)。 */
+export function runAutomationNow(id: string): Promise<{ ok: boolean; started: boolean }> {
+  return apiRequest(`/v1/automations/${id}/run`, { method: 'POST' });
+}
+
+/** 查询自动化任务的运行历史。 */
+export function listAutomationRuns(id: string): Promise<Api.AutomationRun[]> {
+  return apiRequest(`/v1/automations/${id}/runs`);
+}
+

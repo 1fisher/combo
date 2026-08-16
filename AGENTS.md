@@ -180,10 +180,33 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
 ## Code organization & conventions
 
 - **Rust:** module-per-concern under `crates/combo-cli/src/` (`serve`, `agent`,
-  `store`, `meta`, `workspace`, `session`, `auth`, `fs`, `git`, `host`,
-  `terminal`, `relay`, `tunnel`, `skills`, `skills_api`), `pub` API
+  `automation`, `store`, `meta`, `workspace`, `session`, `auth`, `fs`, `git`,
+  `host`, `terminal`, `relay`, `tunnel`, `skills`, `skills_api`), `pub` API
   re-exported from `lib.rs`(`AppState` / `run` / `serve_listener`)。Workspace root
   `Cargo.toml` has members `crates/combo-cli`, `crates/combo-relay` and `src-tauri`.
+- **自动化(定时任务)** (`crates/combo-cli/src/automation.rs`):combo 后台定时
+  触发 agent 运行。调度模型四种:`once`(一次性 run_at)、`interval`(每
+  every_seconds 秒)、`daily`(每天 HH:MM)、`weekly`(每周 weekday=1周一..7周日
+  HH:MM),`Schedule::next_after` 基于 chrono::Local 计算下一次触发,不引入 cron
+  依赖。`AutomationScheduler` 挂在 `AppState.automations`,serve_listener 启动时
+  `start(state.clone())`,后台每 15 秒 `tick` 扫描 sqlite 中
+  `enabled AND next_run_at <= now` 的任务;到期后在目标 workspace 新建会话
+  (标题 `⏰ {任务名}`)并复用 `serve::start_agent_run` 发起 agent 运行,运行结束
+  经完成回调把结果写入 `automation_runs` 表并更新任务 `last_status`
+  (success/error/cancelled/skipped)。REST 端点:
+  `GET/POST /v1/automations`、`GET/PATCH/DELETE /v1/automations/:id`、
+  `POST /v1/automations/:id/run`(手动触发,不推进排期)、
+  `GET /v1/automations/:id/runs`(历史)。sqlite 表 `automations` +
+  `automation_runs`(见 `store.rs`),删除项目时 `workspace::delete` 级联清理。
+  前端 `AutomationPanel.tsx`(侧边栏「自动化」按钮打开)作为**主内容区视图**(与
+  会话/终端/编辑器同级,非 Dialog;顶栏有自动化切换按钮,点击侧边栏「自动化」
+  或顶栏图标在 agent ↔ automation 视图间切换)三视图:列表(启用开关/
+  立即运行/历史/编辑/删除)/ 表单(名称/目标项目/提示词/调度类型)/ 运行历史。
+- **serve run 公共入口**:`serve::start_agent_run(state, ws_id, req, on_finish)`
+  是发起一次 agent 运行的唯一入口(HTTP handler `run_agent_ws` 与自动化调度器
+  共用)。`on_finish: Option<AgentFinishCallback>` 在后台 run 真正结束时调用
+  (reason: end_turn|cancelled|error + 友好错误文案),自动化任务据此落运行结果;
+  普通对话传 None。
 - **Frontend layout:** `src/components/{ui,shell,agent}` — `ui/` is generated
   shadcn primitives, `shell/` is app chrome, `agent/` is the chat/tool/modal UI.
   The shell is a 1:1 仿写 ZCode 的 agent 布局:左侧 `WorkspaceSidebar`(默认 372px,

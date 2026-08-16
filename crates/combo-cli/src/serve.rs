@@ -15,6 +15,7 @@
 
 use crate::agent::{self, AskConfig, RunEvent, RunUsage};
 use crate::auth;
+use crate::automation::{self, AutomationScheduler};
 use crate::compact;
 use crate::config::AppConfig;
 use crate::fs;
@@ -70,6 +71,8 @@ pub struct AppState {
     pub questions: Arc<QuestionRegistry>,
     /// todo 工具的任务列表存储(session_id → 任务列表)。
     pub todos: Arc<TodoStore>,
+    /// 自动化(定时任务)调度器:后台 tick 扫描到期的任务并触发 agent 运行。
+    pub automations: Arc<AutomationScheduler>,
 }
 
 impl AppState {
@@ -90,6 +93,7 @@ impl AppState {
             local_port: 0,
             questions: QuestionRegistry::new(),
             todos: TodoStore::new(),
+            automations: Arc::new(AutomationScheduler::new()),
         })
     }
 
@@ -133,6 +137,7 @@ impl AppState {
             local_port: 0,
             questions: QuestionRegistry::new(),
             todos: TodoStore::new(),
+            automations: Arc::new(AutomationScheduler::new()),
         }
     }
 }
@@ -269,6 +274,400 @@ struct AgentReq {
     workspace_dir: Option<String>,
 }
 
+/// 发起一次 agent 运行所需的全部参数(供 HTTP handler 与自动化调度器共用)。
+#[derive(Clone)]
+pub(crate) struct AgentRunRequest {
+    pub session_id: String,
+    pub run_id: String,
+    pub prompt: String,
+    /// 客户端注入的历史消息(可选;None 时从 sqlite 读取)。
+    pub history: Option<Vec<Value>>,
+    /// workspace 根目录兜底(可选;优先从 sqlite 元数据解析)。
+    pub workspace_dir: Option<String>,
+}
+
+/// run 结束时的回调(reason, error)。
+/// reason: end_turn | cancelled | error;error 为友好错误文案(None 表示成功/取消)。
+pub(crate) type AgentFinishCallback = Box<dyn FnOnce(&str, Option<String>) + Send>;
+
+/// 发起一次 agent 运行(公共入口,HTTP handler 与自动化定时任务共用)。
+///
+/// 立即回传用户消息事件(前端据此清除乐观插入),随后在后台任务中
+/// 流式运行,事件经 workspace 的 broadcast 广播给 SSE 订阅者。
+/// `on_finish` 在后台 run 真正结束时(成功/取消/出错)调用一次,
+/// 供自动化任务记录运行结果;普通对话传 None。
+pub(crate) async fn start_agent_run(
+    state: &AppState,
+    ws_id: &str,
+    req: AgentRunRequest,
+    on_finish: Option<AgentFinishCallback>,
+) -> Result<(), (StatusCode, String)> {
+    if req.session_id.is_empty() || req.prompt.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "session_id 与 prompt 不能为空".into(),
+        ));
+    }
+    let run_id = req.run_id.clone();
+    let run_id_for_task = run_id.clone();
+    // 同一 session 同时只允许一个 run(多会话并发,单会话串行)。
+    // 取消信号按 run 生成:run 结束随 active entry 释放,不随会话累积。
+    let Some(cancel_rx) = state.runs.start_run(ws_id, &req.session_id, &run_id) else {
+        return Err((
+            StatusCode::CONFLICT,
+            "该会话已有正在进行的任务,请等待完成或先停止".into(),
+        ));
+    };
+    let tx = state.runs.broadcast(ws_id);
+    // 广播 busy=true(携带 run_id):订阅方据此恢复运行态(前端 markRun running)。
+    let _ = tx.send(session_busy_env(&req.session_id, true, Some(&run_id)));
+
+    // 1. 回传用户消息(created),前端据此移除乐观插入的 local- 消息。
+    //    workspace 根目录先解析,以便加载该项目的 AGENTS.md(项目基础规则)
+    //    并按该 workspace 的禁用技能重建 preamble(技能开关生效)。
+    let workspace_dir = state
+        .meta
+        .get(ws_id)
+        .map(|m| m.path)
+        .or_else(|| req.workspace_dir.as_deref().map(std::path::PathBuf::from));
+    let cfg = {
+        let base = state.cfg.lock().unwrap().clone();
+        let ws_disabled = state.meta.db().get_disabled_skills(ws_id).unwrap_or_default();
+        base.with_workspace(workspace_dir.clone(), &ws_disabled)
+    };
+    let user_msg = user_message_json(&req.session_id, &req.prompt, &cfg);
+    let _ = tx.send(msg_env("created", user_msg.clone()));
+    // 服务端持久化:用户消息立即落库(历史不再依赖前端订阅回写,
+    // 未订阅该 workspace 的客户端也能拿到完整历史)。
+    persist_msg(state.meta.as_ref(), ws_id, &user_msg);
+
+    // 2. 会话历史从本地 sqlite 解析(多轮上下文)。
+    //    req 里旧客户端注入的 history 仅在 sqlite 无数据时兜底。
+    let mut history: Vec<Value> = match &req.history {
+        Some(h) if !h.is_empty() => h.clone(),
+        _ => state
+            .meta
+            .db()
+            .list_messages(ws_id, &req.session_id)
+            .unwrap_or_default()
+            .iter()
+            .map(|m| {
+                let parts: Value =
+                    serde_json::from_str(&m.parts).unwrap_or(Value::Array(vec![]));
+                json!({ "role": m.role, "parts": parts })
+            })
+            .collect(),
+    };
+
+    // 3. 记录请求日志(发送给 agent 的内容)
+    let provider_id = cfg.provider.id.clone();
+    let model_name = cfg.model.clone();
+    crate::request_log::log_request(
+        ws_id,
+        &req.session_id,
+        &run_id,
+        &req.prompt,
+        &provider_id,
+        &model_name,
+        history.len(),
+    );
+
+    // 3.5 自动压缩:上下文接近模型窗口上限时,总结旧消息释放空间。
+    //     仅在从 sqlite 加载历史时触发(client body 传来的历史无 ID 无法删除)。
+    //     触发信号优先用 rig 原生 usage 上报的真实上下文占用
+    //     (上次 run 结束时持久化的 context_tokens,含 preamble/工具定义/全部历史),
+    //     字符估算仅作 provider 未上报时的兜底——中文会话按 chars/3 估算
+    //     偏低 2~3 倍,旧实现常在超窗报错时仍未压缩。
+    if req.history.as_ref().map_or(true, |h| h.is_empty()) {
+        let ctx_tokens = state
+            .meta
+            .db()
+            .get_context_tokens(&req.session_id)
+            .map(|t| t as u64);
+        if compact::needs_compact(&cfg, &history, ctx_tokens) {
+            let stored = state
+                .meta
+                .db()
+                .list_messages(ws_id, &req.session_id)
+                .unwrap_or_default();
+            let ids: Vec<String> = stored.iter().map(|m| m.id.clone()).collect();
+            if ids.len() == history.len() {
+                match compact::compact(&cfg, &history, &ids, ctx_tokens).await {
+                    Ok(Some(result)) => {
+                        let removed_ids = result.removed_ids.clone();
+                        let count = result.compacted_count;
+                        let tokens_before = result.tokens_before;
+                        let tokens_after = result.tokens_after;
+                        // 摘要时间戳:排在保留尾部第一条消息之前(list_messages 按 created_at 升序)
+                        let summary_at = stored
+                            .get(count)
+                            .map(|m| m.created_at - 1)
+                            .unwrap_or_else(now_secs);
+                        match compact::persist_compaction(
+                            &state.meta,
+                            ws_id,
+                            &req.session_id,
+                            &result,
+                            summary_at,
+                        ) {
+                            Ok(summary_id) => {
+                                // 重置上下文占用,避免旧值在后续轮次反复触发压缩
+                                let _ = state
+                                    .meta
+                                    .db()
+                                    .set_context_tokens(&req.session_id, tokens_after as i64);
+                                // 广播:删除旧消息
+                                for id in &removed_ids {
+                                    let _ = tx.send(msg_env(
+                                        "deleted",
+                                        json!({ "id": id, "session_id": &req.session_id }),
+                                    ));
+                                }
+                                // 广播:插入摘要消息
+                                let summary_msg = compact::summary_message_json(
+                                    &req.session_id,
+                                    &summary_id,
+                                    &result.summary,
+                                    count,
+                                    tokens_before,
+                                    tokens_after,
+                                    &cfg,
+                                    summary_at,
+                                );
+                                let _ = tx.send(msg_env("created", summary_msg));
+                                // 从压缩后的 sqlite 重建历史
+                                history = compact::load_compacted_history(
+                                    &state.meta,
+                                    ws_id,
+                                    &req.session_id,
+                                );
+                                eprintln!(
+                                    "自动压缩完成: {count} 条消息, tokens {tokens_before} → {tokens_after}"
+                                );
+                            }
+                            Err(e) => eprintln!("自动压缩持久化失败: {e}"),
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => eprintln!("自动压缩失败(已跳过): {e}"),
+                }
+            }
+        }
+    }
+
+    // 4. 后台运行 agent,事件经广播流出
+    let ws_id_tool = ws_id.to_string();
+    let state2 = state.clone();
+    tokio::spawn(async move {
+        let session_id = req.session_id.clone();
+        // RunGuard:任务结束(含 panic)时释放 busy 标记并广播 is_busy=false,
+        // 保证任意退出路径下该会话都能重新发起。
+        let _run_guard = RunGuard {
+            state: state2.clone(),
+            session_id: session_id.clone(),
+            run_id: run_id_for_task.clone(),
+            tx: tx.clone(),
+        };
+        // 注入未完成的任务清单状态:上一轮中断(报错/取消)清单仍留在 TodoStore,
+        // 附带进度让 agent 开局即对准「当前第几项」。仅影响本次发往 LLM 的
+        // prompt;广播与落库的用户消息仍用 req.prompt 原文,不污染历史。
+        let prompt = match state2.todos.get(&req.session_id) {
+            Some(todos) => match crate::todo::todo_context_prompt(&todos) {
+                Some(ctx) => format!("{}\n\n{}", req.prompt, ctx),
+                None => req.prompt.clone(),
+            },
+            None => req.prompt.clone(),
+        };
+        let run_id2 = run_id_for_task.clone();
+        let assistant_id = uuid::Uuid::new_v4().to_string();
+        let created_at = now_secs();
+
+        // 初始空 assistant 消息(created)
+        let _ = tx.send(msg_env(
+            "created",
+            assistant_message_json(&session_id, &assistant_id, &cfg, Vec::new(), created_at),
+        ));
+
+        let rig_history = history_to_messages(&history);
+        let mut sparts = StreamParts::default();
+        let mut usage: Option<RunUsage> = None;
+        let tx_ev = tx.clone();
+        // 服务端持久化(节流):assistant 快照至少间隔 1.5s 落库一次,
+        // 工具调用/工具结果/最终消息必落;崩溃最多至丢失 1.5s 内的增量。
+        let meta_p = state2.meta.clone();
+        let ws_p = ws_id_tool.clone();
+        let mut last_persist = std::time::Instant::now();
+        // 收集工具调用摘要供响应日志使用
+        let mut tool_call_summaries: Vec<crate::request_log::ToolCallSummary> = Vec::new();
+        // question 工具:需要 broadcast tx、registry 和 cancel 信号
+        let extra_tools = vec![
+            crate::question::question_tool(
+                session_id.clone(),
+                tx.clone(),
+                state2.questions.clone(),
+                cancel_rx.clone(),
+            ),
+            crate::todo::todo_write_tool(
+                session_id.clone(),
+                tx.clone(),
+                state2.todos.clone(),
+            ),
+            compact::compact_tool(
+                ws_id_tool.clone(),
+                session_id.clone(),
+                state2.meta.clone(),
+                cfg.clone(),
+                tx.clone(),
+            ),
+        ];
+        let result =
+            crate::agent::stream_run(&cfg, &prompt, &rig_history, workspace_dir, cancel_rx, extra_tools, |ev| {
+            // 本次事件是否需要立即落库(工具调用是消息结构边界,必须落)
+            let mut force_persist = false;
+            match ev {
+                RunEvent::TextDelta(t) => {
+                    crate::request_log::log_event(
+                        &run_id_for_task,
+                        &session_id,
+                        "text_delta",
+                        json!({ "delta": &t }),
+                    );
+                    sparts.text_delta(&t);
+                }
+                RunEvent::ReasoningDelta(r) => {
+                    crate::request_log::log_event(
+                        &run_id_for_task,
+                        &session_id,
+                        "reasoning_delta",
+                        json!({ "delta": &r }),
+                    );
+                    sparts.reasoning_delta(&r);
+                }
+                RunEvent::ToolCall { id, name, input } => {
+                    crate::request_log::log_event(
+                        &run_id_for_task,
+                        &session_id,
+                        "tool_call",
+                        json!({ "id": &id, "name": &name, "input": &input }),
+                    );
+                    tool_call_summaries.push(crate::request_log::ToolCallSummary {
+                        name: name.clone(),
+                        input: input.clone(),
+                    });
+                    sparts.tool_call(&id, &name, &input);
+                    force_persist = true;
+                }
+                RunEvent::ToolResult { id, name, content } => {
+                    crate::request_log::log_event(
+                        &run_id_for_task,
+                        &session_id,
+                        "tool_result",
+                        json!({ "id": &id, "name": &name, "content_preview": content.chars().take(2000).collect::<String>() }),
+                    );
+                    let msg = tool_result_message_json(&session_id, &id, &name, &content);
+                    persist_msg(meta_p.as_ref(), &ws_p, &msg);
+                    let _ = tx_ev.send(msg_env("created", msg));
+                }
+                RunEvent::Usage(u) => usage = Some(u),
+            }
+            let upd = assistant_message_json(
+                &session_id,
+                &assistant_id,
+                &cfg,
+                sparts.parts.clone(),
+                created_at,
+            );
+            if force_persist || last_persist.elapsed() >= Duration::from_millis(1500) {
+                persist_msg(meta_p.as_ref(), &ws_p, &upd);
+                last_persist = std::time::Instant::now();
+            }
+            let _ = tx_ev.send(msg_env("updated", upd));
+        })
+        .await;
+
+        let (reason, error, text) = match &result {
+            Ok(Some(t)) => ("end_turn", None, t.clone()),
+            Ok(None) => ("cancelled", None, String::new()),
+            Err(e) => {
+                let msg = friendly_error(e);
+                ("error", Some(msg.clone()), msg)
+            }
+        };
+        sparts.finish(reason, now_secs(), usage.as_ref());
+        let final_msg = assistant_message_json(
+            &session_id,
+            &assistant_id,
+            &cfg,
+            sparts.into_parts(),
+            created_at,
+        );
+        persist_msg(meta_p.as_ref(), &ws_p, &final_msg);
+        let _ = tx.send(msg_env("updated", final_msg));
+        let _ = tx.send(run_complete_env(
+            &session_id,
+            &run_id2,
+            &assistant_id,
+            &text,
+            error.as_deref(),
+            usage,
+        ));
+
+        // run 真正结束:通知调用方(自动化任务据此落运行结果)。
+        if let Some(cb) = on_finish {
+            cb(&reason, error.clone());
+        }
+
+        // 记录响应日志(agent 返回的内容;usage 记 run 累计消耗)
+        crate::request_log::log_response(
+            &run_id2,
+            &session_id,
+            reason,
+            &text,
+            error.as_deref(),
+            usage.map(|u| (u.total_input, u.total_output)),
+            &tool_call_summaries,
+        );
+
+        // 累加 token 用量与花费到会话:
+        // - prompt/completion 累计 run 内全部 completion 调用(rig 原生 Usage 求和);
+        // - context_tokens 记录最后一次调用的 input+output(当前上下文窗口占用,
+        //   驱动下一轮的 compact 触发判断与前端用量环)。
+        if let Some(u) = usage {
+            let (pin, pout) =
+                crate::providers::get_model_pricing(&cfg.provider, &cfg.model);
+            let cost =
+                (u.total_input as f64 / 1_000_000.0) * pin + (u.total_output as f64 / 1_000_000.0) * pout;
+            let _ = state2.meta.db().add_usage(
+                &session_id,
+                u.total_input as i64,
+                u.total_output as i64,
+                cost,
+                u.context_tokens() as i64,
+            );
+        }
+    });
+
+    Ok(())
+}
+
+/// POST /v1/workspaces/{id}/agent — 发起一次 agent 运行(薄包装,共享 start_agent_run)。
+async fn run_agent_ws(
+    State(state): State<AppState>,
+    Path(ws_id): Path<String>,
+    Json(body): Json<AgentReq>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let run_id = body.run_id.clone().unwrap_or_else(|| body.session_id.clone());
+    let req = AgentRunRequest {
+        session_id: body.session_id,
+        run_id: run_id.clone(),
+        prompt: body.prompt,
+        history: body.history,
+        workspace_dir: body.workspace_dir,
+    };
+    start_agent_run(&state, &ws_id, req, None).await?;
+    Ok(Json(json!({ "ok": true, "run_id": run_id })))
+}
+
 pub async fn run(
     cfg: &agent::AskConfig,
     host: String,
@@ -301,6 +700,8 @@ pub async fn serve_listener(
     allowed_origins: Vec<String>,
     static_dir: Option<PathBuf>,
 ) -> Result<()> {
+    // 启动自动化调度器(定时任务后台扫描;服务退出时随进程结束)。
+    state.automations.start(state.clone());
     let app = build_router(state.clone(), allowed_origins, static_dir);
     // 注入 ConnectInfo<SocketAddr> 供鉴权中间件判断请求来源是否回环。
     let shutdown_handle = state.shutdown.clone();
@@ -492,6 +893,19 @@ fn build_router(
 .route("/v1/workspaces/:id/git/checkout", post(git::git_checkout))
         .route("/v1/workspaces/:id/git/commit/files", get(git::commit_files))
         .route("/v1/workspaces/:id/git/commit/diff", get(git::commit_diff))
+        // ---- 自动化(定时任务) ----
+        .route(
+            "/v1/automations",
+            get(automation::list).post(automation::create),
+        )
+        .route(
+            "/v1/automations/:id",
+            get(automation::get)
+                .patch(automation::update)
+                .delete(automation::remove),
+        )
+        .route("/v1/automations/:id/run", post(automation::run_now))
+        .route("/v1/automations/:id/runs", get(automation::runs))
         .layer(from_fn_with_state(state.clone(), auth::require_token))
         .with_state(state);
 
@@ -679,357 +1093,6 @@ async fn usage_stats() -> Json<Value> {
     }))
 }
 
-/// POST /v1/workspaces/{id}/agent — 发起一次 agent 运行。
-///
-/// 立即回传用户消息事件(前端据此清除乐观插入),随后在后台任务中
-/// 流式运行,事件经 workspace 的 broadcast 广播给 SSE 订阅者。
-async fn run_agent_ws(
-    State(state): State<AppState>,
-    Path(ws_id): Path<String>,
-    Json(body): Json<AgentReq>,
-) -> Result<Json<Value>, (StatusCode, String)> {
-    if body.session_id.is_empty() || body.prompt.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "session_id 与 prompt 不能为空".into(),
-        ));
-    }
-    let run_id = body.run_id.clone().unwrap_or_else(|| body.session_id.clone());
-    let run_id_for_task = run_id.clone();
-    // 同一 session 同时只允许一个 run(多会话并发,单会话串行)。
-    // 取消信号按 run 生成:run 结束随 active entry 释放,不随会话累积。
-    let Some(cancel_rx) = state.runs.start_run(&ws_id, &body.session_id, &run_id) else {
-        return Err((
-            StatusCode::CONFLICT,
-            "该会话已有正在进行的任务,请等待完成或先停止".into(),
-        ));
-    };
-    let tx = state.runs.broadcast(&ws_id);
-    // 广播 busy=true(携带 run_id):订阅方据此恢复运行态(前端 markRun running)。
-    let _ = tx.send(session_busy_env(&body.session_id, true, Some(&run_id)));
-
-    // 1. 回传用户消息(created),前端据此移除乐观插入的 local- 消息。
-    //    workspace 根目录先解析,以便加载该项目的 AGENTS.md(项目基础规则)
-    //    并按该 workspace 的禁用技能重建 preamble(技能开关生效)。
-    let workspace_dir = state
-        .meta
-        .get(&ws_id)
-        .map(|m| m.path)
-        .or_else(|| body.workspace_dir.as_deref().map(std::path::PathBuf::from));
-    let cfg = {
-        let base = state.cfg.lock().unwrap().clone();
-        let ws_disabled = state.meta.db().get_disabled_skills(&ws_id).unwrap_or_default();
-        base.with_workspace(workspace_dir.clone(), &ws_disabled)
-    };
-    let user_msg = user_message_json(&body.session_id, &body.prompt, &cfg);
-    let _ = tx.send(msg_env("created", user_msg.clone()));
-    // 服务端持久化:用户消息立即落库(历史不再依赖前端订阅回写,
-    // 未订阅该 workspace 的客户端也能拿到完整历史)。
-    persist_msg(state.meta.as_ref(), &ws_id, &user_msg);
-
-    // 2. 会话历史从本地 sqlite 解析(多轮上下文)。
-    //    body 里旧客户端注入的 history 仅在 sqlite 无数据时兜底。
-    let mut history: Vec<Value> = match &body.history {
-        Some(h) if !h.is_empty() => h.clone(),
-        _ => state
-            .meta
-            .db()
-            .list_messages(&ws_id, &body.session_id)
-            .unwrap_or_default()
-            .iter()
-            .map(|m| {
-                let parts: Value =
-                    serde_json::from_str(&m.parts).unwrap_or(Value::Array(vec![]));
-                json!({ "role": m.role, "parts": parts })
-            })
-            .collect(),
-    };
-
-    // 3. 记录请求日志(发送给 agent 的内容)
-    let provider_id = cfg.provider.id.clone();
-    let model_name = cfg.model.clone();
-    crate::request_log::log_request(
-        &ws_id,
-        &body.session_id,
-        &run_id,
-        &body.prompt,
-        &provider_id,
-        &model_name,
-        history.len(),
-    );
-
-    // 3.5 自动压缩:上下文接近模型窗口上限时,总结旧消息释放空间。
-    //     仅在从 sqlite 加载历史时触发(client body 传来的历史无 ID 无法删除)。
-    //     触发信号优先用 rig 原生 usage 上报的真实上下文占用
-    //     (上次 run 结束时持久化的 context_tokens,含 preamble/工具定义/全部历史),
-    //     字符估算仅作 provider 未上报时的兜底——中文会话按 chars/3 估算
-    //     偏低 2~3 倍,旧实现常在超窗报错时仍未压缩。
-    if body.history.as_ref().map_or(true, |h| h.is_empty()) {
-        let ctx_tokens = state
-            .meta
-            .db()
-            .get_context_tokens(&body.session_id)
-            .map(|t| t as u64);
-        if compact::needs_compact(&cfg, &history, ctx_tokens) {
-            let stored = state
-                .meta
-                .db()
-                .list_messages(&ws_id, &body.session_id)
-                .unwrap_or_default();
-            let ids: Vec<String> = stored.iter().map(|m| m.id.clone()).collect();
-            if ids.len() == history.len() {
-                match compact::compact(&cfg, &history, &ids, ctx_tokens).await {
-                    Ok(Some(result)) => {
-                        let removed_ids = result.removed_ids.clone();
-                        let count = result.compacted_count;
-                        let tokens_before = result.tokens_before;
-                        let tokens_after = result.tokens_after;
-                        // 摘要时间戳:排在保留尾部第一条消息之前(list_messages 按 created_at 升序)
-                        let summary_at = stored
-                            .get(count)
-                            .map(|m| m.created_at - 1)
-                            .unwrap_or_else(now_secs);
-                        match compact::persist_compaction(
-                            &state.meta,
-                            &ws_id,
-                            &body.session_id,
-                            &result,
-                            summary_at,
-                        ) {
-                            Ok(summary_id) => {
-                                // 重置上下文占用,避免旧值在后续轮次反复触发压缩
-                                let _ = state
-                                    .meta
-                                    .db()
-                                    .set_context_tokens(&body.session_id, tokens_after as i64);
-                                // 广播:删除旧消息
-                                for id in &removed_ids {
-                                    let _ = tx.send(msg_env(
-                                        "deleted",
-                                        json!({ "id": id, "session_id": &body.session_id }),
-                                    ));
-                                }
-                                // 广播:插入摘要消息
-                                let summary_msg = compact::summary_message_json(
-                                    &body.session_id,
-                                    &summary_id,
-                                    &result.summary,
-                                    count,
-                                    tokens_before,
-                                    tokens_after,
-                                    &cfg,
-                                    summary_at,
-                                );
-                                let _ = tx.send(msg_env("created", summary_msg));
-                                // 从压缩后的 sqlite 重建历史
-                                history = compact::load_compacted_history(
-                                    &state.meta,
-                                    &ws_id,
-                                    &body.session_id,
-                                );
-                                eprintln!(
-                                    "自动压缩完成: {count} 条消息, tokens {tokens_before} → {tokens_after}"
-                                );
-                            }
-                            Err(e) => eprintln!("自动压缩持久化失败: {e}"),
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(e) => eprintln!("自动压缩失败(已跳过): {e}"),
-                }
-            }
-        }
-    }
-
-    // 4. 后台运行 agent,事件经广播流出
-    let ws_id_tool = ws_id.clone();
-    let state2 = state.clone();
-    tokio::spawn(async move {
-        let session_id = body.session_id.clone();
-        // RunGuard:任务结束(含 panic)时释放 busy 标记并广播 is_busy=false,
-        // 保证任意退出路径下该会话都能重新发起。
-        let _run_guard = RunGuard {
-            state: state2.clone(),
-            session_id: session_id.clone(),
-            run_id: run_id_for_task.clone(),
-            tx: tx.clone(),
-        };
-        // 注入未完成的任务清单状态:上一轮中断(报错/取消)清单仍留在 TodoStore,
-        // 附带进度让 agent 开局即对准「当前第几项」。仅影响本次发往 LLM 的
-        // prompt;广播与落库的用户消息仍用 body.prompt 原文,不污染历史。
-        let prompt = match state2.todos.get(&body.session_id) {
-            Some(todos) => match crate::todo::todo_context_prompt(&todos) {
-                Some(ctx) => format!("{}\n\n{}", body.prompt, ctx),
-                None => body.prompt.clone(),
-            },
-            None => body.prompt.clone(),
-        };
-        let run_id2 = run_id_for_task.clone();
-        let assistant_id = uuid::Uuid::new_v4().to_string();
-        let created_at = now_secs();
-
-        // 初始空 assistant 消息(created)
-        let _ = tx.send(msg_env(
-            "created",
-            assistant_message_json(&session_id, &assistant_id, &cfg, Vec::new(), created_at),
-        ));
-
-        let rig_history = history_to_messages(&history);
-        let mut sparts = StreamParts::default();
-        let mut usage: Option<RunUsage> = None;
-        let tx_ev = tx.clone();
-        // 服务端持久化(节流):assistant 快照至少间隔 1.5s 落库一次,
-        // 工具调用/工具结果/最终消息必落;崩溃最多至丢失 1.5s 内的增量。
-        let meta_p = state2.meta.clone();
-        let ws_p = ws_id_tool.clone();
-        let mut last_persist = std::time::Instant::now();
-        // 收集工具调用摘要供响应日志使用
-        let mut tool_call_summaries: Vec<crate::request_log::ToolCallSummary> = Vec::new();
-        // question 工具:需要 broadcast tx、registry 和 cancel 信号
-        let extra_tools = vec![
-            crate::question::question_tool(
-                session_id.clone(),
-                tx.clone(),
-                state2.questions.clone(),
-                cancel_rx.clone(),
-            ),
-            crate::todo::todo_write_tool(
-                session_id.clone(),
-                tx.clone(),
-                state2.todos.clone(),
-            ),
-            compact::compact_tool(
-                ws_id_tool.clone(),
-                session_id.clone(),
-                state2.meta.clone(),
-                cfg.clone(),
-                tx.clone(),
-            ),
-        ];
-        let result =
-            crate::agent::stream_run(&cfg, &prompt, &rig_history, workspace_dir, cancel_rx, extra_tools, |ev| {
-            // 本次事件是否需要立即落库(工具调用是消息结构边界,必须落)
-            let mut force_persist = false;
-            match ev {
-                RunEvent::TextDelta(t) => {
-                    crate::request_log::log_event(
-                        &run_id_for_task,
-                        &session_id,
-                        "text_delta",
-                        json!({ "delta": &t }),
-                    );
-                    sparts.text_delta(&t);
-                }
-                RunEvent::ReasoningDelta(r) => {
-                    crate::request_log::log_event(
-                        &run_id_for_task,
-                        &session_id,
-                        "reasoning_delta",
-                        json!({ "delta": &r }),
-                    );
-                    sparts.reasoning_delta(&r);
-                }
-                RunEvent::ToolCall { id, name, input } => {
-                    crate::request_log::log_event(
-                        &run_id_for_task,
-                        &session_id,
-                        "tool_call",
-                        json!({ "id": &id, "name": &name, "input": &input }),
-                    );
-                    tool_call_summaries.push(crate::request_log::ToolCallSummary {
-                        name: name.clone(),
-                        input: input.clone(),
-                    });
-                    sparts.tool_call(&id, &name, &input);
-                    force_persist = true;
-                }
-                RunEvent::ToolResult { id, name, content } => {
-                    crate::request_log::log_event(
-                        &run_id_for_task,
-                        &session_id,
-                        "tool_result",
-                        json!({ "id": &id, "name": &name, "content_preview": content.chars().take(2000).collect::<String>() }),
-                    );
-                    let msg = tool_result_message_json(&session_id, &id, &name, &content);
-                    persist_msg(meta_p.as_ref(), &ws_p, &msg);
-                    let _ = tx_ev.send(msg_env("created", msg));
-                }
-                RunEvent::Usage(u) => usage = Some(u),
-            }
-            let upd = assistant_message_json(
-                &session_id,
-                &assistant_id,
-                &cfg,
-                sparts.parts.clone(),
-                created_at,
-            );
-            if force_persist || last_persist.elapsed() >= Duration::from_millis(1500) {
-                persist_msg(meta_p.as_ref(), &ws_p, &upd);
-                last_persist = std::time::Instant::now();
-            }
-            let _ = tx_ev.send(msg_env("updated", upd));
-        })
-        .await;
-
-        let (reason, error, text) = match &result {
-            Ok(Some(t)) => ("end_turn", None, t.clone()),
-            Ok(None) => ("cancelled", None, String::new()),
-            Err(e) => {
-                let msg = friendly_error(e);
-                ("error", Some(msg.clone()), msg)
-            }
-        };
-        sparts.finish(reason, now_secs(), usage.as_ref());
-        let final_msg = assistant_message_json(
-            &session_id,
-            &assistant_id,
-            &cfg,
-            sparts.into_parts(),
-            created_at,
-        );
-        persist_msg(meta_p.as_ref(), &ws_p, &final_msg);
-        let _ = tx.send(msg_env("updated", final_msg));
-        let _ = tx.send(run_complete_env(
-            &session_id,
-            &run_id2,
-            &assistant_id,
-            &text,
-            error.as_deref(),
-            usage,
-        ));
-
-        // 记录响应日志(agent 返回的内容;usage 记 run 累计消耗)
-        crate::request_log::log_response(
-            &run_id2,
-            &session_id,
-            reason,
-            &text,
-            error.as_deref(),
-            usage.map(|u| (u.total_input, u.total_output)),
-            &tool_call_summaries,
-        );
-
-        // 累加 token 用量与花费到会话:
-        // - prompt/completion 累计 run 内全部 completion 调用(rig 原生 Usage 求和);
-        // - context_tokens 记录最后一次调用的 input+output(当前上下文窗口占用,
-        //   驱动下一轮的 compact 触发判断与前端用量环)。
-        if let Some(u) = usage {
-            let (pin, pout) =
-                crate::providers::get_model_pricing(&cfg.provider, &cfg.model);
-            let cost =
-                (u.total_input as f64 / 1_000_000.0) * pin + (u.total_output as f64 / 1_000_000.0) * pout;
-            let _ = state2.meta.db().add_usage(
-                &session_id,
-                u.total_input as i64,
-                u.total_output as i64,
-                cost,
-                u.context_tokens() as i64,
-            );
-        }
-    });
-
-    Ok(Json(json!({ "ok": true, "run_id": run_id })))
-}
 
 /// POST /v1/workspaces/{id}/agent/sessions/{sid}/cancel — 取消运行。
 async fn cancel_agent(

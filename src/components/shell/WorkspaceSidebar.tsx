@@ -48,7 +48,6 @@ import { McpPanel } from './McpPanel';
 import { DirectoryPicker } from './DirectoryPicker';
 import { SettingsDialog } from './SettingsDialog';
 import { SearchDialog } from './SearchDialog';
-import { AutomationPanel } from './AutomationPanel';
 import { UsageStatsDialog } from './UsageStatsDialog';
 // qrcode 依赖较大,首次打开二维码前不加载
 const MobileConnectDialog = lazy(() =>
@@ -212,7 +211,11 @@ function WorkspaceGroup({
   );
 }
 
-export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {}) {
+export function WorkspaceSidebar({
+  onNavigate,
+  onOpenAutomation,
+  autoActive,
+}: { onNavigate?: () => void; onOpenAutomation?: () => void; autoActive?: boolean } = {}) {
   const qc = useQueryClient();
   const { workspaces, isLoading, create, rename, changePath, remove } = useWorkspaces();
   const active = useActiveWorkspaceId();
@@ -238,7 +241,6 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
   const [mcpOpen, setMcpOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  const [autoOpen, setAutoOpen] = useState(false);
   const [statsOpen, setStatsOpen] = useState(false);
   const [mobileConnectOpen, setMobileConnectOpen] = useState(false);
   // 首次打开后才挂载,之后保持以保留关闭动画
@@ -498,8 +500,11 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
           </button>
           <button
             type="button"
-            onClick={() => setAutoOpen(true)}
-            className="flex h-8 w-full shrink-0 cursor-pointer items-center gap-2 overflow-hidden rounded-lg pl-2.5 pr-2.5 text-left transition-colors hover:bg-surface-hover hover:text-foreground"
+            onClick={() => onOpenAutomation?.()}
+            className={cn(
+              'flex h-8 w-full shrink-0 cursor-pointer items-center gap-2 overflow-hidden rounded-lg pl-2.5 pr-2.5 text-left transition-colors hover:bg-surface-hover hover:text-foreground',
+              autoActive && 'bg-surface-hover text-brand'
+            )}
             title="自动化"
           >
             <CalendarClock className="size-4 shrink-0" />
@@ -877,7 +882,6 @@ export function WorkspaceSidebar({ onNavigate }: { onNavigate?: () => void } = {
       <McpPanel open={mcpOpen} onOpenChange={setMcpOpen} />
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
       <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} onNavigate={onNavigate} />
-      <AutomationPanel open={autoOpen} onOpenChange={setAutoOpen} />
       <UsageStatsDialog open={statsOpen} onOpenChange={setStatsOpen} />
       {mobileConnectLoaded && (
         <Suspense fallback={null}>

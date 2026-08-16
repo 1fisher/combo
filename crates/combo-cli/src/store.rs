@@ -83,6 +83,43 @@ pub struct AccessToken {
     pub revoked: bool,
 }
 
+/// 自动化任务(定时任务)。`schedule` 为 JSON 字符串,
+/// 结构见 `automation.rs::Schedule`。
+#[derive(Clone, Debug)]
+pub struct StoredAutomation {
+    pub id: String,
+    pub workspace_id: String,
+    pub name: String,
+    pub prompt: String,
+    /// 调度配置(JSON 字符串:`{ "type": "once|interval|daily|weekly", ... }`)。
+    pub schedule: String,
+    pub enabled: bool,
+    /// 下次触发时间(unix 秒);None 表示不再调度(一次性任务已执行)。
+    pub next_run_at: Option<i64>,
+    pub last_run_at: Option<i64>,
+    /// 最近一次运行结果:success | error | cancelled | skipped。
+    pub last_status: Option<String>,
+    pub last_error: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// 自动化任务的一次运行记录。
+#[derive(Clone, Debug)]
+pub struct AutomationRun {
+    pub id: String,
+    pub automation_id: String,
+    pub workspace_id: String,
+    pub session_id: String,
+    pub run_id: String,
+    /// running | success | error | cancelled
+    pub status: String,
+    pub started_at: i64,
+    pub finished_at: Option<i64>,
+    pub error: Option<String>,
+}
+
+
 /// 线程安全的 sqlite 连接。所有方法都是短事务,持锁时间可忽略。
 pub struct ComboDb {
     conn: Mutex<Connection>,
@@ -159,7 +196,34 @@ impl ComboDb {
             CREATE TABLE IF NOT EXISTS workspace_config (
                 workspace_id    TEXT PRIMARY KEY,
                 disabled_skills TEXT NOT NULL DEFAULT '[]'
-            );",
+            );
+            CREATE TABLE IF NOT EXISTS automations (
+                id            TEXT PRIMARY KEY,
+                workspace_id  TEXT NOT NULL,
+                name          TEXT NOT NULL,
+                prompt        TEXT NOT NULL,
+                schedule      TEXT NOT NULL,
+                enabled       INTEGER NOT NULL DEFAULT 1,
+                next_run_at   INTEGER,
+                last_run_at   INTEGER,
+                last_status   TEXT,
+                last_error    TEXT,
+                created_at    INTEGER NOT NULL,
+                updated_at    INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_automation_ws ON automations(workspace_id);
+            CREATE TABLE IF NOT EXISTS automation_runs (
+                id            TEXT PRIMARY KEY,
+                automation_id TEXT NOT NULL,
+                workspace_id  TEXT NOT NULL,
+                session_id    TEXT NOT NULL,
+                run_id        TEXT NOT NULL,
+                status        TEXT NOT NULL,
+                started_at    INTEGER NOT NULL,
+                finished_at   INTEGER,
+                error         TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_automation_runs ON automation_runs(automation_id);",
         )?;
         // 容错迁移:旧库可能缺少新增列,逐个尝试添加(已存在则忽略)。
         let mig = [
@@ -612,6 +676,185 @@ impl ComboDb {
             .execute("UPDATE access_tokens SET revoked=1", [])?;
         Ok(())
     }
+
+    // ---------- automations ----------
+
+    /// 写入(插入或按 id 覆盖)一条自动化任务。
+    pub fn upsert_automation(&self, a: &StoredAutomation) -> anyhow::Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO automations (id, workspace_id, name, prompt, schedule, enabled,
+                                      next_run_at, last_run_at, last_status, last_error,
+                                      created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+             ON CONFLICT(id) DO UPDATE SET
+                 workspace_id=excluded.workspace_id,
+                 name=excluded.name,
+                 prompt=excluded.prompt,
+                 schedule=excluded.schedule,
+                 enabled=excluded.enabled,
+                 next_run_at=excluded.next_run_at,
+                 last_run_at=excluded.last_run_at,
+                 last_status=excluded.last_status,
+                 last_error=excluded.last_error,
+                 updated_at=excluded.updated_at",
+            params![
+                a.id,
+                a.workspace_id,
+                a.name,
+                a.prompt,
+                a.schedule,
+                a.enabled as i64,
+                a.next_run_at,
+                a.last_run_at,
+                a.last_status,
+                a.last_error,
+                a.created_at,
+                a.updated_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_automation(&self, id: &str) -> anyhow::Result<Option<StoredAutomation>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, workspace_id, name, prompt, schedule, enabled, next_run_at,
+                    last_run_at, last_status, last_error, created_at, updated_at
+             FROM automations WHERE id=?1",
+        )?;
+        let mut rows = stmt.query(params![id])?;
+        let row = match rows.next()? {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+        Ok(Some(row_to_automation(row)?))
+    }
+
+    /// 列出全部自动化任务(按创建时间倒序)。
+    pub fn list_automations(&self) -> anyhow::Result<Vec<StoredAutomation>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, workspace_id, name, prompt, schedule, enabled, next_run_at,
+                    last_run_at, last_status, last_error, created_at, updated_at
+             FROM automations ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map([], row_to_automation)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// 列出某个 workspace 下的全部自动化任务(按创建时间倒序)。
+    pub fn list_automations_by_workspace(
+        &self,
+        workspace_id: &str,
+    ) -> anyhow::Result<Vec<StoredAutomation>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, workspace_id, name, prompt, schedule, enabled, next_run_at,
+                    last_run_at, last_status, last_error, created_at, updated_at
+             FROM automations WHERE workspace_id=?1 ORDER BY created_at DESC",
+        )?;
+        let rows = stmt.query_map(params![workspace_id], row_to_automation)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// 列出到期待触发的任务(enabled 且 next_run_at 非空且 <= now)。
+    pub fn list_due_automations(&self, now: i64) -> anyhow::Result<Vec<StoredAutomation>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, workspace_id, name, prompt, schedule, enabled, next_run_at,
+                    last_run_at, last_status, last_error, created_at, updated_at
+             FROM automations WHERE enabled=1 AND next_run_at IS NOT NULL AND next_run_at <= ?1
+             ORDER BY next_run_at ASC",
+        )?;
+        let rows = stmt.query_map(params![now], row_to_automation)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn delete_automation(&self, id: &str) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM automations WHERE id=?1", params![id])?;
+        conn.execute("DELETE FROM automation_runs WHERE automation_id=?1", params![id])?;
+        Ok(())
+    }
+
+    /// 删除某个 workspace 下的所有自动化任务(删除项目时级联清理)。
+    pub fn delete_automations_by_workspace(&self, workspace_id: &str) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM automations WHERE workspace_id=?1",
+            params![workspace_id],
+        )?;
+        conn.execute(
+            "DELETE FROM automation_runs WHERE workspace_id=?1",
+            params![workspace_id],
+        )?;
+        Ok(())
+    }
+
+    // ---------- automation_runs ----------
+
+    pub fn insert_automation_run(&self, r: &AutomationRun) -> anyhow::Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO automation_runs (id, automation_id, workspace_id, session_id, run_id,
+                                          status, started_at, finished_at, error)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                r.id,
+                r.automation_id,
+                r.workspace_id,
+                r.session_id,
+                r.run_id,
+                r.status,
+                r.started_at,
+                r.finished_at,
+                r.error,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// 更新一条运行记录的状态/结束时间/错误(按 id 匹配)。
+    pub fn update_automation_run(
+        &self,
+        id: &str,
+        status: &str,
+        finished_at: i64,
+        error: Option<&str>,
+    ) -> anyhow::Result<bool> {
+        let n = self.conn.lock().unwrap().execute(
+            "UPDATE automation_runs SET status=?1, finished_at=?2, error=?3 WHERE id=?4",
+            params![status, finished_at, error, id],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// 列出某自动化任务的运行历史(按开始时间倒序,最多 100 条)。
+    pub fn list_automation_runs(&self, automation_id: &str) -> anyhow::Result<Vec<AutomationRun>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, automation_id, workspace_id, session_id, run_id, status,
+                    started_at, finished_at, error
+             FROM automation_runs WHERE automation_id=?1 ORDER BY started_at DESC LIMIT 100",
+        )?;
+        let rows = stmt.query_map(params![automation_id], row_to_automation_run)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
 }
 
 fn row_to_conv(r: &rusqlite::Row<'_>) -> rusqlite::Result<ConversationMeta> {
@@ -637,6 +880,37 @@ fn row_to_token(r: &rusqlite::Row<'_>) -> rusqlite::Result<AccessToken> {
         expires_at: r.get(3)?,
         last_used_at: r.get(4)?,
         revoked: r.get::<_, i64>(5)? != 0,
+    })
+}
+
+fn row_to_automation(r: &rusqlite::Row<'_>) -> rusqlite::Result<StoredAutomation> {
+    Ok(StoredAutomation {
+        id: r.get(0)?,
+        workspace_id: r.get(1)?,
+        name: r.get(2)?,
+        prompt: r.get(3)?,
+        schedule: r.get(4)?,
+        enabled: r.get::<_, i64>(5)? != 0,
+        next_run_at: r.get(6)?,
+        last_run_at: r.get(7)?,
+        last_status: r.get(8)?,
+        last_error: r.get(9)?,
+        created_at: r.get(10)?,
+        updated_at: r.get(11)?,
+    })
+}
+
+fn row_to_automation_run(r: &rusqlite::Row<'_>) -> rusqlite::Result<AutomationRun> {
+    Ok(AutomationRun {
+        id: r.get(0)?,
+        automation_id: r.get(1)?,
+        workspace_id: r.get(2)?,
+        session_id: r.get(3)?,
+        run_id: r.get(4)?,
+        status: r.get(5)?,
+        started_at: r.get(6)?,
+        finished_at: r.get(7)?,
+        error: r.get(8)?,
     })
 }
 
@@ -863,5 +1137,109 @@ mod tests {
 
         // 不同 workspace 互不影响
         assert!(db.get_disabled_skills("ws-2").unwrap().is_empty());
+    }
+
+    fn auto(id: &str, ws: &str, next: Option<i64>) -> StoredAutomation {
+        StoredAutomation {
+            id: id.into(),
+            workspace_id: ws.into(),
+            name: format!("任务 {id}"),
+            prompt: "帮我整理周报".into(),
+            schedule: r#"{"type":"daily","time":"09:00"}"#.into(),
+            enabled: true,
+            next_run_at: next,
+            last_run_at: None,
+            last_status: None,
+            last_error: None,
+            created_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    fn run_rec(id: &str, auto: &str, ws: &str) -> AutomationRun {
+        AutomationRun {
+            id: id.into(),
+            automation_id: auto.into(),
+            workspace_id: ws.into(),
+            session_id: "s1".into(),
+            run_id: "r1".into(),
+            status: "running".into(),
+            started_at: 10,
+            finished_at: None,
+            error: None,
+        }
+    }
+
+    #[test]
+    fn automation_crud() {
+        let db = ComboDb::in_memory();
+        db.upsert_automation(&auto("a1", "w1", Some(100))).unwrap();
+        db.upsert_automation(&auto("a2", "w1", Some(200))).unwrap();
+        db.upsert_automation(&auto("a3", "w2", Some(150))).unwrap();
+
+        assert_eq!(db.list_automations().unwrap().len(), 3);
+        assert_eq!(db.list_automations_by_workspace("w1").unwrap().len(), 2);
+
+        // 到期查询
+        let due = db.list_due_automations(150).unwrap();
+        assert!(due.iter().any(|a| a.id == "a1")); // 100 <= 150
+        assert!(due.iter().any(|a| a.id == "a3")); // 150 <= 150
+        assert!(!due.iter().any(|a| a.id == "a2")); // 200 > 150
+
+        // 禁用后不再到期
+        let mut a2 = auto("a2", "w1", Some(200));
+        a2.enabled = false;
+        db.upsert_automation(&a2).unwrap();
+        let due = db.list_due_automations(999).unwrap();
+        assert!(!due.iter().any(|a| a.id == "a2"));
+
+        // next_run_at 为空(一次性已完成)→ 不再调度
+        let a3 = auto("a3", "w2", None);
+        db.upsert_automation(&a3).unwrap();
+        let due = db.list_due_automations(999).unwrap();
+        assert!(!due.iter().any(|a| a.id == "a3"));
+
+        // 更新与获取
+        let got = db.get_automation("a1").unwrap().unwrap();
+        assert_eq!(got.name, "任务 a1");
+        assert!(got.enabled);
+        let mut a1 = got.clone();
+        a1.name = "新名称".into();
+        a1.enabled = false;
+        db.upsert_automation(&a1).unwrap();
+        assert_eq!(db.get_automation("a1").unwrap().unwrap().name, "新名称");
+        assert!(!db.get_automation("a1").unwrap().unwrap().enabled);
+
+        // 删除单个(级联运行记录)
+        db.insert_automation_run(&run_rec("r1", "a1", "w1")).unwrap();
+        db.delete_automation("a1").unwrap();
+        assert!(db.get_automation("a1").unwrap().is_none());
+        assert!(db.list_automation_runs("a1").unwrap().is_empty());
+    }
+
+    #[test]
+    fn automation_runs_roundtrip_and_workspace_delete() {
+        let db = ComboDb::in_memory();
+        db.upsert_automation(&auto("a1", "w1", Some(100))).unwrap();
+        db.insert_automation_run(&run_rec("r1", "a1", "w1")).unwrap();
+        db.insert_automation_run(&run_rec("r2", "a1", "w1")).unwrap();
+
+        assert_eq!(db.list_automation_runs("a1").unwrap().len(), 2);
+
+        // 结束一条:更新状态/结束时间/错误
+        assert!(db.update_automation_run("r1", "success", 20, None).unwrap());
+        let runs = db.list_automation_runs("a1").unwrap();
+        let r1 = runs.iter().find(|r| r.id == "r1").unwrap();
+        assert_eq!(r1.status, "success");
+        assert_eq!(r1.finished_at, Some(20));
+        assert!(r1.error.is_none());
+
+        // 不存在的记录返回 false
+        assert!(!db.update_automation_run("nope", "success", 20, None).unwrap());
+
+        // 删除 workspace 级联清理任务与运行记录
+        db.delete_automations_by_workspace("w1").unwrap();
+        assert!(db.list_automations_by_workspace("w1").unwrap().is_empty());
+        assert!(db.list_automation_runs("a1").unwrap().is_empty());
     }
 }
