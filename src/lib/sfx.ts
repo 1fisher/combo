@@ -1,7 +1,7 @@
 /**
  * 音效:Web Audio 程序化合成,不依赖任何音频资源文件。
- * - playComboHit:连击打击音(拳皇风)——低频闷响 + 白噪声脆响,
- *   音高/亮度/力度随 combo 数值(1→100)递增,与特效的绿→红渐变呼应;
+ * - playComboHit:连击打击音(柔和风)——低频圆润闷咚 + 低通白噪声气声,
+ *   饱满度随 combo 数值(1→100)递增,与特效的绿→红渐变呼应;
  * - playNotifyDone:任务完成提示音(双音上行,轻快);
  * - playNotifyAttention:需要交互的提醒音(双短音,略急促)。
  *
@@ -74,7 +74,7 @@ function tone(
   o.stop(at + dur + 0.02);
 }
 
-/** 连击打击音:combo 越高越响越亮(强度 1→100 映射 0→1) */
+/** 连击打击音(柔和):combo 越高越饱满,低频气声铺垫,不刺耳 */
 export function playComboHit(combo: number): void {
   const c = audioCtx();
   if (!c) return;
@@ -82,34 +82,34 @@ export function playComboHit(combo: number): void {
     const t = c.currentTime;
     const out = masterOut(c, t);
     const k = Math.max(0, Math.min(100, combo)) / 100;
-    // 低频闷响(punch):正弦下滑,起跳频率与力度随 combo 提升
+    // 低频闷咚(soft thump):正弦缓降,起音放缓、音量收敛,圆润不炸
     const thump = c.createOscillator();
     const tg = c.createGain();
     thump.type = 'sine';
-    thump.frequency.setValueAtTime(150 + k * 90, t);
-    thump.frequency.exponentialRampToValueAtTime(60, t + 0.12);
+    thump.frequency.setValueAtTime(110 + k * 50, t);
+    thump.frequency.exponentialRampToValueAtTime(55, t + 0.2);
     tg.gain.setValueAtTime(0.0001, t);
-    tg.gain.exponentialRampToValueAtTime(0.7 + 0.3 * k, t + 0.008);
-    tg.gain.exponentialRampToValueAtTime(0.0001, t + 0.14);
+    tg.gain.exponentialRampToValueAtTime(0.45 + 0.2 * k, t + 0.02);
+    tg.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
     thump.connect(tg);
     tg.connect(out);
     thump.start(t);
-    thump.stop(t + 0.16);
-    // 高频脆响(snap):白噪声过带通,中心频率随 combo 上移(越高越「燃」)
+    thump.stop(t + 0.3);
+    // 气声垫(soft puff):白噪声过低通只留空气感,去掉了原来的高频脆响
     const noise = noiseSource(c);
-    const bp = c.createBiquadFilter();
-    bp.type = 'bandpass';
-    bp.frequency.value = 900 + k * 1400;
-    bp.Q.value = 0.8;
+    const lp = c.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 380 + k * 320;
+    lp.Q.value = 0.5;
     const ng = c.createGain();
     ng.gain.setValueAtTime(0.0001, t);
-    ng.gain.exponentialRampToValueAtTime(0.35 + 0.25 * k, t + 0.005);
-    ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
-    noise.connect(bp);
-    bp.connect(ng);
+    ng.gain.exponentialRampToValueAtTime(0.16 + 0.1 * k, t + 0.015);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+    noise.connect(lp);
+    lp.connect(ng);
     ng.connect(out);
     noise.start(t);
-    noise.stop(t + 0.1);
+    noise.stop(t + 0.18);
   } catch {
     /* 音频失败不影响主流程 */
   }

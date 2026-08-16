@@ -85,7 +85,7 @@ describe('sfx', () => {
     }).not.toThrow();
   });
 
-  it('playComboHit 合成低频闷响 + 噪声脆响,combo 越高起跳频率越高', async () => {
+  it('playComboHit 合成低频闷咚 + 低通气声,combo 越高越饱满', async () => {
     const { mod, ctx } = await loadSfxWithStub();
     mod.playComboHit(1);
     let c = ctx();
@@ -93,13 +93,13 @@ describe('sfx', () => {
     expect(c.createBufferSource).toHaveBeenCalledTimes(1);
     const thump = c.createOscillator.mock.results[0].value as FakeOscillatorNode;
     expect(thump.type).toBe('sine');
-    expect(thump.frequency.setValueAtTime).toHaveBeenCalledWith(150.9, 0);
+    expect(thump.frequency.setValueAtTime).toHaveBeenCalledWith(110.5, 0);
 
     mod.playComboHit(100);
     c = ctx();
     const thump100 = c.createOscillator.mock.results[1].value as FakeOscillatorNode;
-    // 100 连击 → 起跳 240Hz,更响更烈
-    expect(thump100.frequency.setValueAtTime).toHaveBeenCalledWith(240, 0);
+    // 100 连击 → 起跳 160Hz,更饱满但仍柔和(低频缓降 + 低通气声)
+    expect(thump100.frequency.setValueAtTime).toHaveBeenCalledWith(160, 0);
     expect(thump100.start).toHaveBeenCalled();
     expect(thump100.stop).toHaveBeenCalled();
   });
