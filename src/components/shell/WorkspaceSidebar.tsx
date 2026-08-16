@@ -43,12 +43,9 @@ import { confirmDialog } from '../../lib/confirm';
 import { createSession as createSessionApi } from '../../lib/api';
 import { ConversationList } from './ConversationList';
 import { SessionRow } from './SessionRow';
-import { SkillsPanel } from './SkillsPanel';
-import { McpPanel } from './McpPanel';
 import { DirectoryPicker } from './DirectoryPicker';
 import { SettingsDialog } from './SettingsDialog';
-import { SearchDialog } from './SearchDialog';
-import { UsageStatsDialog } from './UsageStatsDialog';
+import type { AppView, SideView } from './AppShell';
 // qrcode 依赖较大,首次打开二维码前不加载
 const MobileConnectDialog = lazy(() =>
   import('./MobileConnectDialog').then((m) => ({ default: m.MobileConnectDialog })),
@@ -213,9 +210,15 @@ function WorkspaceGroup({
 
 export function WorkspaceSidebar({
   onNavigate,
-  onOpenAutomation,
-  autoActive,
-}: { onNavigate?: () => void; onOpenAutomation?: () => void; autoActive?: boolean } = {}) {
+  onOpenView,
+  activeView,
+}: {
+  onNavigate?: () => void;
+  /** 打开主内容区全页视图(自动化/搜索/技能/MCP/统计) */
+  onOpenView?: (v: SideView) => void;
+  /** 当前主内容区视图,用于高亮导航项 */
+  activeView?: AppView;
+} = {}) {
   const qc = useQueryClient();
   const { workspaces, isLoading, create, rename, changePath, remove } = useWorkspaces();
   const active = useActiveWorkspaceId();
@@ -237,11 +240,7 @@ export function WorkspaceSidebar({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('');
   const [sidebarError, setSidebarError] = useState<string | null>(null);
-  const [skillsOpen, setSkillsOpen] = useState(false);
-  const [mcpOpen, setMcpOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [statsOpen, setStatsOpen] = useState(false);
   const [mobileConnectOpen, setMobileConnectOpen] = useState(false);
   // 首次打开后才挂载,之后保持以保留关闭动画
   const [mobileConnectLoaded, setMobileConnectLoaded] = useState(false);
@@ -275,6 +274,9 @@ export function WorkspaceSidebar({
   const [changingPath, setChangingPath] = useState(false);
   // 供 ⌘/Ctrl+N 快捷键调用的最新 onNewTask(避免闭包过期)
   const onNewTaskRef = useRef<() => void>(() => {});
+  // 供 ⌘/Ctrl+K 快捷键调用的最新 onOpenView(同上)
+  const onOpenViewRef = useRef(onOpenView);
+  onOpenViewRef.current = onOpenView;
 
   // ⌘/Ctrl+N 新建任务, ⌘/Ctrl+K 搜索
   useEffect(() => {
@@ -285,7 +287,7 @@ export function WorkspaceSidebar({
       }
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
-        setSearchOpen(true);
+        onOpenViewRef.current?.('search');
       }
     }
     window.addEventListener('keydown', onKey);
@@ -488,55 +490,35 @@ export function WorkspaceSidebar({
             <span className="min-w-0 flex-1 truncate text-[13px]">新建任务</span>
             <span className="shrink-0 text-xs font-normal text-foreground-subtlest">⌘ N</span>
           </button>
-          <button
-            type="button"
-            onClick={() => setSearchOpen(true)}
-            className="flex h-8 w-full shrink-0 cursor-pointer items-center gap-2 overflow-hidden rounded-lg pl-2.5 pr-2.5 text-left transition-colors hover:bg-surface-hover hover:text-foreground"
-            title="搜索 (⌘ K)"
-          >
-            <Search className="size-4 shrink-0" />
-            <span className="min-w-0 flex-1 truncate text-[13px]">搜索</span>
-            <span className="shrink-0 text-xs font-normal text-foreground-subtlest">⌘ K</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => onOpenAutomation?.()}
-            className={cn(
-              'flex h-8 w-full shrink-0 cursor-pointer items-center gap-2 overflow-hidden rounded-lg pl-2.5 pr-2.5 text-left transition-colors hover:bg-surface-hover hover:text-foreground',
-              autoActive && 'bg-surface-hover text-brand'
-            )}
-            title="自动化"
-          >
-            <CalendarClock className="size-4 shrink-0" />
-            <span className="min-w-0 flex-1 truncate text-[13px]">自动化</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setSkillsOpen(true)}
-            className="flex h-8 w-full shrink-0 cursor-pointer items-center gap-2 overflow-hidden rounded-lg pl-2.5 pr-2.5 text-left transition-colors hover:bg-surface-hover hover:text-foreground"
-            title="技能"
-          >
-            <WandSparkles className="size-4 shrink-0" />
-            <span className="min-w-0 flex-1 truncate text-[13px]">技能</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setMcpOpen(true)}
-            className="flex h-8 w-full shrink-0 cursor-pointer items-center gap-2 overflow-hidden rounded-lg pl-2.5 pr-2.5 text-left transition-colors hover:bg-surface-hover hover:text-foreground"
-            title="MCP 工具"
-          >
-            <Boxes className="size-4 shrink-0" />
-            <span className="min-w-0 flex-1 truncate text-[13px]">MCP</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setStatsOpen(true)}
-            className="flex h-8 w-full shrink-0 cursor-pointer items-center gap-2 overflow-hidden rounded-lg pl-2.5 pr-2.5 text-left transition-colors hover:bg-surface-hover hover:text-foreground"
-            title="用量统计"
-          >
-            <BarChart3 className="size-4 shrink-0" />
-            <span className="min-w-0 flex-1 truncate text-[13px]">统计</span>
-          </button>
+          {/* 主内容区全页视图导航:自动化/搜索/技能/MCP/统计 */}
+          {(
+            [
+              { view: 'search', label: '搜索', icon: Search, kbd: '⌘ K', title: '搜索 (⌘ K)' },
+              { view: 'automation', label: '自动化', icon: CalendarClock, title: '自动化' },
+              { view: 'skills', label: '技能', icon: WandSparkles, title: '技能' },
+              { view: 'mcp', label: 'MCP', icon: Boxes, title: 'MCP 工具' },
+              { view: 'stats', label: '统计', icon: BarChart3, title: '用量统计' },
+            ] as const
+          ).map((item) => (
+            <button
+              key={item.view}
+              type="button"
+              onClick={() => onOpenView?.(item.view)}
+              className={cn(
+                'flex h-8 w-full shrink-0 cursor-pointer items-center gap-2 overflow-hidden rounded-lg pl-2.5 pr-2.5 text-left transition-colors hover:bg-surface-hover hover:text-foreground',
+                activeView === item.view && 'bg-surface-hover text-brand'
+              )}
+              title={item.title}
+            >
+              <item.icon className="size-4 shrink-0" />
+              <span className="min-w-0 flex-1 truncate text-[13px]">{item.label}</span>
+              {'kbd' in item && (
+                <span className="shrink-0 text-xs font-normal text-foreground-subtlest">
+                  {item.kbd}
+                </span>
+              )}
+            </button>
+          ))}
         </div>
         {/* 视图切换 + 工具按钮 */}
         <div className="flex min-w-0 items-center justify-between gap-2 pl-2.5 pr-3">
@@ -878,11 +860,7 @@ export function WorkspaceSidebar({
           </Button>
         </div>
       </div>
-      <SkillsPanel open={skillsOpen} onOpenChange={setSkillsOpen} />
-      <McpPanel open={mcpOpen} onOpenChange={setMcpOpen} />
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
-      <SearchDialog open={searchOpen} onOpenChange={setSearchOpen} onNavigate={onNavigate} />
-      <UsageStatsDialog open={statsOpen} onOpenChange={setStatsOpen} />
       {mobileConnectLoaded && (
         <Suspense fallback={null}>
           <MobileConnectDialog open={mobileConnectOpen} onOpenChange={setMobileConnectOpen} />

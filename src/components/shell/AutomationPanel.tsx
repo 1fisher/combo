@@ -26,13 +26,10 @@ import {
 import { useWorkspaces } from '../../hooks/useWorkspaces';
 import { confirmDialog } from '../../lib/confirm';
 import { cn } from '../../lib/utils';
-import { HeroBackdrop } from '../agent/HeroBackdrop';
+import { HeroCard, HeroEmpty, INPUT_CLS, LABEL_CLS, PAGE, ViewScroll } from './PageShell';
 import type { Api } from '../../lib/api/types';
 
 const WEEKDAYS = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
-
-/** 页面容器:铺满内容区宽度,超宽屏封顶,保证整页观感 */
-const PAGE = 'mx-auto flex w-full max-w-[1400px] flex-col px-6 py-8 md:px-10';
 
 function formatTime(ts: number | null | undefined): string {
   if (!ts) return '—';
@@ -302,9 +299,8 @@ export function AutomationPanel() {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {/* ---------- 列表视图:加载中 / 空首页(hero)/ 任务列表 ---------- */}
+    <ViewScroll>
+      {/* ---------- 列表视图:加载中 / 空首页(hero)/ 任务列表 ---------- */}
         {view.kind === 'list' &&
           (isLoading ? (
             <div className={cn(PAGE)}>
@@ -313,10 +309,29 @@ export function AutomationPanel() {
               </div>
             </div>
           ) : !automations || automations.length === 0 ? (
-            <AutomationHeroEmpty
-              hasWorkspace={!!workspaces?.length}
-              onPick={(preset) => setView({ kind: 'form', editing: null, preset })}
-            />
+            <HeroEmpty
+              title="把重复交给 Combo,让时间为你值守"
+              desc="创建定时任务,到点自动在目标项目运行 agent,结果写入会话,无需值守。"
+            >
+              {!workspaces?.length && (
+                <p className="relative z-10 flex items-center gap-1.5 px-4 text-[13px] text-amber-600 dark:text-amber-400">
+                  <CalendarClock className="size-4 shrink-0" />
+                  还没有项目,请先在左侧添加项目后再创建自动化任务
+                </p>
+              )}
+              {/* 模板卡片:点击进入表单并预填 */}
+              <div className="relative z-10 mt-6 grid w-full max-w-2xl grid-cols-1 gap-4 px-4 sm:grid-cols-3">
+                {AUTOMATION_TEMPLATES.map((t) => (
+                  <HeroCard
+                    key={t.title}
+                    icon={t.icon}
+                    title={t.title}
+                    desc={t.desc}
+                    onClick={() => setView({ kind: 'form', editing: null, preset: t.preset })}
+                  />
+                ))}
+              </div>
+            </HeroEmpty>
           ) : (
             <div className={cn(PAGE, 'gap-6')}>
               <div className="flex flex-wrap items-end justify-between gap-4">
@@ -478,7 +493,7 @@ export function AutomationPanel() {
                 <h3 className="text-[13px] font-medium text-foreground-subtle">基本信息</h3>
                 <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
                   <div>
-                    <label className="mb-1.5 block text-[13px] font-medium text-foreground-subtle">
+                    <label className={LABEL_CLS}>
                       任务名称
                     </label>
                     <input
@@ -489,7 +504,7 @@ export function AutomationPanel() {
                     />
                   </div>
                   <div>
-                    <label className="mb-1.5 block text-[13px] font-medium text-foreground-subtle">
+                    <label className={LABEL_CLS}>
                       目标项目
                     </label>
                     <select
@@ -510,7 +525,7 @@ export function AutomationPanel() {
                 </div>
 
                 <div className="flex min-h-0 flex-1 flex-col">
-                  <label className="mb-1.5 block text-[13px] font-medium text-foreground-subtle">
+                  <label className={LABEL_CLS}>
                     任务提示词
                   </label>
                   <textarea
@@ -572,12 +587,12 @@ export function AutomationPanel() {
                 <div className="rounded-lg border border-border/60 bg-surface-hover/40 p-4">
                   {draft.scheduleType === 'once' && (
                     <div>
-                      <label className="mb-1.5 block text-[13px] font-medium text-foreground-subtle">
+                      <label className={LABEL_CLS}>
                         执行时间
                       </label>
                       <input
                         type="datetime-local"
-                        className="h-9 w-full rounded-lg border border-border bg-surface-hover px-3 text-sm text-foreground outline-none transition-colors focus:border-ring/60 focus:ring-1 focus:ring-ring/40"
+                        className={INPUT_CLS}
                         value={draft.runAt}
                         onChange={(e) => setDraft({ ...draft, runAt: e.target.value })}
                       />
@@ -588,13 +603,13 @@ export function AutomationPanel() {
                   )}
                   {draft.scheduleType === 'interval' && (
                     <div>
-                      <label className="mb-1.5 block text-[13px] font-medium text-foreground-subtle">
+                      <label className={LABEL_CLS}>
                         执行间隔(分钟)
                       </label>
                       <input
                         type="number"
                         min={1}
-                        className="h-9 w-full rounded-lg border border-border bg-surface-hover px-3 text-sm text-foreground outline-none transition-colors focus:border-ring/60 focus:ring-1 focus:ring-ring/40"
+                        className={INPUT_CLS}
                         value={draft.every}
                         onChange={(e) => setDraft({ ...draft, every: e.target.value })}
                       />
@@ -610,12 +625,12 @@ export function AutomationPanel() {
                   )}
                   {draft.scheduleType === 'daily' && (
                     <div>
-                      <label className="mb-1.5 block text-[13px] font-medium text-foreground-subtle">
+                      <label className={LABEL_CLS}>
                         每天执行时间
                       </label>
                       <input
                         type="time"
-                        className="h-9 w-full rounded-lg border border-border bg-surface-hover px-3 text-sm text-foreground outline-none transition-colors focus:border-ring/60 focus:ring-1 focus:ring-ring/40"
+                        className={INPUT_CLS}
                         value={draft.time}
                         onChange={(e) => setDraft({ ...draft, time: e.target.value })}
                       />
@@ -625,7 +640,7 @@ export function AutomationPanel() {
                   {draft.scheduleType === 'weekly' && (
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="mb-1.5 block text-[13px] font-medium text-foreground-subtle">
+                        <label className={LABEL_CLS}>
                           星期
                         </label>
                         <select
@@ -641,12 +656,12 @@ export function AutomationPanel() {
                         </select>
                       </div>
                       <div>
-                        <label className="mb-1.5 block text-[13px] font-medium text-foreground-subtle">
+                        <label className={LABEL_CLS}>
                           执行时间
                         </label>
                         <input
                           type="time"
-                          className="h-9 w-full rounded-lg border border-border bg-surface-hover px-3 text-sm text-foreground outline-none transition-colors focus:border-ring/60 focus:ring-1 focus:ring-ring/40"
+                          className={INPUT_CLS}
                           value={draft.time}
                           onChange={(e) => setDraft({ ...draft, time: e.target.value })}
                         />
@@ -682,8 +697,7 @@ export function AutomationPanel() {
         {view.kind === 'runs' && (
           <RunHistoryView automation={view.automation} onBack={() => setView({ kind: 'list' })} />
         )}
-      </div>
-    </div>
+    </ViewScroll>
   );
 }
 
@@ -758,62 +772,6 @@ function RunHistoryView({
               )}
             </div>
           </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/**
- * 自动化首页(无任务时):与会话首页(ChatEmptyState)同构——
- * hero 背景(Combo 线框字 + 粒子流光)+ 问候语 + 模板卡片;
- * 点击卡片直接进入新建表单并预填名称/提示词/调度。
- */
-function AutomationHeroEmpty({
-  hasWorkspace,
-  onPick,
-}: {
-  hasWorkspace: boolean;
-  onPick: (preset: Partial<Draft>) => void;
-}) {
-  return (
-    <div className="relative flex min-h-full flex-col items-center justify-center gap-6 px-4 py-10 text-foreground">
-      {/* 装饰背景(与会话首页共用,见 HeroBackdrop) */}
-      <HeroBackdrop />
-
-      {/* 问候语(压在背景字之上) */}
-      <div className="relative z-10 flex w-full max-w-2xl flex-col items-center gap-5">
-        <p className="w-full px-4 text-center font-medium max-md:text-xl text-3xl">
-          把重复交给 Combo,让时间为你值守
-        </p>
-        <p className="max-w-md px-4 text-center text-[13px] leading-relaxed text-foreground-subtle">
-          创建定时任务,到点自动在目标项目运行 agent,结果写入会话,无需值守。
-        </p>
-        {!hasWorkspace && (
-          <p className="flex items-center gap-1.5 px-4 text-[13px] text-amber-600 dark:text-amber-400">
-            <CalendarClock className="size-4 shrink-0" />
-            还没有项目,请先在左侧添加项目后再创建自动化任务
-          </p>
-        )}
-      </div>
-
-      {/* 模板卡片:点击进入表单并预填 */}
-      <div className="relative z-10 mt-6 grid w-full max-w-2xl grid-cols-1 gap-4 sm:grid-cols-3">
-        {AUTOMATION_TEMPLATES.map((t) => (
-          <button
-            key={t.title}
-            type="button"
-            onClick={() => onPick(t.preset)}
-            className="flex flex-col gap-2 rounded-2xl border border-card-border bg-background p-3 text-left transition-colors hover:bg-surface-hover"
-          >
-            <div className="flex items-center gap-1.5">
-              <span className="flex size-5 shrink-0 items-center justify-center">
-                <t.icon className="size-4 text-foreground-subtle" />
-              </span>
-              <span className="truncate text-[13px] leading-5 text-foreground">{t.title}</span>
-            </div>
-            <p className="text-xs leading-snug text-foreground-subtle line-clamp-3">{t.desc}</p>
-          </button>
         ))}
       </div>
     </div>

@@ -14,14 +14,18 @@ import { connectLoop } from '../../lib/connection';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
 import { AutomationPanel } from './AutomationPanel';
+import { SearchView } from './SearchView';
+import { SkillsView } from './SkillsView';
+import { McpView } from './McpView';
 import { AgentPanel } from '../agent/AgentPanel';
-// xterm / CodeMirror 体量大,按需加载并各自独立成 chunk
+// xterm / CodeMirror / recharts 体量大,按需加载并各自独立成 chunk
 const TerminalPanel = lazy(() =>
   import('./TerminalPanel').then((m) => ({ default: m.TerminalPanel })),
 );
 const EditorPane = lazy(() =>
   import('../editor/EditorPane').then((m) => ({ default: m.EditorPane })),
 );
+const StatsView = lazy(() => import('./StatsView').then((m) => ({ default: m.StatsView })));
 import { ModalQueue } from '../agent/ModalQueue';
 import { useEditorStore } from '../../stores/editorStore';
 import { useActiveWorkspaceId } from '../../hooks/useActiveWorkspaceId';
@@ -42,6 +46,23 @@ function PanelLoading() {
 
 const SIDEBAR_MIN = 264;
 const SIDEBAR_DEFAULT = 372;
+
+/** 主内容区视图;automation/search/skills/mcp/stats 为全页独立视图(侧边栏可导航) */
+export type AppView =
+  | 'agent'
+  | 'terminal'
+  | 'editor'
+  | 'automation'
+  | 'search'
+  | 'skills'
+  | 'mcp'
+  | 'stats';
+
+/** 侧边栏导航按钮对应的全页视图 */
+export type SideView = Extract<
+  AppView,
+  'automation' | 'search' | 'skills' | 'mcp' | 'stats'
+>;
 
 export function AppShell() {
   useEffect(() => {
@@ -69,14 +90,24 @@ function AppShellInner() {
   const [collapsed, setCollapsed] = useState(
     () => typeof window === 'undefined' || window.innerWidth < 768
   );
-  const [view, setView] = useState<'agent' | 'terminal' | 'editor' | 'automation'>('agent');
-  // 面板首次切换过去才挂载(lazy 按需拉取),挂载后保持不卸载以保留终端/编辑器状态
-  const [paneMounted, setPaneMounted] = useState({ terminal: false, editor: false });
+  const [view, setView] = useState<AppView>('agent');
+  // 面板首次切换过去才挂载(lazy 按需拉取 + 查询延迟发起),挂载后保持不卸载以保留状态
+  const [paneMounted, setPaneMounted] = useState<
+    Record<'terminal' | 'editor' | SideView, boolean>
+  >({
+    terminal: false,
+    editor: false,
+    automation: false,
+    search: false,
+    skills: false,
+    mcp: false,
+    stats: false,
+  });
   const [helpOpen, setHelpOpen] = useState(false);
 
   useEffect(() => {
-    if (view === 'terminal') setPaneMounted((p) => (p.terminal ? p : { ...p, terminal: true }));
-    if (view === 'editor') setPaneMounted((p) => (p.editor ? p : { ...p, editor: true }));
+    if (view === 'agent') return;
+    setPaneMounted((p) => (p[view] ? p : { ...p, [view]: true }));
   }, [view]);
   const dragRef = useRef<{ startX: number; startW: number } | null>(null);
   const isMobile = useIsMobile();
@@ -131,13 +162,15 @@ function AppShellInner() {
                   <WorkspaceSidebar
                     onNavigate={() => {
                       setCollapsed(true);
-                      if (view === 'automation') setView('agent');
+                      // 从任意全页视图(自动化/搜索/技能/MCP/统计)回到会话
+                      if (view !== 'agent' && view !== 'terminal' && view !== 'editor')
+                        setView('agent');
                     }}
-                    onOpenAutomation={() => {
+                    onOpenView={(v) => {
                       setCollapsed(true);
-                      setView('automation');
+                      setView(v);
                     }}
-                    autoActive={view === 'automation'}
+                    activeView={view}
                   />
                 </div>
               </div>
@@ -155,10 +188,12 @@ function AppShellInner() {
             >
               <WorkspaceSidebar
                 onNavigate={() => {
-                  if (view === 'automation') setView('agent');
+                  // 从任意全页视图(自动化/搜索/技能/MCP/统计)回到会话
+                  if (view !== 'agent' && view !== 'terminal' && view !== 'editor')
+                    setView('agent');
                 }}
-                onOpenAutomation={() => setView('automation')}
-                autoActive={view === 'automation'}
+                onOpenView={(v) => setView(v)}
+                activeView={view}
               />
             </div>
             {/* 调整侧边栏宽度 */}
@@ -239,7 +274,23 @@ function AppShellInner() {
                 )}
               </div>
               <div className={cn('flex min-h-0 w-full flex-1', view !== 'automation' && 'hidden')}>
-                <AutomationPanel />
+                {paneMounted.automation && <AutomationPanel />}
+              </div>
+              <div className={cn('flex min-h-0 w-full flex-1', view !== 'search' && 'hidden')}>
+                {paneMounted.search && <SearchView onNavigate={() => setView('agent')} />}
+              </div>
+              <div className={cn('flex min-h-0 w-full flex-1', view !== 'skills' && 'hidden')}>
+                {paneMounted.skills && <SkillsView />}
+              </div>
+              <div className={cn('flex min-h-0 w-full flex-1', view !== 'mcp' && 'hidden')}>
+                {paneMounted.mcp && <McpView />}
+              </div>
+              <div className={cn('flex min-h-0 w-full flex-1', view !== 'stats' && 'hidden')}>
+                {paneMounted.stats && (
+                  <Suspense fallback={<PanelLoading />}>
+                    <StatsView />
+                  </Suspense>
+                )}
               </div>
               <div className={cn('flex min-h-0 w-full flex-1', view !== 'editor' && 'hidden')}>
                 {workspaceId ? (
