@@ -21,6 +21,7 @@ import {
   Smartphone,
   Trash2,
   WandSparkles,
+  Waypoints,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import {
@@ -499,7 +500,7 @@ export function WorkspaceSidebar({
             <span className="min-w-0 flex-1 truncate text-[13px]">新建任务</span>
             <span className="shrink-0 text-xs font-normal text-foreground-subtlest">⌘ N</span>
           </button>
-          {/* 主内容区全页视图导航:自动化/搜索/技能/MCP/统计 */}
+          {/* 主内容区全页视图导航:自动化/搜索/技能/MCP/统计/图谱 */}
           {(
             [
               { view: 'search', label: '搜索', icon: Search, kbd: '⌘ K', title: '搜索 (⌘ K)' },
@@ -507,6 +508,7 @@ export function WorkspaceSidebar({
               { view: 'skills', label: '技能', icon: WandSparkles, title: '技能' },
               { view: 'mcp', label: 'MCP', icon: Boxes, title: 'MCP 工具' },
               { view: 'stats', label: '统计', icon: BarChart3, title: '用量统计' },
+              { view: 'graph', label: '图谱', icon: Waypoints, title: '知识图谱' },
             ] as const
           ).map((item) => (
             <button

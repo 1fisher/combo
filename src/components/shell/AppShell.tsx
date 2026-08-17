@@ -26,6 +26,7 @@ const EditorPane = lazy(() =>
   import('../editor/EditorPane').then((m) => ({ default: m.EditorPane })),
 );
 const StatsView = lazy(() => import('./StatsView').then((m) => ({ default: m.StatsView })));
+const GraphView = lazy(() => import('./GraphView').then((m) => ({ default: m.GraphView })));
 import { ModalQueue } from '../agent/ModalQueue';
 import { useEditorStore } from '../../stores/editorStore';
 import { useActiveWorkspaceId } from '../../hooks/useActiveWorkspaceId';
@@ -47,7 +48,7 @@ function PanelLoading() {
 const SIDEBAR_MIN = 264;
 const SIDEBAR_DEFAULT = 372;
 
-/** 主内容区视图;automation/search/skills/mcp/stats 为全页独立视图(侧边栏可导航) */
+/** 主内容区视图;automation/search/skills/mcp/stats/graph 为全页独立视图(侧边栏可导航) */
 export type AppView =
   | 'agent'
   | 'terminal'
@@ -56,12 +57,13 @@ export type AppView =
   | 'search'
   | 'skills'
   | 'mcp'
-  | 'stats';
+  | 'stats'
+  | 'graph';
 
 /** 侧边栏导航按钮对应的全页视图 */
 export type SideView = Extract<
   AppView,
-  'automation' | 'search' | 'skills' | 'mcp' | 'stats'
+  'automation' | 'search' | 'skills' | 'mcp' | 'stats' | 'graph'
 >;
 
 export function AppShell() {
@@ -102,6 +104,7 @@ function AppShellInner() {
     skills: false,
     mcp: false,
     stats: false,
+    graph: false,
   });
   const [helpOpen, setHelpOpen] = useState(false);
 
@@ -162,7 +165,7 @@ function AppShellInner() {
                   <WorkspaceSidebar
                     onNavigate={() => {
                       setCollapsed(true);
-                      // 从任意全页视图(自动化/搜索/技能/MCP/统计)回到会话
+                      // 从任意全页视图(自动化/搜索/技能/MCP/统计/图谱)回到会话
                       if (view !== 'agent' && view !== 'terminal' && view !== 'editor')
                         setView('agent');
                     }}
@@ -188,7 +191,7 @@ function AppShellInner() {
             >
               <WorkspaceSidebar
                 onNavigate={() => {
-                  // 从任意全页视图(自动化/搜索/技能/MCP/统计)回到会话
+                  // 从任意全页视图(自动化/搜索/技能/MCP/统计/图谱)回到会话
                   if (view !== 'agent' && view !== 'terminal' && view !== 'editor')
                     setView('agent');
                 }}
@@ -289,6 +292,16 @@ function AppShellInner() {
                 {paneMounted.stats && (
                   <Suspense fallback={<PanelLoading />}>
                     <StatsView />
+                  </Suspense>
+                )}
+              </div>
+              <div className={cn('flex min-h-0 w-full flex-1', view !== 'graph' && 'hidden')}>
+                {paneMounted.graph && (
+                  <Suspense fallback={<PanelLoading />}>
+                    <GraphView
+                      workspaceId={workspaceId}
+                      onOpenInEditor={() => setView('editor')}
+                    />
                   </Suspense>
                 )}
               </div>

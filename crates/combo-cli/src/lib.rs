@@ -11,6 +11,7 @@ pub mod config;
 pub mod db;
 pub mod fs;
 pub mod git;
+pub mod graph;
 pub mod host;
 pub mod lan;
 pub mod lsp;

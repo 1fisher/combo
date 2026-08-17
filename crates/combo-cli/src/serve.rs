@@ -20,6 +20,7 @@ use crate::compact;
 use crate::config::AppConfig;
 use crate::fs;
 use crate::git;
+use crate::graph;
 use crate::host;
 use crate::lan;
 use crate::meta::MetaStore;
@@ -907,6 +908,8 @@ fn build_router(
             "/v1/workspaces/:id/files/search",
             get(fs::search),
         )
+        // ---- 知识图谱 ----
+        .route("/v1/workspaces/:id/graph", get(graph::graph))
         .route("/v1/workspaces/:id/git/status", get(git::status))
         .route("/v1/workspaces/:id/git/repos", get(git::repos))
         .route("/v1/workspaces/:id/git/diff", get(git::diff))

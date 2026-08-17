@@ -352,8 +352,8 @@ pub async fn write(
 
 // ============================= 文件内容搜索 =============================
 
-/// 搜索时应跳过的目录名(加快递归速度)。
-fn is_skip_dir(name: &str) -> bool {
+/// 搜索时应跳过的目录名(加快递归速度)。graph.rs 知识图谱扫描同样复用。
+pub(crate) fn is_skip_dir(name: &str) -> bool {
     if name.starts_with('.') {
         return true;
     }

@@ -2261,4 +2261,48 @@ export namespace Api {
     finished_at: number | null;
     error: string | null;
   };
+
+  // ---------- 知识图谱(项目代码依赖图) ----------
+
+  /** 图谱节点:一个源码文件。id 为 workspace 相对路径('/' 分隔)。 */
+  export type GraphNode = {
+    id: string;
+    /** 文件名。 */
+    name: string;
+    /** 所在目录(相对路径,根为 '.')。 */
+    dir: string;
+    /** 语言标识:ts/tsx/js/jsx/py/rs/go/vue/svelte/java/… */
+    lang: string;
+    /** 函数/类/接口等定义数(启发式计数)。 */
+    defs: number;
+    /** 代码行数。 */
+    loc: number;
+    /** 该文件引用的项目内文件数(出度)。 */
+    out: number;
+    /** 被项目内文件引用数(入度)。 */
+    in: number;
+    /** 该文件引用的外部依赖包名列表。 */
+    external: string[];
+  };
+
+  /** 图谱边:source 文件 import 了 target 文件。 */
+  export type GraphEdge = { source: string; target: string };
+
+  /** GET /v1/workspaces/{id}/graph 响应。 */
+  export type WorkspaceGraph = {
+    nodes: GraphNode[];
+    edges: GraphEdge[];
+    stats: {
+      files: number;
+      edges: number;
+      total_loc: number;
+      /** 语言 → 文件数。 */
+      langs: Record<string, number>;
+      /** 被引用最多的外部依赖(取前 100)。 */
+      external: { name: string; count: number }[];
+      /** 文件数超上限被截断时为 true。 */
+      truncated: boolean;
+    };
+    generated_at: number;
+  };
 }

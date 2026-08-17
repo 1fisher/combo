@@ -193,7 +193,7 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
 
 - **Rust:** module-per-concern under `crates/combo-cli/src/` (`serve`, `agent`,
   `automation`, `store`, `meta`, `workspace`, `session`, `auth`, `fs`, `git`,
-  `host`, `terminal`, `relay`, `tunnel`, `skills`, `skills_api`), `pub` API
+  `host`, `terminal`, `relay`, `tunnel`, `skills`, `skills_api`, `graph`), `pub` API
   re-exported from `lib.rs`(`AppState` / `run` / `serve_listener`)。Workspace root
   `Cargo.toml` has members `crates/combo-cli`, `crates/combo-relay` and `src-tauri`.
 - **自动化(定时任务)** (`crates/combo-cli/src/automation.rs`):combo 后台定时
@@ -214,6 +214,18 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   会话/终端/编辑器同级,非 Dialog;顶栏有自动化切换按钮,点击侧边栏「自动化」
   或顶栏图标在 agent ↔ automation 视图间切换)三视图:列表(启用开关/
   立即运行/历史/编辑/删除)/ 表单(名称/目标项目/提示词/调度类型)/ 运行历史。
+- **项目知识图谱**(`graph.rs` + `GraphView.tsx`,侧边栏「图谱」按钮):`GET
+  /v1/workspaces/:id/graph` 扫描 workspace 源码(上限 2500 文件,跳过
+  node_modules/target 等目录与隐藏目录),启发式正则解析文件间 import 依赖
+  (TS/JS 相对路径与 `@/` 别名、Python 相对/绝对 import、Rust `use crate::`/
+  `mod x;`、Go 按 `go.mod` module 前缀、C/C++ `#include "..."`),返回文件级
+  依赖图(nodes/edges)+ 外部依赖聚合(裸包名计数,top 100)+ 语言/行数/定义数
+  统计;`spawn_blocking` 跑扫描,解析为 `Resolution::{Internal,External,None}`。
+  前端 `GraphView`(lazy 全页视图,AppView=`'graph'`)用 `d3-force` 力导向布局 +
+  canvas 渲染:节点按语言着色、大小随连接度,支持缩放/平移/拖拽节点/hover 高亮
+  邻居/点选查看详情(依赖/被依赖/外部依赖,可跳编辑器打开文件)、搜索高亮、
+  目录过滤、「仅看有依赖的文件」开关。注意 canvas 的 `setPointerCapture` 需要
+  try-catch(合成事件下 pointerId 未激活会抛 NotFoundError 打断整个交互)。
 - **serve run 公共入口**:`serve::start_agent_run(state, ws_id, req, on_finish)`
   是发起一次 agent 运行的唯一入口(HTTP handler `run_agent_ws` 与自动化调度器
   共用)。`on_finish: Option<AgentFinishCallback>` 在后台 run 真正结束时调用

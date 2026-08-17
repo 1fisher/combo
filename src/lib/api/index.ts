@@ -901,3 +901,10 @@ export function listAutomationRuns(id: string): Promise<Api.AutomationRun[]> {
   return apiRequest(`/v1/automations/${id}/runs`);
 }
 
+// ---------- 知识图谱 ----------
+
+/** 获取项目的知识图谱(文件级依赖图 + 外部依赖统计)。 */
+export function getWorkspaceGraph(workspaceId: string): Promise<Api.WorkspaceGraph> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/graph`);
+}
+
