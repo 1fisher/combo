@@ -1,6 +1,7 @@
 import { getClientId } from '../clientId';
 import { getAccessToken } from '../authToken';
 import { ensureProxyBaseUrl } from '../connection';
+import { getP2pTransport } from '../p2p/transport';
 import { EventCoalescer } from './coalesce';
 import type { EventEnvelope } from './payloadTypes';
 
@@ -127,10 +128,14 @@ export class WorkspaceEventSource {
       const headers: Record<string, string> = { Accept: 'text/event-stream' };
       const token = getAccessToken();
       if (token) headers.Authorization = `Bearer ${token}`;
-      const res = await fetch(url, {
-        headers,
-        signal: controller.signal,
-      });
+      // P2P 就绪时 SSE 走 WebRTC DataChannel(流式 chunk 透传)
+      const p2p = getP2pTransport();
+      const res = p2p?.isReady()
+        ? await p2p.fetch(url, { headers, signal: controller.signal })
+        : await fetch(url, {
+            headers,
+            signal: controller.signal,
+          });
       if (!res.ok || !res.body) {
         if (res.status === 404) {
           this.stopped = true;

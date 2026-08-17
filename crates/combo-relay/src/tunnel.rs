@@ -7,7 +7,7 @@ use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -83,6 +83,8 @@ pub struct TunnelHandle {
     pub pending: Arc<DashMap<String, PendingResponse>>,
     /// 活跃的 WS 隧道:id → 浏览器 WS 发送通道。
     pub pending_ws: Arc<DashMap<String, mpsc::UnboundedSender<WsTunnelEvent>>>,
+    /// 活跃的 P2P 信令 WS:id → 浏览器 signal WS 发送通道(纯 JSON 文本)。
+    pub signal_peers: Arc<DashMap<String, mpsc::UnboundedSender<String>>>,
 }
 
 /// 待响应的 HTTP 请求(中转端等待桌面客户端的响应)。
@@ -109,6 +111,104 @@ pub async fn ws_tunnel_handler(
     ws.on_upgrade(move |socket| tunnel_task(state, query.token, socket))
 }
 
+/// 浏览器 → 中转:信令 WS 输入帧。
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum BrowserSignalIn {
+    Signal { data: String },
+}
+
+/// 中转 → 浏览器:信令 WS 输出帧。
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum BrowserSignalOut {
+    Signal { data: String },
+    Error { message: String },
+    Closed,
+}
+
+fn closed_frame() -> String {
+    serde_json::to_string(&BrowserSignalOut::Closed).unwrap_or_default()
+}
+
+/// WebSocket 升级:浏览器建立 P2P 信令通道。
+///
+/// 路由: `GET /v1/relay/signal?token=<access_token>`
+/// 浏览器发 `{"type":"signal","data":"<json>"}`,中转包裹为
+/// `TunnelMsg::Signal` 转给桌面端;桌面端的 `DesktopMsg::Signal` 原路回传。
+pub async fn ws_signal_handler(
+    ws: WebSocketUpgrade,
+    Query(query): Query<TunnelQuery>,
+    State(state): State<RelayState>,
+) -> Response {
+    ws.on_upgrade(move |socket| signal_task(state, query.token, socket))
+}
+
+async fn signal_task(state: RelayState, token: String, socket: WebSocket) {
+    let (mut ws_sink, mut ws_stream) = socket.split();
+    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    let conn_id = uuid::Uuid::new_v4().to_string();
+
+    // 隧道必须已存在(桌面端已连),否则报错并关闭
+    let Some(handle) = state.tunnels.get(&token) else {
+        let frame = serde_json::to_string(&BrowserSignalOut::Error {
+            message: "桌面客户端未连接".into(),
+        })
+        .unwrap_or_default();
+        let _ = ws_sink.send(Message::Text(frame)).await;
+        let _ = ws_sink.close().await;
+        return;
+    };
+    handle.signal_peers.insert(conn_id.clone(), tx.clone());
+    drop(handle);
+
+    let write_task = tokio::spawn(async move {
+        while let Some(frame) = rx.recv().await {
+            if ws_sink.send(Message::Text(frame)).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    info!("P2P 信令 WS 已建立: id={:.8}", conn_id);
+    while let Some(msg) = ws_stream.next().await {
+        let text = match msg {
+            Ok(Message::Text(t)) => t,
+            Ok(Message::Close(_)) | Err(_) => break,
+            _ => continue,
+        };
+        let Ok(BrowserSignalIn::Signal { data }) = serde_json::from_str::<BrowserSignalIn>(&text)
+        else {
+            continue;
+        };
+        match state.tunnels.get(&token) {
+            Some(handle) => {
+                if handle
+                    .tx
+                    .send(TunnelMsg::Signal {
+                        id: conn_id.clone(),
+                        data,
+                    })
+                    .is_err()
+                {
+                    let _ = tx.send(closed_frame());
+                    break;
+                }
+            }
+            None => {
+                let _ = tx.send(closed_frame());
+                break;
+            }
+        }
+    }
+
+    write_task.abort();
+    if let Some(handle) = state.tunnels.get(&token) {
+        handle.signal_peers.remove(&conn_id);
+    }
+    info!("P2P 信令 WS 已断开: id={:.8}", conn_id);
+}
+
 /// 隧道任务:管理一条桌面客户端 WebSocket 连接。
 async fn tunnel_task(state: RelayState, token: String, socket: WebSocket) {
     let (mut ws_sink, mut ws_stream) = socket.split();
@@ -118,6 +218,7 @@ async fn tunnel_task(state: RelayState, token: String, socket: WebSocket) {
     let pending = Arc::new(DashMap::new());
     let pending_ws: Arc<DashMap<String, mpsc::UnboundedSender<WsTunnelEvent>>> =
         Arc::new(DashMap::new());
+    let signal_peers: Arc<DashMap<String, mpsc::UnboundedSender<String>>> = Arc::new(DashMap::new());
 
     let conn_id = uuid::Uuid::new_v4().to_string();
     let handle = TunnelHandle {
@@ -125,6 +226,7 @@ async fn tunnel_task(state: RelayState, token: String, socket: WebSocket) {
         tx,
         pending: pending.clone(),
         pending_ws: pending_ws.clone(),
+        signal_peers: signal_peers.clone(),
     };
 
     // 注册隧道(覆盖同 token 旧连接)
@@ -251,6 +353,14 @@ async fn tunnel_task(state: RelayState, token: String, socket: WebSocket) {
                 }
                 pending_ws.remove(&id);
             }
+            DesktopMsg::Signal { id, data } => {
+                // P2P 信令:路由到对应的浏览器 signal WS
+                if let Some(entry) = signal_peers.get(&id) {
+                    let frame =
+                        serde_json::to_string(&BrowserSignalOut::Signal { data }).unwrap_or_default();
+                    let _ = entry.send(frame);
+                }
+            }
         }
     }
 
@@ -261,6 +371,11 @@ async fn tunnel_task(state: RelayState, token: String, socket: WebSocket) {
         let _ = entry.send(WsTunnelEvent::Close);
     }
     pending_ws.clear();
+    // 关闭所有浏览器侧信令 WS(桌面端已断,协商无从继续)
+    for entry in signal_peers.iter() {
+        let _ = entry.send(closed_frame());
+    }
+    signal_peers.clear();
     // 只移除属于本次连接的条目:同 token 快速重连时,旧连接的清理可能晚于
     // 新连接注册执行,直接 remove 会误删新条目,导致中转端存在存活 WS 但
     // tunnels 表里没有该 token,浏览器请求全部 502「桌面客户端未连接」。
@@ -929,6 +1044,7 @@ mod tests {
                 tx,
                 pending,
                 pending_ws,
+                signal_peers: Arc::new(DashMap::new()),
             },
         );
         assert_eq!(state.single_tunnel_token(), Some("tok1".to_string()));
@@ -944,6 +1060,7 @@ mod tests {
             tx: mpsc::unbounded_channel().0,
             pending: Arc::new(DashMap::new()),
             pending_ws: Arc::new(DashMap::new()),
+            signal_peers: Arc::new(DashMap::new()),
         };
         state.tunnels.insert("tok1".to_string(), make_handle());
         state.tunnels.insert("tok2".to_string(), make_handle());
@@ -959,6 +1076,7 @@ mod tests {
             tx: mpsc::unbounded_channel().0,
             pending: Arc::new(DashMap::new()),
             pending_ws: Arc::new(DashMap::new()),
+            signal_peers: Arc::new(DashMap::new()),
         };
         state.tunnels.insert("only_token".to_string(), make_handle());
 
@@ -985,6 +1103,7 @@ mod tests {
             tx: mpsc::unbounded_channel().0,
             pending: Arc::new(DashMap::new()),
             pending_ws: Arc::new(DashMap::new()),
+            signal_peers: Arc::new(DashMap::new()),
         };
         // 注册旧连接条目
         state.tunnels.insert("tok".to_string(), make_handle());

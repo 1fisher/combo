@@ -776,6 +776,29 @@ export interface RelayStatus {
   error?: string;
 }
 
+export interface LanInfo {
+  /** 局域网直连候选地址(空 = 不可用) */
+  urls: string[];
+  port: number;
+  lan_listening: boolean;
+  has_static: boolean;
+}
+
+export interface P2pStatus {
+  enabled: boolean;
+  connected: number;
+}
+
+/** 查询局域网直连信息(桌面端生成二维码时调用)。 */
+export function getLanInfo(): Promise<LanInfo> {
+  return apiRequest('/v1/lan-info');
+}
+
+/** 查询 WebRTC P2P 直连状态。 */
+export function getP2pStatus(): Promise<P2pStatus> {
+  return apiRequest('/v1/p2p/status');
+}
+
 /**
  * 启动桌面端到中转服务器的反向隧道。
  * @param wsUrl 中转 WebSocket 地址 (wss://...)

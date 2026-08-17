@@ -5,6 +5,7 @@
 //! - `POST /v1/relay/stop` — 停止隧道
 //! - `GET /v1/relay/status` — 查询状态
 
+use crate::p2p::P2pManager;
 use crate::tunnel::{run_tunnel_client, test_connection, TunnelClientConfig};
 use axum::extract::State;
 use axum::Json;
@@ -24,6 +25,8 @@ pub struct RelayManager {
     /// 最近一次连接错误(透传到 RelayStatus.error 供前端显示)。
     /// 连接成功时清空。
     last_error: Arc<std::sync::Mutex<Option<String>>>,
+    /// WebRTC P2P 直连管理器:信令经隧道收发,随隧道启停。
+    pub p2p: Arc<P2pManager>,
 }
 
 impl RelayManager {
@@ -33,6 +36,7 @@ impl RelayManager {
             config: Mutex::new(None),
             connected: Arc::new(AtomicBool::new(false)),
             last_error: Arc::new(std::sync::Mutex::new(None)),
+            p2p: P2pManager::new(),
         })
     }
 
@@ -55,9 +59,10 @@ impl RelayManager {
         let config_clone = config.clone();
         let connected_flag = self.connected.clone();
         let last_error = self.last_error.clone();
+        let p2p = self.p2p.clone();
 
         *task_guard = Some(tokio::spawn(async move {
-            run_tunnel_client(config, connected_flag, last_error).await;
+            run_tunnel_client(config, connected_flag, last_error, p2p).await;
         }));
 
         let mut cfg_guard = self.config.lock().await;
@@ -145,9 +150,10 @@ pub async fn start_relay(
         local_proxy_url: local.clone(),
     };
     match test_connection(&test_config).await {
-        Ok(()) => {
-            tracing::info!("[relay] 试连成功,启动后台隧道循环");
-            state.relay.start(body.url, body.token, local).await;
+    Ok(()) => {
+        tracing::info!("[relay] 试连成功,启动后台隧道循环");
+        state.relay.p2p.reset(Some(local.clone()));
+        state.relay.start(body.url, body.token, local).await;
             Json(RelayStatus {
                 running: true,
                 connected: true,
@@ -168,6 +174,7 @@ pub async fn start_relay(
 pub async fn stop_relay(
     State(state): State<crate::serve::AppState>,
 ) -> Json<RelayStatus> {
+    state.relay.p2p.reset(None);
     state.relay.stop().await;
     Json(RelayStatus {
         running: false,
@@ -184,4 +191,18 @@ pub async fn relay_status(
         connected: state.relay.is_connected(),
         error: state.relay.last_error(),
     })
+}
+
+#[derive(Serialize)]
+pub struct P2pStatus {
+    /// 隧道是否已连接(P2P 信令依赖隧道)。
+    pub enabled: bool,
+    /// 当前在线的 WebRTC 会话数。
+    pub connected: usize,
+}
+
+/// GET /v1/p2p/status:WebRTC P2P 直连状态。
+pub async fn p2p_status(State(state): State<crate::serve::AppState>) -> Json<P2pStatus> {
+    let (enabled, connected) = state.relay.p2p.status();
+    Json(P2pStatus { enabled, connected })
 }

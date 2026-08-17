@@ -1,6 +1,7 @@
 import { getProxyBaseUrl } from '../connection';
 import { getClientId } from '../clientId';
 import { getAccessToken } from '../authToken';
+import { getP2pTransport } from '../p2p/transport';
 
 export class ApiError extends Error {
   constructor(
@@ -30,12 +31,24 @@ export async function apiRequest<T>(
     : undefined;
   let res: Response;
   try {
-    res = await fetch(`${base}${path}?${q.toString()}`, {
-      method: opts.method ?? 'GET',
-      headers,
-      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
-      signal: ac.signal,
-    });
+    const url = `${base}${path}?${q.toString()}`;
+    // P2P 就绪时请求走 WebRTC DataChannel(移动端经中转访问场景)
+    const p2p = getP2pTransport();
+    if (p2p?.isReady()) {
+      res = await p2p.fetch(url, {
+        method: opts.method ?? 'GET',
+        headers,
+        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+        signal: ac.signal,
+      });
+    } else {
+      res = await fetch(url, {
+        method: opts.method ?? 'GET',
+        headers,
+        body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+        signal: ac.signal,
+      });
+    }
   } catch (e) {
     if (e instanceof DOMException && e.name === 'AbortError') {
       throw new ApiError(0, '请求超时');

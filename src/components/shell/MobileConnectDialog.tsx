@@ -13,9 +13,11 @@ import { cn } from '../../lib/utils';
 import { getExternalUrl, getEffectiveExternalUrl } from '../../lib/connection';
 import {
   createAccessToken,
+  getLanInfo,
   revokeAccessToken,
   startRelayTunnel,
   type CreatedToken,
+  type LanInfo,
 } from '../../lib/api';
 
 interface MobileConnectDialogProps {
@@ -30,6 +32,7 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
   const [loading, setLoading] = useState(false);
   const [tunnelConnected, setTunnelConnected] = useState(false);
   const [tunnelError, setTunnelError] = useState<string | null>(null);
+  const [lanInfo, setLanInfo] = useState<LanInfo | null>(null);
   // ref 持有当前令牌,供 generateToken 撤销旧令牌时读取,
   // 避免 useCallback 依赖 tokenInfo 导致与 useEffect 形成无限循环。
   const tokenRef = useRef<CreatedToken | null>(null);
@@ -41,8 +44,14 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
     return getEffectiveExternalUrl().replace(/\/$/, '');
   })();
 
-  // 扫码后移动端打开的地址:页面 URL + token 参数
-  const mobileUrl = tokenInfo ? `${pageUrl}?token=${encodeURIComponent(tokenInfo.token)}` : '';
+  // 扫码后移动端打开的地址:页面 URL + token + lan(局域网直连可用时携带,
+  // 手机同 WiFi 打开后自动整页跳转到桌面直连页,不再经中转)
+  const lanUrl = lanInfo?.urls?.[0] ?? null;
+  const mobileUrl = tokenInfo
+    ? `${pageUrl}?token=${encodeURIComponent(tokenInfo.token)}${
+        lanUrl ? `&lan=${encodeURIComponent(lanUrl)}` : ''
+      }`
+    : '';
 
   const generateToken = useCallback(async () => {
     setLoading(true);
@@ -74,6 +83,11 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
       } else {
         throw new Error('隧道连接超时,请检查网络或中转域名后重试');
       }
+
+      // 局域网直连信息(异步获取,失败不影响二维码生成)
+      getLanInfo()
+        .then(setLanInfo)
+        .catch(() => setLanInfo(null));
     } catch (e) {
       tokenRef.current = null;
       setTokenInfo(null);
@@ -90,6 +104,7 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
       setQrDataUrl('');
       setTunnelConnected(false);
       setTunnelError(null);
+      setLanInfo(null);
       return;
     }
     void generateToken();
@@ -215,6 +230,28 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
                   ? '隧道已连接,可扫码访问'
                   : '隧道连接中,请稍候…'}
             </span>
+          </div>
+
+          {/* 连接方式说明 */}
+          <div className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-[12px] leading-relaxed text-foreground-subtle">
+            {lanUrl ? (
+              <>
+                <p className="font-medium text-success">支持局域网直连</p>
+                <p className="mt-0.5">
+                  同一 WiFi 下扫码后自动直连桌面
+                  (<code className="break-all text-foreground">{lanUrl}</code>),
+                  跨网络时自动协商 P2P 直连,均失败才走云端中转。
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="font-medium text-brand">中转 + P2P 连接</p>
+                <p className="mt-0.5">
+                  扫码后先经中转访问,页面会自动协商 WebRTC P2P 直连;
+                  打洞成功后流量不再经过中转服务器。
+                </p>
+              </>
+            )}
           </div>
 
           {/* 访问地址 */}

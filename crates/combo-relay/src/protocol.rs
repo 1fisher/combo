@@ -42,6 +42,12 @@ pub enum TunnelMsg {
     WsClose {
         id: String,
     },
+    /// WebRTC P2P 信令:浏览器(经 signal WS)→ 桌面端。
+    /// `id` 为信令会话标识(signal WS 连接 id),中转只透传不解析。
+    Signal {
+        id: String,
+        data: String,
+    },
 }
 
 /// 桌面客户端 → 中转服务器:HTTP 响应或 WebSocket 隧道消息。
@@ -83,5 +89,10 @@ pub enum DesktopMsg {
     WsError {
         id: String,
         message: String,
+    },
+    /// WebRTC P2P 信令:桌面端 → 浏览器(signal WS)。
+    Signal {
+        id: String,
+        data: String,
     },
 }

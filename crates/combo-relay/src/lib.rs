@@ -3,7 +3,7 @@ pub mod tunnel;
 
 pub use tunnel::{
     is_ws_upgrade, token_cookie_headers, tunnel_forward, tunnel_forward_all, tunnel_status_handler,
-    waiting_page, ws_proxy_handler, ws_tunnel_handler, RelayState,
+    waiting_page, ws_proxy_handler, ws_signal_handler, ws_tunnel_handler, RelayState,
 };
 
 use axum::body::Body;
@@ -51,6 +51,7 @@ pub fn build_router(
 
     Router::new()
         .route("/v1/relay/tunnel", get(ws_tunnel_handler))
+        .route("/v1/relay/signal", get(ws_signal_handler))
         .route("/v1/relay/status", get(tunnel_status_handler))
         .route("/v1/health", get(health))
         .fallback(move |State(state): State<RelayState>, req: Request| {

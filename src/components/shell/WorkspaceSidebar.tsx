@@ -221,6 +221,7 @@ export function WorkspaceSidebar({
   const setActive = useAgentStore((s) => s.setActiveWorkspace);
   const setActiveSessionId = useAgentStore((s) => s.setActiveSessionId);
   const connStatus = useConnectionStore((s) => s.status);
+  const connTransport = useConnectionStore((s) => s.transport);
   const {
     sessions: activeSessions,
     create: createSessionIn,
@@ -468,8 +469,20 @@ export function WorkspaceSidebar({
     };
   }, [ctxMenu]);
 
+  const transportLabel =
+    connTransport === 'lan'
+      ? ' · 局域网直连'
+      : connTransport === 'p2p'
+        ? ' · P2P'
+        : connTransport === 'relay'
+          ? ' · 中转'
+          : '';
   const connLabel =
-    connStatus === 'connected' ? '已连接' : connStatus === 'connecting' ? '连接中' : '离线';
+    (connStatus === 'connected'
+      ? '已连接'
+      : connStatus === 'connecting'
+        ? '连接中'
+        : '离线') + transportLabel;
 
   return (
     <aside className="flex h-full select-none flex-col overflow-hidden">

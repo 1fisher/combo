@@ -51,6 +51,12 @@ enum TunnelMsg {
     WsClose {
         id: String,
     },
+    /// WebRTC P2P 信令:移动端经中转发来的 offer/关闭等信令(JSON 字符串)。
+    /// 中转服务器只透传,不解析。`id` 为信令会话标识(浏览器 signal WS 连接 id)。
+    Signal {
+        id: String,
+        data: String,
+    },
 }
 
 /// 线路协议:桌面客户端 → 中转服务器。
@@ -88,6 +94,11 @@ enum DesktopMsg {
     WsError {
         id: String,
         message: String,
+    },
+    /// WebRTC P2P 信令:桌面端 → 移动端(answer/错误/关闭)。
+    Signal {
+        id: String,
+        data: String,
     },
 }
 
@@ -156,17 +167,19 @@ pub async fn test_connection(config: &TunnelClientConfig) -> Result<(), String> 
 ///
 /// `last_error` 用于将最近一次连接错误透传给前端(RelayStatus.error),
 /// 便于在 UI 上显示具体原因(TLS 失败 / DNS 解析 / 连接拒绝等)。
+/// `p2p` 为 WebRTC 直连管理器:信令经本隧道收发,P2P 连接与隧道同生共死。
 pub async fn run_tunnel_client(
     config: TunnelClientConfig,
     connected: Arc<AtomicBool>,
     last_error: Arc<std::sync::Mutex<Option<String>>>,
+    p2p: Arc<crate::p2p::P2pManager>,
 ) {
     let mut backoff = Duration::from_secs(1);
     let max_backoff = Duration::from_secs(30);
 
     loop {
         println!("COMBO_TUNNEL_CONNECT={}", config.relay_url);
-        match connect_and_serve(&config, &connected).await {
+        match connect_and_serve(&config, &connected, &p2p).await {
             Ok(()) => {
                 eprintln!("COMBO_TUNNEL_DISCONNECTED=正常关闭");
                 backoff = Duration::from_secs(1);
@@ -189,6 +202,7 @@ pub async fn run_tunnel_client(
 async fn connect_and_serve(
     config: &TunnelClientConfig,
     connected: &AtomicBool,
+    p2p: &Arc<crate::p2p::P2pManager>,
 ) -> anyhow::Result<()> {
     ensure_crypto_provider();
     // 归一化 scheme:Https:// → wss://, https:// → wss://, Http:// → ws://
@@ -220,6 +234,14 @@ async fn connect_and_serve(
 
     // 共享的 WebSocket 发送通道:各 handler task 通过它回传响应。
     let (ws_tx, mut ws_rx) = mpsc::unbounded_channel::<Message>();
+
+    // 信令回传闭包:P2P 会话通过它把 answer/错误/关闭信令发回中转服务器。
+    let emit: crate::p2p::EmitSignal = {
+        let ws_tx = ws_tx.clone();
+        Arc::new(move |id: &str, data: &str| {
+            let _ = ws_tx.send(Message::Text(signal_frame(id, data)));
+        })
+    };
 
     // 写入任务:从通道读取消息写入 WebSocket
     let write_task = tokio::spawn(async move {
@@ -299,30 +321,59 @@ async fn connect_and_serve(
                     let _ = handle_ws_close(ws_tunnels, id).await;
                 });
             }
+            TunnelMsg::Signal { id, data } => {
+                let p2p = p2p.clone();
+                let emit = emit.clone();
+                tokio::spawn(async move {
+                    p2p.handle_signal(id, data, emit).await;
+                });
+            }
         }
     }
 
     write_task.abort();
+    // 隧道断开 → 信令通道失效 → 关闭全部 WebRTC 会话。
+    p2p.clear().await;
     eprintln!("COMBO_TUNNEL_DISCONNECTED=1");
     Ok(())
 }
 
-/// 处理单个隧道请求:转发到本地 serve,流式回传响应。
-async fn handle_request(
-    ws_tx: mpsc::UnboundedSender<Message>,
-    config: TunnelClientConfig,
+/// 请求执行事件流:隧道(WS)与 P2P(DataChannel)两种出口共用同一执行核心。
+#[derive(Debug)]
+pub(crate) enum ExecEvent {
+    Start {
+        status: u16,
+        headers: HashMap<String, String>,
+    },
+    /// 响应体分片(原始字节,已按 ≤8KB 切片:8KB base64 后 ~11KB,
+    /// 低于 WebRTC DataChannel 单消息 16KB 上限)。
+    Chunk(Vec<u8>),
+    End,
+    Error {
+        status: u16,
+        message: String,
+    },
+}
+
+/// 单条响应体分片的最大原始字节数(base64 后仍在 DataChannel 单消息限制内)。
+pub(crate) const CHUNK_RAW_MAX: usize = 8 * 1024;
+
+/// 请求执行核心:把请求转发到本地 serve,事件流式回传(支持 SSE)。
+/// 隧道(DesktopMsg)与 WebRTC DataChannel 各自适配事件格式。
+pub(crate) async fn execute_request(
     client: reqwest::Client,
-    id: String,
+    local_proxy_url: String,
     method: String,
     path: String,
     query: String,
     headers: HashMap<String, String>,
-    body: Option<String>,
+    body: Option<Vec<u8>>,
+    ev_tx: mpsc::UnboundedSender<ExecEvent>,
 ) {
     let url = if query.is_empty() {
-        format!("{}{}", config.local_proxy_url, path)
+        format!("{}{}", local_proxy_url, path)
     } else {
-        format!("{}{}?{}", config.local_proxy_url, path, query)
+        format!("{}{}?{}", local_proxy_url, path, query)
     };
 
     let mut builder = client.request(method.parse().unwrap_or(reqwest::Method::GET), &url);
@@ -342,29 +393,22 @@ async fn handle_request(
         }
     }
 
-    // 解码请求体
-    if let Some(b64) = body {
-        if let Ok(decoded) = base64::engine::general_purpose::STANDARD.decode(&b64) {
-            builder = builder.body(decoded);
-        }
+    if let Some(bytes) = body {
+        builder = builder.body(bytes);
     }
 
     let resp = match builder.send().await {
         Ok(r) => r,
         Err(e) => {
-            let _ = send_desktop_msg(
-                &ws_tx,
-                DesktopMsg::ResponseError {
-                    id: id.clone(),
-                    status: 502,
-                    message: format!("本地代理不可达: {e}"),
-                },
-            );
+            let _ = ev_tx.send(ExecEvent::Error {
+                status: 502,
+                message: format!("本地代理不可达: {e}"),
+            });
             return;
         }
     };
 
-    // ResponseStart: 状态 + 响应头
+    // Start: 状态 + 响应头
     let status = resp.status().as_u16();
     let mut resp_headers = HashMap::new();
     for (k, v) in resp.headers().iter() {
@@ -378,34 +422,85 @@ async fn handle_request(
         }
     }
 
-    let _ = send_desktop_msg(
-        &ws_tx,
-        DesktopMsg::ResponseStart {
-            id: id.clone(),
-            status,
-            headers: resp_headers,
-        },
-    );
+    let _ = ev_tx.send(ExecEvent::Start {
+        status,
+        headers: resp_headers,
+    });
 
-    // 流式读取响应体(支持 SSE 长连接)
+    // 流式读取响应体(支持 SSE 长连接),按 CHUNK_RAW_MAX 切片
     use futures::TryStreamExt;
     let mut stream = resp.bytes_stream();
     while let Ok(Some(chunk)) = stream.try_next().await {
         if chunk.is_empty() {
             continue;
         }
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&chunk);
-        let _ = send_desktop_msg(
-            &ws_tx,
-            DesktopMsg::ResponseChunk {
-                id: id.clone(),
-                body: b64,
-            },
-        );
+        let mut offset = 0;
+        while offset < chunk.len() {
+            let end = (offset + CHUNK_RAW_MAX).min(chunk.len());
+            let _ = ev_tx.send(ExecEvent::Chunk(chunk[offset..end].to_vec()));
+            offset = end;
+        }
     }
 
-    // ResponseEnd
-    let _ = send_desktop_msg(&ws_tx, DesktopMsg::ResponseEnd { id });
+    let _ = ev_tx.send(ExecEvent::End);
+}
+
+/// 序列化一条桌面端 → 中转服务器的 P2P 信令消息。
+pub(crate) fn signal_frame(id: &str, data: &str) -> String {
+    serde_json::to_string(&DesktopMsg::Signal {
+        id: id.to_string(),
+        data: data.to_string(),
+    })
+    .unwrap_or_default()
+}
+
+/// 处理单个隧道请求:转发到本地 serve,流式回传响应(DesktopMsg 适配层)。
+async fn handle_request(
+    ws_tx: mpsc::UnboundedSender<Message>,
+    config: TunnelClientConfig,
+    client: reqwest::Client,
+    id: String,
+    method: String,
+    path: String,
+    query: String,
+    headers: HashMap<String, String>,
+    body: Option<String>,
+) {
+    let body_bytes = body.and_then(|b64| base64::engine::general_purpose::STANDARD.decode(&b64).ok());
+    let (ev_tx, mut ev_rx) = mpsc::unbounded_channel::<ExecEvent>();
+    let exec = execute_request(
+        client,
+        config.local_proxy_url.clone(),
+        method,
+        path,
+        query,
+        headers,
+        body_bytes,
+        ev_tx,
+    );
+    tokio::spawn(exec);
+    while let Some(ev) = ev_rx.recv().await {
+        let msg = match ev {
+            ExecEvent::Start { status, headers } => DesktopMsg::ResponseStart {
+                id: id.clone(),
+                status,
+                headers,
+            },
+            ExecEvent::Chunk(bytes) => DesktopMsg::ResponseChunk {
+                id: id.clone(),
+                body: base64::engine::general_purpose::STANDARD.encode(bytes),
+            },
+            ExecEvent::End => DesktopMsg::ResponseEnd { id: id.clone() },
+            ExecEvent::Error { status, message } => DesktopMsg::ResponseError {
+                id: id.clone(),
+                status,
+                message,
+            },
+        };
+        if send_desktop_msg(&ws_tx, msg).is_err() {
+            break;
+        }
+    }
 }
 
 /// 处理 WS 隧道升级:连接本地 WS 端点,桥接双向数据。

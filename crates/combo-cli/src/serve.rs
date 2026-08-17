@@ -21,6 +21,7 @@ use crate::config::AppConfig;
 use crate::fs;
 use crate::git;
 use crate::host;
+use crate::lan;
 use crate::meta::MetaStore;
 use crate::question::QuestionRegistry;
 use crate::todo::TodoStore;
@@ -66,6 +67,10 @@ pub struct AppState {
     pub browse_root: Option<PathBuf>,
     /// 隧道管理器(控制桌面端到中转服务器的反向隧道)。
     pub relay: Arc<RelayManager>,
+    /// serve 是否监听了非回环地址(局域网直连可用性判断)。
+    pub bind_lan: bool,
+    /// 是否配置了前端静态资源目录(局域网直连页面需要桌面端自己供页面)。
+    pub has_static: bool,
     /// 本地监听端口(隧道转发目标)。
     pub local_port: u16,
     /// question 工具的待回答注册表(batch_id → 等待中的 tool 调用)。
@@ -91,6 +96,8 @@ impl AppState {
                 .ok()
                 .map(PathBuf::from),
             relay: RelayManager::new(),
+            bind_lan: false,
+            has_static: false,
             local_port: 0,
             questions: QuestionRegistry::new(),
             todos: TodoStore::new(),
@@ -135,6 +142,8 @@ impl AppState {
             meta,
             browse_root,
             relay: RelayManager::new(),
+            bind_lan: false,
+            has_static: false,
             local_port: 0,
             questions: QuestionRegistry::new(),
             todos: TodoStore::new(),
@@ -710,12 +719,16 @@ pub async fn run(
 /// tunnel-all 模式下中转服务器全量代理到桌面端。
 pub async fn serve_listener(
     listener: tokio::net::TcpListener,
-    state: AppState,
+    mut state: AppState,
     allowed_origins: Vec<String>,
     static_dir: Option<PathBuf>,
 ) -> Result<()> {
     // 启动自动化调度器(定时任务后台扫描;服务退出时随进程结束)。
     state.automations.start(state.clone());
+    // 记录监听/静态资源状态,供 /v1/lan-info 判断局域网直连可用性。
+    let bind_ip = listener.local_addr().map(|a| a.ip()).unwrap_or(std::net::IpAddr::from([127, 0, 0, 1]));
+    state.bind_lan = bind_ip.is_unspecified() || !bind_ip.is_loopback();
+    state.has_static = static_dir.as_ref().is_some_and(|d| d.join("index.html").is_file());
     let app = build_router(state.clone(), allowed_origins, static_dir);
     // 注入 ConnectInfo<SocketAddr> 供鉴权中间件判断请求来源是否回环。
     let shutdown_handle = state.shutdown.clone();
@@ -852,6 +865,8 @@ fn build_router(
         .route("/v1/relay/start", post(relay::start_relay))
         .route("/v1/relay/stop", post(relay::stop_relay))
         .route("/v1/relay/status", get(relay::relay_status))
+        .route("/v1/lan-info", get(lan::lan_info))
+        .route("/v1/p2p/status", get(relay::p2p_status))
         // ---- 服务器目录浏览 ----
         .route("/v1/host/home", get(host::home))
         .route("/v1/host/dirs", get(host::dirs))

@@ -143,11 +143,12 @@ async fn init_backend(app: &tauri::AppHandle) {
         }
     };
 
-    // 绑定地址:默认 127.0.0.1(仅本地);域名部署时可设 COMBO_HOST=0.0.0.0 对外开放。
+    // 绑定地址:默认 0.0.0.0(支持手机同 WiFi 局域网直连;非回环请求由令牌
+    // 中间件强制鉴权)。如需仅本机访问,设 COMBO_HOST=127.0.0.1。
     let bind_host: std::net::IpAddr = std::env::var("COMBO_HOST")
         .ok()
         .and_then(|h| h.trim().parse().ok())
-        .unwrap_or([127, 0, 0, 1].into());
+        .unwrap_or([0, 0, 0, 0].into());
     // 默认监听 18236(与独立 combo-cli serve 行为一致),被占用自动 +1 递增;
     // 桌面端前端默认连接本机 combo-cli,实际端口经 proxy-ready 事件/命令下发。
     let listener = match combo_cli::serve::bind_auto(

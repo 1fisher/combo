@@ -4,11 +4,21 @@ import './index.css';
 import { AppShell } from './components/shell/AppShell';
 import { Liquid } from './components/canvasui/Liquid';
 import { useUIPreferences } from './stores/uiPreferencesStore';
-import { extractTokenFromUrl } from './lib/authToken';
+import { extractTokenFromUrl, getAccessToken } from './lib/authToken';
+import { extractLanFromUrl, maybeRedirectToLan } from './lib/lanDirect';
+import { ensureP2pConnected } from './lib/p2p/transport';
 import { isTauri } from './lib/connection';
 
 // 移动端扫码打开后,从 URL 提取访问令牌并持久化(移除地址栏中的 token)。
-extractTokenFromUrl();
+const token = extractTokenFromUrl();
+// 局域网直连引导:提取 ?lan= 并在可用时自动整页跳转到桌面直连页面。
+// 跳转失败(手机不在同一 WiFi)返回本页后,不再重复自动跳转。
+extractLanFromUrl();
+if (!isTauri()) {
+  const redirected = maybeRedirectToLan(token ?? getAccessToken());
+  // 未走局域网直连时,异步建立 WebRTC P2P(失败静默回退中转)
+  if (!redirected) void ensureP2pConnected();
+}
 
 // 桌面模式下隐藏窗口标题栏的产品名,仅保留浏览器标签页标题。
 if (isTauri()) {

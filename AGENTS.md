@@ -446,3 +446,23 @@ health 都走同一 base,跨域由 CORS 放开。
     前端静态服务 + SPA fallback(index.html)。非 `/v1/` 路径走静态文件,
     不受鉴权中间件保护(前端资源为公开内容)。Tauri 应用在 `init_backend` 中
     自动检测 dist/(`COMBO_STATIC_DIR` → Tauri resource_dir → 开发模式 auto-detect)。
+- **P2P 直连(扫码后优先直连,中转兜底)**:移动端扫码后的连接方式按优先级
+  自动选择,三级回退,**LAN 直连 → WebRTC P2P → relay 中转**:
+  1. **局域网直连**:桌面端(Tauri 模式)默认绑定 `0.0.0.0`(可用
+     `COMBO_HOST=127.0.0.1` 关闭),`GET /v1/lan-info`(combo-cli `lan.rs`)探测
+     本机局域网 IP(UDP connect 技巧,不实际发包)返回直连候选 URL。二维码在
+     token 之外携带 `&lan=http://<ip>:<port>`;手机扫码打开中转页后由
+     `src/lib/lanDirect.ts` 提取并**整页跳转**到桌面直连页(https 中转页无法
+     fetch 探测 http 局域网地址——mixed content,只能导航),每会话
+     (sessionStorage `combo.lanTried`)只自动跳一次,失败回到中转页不再跳。
+  2. **WebRTC P2P**:手机留在中转页时异步协商 DataChannel 直连
+     (`src/lib/p2p/transport.ts` + combo-cli `p2p.rs`,webrtc 0.20 trait 风格 API,
+     桌面端为 answer 方、非 trickle ICE)。**信令经中转**:`/v1/relay/signal?token=`
+     WS(combo-relay `ws_signal_handler`)↔ `TunnelMsg::Signal`/`DesktopMsg::Signal`
+     透传 ↔ 桌面隧道读循环 → `P2pManager::handle_signal`。连接成功后
+     `apiRequest`/SSE 走 DataChannel(`DcFrame` JSON 帧:req/body 分片
+     start/chunk/end,单帧 b64 ≤12KB、响应分片 ≤8KB,DataChannel 单消息 16KB
+     上限);STUN 默认 `stun.l.google.com:19302`(`COMBO_STUN_URLS` 可覆盖)。
+     终端 WS 仍走中转代理。失败/断开自动回退 relay,`GET /v1/p2p/status` 查询
+     状态,侧边栏连接状态显示 `局域网直连/P2P/中转`(`connectionStore.transport`)。
+     **旧版中转服务器不认识 Signal 消息**——P2P 需要新版 combo-relay 配套部署。
