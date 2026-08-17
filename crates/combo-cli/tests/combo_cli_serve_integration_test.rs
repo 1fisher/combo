@@ -69,6 +69,9 @@ fn make_state() -> AppState {
         questions: combo_cli::question::QuestionRegistry::new(),
         todos: combo_cli::todo::TodoStore::new(),
         automations: Arc::new(AutomationScheduler::new()),
+        asr: Arc::new(combo_cli::asr::AsrService::new(
+            std::env::temp_dir().join("combo-asr-test-models"),
+        )),
     }
 }
 
@@ -333,6 +336,9 @@ async fn git_repos_discovers_root_and_subdir_repos() {
         questions: combo_cli::question::QuestionRegistry::new(),
         todos: combo_cli::todo::TodoStore::new(),
         automations: Arc::new(AutomationScheduler::new()),
+        asr: Arc::new(combo_cli::asr::AsrService::new(
+            std::env::temp_dir().join("combo-asr-test-models"),
+        )),
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

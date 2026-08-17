@@ -8,6 +8,7 @@ import {
   FileText,
   History,
   Loader2,
+  Mic,
   Paperclip,
   Plus,
   Quote,
@@ -29,6 +30,8 @@ import { useAgentInfo, useProviders, useSetModel, useWorkspaceConfig } from '../
 import type { Api } from '../../lib/api/types';
 import { cn, usageColor } from '../../lib/utils';
 import { useIsMobile } from '../../hooks/useIsMobile';
+import { useDictation } from '../../hooks/useDictation';
+import { appendTranscript } from '../../lib/audio';
 import { AttachmentPicker } from './AttachmentPicker';
 import { ProviderLogo } from './ProviderLogo';
 import { FlameWrap } from '../canvasui/FlameWrap';
@@ -583,6 +586,12 @@ export function Composer({
     setPickerOpen(false);
   }
 
+  // 语音听写:后端本地 Paraformer 双语流式模型,边说边出字,结果追加到输入框
+  const dictation = useDictation((text) => {
+    onChange(appendTranscript(value, text));
+    requestAnimationFrame(() => areaRef.current?.focus());
+  });
+
   return (
     <div className="px-4 py-2 w-full shrink-0">
       <div className="w-full">
@@ -699,6 +708,21 @@ export function Composer({
                   aria-label="输入消息"
                 />
               </div>
+              {/* 语音实时识别:流式边说边出字;首录下载模型时展示进度 */}
+              {dictation.state !== 'idle' && (dictation.partialText || dictation.modelProgress != null) && (
+                <div className="flex items-start gap-2 text-xs text-foreground-subtle leading-5">
+                  {dictation.state === 'recording' && (
+                    <span className="bg-destructive rounded-full size-1.5 mt-1.5 animate-pulse shrink-0" />
+                  )}
+                  {dictation.partialText ? (
+                    <span className="min-w-0 break-all line-clamp-3">{dictation.partialText}</span>
+                  ) : (
+                    <span className="tabular-nums shrink-0">
+                      模型下载中 {Math.round((dictation.modelProgress ?? 0) * 100)}%
+                    </span>
+                  )}
+                </div>
+              )}
               {/* 工具栏 */}
               <div className="flex items-end gap-3">
                 <div className="flex flex-1 items-center gap-1 min-w-0">
@@ -1025,6 +1049,53 @@ export function Composer({
                       </>
                     )}
                   </div>
+                  {/* 语音输入(本地 Paraformer 双语流式识别) */}
+                  <div className="flex items-center gap-1 shrink-0">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={dictation.toggle}
+                      disabled={dictation.state === 'transcribing'}
+                      className={cn(
+                        'rounded-lg shrink-0',
+                        dictation.state === 'recording'
+                          ? 'text-destructive hover:text-destructive'
+                          : 'text-foreground-subtle hover:text-foreground'
+                      )}
+                      aria-label="语音输入"
+                      title={
+                        dictation.state === 'recording'
+                          ? `停止并完成识别(${dictation.seconds}s)`
+                          : dictation.state === 'transcribing'
+                            ? '识别中…'
+                            : '语音输入'
+                      }
+                    >
+                      {dictation.state === 'transcribing' ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <Mic
+                          className={cn(
+                            'size-4',
+                            dictation.state === 'recording' && 'animate-pulse'
+                          )}
+                        />
+                      )}
+                      <span className="sr-only">语音输入</span>
+                    </Button>
+                    {dictation.state === 'recording' && (
+                      <span className="flex items-center gap-1 text-[11px] tabular-nums text-destructive shrink-0">
+                        <span className="bg-destructive rounded-full size-1.5 animate-pulse" />
+                        {dictation.seconds}s
+                      </span>
+                    )}
+                    {dictation.state === 'transcribing' && dictation.modelProgress != null && (
+                      <span className="text-[11px] tabular-nums text-foreground-subtle shrink-0">
+                        模型 {Math.round(dictation.modelProgress * 100)}%
+                      </span>
+                    )}
+                  </div>
                   {/* 发送 / 停止 */}
                   {running ? (
                     <Button
@@ -1086,9 +1157,9 @@ export function Composer({
                   </span>
                 </div>
               )}
-              {modelErr && (
+              {(modelErr || dictation.error) && (
                 <p className="px-1 text-destructive text-xs" role="alert">
-                  {modelErr}
+                  {modelErr || dictation.error}
                 </p>
               )}
             </div>

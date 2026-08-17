@@ -3,6 +3,7 @@
 
 pub mod agent;
 pub mod agents_md;
+pub mod asr;
 pub mod auth;
 pub mod automation;
 pub mod binpath;

@@ -14,5 +14,7 @@
     <string>Combo 需要访问移动硬盘、U 盘等外置卷,以打开其中的项目与文件。</string>
     <key>NSNetworkVolumesUsageDescription</key>
     <string>Combo 需要访问网络卷,以打开其中的项目与文件。</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Combo 需要使用麦克风,以将你的语音转写为输入内容(本地模型离线识别)。</string>
 </dict>
 </plist>

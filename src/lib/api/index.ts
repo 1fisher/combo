@@ -1,5 +1,5 @@
 import type { Api } from './types';
-import { apiRequest, ApiError } from './client';
+import { apiRequest, apiRequestRaw, ApiError } from './client';
 import { getClientId } from '../clientId';
 
 export * from './client';
@@ -944,5 +944,31 @@ export function listAutomationRuns(id: string): Promise<Api.AutomationRun[]> {
 /** 获取项目的知识图谱(文件级依赖图 + 外部依赖统计)。 */
 export function getWorkspaceGraph(workspaceId: string): Promise<Api.WorkspaceGraph> {
   return apiRequest(`/v1/workspaces/${workspaceId}/graph`);
+}
+
+// ---------- 本地语音识别(ASR,Paraformer 双语流式) ----------
+
+/** 查询语音模型状态(未就绪/下载中/加载中/就绪/失败)。 */
+export function getTranscribeStatus(): Promise<Api.TranscribeStatus> {
+  return apiRequest('/v1/transcribe/status');
+}
+
+/** 触发语音模型下载/加载(幂等,后台执行)。 */
+export function prepareTranscribe(): Promise<{ ok: boolean; phase: Api.TranscribePhase }> {
+  return apiRequest('/v1/transcribe/prepare', { method: 'POST' });
+}
+
+/**
+ * 转写 16kHz 单声道 PCM16 音频(原始二进制请求体)。
+ * 模型未就绪时抛出 code 为 `asr_not_ready` 的 ApiError(503)。
+ */
+export function transcribeAudio(pcm: ArrayBuffer): Promise<Api.TranscribeResult> {
+  return apiRequestRaw('/v1/transcribe', {
+    method: 'POST',
+    query: { sample_rate: '16000' },
+    body: pcm,
+    contentType: 'application/octet-stream',
+    timeoutMs: 120_000,
+  });
 }
 

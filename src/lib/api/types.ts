@@ -2319,4 +2319,25 @@ export namespace Api {
     };
     generated_at: number;
   };
+
+  // ---------- 本地语音识别(ASR,Paraformer 双语流式) ----------
+
+  /** 模型阶段:not_ready 未下载 / downloading 下载中 / loading 加载中 / ready 就绪 / failed 失败。 */
+  export type TranscribePhase = 'not_ready' | 'downloading' | 'loading' | 'ready' | 'failed';
+
+  /** GET /v1/transcribe/status 响应。 */
+  export type TranscribeStatus = {
+    ready: boolean;
+    phase: TranscribePhase;
+    /** downloading 阶段 0~1。 */
+    progress?: number | null;
+    error?: string | null;
+    model_dir?: string;
+  };
+
+  /** POST /v1/transcribe 响应。 */
+  export type TranscribeResult = {
+    text: string;
+    lang?: string;
+  };
 }

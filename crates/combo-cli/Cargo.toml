@@ -41,6 +41,9 @@ base64 = "0.22"
 hex = "0.4"
 which = "7"
 webrtc = "0.20.3"
+sherpa-rs = { version = "0.6", features = ["static", "sys"] }
+tar = "0.4"
+bzip2 = { version = "0.4", features = ["static"] }
 
 [dev-dependencies]
 tempfile = "3"

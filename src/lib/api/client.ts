@@ -80,3 +80,68 @@ export async function apiRequest<T>(
   if (!text) return undefined as T;
   return JSON.parse(text) as T;
 }
+
+/** 二进制请求体版 apiRequest(如语音 PCM 上传):body 为原始字节,响应仍按 JSON 解析。 */
+export async function apiRequestRaw<T>(
+  path: string,
+  opts: {
+    method?: string;
+    query?: Record<string, string>;
+    body: ArrayBuffer;
+    contentType?: string;
+    timeoutMs?: number;
+  }
+): Promise<T> {
+  const base = getProxyBaseUrl();
+  const q = new URLSearchParams(opts.query ?? {});
+  if (!q.has('client_id')) q.set('client_id', getClientId());
+  const token = getAccessToken();
+  const headers: Record<string, string> = {
+    'Content-Type': opts.contentType ?? 'application/octet-stream',
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const ac = new AbortController();
+  const timer = opts.timeoutMs ? setTimeout(() => ac.abort(), opts.timeoutMs) : undefined;
+  let res: Response;
+  try {
+    const url = `${base}${path}?${q.toString()}`;
+    const p2p = getP2pTransport();
+    if (p2p?.isReady()) {
+      res = await p2p.fetch(url, {
+        method: opts.method ?? 'POST',
+        headers,
+        body: opts.body,
+        signal: ac.signal,
+      });
+    } else {
+      res = await fetch(url, {
+        method: opts.method ?? 'POST',
+        headers,
+        body: opts.body,
+        signal: ac.signal,
+      });
+    }
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      throw new ApiError(0, '请求超时');
+    }
+    throw new ApiError(0, 'network error');
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  if (!res.ok) {
+    let message = res.statusText;
+    let code: string | undefined;
+    try {
+      const j = (await res.json()) as { message?: string; code?: string };
+      if (j.message) message = j.message;
+      code = j.code;
+    } catch {
+      /* keep statusText */
+    }
+    throw new ApiError(res.status, message, code);
+  }
+  const text = await res.text();
+  if (!text) return undefined as T;
+  return JSON.parse(text) as T;
+}

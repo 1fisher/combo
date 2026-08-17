@@ -14,6 +14,7 @@
 //! 消息事件经 broadcast 广播。
 
 use crate::agent::{self, AskConfig, RunEvent, RunUsage};
+use crate::asr;
 use crate::auth;
 use crate::automation::{self, AutomationScheduler};
 use crate::compact;
@@ -81,6 +82,8 @@ pub struct AppState {
     pub todos: Arc<TodoStore>,
     /// 自动化(定时任务)调度器:后台 tick 扫描到期的任务并触发 agent 运行。
     pub automations: Arc<AutomationScheduler>,
+    /// 本地语音识别(SenseVoice int8,输入框语音输入)。
+    pub asr: Arc<asr::AsrService>,
 }
 
 impl AppState {
@@ -104,6 +107,9 @@ impl AppState {
             questions: QuestionRegistry::new(),
             todos: TodoStore::new(),
             automations: Arc::new(AutomationScheduler::new()),
+            asr: Arc::new(asr::AsrService::new(
+                crate::paths::default_data_dir().join("models"),
+            )),
         })
     }
 
@@ -150,6 +156,10 @@ impl AppState {
             questions: QuestionRegistry::new(),
             todos: TodoStore::new(),
             automations: Arc::new(AutomationScheduler::new()),
+            // 指向临时目录下的空路径:测试中模型永远未就绪(transcribe 返回 503)
+            asr: Arc::new(asr::AsrService::new(
+                std::env::temp_dir().join("combo-asr-test-models"),
+            )),
         }
     }
 }
@@ -822,6 +832,8 @@ fn build_router(
         .route("/v1/auth/token/revoke", delete(auth::revoke_token))
         // ---- skills / 终端 / 隧道 ----
         .route("/v1/skills", get(skills_api::list))
+        // ---- 本地语音识别(ASR) ----
+        .merge(asr::router())
         .route("/v1/mcp", get(list_mcp).post(upsert_mcp))
         .route("/v1/mcp/remove", post(remove_mcp))
         .route("/v1/mcp/test", post(test_mcp))
@@ -3221,7 +3233,7 @@ mod tests {
         let global_model = state.cfg.lock().unwrap().model.clone();
 
         // 为 ws_t 切换模型:应记入该 workspace,不写全局
-        config_model(
+        let _ = config_model(
             State(state.clone()),
             Path("ws_t".into()),
             Json(ConfigModelReq {

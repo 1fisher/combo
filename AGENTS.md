@@ -252,6 +252,33 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   共用)。`on_finish: Option<AgentFinishCallback>` 在后台 run 真正结束时调用
   (reason: end_turn|cancelled|error + 友好错误文案),自动化任务据此落运行结果;
   普通对话传 None。
+- **本地语音识别(`asr.rs`,Composer 语音输入)**:输入框话筒按钮的听写服务,
+  完全本地离线。模型选 **流式 Paraformer 双语中英 int8**
+  (`sherpa-onnx-streaming-paraformer-bilingual-zh-en`,普通话+方言口音+英语,
+  边说边出字;encoder~165MB + decoder~72MB)。sherpa-rs 0.6 未封装 online
+  识别器,`asr.rs` 经其 `sys` feature re-export 的 `sherpa_rs_sys` 直调
+  sherpa-onnx C API(静态链接 `features=["static","sys"]`,构建时从 GitHub
+  release 下载预编译库——**网络受限时需设 HTTP(S)_PROXY**);识别器进程内共享,
+  所有流操作经 `OnlineRecognizer::ops` 锁串行,每连接/每次转写独立
+  OnlineStream,端点检测(rule1 2.4s / rule2 1.2s / rule3 20s)触发时固化分段
+  并重置流。REST:`GET /v1/transcribe/status`(模型阶段 not_ready/downloading/
+  loading/ready/failed + 下载进度)、`POST /v1/transcribe/prepare`(幂等触发
+  下载/加载,后台执行)、`POST /v1/transcribe?sample_rate=16000`(整段转写,
+  请求体为 16kHz 单声道 PCM16 小端原始字节,响应 `{text,lang}`;模型未就绪
+  503 code=asr_not_ready;body limit 32MB)、`GET /v1/transcribe/stream`
+  (**WebSocket 流式听写**:客户端持续推 PCM16 二进制帧,服务端回发
+  `{"type":"partial"}` 增量;发 `{"type":"finish"}` 后回 `{"type":"final"}`
+  并关闭;`?token=` 传远程令牌,同终端 WS)。模型文件缺失时自动从 sherpa-onnx
+  release 下载(`COMBO_ASR_MODEL_URL` 可换镜像),解压到 `<数据目录>/models/`,
+  懒加载一次常驻(`AppState.asr`,解码在 spawn_blocking 中执行)。**音频采集与
+  PCM 转换在前端**:`useDictation`(`src/hooks/useDictation.ts`)用
+  AudioWorklet(inline Blob,`combo-pcm-collector`)以 16kHz 直接采集、降混、
+  聚帧(~100ms)成 PCM16,经 `src/lib/asrStream.ts` 的 `AsrStream` WebSocket
+  直发;首录模型未就绪时音频在客户端缓冲(≤5min),就绪后自动建连并补发,
+  下载与录音并行。状态机 idle/recording/transcribing(10min 上限),
+  `partialText` 实时回显在输入框下方。Composer 右下话筒按钮接入,最终文本经
+  `appendTranscript` 追加进输入框(中英边界智能补空格)。macOS 麦克风权限声明
+  在 `src-tauri/Info.plist`(`NSMicrophoneUsageDescription`)。
 - **Frontend layout:** `src/components/{ui,shell,agent}` — `ui/` is generated
   shadcn primitives, `shell/` is app chrome, `agent/` is the chat/tool/modal UI.
   The shell is a 1:1 仿写 ZCode 的 agent 布局:左侧 `WorkspaceSidebar`(默认 372px,
