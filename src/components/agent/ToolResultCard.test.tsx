@@ -117,6 +117,39 @@ describe('ToolResultCard · read 结果语法高亮', () => {
   });
 });
 
+describe('ToolResultCard · 时长格式化', () => {
+  it('耗时以人类可读方式展示(毫秒/秒/分/小时)', () => {
+    seedToolCall('td1', 'bash', '{"command":"x"}');
+    const cases: Array<[number, string]> = [
+      [950, '950ms'],
+      [15752, '15.8s'],
+      [10000, '10s'],
+      [120_000, '2分'],
+      [125_000, '2分5秒'],
+      [3_800_000, '1小时3分'],
+      [7_200_000, '2小时'],
+    ];
+    for (const [ms, label] of cases) {
+      const { unmount } = render(
+        <ToolResultCard
+          result={{
+            tool_call_id: 'td1',
+            name: 'bash',
+            content: '',
+            metadata: JSON.stringify({ exit_code: 0, duration_ms: ms }),
+          }}
+        />,
+      );
+      expect(document.querySelector('summary')?.textContent ?? '').toContain(label);
+      // 仅当格式化结果与原始毫秒不同才断言原始值未出现(如 15752ms → 15.8s)
+      if (label !== `${ms}ms`) {
+        expect(document.querySelector('summary')?.textContent ?? '').not.toContain(`${ms}ms`);
+      }
+      unmount();
+    }
+  });
+});
+
 describe('ToolResultCard · bash 结果去重', () => {
   it('配对 tool_call 的 bash 结果:剥离内容中的 `$ 命令` 回显,标题不再重复命令', () => {
     seedToolCall('tb1', 'bash', '{"command":"cargo test"}');
@@ -136,7 +169,7 @@ describe('ToolResultCard · bash 结果去重', () => {
     expect(pre?.textContent).not.toContain('$ cargo test');
   });
 
-  it('bash 成功:状态标记在卡片摘要上(成功),不拼进输出内容', () => {
+  it('bash 成功:仅对勾图标标记,不显示「成功」文字,内容保持纯输出', () => {
     seedToolCall('tb2', 'bash', '{"command":"echo hi"}');
     render(
       <ToolResultCard
@@ -149,7 +182,8 @@ describe('ToolResultCard · bash 结果去重', () => {
       />,
     );
     const summary = document.querySelector('summary')?.textContent ?? '';
-    expect(summary).toContain('成功');
+    expect(summary).not.toContain('成功');
+    expect(document.querySelector('.text-green-500')).toBeTruthy();
     const pre = document.querySelector('pre');
     expect(pre?.textContent).toBe('hi');
     expect(pre?.textContent).not.toContain('命令执行成功');
@@ -193,7 +227,7 @@ describe('ToolResultCard · bash 结果去重', () => {
     expect(pre?.textContent).not.toContain('命令执行超时');
   });
 
-  it('bash 空输出但成功:仍渲染卡片展示状态', () => {
+  it('bash 空输出但成功:仍渲染卡片,仅对勾图标标记', () => {
     seedToolCall('tb5', 'bash', '{"command":"true"}');
     render(
       <ToolResultCard
@@ -206,7 +240,7 @@ describe('ToolResultCard · bash 结果去重', () => {
       />,
     );
     const summary = document.querySelector('summary')?.textContent ?? '';
-    expect(summary).toContain('成功');
+    expect(summary).not.toContain('成功');
     expect(document.querySelector('details')).toBeTruthy();
   });
 

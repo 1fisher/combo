@@ -33,3 +33,24 @@ export function stripCommandEcho(content: string, command: string | null): strin
   }
   return content;
 }
+
+/**
+ * 人类可读时长:15752 → "15.8s"、120s → "2分"、3800s → "1小时3分"。
+ * 供 bash 类工具卡片的耗时展示使用。
+ */
+export function formatDurationMs(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const secs = ms / 1000;
+  if (secs < 60) {
+    const s = Math.round(secs * 10) / 10;
+    return `${s % 1 === 0 ? s.toFixed(0) : s.toFixed(1)}s`;
+  }
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) {
+    const rem = Math.floor(secs) % 60;
+    return rem ? `${mins}分${rem}秒` : `${mins}分`;
+  }
+  const hours = Math.floor(mins / 60);
+  const rem = mins % 60;
+  return rem ? `${hours}小时${rem}分` : `${hours}小时`;
+}

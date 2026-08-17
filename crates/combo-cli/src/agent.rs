@@ -398,6 +398,12 @@ pub enum RunEvent {
     Usage(RunUsage),
 }
 
+/// 根据 bash 结构化字段判断工具结果是否为失败态:非 0 退出码或超时。
+/// 无退出码字段的工具(question 等)不算失败。
+fn tool_result_is_error(exit_code: Option<i32>, timed_out: bool) -> bool {
+    exit_code.is_some_and(|c| c != 0) || timed_out
+}
+
 /// 流式运行一次 agent 对话(多轮,含工具调用与历史)。
 ///
 /// `history` 为之前的消息;`question` 作为本轮用户消息由 rig 追加。
@@ -611,7 +617,9 @@ where
                         ToolResultContent::Image(_) => {}
                     }
                 }
-                if exit_code != Some(0) || timed_out {
+                // 仅当明确拿到非 0 退出码或超时才视为失败;无退出码字段的
+                // 工具(question 等)不受影响
+                if tool_result_is_error(exit_code, timed_out) {
                     is_error = true;
                 }
                 running_tools.remove(&tool_result.id);
@@ -807,5 +815,18 @@ mod tests {
     fn idle_timeout_disabled_while_tools_running() {
         // 工具执行中(question 等待用户回答可能数分钟)不施加空闲超时
         assert_eq!(idle_timeout(false), None);
+    }
+
+    #[test]
+    fn tool_result_error_status_only_for_bash_failures() {
+        // question 等无退出码字段的工具:用户正常回答不算失败
+        assert!(!tool_result_is_error(None, false));
+        // bash 成功
+        assert!(!tool_result_is_error(Some(0), false));
+        // bash 退出码非 0 / 超时 → 失败
+        assert!(tool_result_is_error(Some(1), false));
+        assert!(tool_result_is_error(Some(7), false));
+        assert!(tool_result_is_error(None, true));
+        assert!(tool_result_is_error(Some(0), true));
     }
 }

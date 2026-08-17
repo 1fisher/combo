@@ -42,6 +42,20 @@ export const MessageItem = memo(function MessageItem({
   workspaceId?: string;
 }) {
   const parts = vm.parts ?? [];
+  // tool_call + 配对 tool_result:合并为单卡片渲染(单一代码展示区 + 状态)。
+  // question 特殊:保留独立格式(QuestionCard 弹窗 + 独立结果卡),不合并。
+  const mergedCallIds = new Set<string>();
+  for (const p of parts) {
+    if (p.type !== 'tool_call') continue;
+    const tc = p.data as { id: string; name: string };
+    if (tc.name === 'question') continue;
+    const hasResult = parts.some(
+      (q) =>
+        q.type === 'tool_result' &&
+        (q.data as { tool_call_id?: string }).tool_call_id === tc.id,
+    );
+    if (hasResult) mergedCallIds.add(tc.id);
+  }
   // 已归档的任务清单卡片(上一轮 todo_write 全部完成):作为消息流中的独立
   // 条目展示,不按普通消息气泡渲染(无 header / 气泡,整条就是任务清单卡片)
   if (vm.todoItems && vm.todoItems.length > 0) {
@@ -154,9 +168,20 @@ export const MessageItem = memo(function MessageItem({
                     );
                   case 'tool_call': {
                     const tc = d as { id: string; name: string; input: string; finished?: boolean };
+                    const mergedResult = mergedCallIds.has(tc.id)
+                      ? (parts.find(
+                          (q) =>
+                            q.type === 'tool_result' &&
+                            (q.data as { tool_call_id: string }).tool_call_id === tc.id,
+                        )?.data as never)
+                      : undefined;
                     return (
                       <div key={i}>
-                        <ToolCallCard call={tc as never} workspaceId={workspaceId} />
+                        <ToolCallCard
+                          call={tc as never}
+                          workspaceId={workspaceId}
+                          result={mergedResult}
+                        />
                       </div>
                     );
                   }
@@ -168,6 +193,8 @@ export const MessageItem = memo(function MessageItem({
                       metadata?: string;
                       is_error?: boolean;
                     };
+                    // 已合并进配对的 tool_call 卡片,不再单独展示
+                    if (mergedCallIds.has(tr.tool_call_id)) return null;
                     // 结构化内容(对象/数组)转为字符串;空内容但携带状态
                     // (is_error/metadata,如 bash 成功但无输出)仍需渲染卡片展示状态
                     const content =

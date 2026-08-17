@@ -9,7 +9,7 @@ import { DiffView } from './DiffView';
 import { TerminalOutput } from './TerminalOutput';
 import { JsonView, tryParseJson } from './JsonView';
 import { BashCode } from './BashCode';
-import { BASH_TOOLS, commandFromInput, stripCommandEcho } from './bashTools';
+import { BASH_TOOLS, commandFromInput, formatDurationMs, stripCommandEcho } from './bashTools';
 import { CodeView } from './CodeView';
 import { toolPathFromInput } from './ToolCallCard';
 
@@ -37,15 +37,8 @@ function useToolCallInput(toolCallId: string): { name: string; input: string } |
   }, [messages, toolCallId]);
 }
 
-export function ToolResultCard({
-  result,
-  /** bash 类工具的命令文本:有值时摘要标题展示命令、展开区顶部高亮渲染 */
-  command,
-}: {
-  result: Api.ToolResult;
-  command?: string;
-}) {
-  const [expanded, setExpanded] = useState(false);
+/** tool_result 的派生视图:摘要(状态/统计/标题)与内容渲染共用同一份计算 */
+function useToolResultView(result: Api.ToolResult, command?: string) {
   const isError = result.is_error ?? false;
   const content =
     typeof result.content === 'string'
@@ -117,7 +110,6 @@ export function ToolResultCard({
   const parsedJson = isJson ? tryParseJson(content) : null;
   const isLong =
     !diffLines && !readView && parsedJson === null && content.length > COLLAPSE_THRESHOLD;
-  const visibleContent = expanded || !isLong ? content : content.slice(0, COLLAPSE_THRESHOLD);
 
   // 提取 metadata 信息(执行状态:退出码/超时/耗时)
   let meta: Record<string, unknown> | null = null;
@@ -130,7 +122,7 @@ export function ToolResultCard({
   }
   const timedOut = meta?.timed_out === true;
   const exitCode = typeof meta?.exit_code === 'number' ? meta.exit_code : undefined;
-  // 失败(退出码非 0)或超时都算错误态;成功态仅 bash 类工具携带状态信息
+  // 失败(退出码非 0)或超时都算错误态
   const showError = isError || timedOut;
   let metaInfo = '';
   if (meta) {
@@ -138,7 +130,7 @@ export function ToolResultCard({
     if (typeof meta.rows === 'number') parts.push(`${meta.rows} 行`);
     if (timedOut) parts.push('超时');
     if (typeof meta.exit_code === 'number' && meta.exit_code !== 0) parts.push(`退出码 ${meta.exit_code}`);
-    if (typeof meta.duration_ms === 'number') parts.push(`${meta.duration_ms}ms`);
+    if (typeof meta.duration_ms === 'number') parts.push(formatDurationMs(meta.duration_ms));
     metaInfo = parts.join(' · ');
   }
 
@@ -151,8 +143,144 @@ export function ToolResultCard({
         ? `读取 ${readPath.length > 40 ? readPath.slice(0, 37) + '…' : readPath}`
         : `${name} 返回`;
 
+  return {
+    isError,
+    content,
+    toolCall,
+    name,
+    isFileTool,
+    isBash,
+    isRead,
+    readView,
+    readPath,
+    readLang,
+    commandText,
+    showCommandBody,
+    outputContent,
+    diffLines,
+    changeStats,
+    parsedJson,
+    isLong,
+    timedOut,
+    exitCode,
+    showError,
+    metaInfo,
+    titleLabel,
+  };
+}
+
+/**
+ * 结果内容区:独立 ToolResultCard 与合并进 ToolCallCard 时复用。
+ * `expanded` 由外层持有,保证摘要折叠提示与内容区状态一致。
+ */
+export function ToolResultBody({
+  result,
+  command,
+  expanded,
+  setExpanded,
+}: {
+  result: Api.ToolResult;
+  command?: string;
+  expanded: boolean;
+  setExpanded: (v: boolean) => void;
+}) {
+  const v = useToolResultView(result, command);
+  const { diffLines, isBash, readView, parsedJson, isLong, content } = v;
+  const visibleContent = expanded || !isLong ? content : content.slice(0, COLLAPSE_THRESHOLD);
+
   return (
-    <details className="group rounded-md border bg-muted/20" open={showError || !!diffLines}>
+    <div className="border-t border-border">
+      {/* 文件修改 → DiffView */}
+      {diffLines && (
+        <DiffView
+          lines={diffLines}
+          className="max-h-[60vh] overflow-auto border-0"
+        />
+      )}
+      {/* bash 输出 → 顶部命令(bash 高亮,仅独立 shell_command)+ 输出(diff 着色) */}
+      {!diffLines && isBash && (
+        <>
+          {v.showCommandBody && v.commandText && (
+            <BashCode command={v.commandText} className="rounded-none" />
+          )}
+          {v.outputContent.trim() !== '' && (
+            <TerminalOutput content={v.outputContent} className="border-0" />
+          )}
+        </>
+      )}
+      {/* read 结果 → 按文件类型语法高亮 + 行号列 */}
+      {!diffLines && !isBash && readView && (
+        <div>
+          <div className="flex items-center gap-2 border-b border-white/5 bg-white/5 px-3 py-1">
+            {v.readLang && (
+              <span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
+                {langDisplayName(v.readLang)}
+              </span>
+            )}
+            <span className="text-[10px] text-muted-foreground/60">
+              {readView.range
+                ? `第 ${readView.range.start}-${readView.range.end} 行`
+                : `${readView.lines.length} 行`}
+              {readView.total ? ` / 共 ${readView.total} 行` : ''}
+            </span>
+          </div>
+          <CodeView
+            code={readView.lines.join('\n')}
+            language={v.readLang}
+            lineNumbers={readView.lineNumbers}
+            className="rounded-none border-0"
+          />
+          {readView.footer && (
+            <div className="border-t border-border px-3 py-1 text-[10px] text-muted-foreground/60">
+              {readView.footer}
+            </div>
+          )}
+        </div>
+      )}
+      {/* JSON → 结构化展示 */}
+      {!diffLines && !isBash && !readView && parsedJson !== null && (
+        <JsonView data={parsedJson} className="max-h-[60vh] border-0" />
+      )}
+      {/* 其他 → 普通 pre */}
+      {!diffLines && !isBash && !readView && parsedJson === null && (
+        <pre className="max-h-[60vh] overflow-auto bg-background px-3 py-2 font-mono text-[11px] leading-relaxed text-foreground/80">
+          {visibleContent}
+          {isLong && !expanded && (
+            <span className="text-muted-foreground/50">
+              {'\n'}… ({content.length - COLLAPSE_THRESHOLD} 字符已折叠)
+            </span>
+          )}
+        </pre>
+      )}
+      {isLong && (
+        <button
+          onClick={(e) => {
+            e.preventDefault();
+            setExpanded(!expanded);
+          }}
+          className="w-full border-t border-border py-1 text-center text-[10px] text-brand hover:bg-surface-hover"
+        >
+          {expanded ? '收起' : '展开全部'}
+        </button>
+      )}
+    </div>
+  );
+}
+
+export function ToolResultCard({
+  result,
+  /** bash 类工具的命令文本:有值时摘要标题展示命令、展开区顶部高亮渲染 */
+  command,
+}: {
+  result: Api.ToolResult;
+  command?: string;
+}) {
+  const v = useToolResultView(result, command);
+  const [expanded, setExpanded] = useState(false);
+  const { showError, timedOut, exitCode, metaInfo, changeStats, isLong, content } = v;
+
+  return (
+    <details className="group rounded-md border bg-muted/20" open={showError || !!v.diffLines}>
       <summary className="flex cursor-pointer items-center gap-2 px-3 py-1.5">
         <ChevronRight className="size-3 text-muted-foreground transition-transform group-open:rotate-90" />
         {showError ? (
@@ -160,20 +288,18 @@ export function ToolResultCard({
         ) : (
           <CheckCircle className="size-3.5 text-green-500" />
         )}
-        {isBash && <Terminal className="size-3 text-muted-foreground" />}
-        <span className="font-mono text-[11px] text-muted-foreground">{titleLabel}</span>
-        {/* 完成/失败/超时状态:标记在消息项上,不再拼进输出内容 */}
-        {(isBash || showError) && (
+        {v.isBash && <Terminal className="size-3 text-muted-foreground" />}
+        <span className="font-mono text-[11px] text-muted-foreground">{v.titleLabel}</span>
+        {/* 失败/超时状态:标记在消息项上(成功已有对勾图标,不重复加文字) */}
+        {showError && (
           <span
             className={
               timedOut
                 ? 'rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-500'
-                : showError
-                  ? 'rounded bg-red-500/10 px-1.5 py-0.5 text-[10px] font-medium text-red-500'
-                  : 'rounded bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-500'
+                : 'rounded bg-red-500/10 px-1.5 py-0.5 text-[10px] font-medium text-red-500'
             }
           >
-            {timedOut ? '超时' : showError ? `失败${exitCode != null ? `(${exitCode})` : ''}` : '成功'}
+            {timedOut ? '超时' : `失败${exitCode != null ? `(${exitCode})` : ''}`}
           </span>
         )}
         {/* 增删统计 */}
@@ -190,79 +316,12 @@ export function ToolResultCard({
           </span>
         )}
       </summary>
-      <div className="border-t border-border">
-        {/* 文件修改 → DiffView */}
-        {diffLines && (
-          <DiffView
-            lines={diffLines}
-            className="max-h-[60vh] overflow-auto border-0"
-          />
-        )}
-        {/* bash 输出 → 顶部命令(bash 高亮,仅独立 shell_command)+ 输出(diff 着色) */}
-        {!diffLines && isBash && (
-          <>
-            {showCommandBody && commandText && (
-              <BashCode command={commandText} className="rounded-none" />
-            )}
-            <TerminalOutput content={outputContent} className="border-0" />
-          </>
-        )}
-        {/* read 结果 → 按文件类型语法高亮 + 行号列 */}
-        {!diffLines && !isBash && readView && (
-          <div>
-            <div className="flex items-center gap-2 border-b border-white/5 bg-white/5 px-3 py-1">
-              {readLang && (
-                <span className="font-mono text-[10px] uppercase tracking-wide text-muted-foreground">
-                  {langDisplayName(readLang)}
-                </span>
-              )}
-              <span className="text-[10px] text-muted-foreground/60">
-                {readView.range
-                  ? `第 ${readView.range.start}-${readView.range.end} 行`
-                  : `${readView.lines.length} 行`}
-                {readView.total ? ` / 共 ${readView.total} 行` : ''}
-              </span>
-            </div>
-            <CodeView
-              code={readView.lines.join('\n')}
-              language={readLang}
-              lineNumbers={readView.lineNumbers}
-              className="rounded-none border-0"
-            />
-            {readView.footer && (
-              <div className="border-t border-border px-3 py-1 text-[10px] text-muted-foreground/60">
-                {readView.footer}
-              </div>
-            )}
-          </div>
-        )}
-        {/* JSON → 结构化展示 */}
-        {!diffLines && !isBash && !readView && parsedJson !== null && (
-          <JsonView data={parsedJson} className="max-h-[60vh] border-0" />
-        )}
-        {/* 其他 → 普通 pre */}
-        {!diffLines && !isBash && !readView && parsedJson === null && (
-          <pre className="max-h-[60vh] overflow-auto bg-background px-3 py-2 font-mono text-[11px] leading-relaxed text-foreground/80">
-            {visibleContent}
-            {isLong && !expanded && (
-              <span className="text-muted-foreground/50">
-                {'\n'}… ({content.length - COLLAPSE_THRESHOLD} 字符已折叠)
-              </span>
-            )}
-          </pre>
-        )}
-        {isLong && (
-          <button
-            onClick={(e) => {
-              e.preventDefault();
-              setExpanded((v) => !v);
-            }}
-            className="w-full border-t border-border py-1 text-center text-[10px] text-brand hover:bg-surface-hover"
-          >
-            {expanded ? '收起' : '展开全部'}
-          </button>
-        )}
-      </div>
+      <ToolResultBody
+        result={result}
+        command={command}
+        expanded={expanded}
+        setExpanded={setExpanded}
+      />
     </details>
   );
 }
