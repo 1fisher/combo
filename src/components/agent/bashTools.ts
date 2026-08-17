@@ -18,3 +18,18 @@ export function commandFromInput(input: string): string | null {
   }
   return null;
 }
+
+/**
+ * 去掉历史 tool_result 内容里回显的命令首行(`$ <command>`)。
+ * 旧版后端 bash 工具会把命令以 `$ <command>\n` 拼进返回内容,而命令已由
+ * 配对的 tool_call(ToolCallCard)单独渲染,这里剥离避免重复展示。
+ * 仅在内容确实以该回显开头时才剥离,否则原样返回。
+ */
+export function stripCommandEcho(content: string, command: string | null): string {
+  if (!command || !command.trim()) return content;
+  const echo = `$ ${command}`;
+  if (content.startsWith(echo)) {
+    return content.slice(echo.length).replace(/^\r?\n/, '');
+  }
+  return content;
+}

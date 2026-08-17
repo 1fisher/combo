@@ -116,3 +116,38 @@ describe('ToolResultCard · read 结果语法高亮', () => {
     expect(screen.getByText(/ok/)).toBeTruthy();
   });
 });
+
+describe('ToolResultCard · bash 结果去重', () => {
+  it('配对 tool_call 的 bash 结果:剥离内容中的 `$ 命令` 回显,标题不再重复命令', () => {
+    seedToolCall('tb1', 'bash', '{"command":"cargo test"}');
+    render(
+      <ToolResultCard
+        result={{
+          tool_call_id: 'tb1',
+          name: 'bash',
+          content: '$ cargo test\nrunning 1 test\n✅ 命令执行成功',
+        }}
+      />,
+    );
+    expect(document.querySelector('summary')?.textContent).toContain('终端输出');
+    expect(document.querySelector('summary')?.textContent).not.toContain('$ cargo test');
+    const pre = document.querySelector('pre');
+    expect(pre?.textContent).toContain('running 1 test');
+    expect(pre?.textContent).not.toContain('$ cargo test');
+  });
+
+  it('独立 shell_command(command 显式传入):保留命令摘要与命令体,输出剥离回显', () => {
+    render(
+      <ToolResultCard
+        command="ls -la"
+        result={{ tool_call_id: 'shell-0', name: 'bash', content: '$ ls -la\nfile.ts' }}
+      />,
+    );
+    expect(document.querySelector('summary')?.textContent).toContain('$ ls -la');
+    const outputPre = Array.from(document.querySelectorAll('pre')).find((p) =>
+      p.textContent?.includes('file.ts'),
+    );
+    expect(outputPre?.textContent).toContain('file.ts');
+    expect(outputPre?.textContent).not.toContain('$ ls -la');
+  });
+});

@@ -9,7 +9,7 @@ import { DiffView } from './DiffView';
 import { TerminalOutput } from './TerminalOutput';
 import { JsonView, tryParseJson } from './JsonView';
 import { BashCode } from './BashCode';
-import { BASH_TOOLS, commandFromInput } from './bashTools';
+import { BASH_TOOLS, commandFromInput, stripCommandEcho } from './bashTools';
 import { CodeView } from './CodeView';
 import { toolPathFromInput } from './ToolCallCard';
 
@@ -85,11 +85,16 @@ export function ToolResultCard({
   // ToolCallCard 展示命令);tool_result 场景配对的 ToolCallCard 已渲染,
   // 不再重复一份
   const showCommandBody = command != null && command.trim() !== '';
-  // 摘要标题上的命令:折叠时也能一眼看到跑了什么
-  const commandBrief = commandText
-    ? commandText.split('\n')[0].trim().slice(0, 80) +
-      (commandText.length > 80 ? '…' : '')
-    : null;
+  // 摘要标题上的命令:仅独立 shell_command(无配对 ToolCallCard)时展示;
+  // tool_result 场景上方配对的 ToolCallCard 已带命令摘要,不再重复
+  const commandBrief =
+    command != null && commandText
+      ? commandText.split('\n')[0].trim().slice(0, 80) +
+        (commandText.length > 80 ? '…' : '')
+      : null;
+  // 旧版后端会把命令以 `$ <command>\n` 回显进返回内容,配对卡片已渲染命令,
+  // 渲染输出前剥离这行回显,避免请求内容在返回里重复
+  const outputContent = isBash ? stripCommandEcho(content, commandText) : content;
 
   // 对文件修改工具计算 diff
   const diffLines = useMemo<DiffLine[] | null>(() => {
@@ -177,7 +182,7 @@ export function ToolResultCard({
             {showCommandBody && commandText && (
               <BashCode command={commandText} className="rounded-none" />
             )}
-            <TerminalOutput content={content} className="border-0" />
+            <TerminalOutput content={outputContent} className="border-0" />
           </>
         )}
         {/* read 结果 → 按文件类型语法高亮 + 行号列 */}

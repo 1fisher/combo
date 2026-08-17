@@ -777,7 +777,7 @@ fn bash_tool(ws: PathBuf) -> DynamicTool {
 
                 match run_bash_command(command, &ws, timeout).await {
                     Ok(output) => {
-                        let mut out = format!("$ {command}\n");
+                        let mut out = String::new();
                         if !output.stdout.is_empty() {
                             out.push_str(&output.stdout);
                         }
