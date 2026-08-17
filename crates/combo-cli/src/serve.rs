@@ -18,6 +18,7 @@ use crate::auth;
 use crate::automation::{self, AutomationScheduler};
 use crate::compact;
 use crate::config::AppConfig;
+use crate::dirperm;
 use crate::fs;
 use crate::git;
 use crate::graph;
@@ -839,6 +840,9 @@ fn build_router(
         // ---- 服务器目录浏览 ----
         .route("/v1/host/home", get(host::home))
         .route("/v1/host/dirs", get(host::dirs))
+        // ---- 目录访问授权(敏感目录只询问一次) ----
+        .route("/v1/dir-grants", get(dirperm::list).post(dirperm::grant))
+        .route("/v1/dir-grants/:id", delete(dirperm::revoke))
         // ---- workspaces / sessions / 文件 / git ----
         .route(
             "/v1/workspaces",

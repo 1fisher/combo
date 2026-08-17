@@ -35,6 +35,7 @@ import {
 import { cn, usageColor } from '../../lib/utils';
 import { useQueryClient } from '@tanstack/react-query';
 import { useWorkspaces } from '../../hooks/useWorkspaces';
+import { useDirPermission } from '../../hooks/useDirPermission';
 import { useSessions, markCreated } from '../../hooks/useSessions';
 import { useActiveWorkspaceId } from '../../hooks/useActiveWorkspaceId';
 import { useAgentStore } from '../../stores/agentStore';
@@ -238,6 +239,10 @@ export function WorkspaceSidebar({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('');
   const [sidebarError, setSidebarError] = useState<string | null>(null);
+  // 敏感目录(桌面/文稿/下载、移动硬盘等)首次访问前的授权询问:允许一次后持久记住
+  const { run: runDirPerm, dialog: dirPermDialog } = useDirPermission((msg) =>
+    setSidebarError(msg),
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [mobileConnectOpen, setMobileConnectOpen] = useState(false);
   // 首次打开后才挂载,之后保持以保留关闭动画
@@ -333,11 +338,7 @@ export function WorkspaceSidebar({
       const { open } = await import('@tauri-apps/plugin-dialog');
       const dir = await open({ directory: true, multiple: false });
       if (typeof dir === 'string') {
-        try {
-          await create({ path: dir });
-        } catch (e) {
-          setSidebarError(e instanceof Error ? e.message : String(e));
-        }
+        await runDirPerm(() => create({ path: dir }).then(() => undefined));
       }
       return;
     }
@@ -441,11 +442,11 @@ export function WorkspaceSidebar({
     setChangingPath(true);
     setSidebarError(null);
     try {
-      await changePath({ id: pathTarget.id, path: p });
-      setPathTarget(null);
-      setPathDraft2('');
-    } catch (e) {
-      setSidebarError(e instanceof Error ? e.message : String(e));
+      await runDirPerm(async () => {
+        await changePath({ id: pathTarget.id, path: p });
+        setPathTarget(null);
+        setPathDraft2('');
+      });
     } finally {
       setChangingPath(false);
     }
@@ -1039,6 +1040,8 @@ export function WorkspaceSidebar({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      {/* 目录访问授权弹窗(敏感目录首次访问时询问一次) */}
+      {dirPermDialog}
       {/* 服务器目录选择器(浏览器/移动端) */}
       <DirectoryPicker
         open={pickerOpen}
@@ -1054,12 +1057,11 @@ export function WorkspaceSidebar({
           setPickerOpen(false);
           if (pickerMode === 'add') {
             setSidebarError(null);
-            void create({ path })
-              .then((w) => {
-                setActive(w.id);
-                onNavigate?.();
-              })
-              .catch((e) => setSidebarError(e instanceof Error ? e.message : String(e)));
+            void runDirPerm(async () => {
+              const w = await create({ path });
+              setActive(w.id);
+              onNavigate?.();
+            });
           } else {
             setPathDraft2(path);
           }

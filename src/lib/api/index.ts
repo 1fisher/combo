@@ -1,5 +1,5 @@
 import type { Api } from './types';
-import { apiRequest } from './client';
+import { apiRequest, ApiError } from './client';
 import { getClientId } from '../clientId';
 
 export * from './client';
@@ -35,6 +35,30 @@ export function changeWorkspacePath(id: string, path: string): Promise<Api.Works
     method: 'PATCH',
     body: { path },
   });
+}
+
+/** 敏感目录访问被拦(403 dir_permission_required)时为 true。 */
+export function isDirPermissionError(
+  e: unknown,
+): e is ApiError & { path?: string } {
+  return e instanceof ApiError && e.code === 'dir_permission_required';
+}
+
+/** 列出已授权的敏感目录(允许一次后持久记住)。 */
+export function listDirGrants(): Promise<Api.DirGrant[]> {
+  return apiRequest<{ grants: Api.DirGrant[] }>('/v1/dir-grants').then(
+    (r) => r.grants ?? [],
+  );
+}
+
+/** 记住一条目录授权(幂等);此后该目录及其子目录不再询问。 */
+export function grantDirAccess(path: string): Promise<{ ok: boolean; path: string }> {
+  return apiRequest('/v1/dir-grants', { method: 'POST', body: { path } });
+}
+
+/** 撤销一条目录授权;撤销后下次访问该目录会重新询问。 */
+export function revokeDirGrant(id: number): Promise<void> {
+  return apiRequest(`/v1/dir-grants/${id}`, { method: 'DELETE' });
 }
 
 export function deleteWorkspace(id: string): Promise<void> {

@@ -151,6 +151,20 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   `GET/POST/DELETE /v1/workspaces/{id}/sessions`:创建/删除/列表全部直接在
   sqlite 操作,不依赖后端在线。会话列表在左侧显示 `name`(不再是完整路径),
   hover 出现铅笔按钮可重命名。
+- **敏感目录访问授权(只询问一次)** (`dirperm.rs` + `store.rs` 表 `dir_grants`):
+  创建项目 / 更换绑定目录时,若目录位于敏感位置(macOS TCC 保护域:
+  `~/Desktop`/`~/Documents`/`~/Downloads`、`~/Library/Mobile Documents`(iCloud)、
+  `/Volumes/*` 外置卷/移动硬盘),且 sqlite `dir_grants` 没有覆盖该路径的授权,
+  `workspace::create`/`rename` 返回 403 `{code: "dir_permission_required", path}`
+  (路径全部 **词法规范化**,不 `canonicalize`——避免检查本身触碰磁盘提前触发
+  系统 TCC 弹窗;mac/win 大小写不敏感比较)。前端 `useDirPermission` hook 捕获
+  该错误弹「允许访问该目录?」(`DirPermissionDialog`),「允许」→
+  `POST /v1/dir-grants` 持久记住并自动重试原请求(仅重试一次);已授权目录
+  (含子目录,祖先前缀覆盖)永不再问。REST:`GET/POST /v1/dir-grants`、
+  `DELETE /v1/dir-grants/:id`;设置弹窗「目录访问授权」区可查看/撤销。
+  存量旧项目不受影响(无启动期回溯检查);`src-tauri/Info.plist` 提供
+  NSDocuments/RemovableVolumes 等 macOS 隐私用途声明文案(打包时与 Tauri
+  自动生成的 Info.plist 合并)。
 - **Selection persistence**: `agentStore` uses `zustand/persist`
   (`localStorage` key `combo.agent`) storing only `activeWorkspaceId` +
   `activeSessionId`; SSE state stays in-memory. `setActiveWorkspace` clears the

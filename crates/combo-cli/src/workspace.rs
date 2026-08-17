@@ -34,6 +34,10 @@ pub async fn create(
     if path.is_empty() {
         return json_err(StatusCode::BAD_REQUEST, "缺少 path");
     }
+    // 敏感目录(桌面/文稿/下载、外置卷等)首次访问前需用户授权一次
+    if let Some(resp) = crate::dirperm::check(&state, path) {
+        return resp;
+    }
     let backend = body
         .get("backend")
         .and_then(|v| v.as_str())
@@ -129,6 +133,10 @@ pub async fn rename(
 
     // 再处理 path(若有):更新元数据
     if let Some(p) = path.filter(|s| !s.is_empty()) {
+        // 敏感目录(桌面/文稿/下载、外置卷等)首次访问前需用户授权一次
+        if let Some(resp) = crate::dirperm::check(&state, p) {
+            return resp;
+        }
         if !FsPath::new(p).is_dir() {
             return json_err(
                 StatusCode::BAD_REQUEST,

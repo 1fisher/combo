@@ -9,6 +9,7 @@ pub mod binpath;
 pub mod compact;
 pub mod config;
 pub mod db;
+pub mod dirperm;
 pub mod fs;
 pub mod git;
 pub mod graph;

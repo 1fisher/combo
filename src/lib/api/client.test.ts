@@ -31,6 +31,24 @@ describe('apiRequest', () => {
     } satisfies Partial<ApiError>);
   });
 
+  it('throws ApiError carrying structured code and path on error body', async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          message: '该目录位于受保护位置,需要允许后才能访问',
+          code: 'dir_permission_required',
+          path: '/Volumes/Backup',
+        }),
+        { status: 403 },
+      )
+    );
+    await expect(apiRequest('/v1/workspaces')).rejects.toMatchObject({
+      status: 403,
+      code: 'dir_permission_required',
+      path: '/Volumes/Backup',
+    } satisfies Partial<ApiError>);
+  });
+
   it('returns undefined for 204 responses', async () => {
     vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }));
     const out = await apiRequest<void>('/v1/workspaces');

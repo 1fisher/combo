@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- macOS TCC 隐私用途声明:访问受保护目录时系统弹窗的说明文案。
+         该文件会在打包时与 Tauri 自动生成的 Info.plist 合并。 -->
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>Combo 需要访问桌面文件夹,以打开其中的项目与文件。</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>Combo 需要访问文稿文件夹,以打开其中的项目与文件。</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>Combo 需要访问下载文件夹,以打开其中的项目与文件。</string>
+    <key>NSRemovableVolumesUsageDescription</key>
+    <string>Combo 需要访问移动硬盘、U 盘等外置卷,以打开其中的项目与文件。</string>
+    <key>NSNetworkVolumesUsageDescription</key>
+    <string>Combo 需要访问网络卷,以打开其中的项目与文件。</string>
+</dict>
+</plist>

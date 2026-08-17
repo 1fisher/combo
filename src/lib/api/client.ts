@@ -6,7 +6,11 @@ import { getP2pTransport } from '../p2p/transport';
 export class ApiError extends Error {
   constructor(
     public status: number,
-    message: string
+    message: string,
+    /** 后端结构化错误码(如 dir_permission_required),供前端针对性弹窗 */
+    public code?: string,
+    /** 部分错误携带的关联路径(如待授权目录) */
+    public path?: string,
   ) {
     super(message);
     this.name = 'ApiError';
@@ -59,13 +63,17 @@ export async function apiRequest<T>(
   }
   if (!res.ok) {
     let message = res.statusText;
+    let code: string | undefined;
+    let path: string | undefined;
     try {
-      const j = (await res.json()) as { message?: string };
+      const j = (await res.json()) as { message?: string; code?: string; path?: string };
       if (j.message) message = j.message;
+      code = j.code;
+      path = j.path;
     } catch {
       /* keep statusText */
     }
-    throw new ApiError(res.status, message);
+    throw new ApiError(res.status, message, code, path);
   }
   if (res.status === 204) return undefined as T;
   const text = await res.text();

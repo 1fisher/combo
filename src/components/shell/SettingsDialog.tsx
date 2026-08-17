@@ -26,8 +26,9 @@ import { requestNotifyPermission } from '../../lib/notify';
 import { useFetchModels, useProviderCrud, useProviderKeys, useProviders, useSaveProviderKey, useSetModelContextWindow } from '../../hooks/useAgentModel';
 import { useUIPreferences } from '../../stores/uiPreferencesStore';
 import { formatTokenCount } from '../../lib/tokens';
-import { useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { confirmDialog } from '../../lib/confirm';
+import { listDirGrants, revokeDirGrant } from '../../lib/api';
 import { cn } from '../../lib/utils';
 
 interface SettingsDialogProps {
@@ -41,8 +42,9 @@ interface SettingsDialogProps {
  * 2. 特效与音效 — Liquid 流体特效 / Combo 连击气泡音。
  * 3. Git 提交署名 — 提交时自动追加 Generated with Combo(服务端全局配置)。
  * 4. 系统通知 — 免打扰 / 任务结束 / 需要交互时发送系统通知(可选同时播放提示音)。
- * 5. 外部访问域名 — 域名部署时填写公开访问地址。
- * 6. 代理地址 — 前后端分离部署时指定 combo-cli serve 服务地址。
+ * 5. 目录访问授权 — 管理已记住的敏感目录授权(允许一次后不再询问)。
+ * 6. 外部访问域名 — 域名部署时填写公开访问地址。
+ * 7. 代理地址 — 前后端分离部署时指定 combo-cli serve 服务地址。
  */
 export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [proxyInput, setProxyInput] = useState('');
@@ -270,6 +272,9 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
           {/* 手动上下文窗口 */}
           <ContextWindowSection open={open} ref={ctxSectionRef} />
 
+          {/* 目录访问授权(敏感目录允许一次后持久记住) */}
+          <DirGrantsSection open={open} />
+
           {/* 外部访问域名 */}
           <div className="flex flex-col gap-2">
             <label className="text-[13px] font-medium text-foreground">外部访问域名</label>
@@ -415,6 +420,56 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
 }
 
 // ---------- Provider 配置区 ----------
+
+// ---------- 目录访问授权区(敏感目录允许一次后持久记住) ----------
+
+function DirGrantsSection({ open }: { open: boolean }) {
+  const qc = useQueryClient();
+  const { data: grants } = useQuery({
+    queryKey: ['dir-grants'],
+    queryFn: listDirGrants,
+    enabled: open,
+  });
+  const revoke = useMutation({
+    mutationFn: (id: number) => revokeDirGrant(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['dir-grants'] }),
+  });
+
+  return (
+    <div className="flex flex-col gap-2">
+      <label className="text-[13px] font-medium text-foreground">目录访问授权</label>
+      <div className="text-[12px] text-foreground-subtle">
+        访问 文稿/桌面/下载、iCloud 或移动硬盘等受保护目录时询问一次,允许后不再重复询问。
+        撤销后下次访问会重新询问。
+      </div>
+      {(grants ?? []).length === 0 ? (
+        <div className="text-[12px] text-foreground-subtlest">暂无已授权目录</div>
+      ) : (
+        <div className="flex max-h-40 flex-col gap-1.5 overflow-auto">
+          {(grants ?? []).map((g) => (
+            <div key={g.id} className="flex items-center gap-2">
+              <span
+                className="min-w-0 flex-1 truncate font-mono text-[12px] text-foreground-subtle"
+                title={g.path}
+              >
+                {g.path}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 shrink-0 px-2 text-[12px] text-destructive hover:text-destructive"
+                disabled={revoke.isPending}
+                onClick={() => void revoke.mutateAsync(g.id).catch(() => undefined)}
+              >
+                撤销
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ProviderConfigSection({ open }: { open: boolean }) {
   const qc = useQueryClient();

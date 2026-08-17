@@ -1979,6 +1979,13 @@ export namespace Api {
     action: 'allow' | 'allow_session' | 'deny';
   };
 
+  // 已授权的敏感目录(桌面/文稿/下载、外置卷等;允许一次后持久记住)
+  export type DirGrant = {
+    id: number;
+    path: string;
+    created_at: number;
+  };
+
   export type QuestionChoice = { id: string; label: string; description?: string };
   export type QuestionItem = {
     id: string;

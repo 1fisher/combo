@@ -142,6 +142,16 @@ pub struct AutomationRun {
     pub error: Option<String>,
 }
 
+/// 已授权访问的敏感目录(桌面/文稿/下载/iCloud、外置卷等)。
+/// 用户允许一次后持久记住,后续访问同一目录(及其子目录)不再询问。
+#[derive(Clone, Debug)]
+pub struct DirGrant {
+    pub id: i64,
+    /// 词法规范化后的绝对路径(见 `dirperm::normalize`)。
+    pub path: String,
+    pub created_at: i64,
+}
+
 
 /// 线程安全的 sqlite 连接。所有方法都是短事务,持锁时间可忽略。
 pub struct ComboDb {
@@ -248,7 +258,12 @@ impl ComboDb {
                 finished_at   INTEGER,
                 error         TEXT
             );
-            CREATE INDEX IF NOT EXISTS idx_automation_runs ON automation_runs(automation_id);",
+            CREATE INDEX IF NOT EXISTS idx_automation_runs ON automation_runs(automation_id);
+            CREATE TABLE IF NOT EXISTS dir_grants (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                path       TEXT NOT NULL UNIQUE,
+                created_at INTEGER NOT NULL
+            );",
         )?;
         // 容错迁移:旧库可能缺少新增列,逐个尝试添加(已存在则忽略)。
         let mig = [
@@ -757,6 +772,48 @@ impl ComboDb {
             .unwrap()
             .execute("UPDATE access_tokens SET revoked=1", [])?;
         Ok(())
+    }
+
+    // ---------- dir grants(敏感目录访问授权) ----------
+
+    /// 列出全部已授权目录(按创建时间升序)。
+    pub fn list_dir_grants(&self) -> anyhow::Result<Vec<DirGrant>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, path, created_at FROM dir_grants ORDER BY created_at ASC, id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(DirGrant {
+                id: row.get(0)?,
+                path: row.get(1)?,
+                created_at: row.get(2)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// 写入一条目录授权(路径已规范化;重复路径幂等)。
+    pub fn upsert_dir_grant(&self, path: &str) -> anyhow::Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO dir_grants (path, created_at) VALUES (?1, ?2)
+             ON CONFLICT(path) DO NOTHING",
+            params![path, unix_secs()],
+        )?;
+        Ok(())
+    }
+
+    /// 删除一条目录授权;返回是否确实删除了记录。
+    pub fn delete_dir_grant(&self, id: i64) -> anyhow::Result<bool> {
+        let n = self
+            .conn
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM dir_grants WHERE id=?1", params![id])?;
+        Ok(n > 0)
     }
 
     // ---------- automations ----------
