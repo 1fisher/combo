@@ -981,6 +981,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         git_output(&dir, ["init", "-q"]).unwrap();
+        // CI 环境可能没有全局 git 身份,设置仓库级身份保证 commit 可用
+        git_output(&dir, ["config", "user.email", "test@combo.local"]).unwrap();
+        git_output(&dir, ["config", "user.name", "combo-test"]).unwrap();
         git_output(&dir, ["commit", "-q", "--allow-empty", "-m", "init"])
             .unwrap();
         let file = dir.join("new_file.ts");
@@ -1018,6 +1021,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         git_output(&dir, ["init", "-q"]).unwrap();
+        // CI 环境可能没有全局 git 身份,设置仓库级身份保证 commit 可用
+        git_output(&dir, ["config", "user.email", "test@combo.local"]).unwrap();
+        git_output(&dir, ["config", "user.name", "combo-test"]).unwrap();
         git_output(&dir, ["commit", "-q", "--allow-empty", "-m", "init"]).unwrap();
         let current = git_output(&dir, ["rev-parse", "--abbrev-ref", "HEAD"])
             .unwrap()
