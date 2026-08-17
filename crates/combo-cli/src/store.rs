@@ -79,6 +79,9 @@ pub struct ConversationMeta {
     /// 最近一次 run 的上下文占用(最后一次 completion 的 input+output,
     /// rig 原生 usage;供前端用量环展示)。
     pub context_tokens: i64,
+    /// 最近一次 run 所用模型的上下文窗口大小(token;provider 模型列表/
+    /// 内置定义/手动覆盖解析,run 结束时随 usage 一同记录)。
+    pub context_window: i64,
 }
 
 /// 单条消息的持久化记录(parts 为 JSON 字符串)。
@@ -192,7 +195,8 @@ impl ComboDb {
                 prompt_tokens      INTEGER NOT NULL DEFAULT 0,
                 completion_tokens  INTEGER NOT NULL DEFAULT 0,
                 cost               REAL    NOT NULL DEFAULT 0.0,
-                context_tokens     INTEGER NOT NULL DEFAULT 0
+                context_tokens     INTEGER NOT NULL DEFAULT 0,
+                context_window     INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_conv_ws ON conversations(workspace_id);
             CREATE TABLE IF NOT EXISTS messages (
@@ -252,6 +256,7 @@ impl ComboDb {
             "ALTER TABLE conversations ADD COLUMN completion_tokens INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE conversations ADD COLUMN cost REAL NOT NULL DEFAULT 0.0",
             "ALTER TABLE conversations ADD COLUMN context_tokens INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE conversations ADD COLUMN context_window INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE workspace_config ADD COLUMN model TEXT NOT NULL DEFAULT ''",
         ];
         for sql in &mig {
@@ -438,8 +443,8 @@ impl ComboDb {
             .lock()
             .unwrap()
             .execute(
-                "INSERT INTO conversations (id, workspace_id, title, message_count, created_at, updated_at, prompt_tokens, completion_tokens, cost, context_tokens)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                "INSERT INTO conversations (id, workspace_id, title, message_count, created_at, updated_at, prompt_tokens, completion_tokens, cost, context_tokens, context_window)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                  ON CONFLICT(id) DO UPDATE SET
                      title=excluded.title,
                      message_count=excluded.message_count,
@@ -454,7 +459,8 @@ impl ComboDb {
                     c.prompt_tokens,
                     c.completion_tokens,
                     c.cost,
-                    c.context_tokens
+                    c.context_tokens,
+                    c.context_window
                 ],
             )?;
         Ok(())
@@ -469,7 +475,7 @@ impl ComboDb {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT c.id, c.workspace_id, c.title, COUNT(m.id), c.created_at, c.updated_at,
-                    c.prompt_tokens, c.completion_tokens, c.cost, c.context_tokens
+                    c.prompt_tokens, c.completion_tokens, c.cost, c.context_tokens, c.context_window
              FROM conversations c
              LEFT JOIN messages m ON m.session_id = c.id
              WHERE c.workspace_id=?1
@@ -497,7 +503,7 @@ impl ComboDb {
         let placeholders = workspace_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!(
             "SELECT c.id, c.workspace_id, c.title, COUNT(m.id), c.created_at, c.updated_at,
-                    c.prompt_tokens, c.completion_tokens, c.cost, c.context_tokens
+                    c.prompt_tokens, c.completion_tokens, c.cost, c.context_tokens, c.context_window
              FROM conversations c
              LEFT JOIN messages m ON m.session_id = c.id
              WHERE c.workspace_id IN ({placeholders})
@@ -572,11 +578,21 @@ impl ComboDb {
         (v > 0).then_some(v)
     }
 
-    /// 直接设置会话的上下文占用(自动压缩完成后重置,避免旧值反复触发压缩)。
+    /// 直接设置会话的上下文占用(手动压缩后重置为压缩后的估算占用)。
     pub fn set_context_tokens(&self, session_id: &str, tokens: i64) -> anyhow::Result<()> {
         self.conn.lock().unwrap().execute(
             "UPDATE conversations SET context_tokens=?2 WHERE id=?1",
             params![session_id, tokens],
+        )?;
+        Ok(())
+    }
+
+    /// 记录会话最近一次 run 所用模型的上下文窗口大小(token;
+    /// 模型切换后随下次 run 结束更新)。
+    pub fn set_context_window(&self, session_id: &str, window: i64) -> anyhow::Result<()> {
+        self.conn.lock().unwrap().execute(
+            "UPDATE conversations SET context_window=?2 WHERE id=?1",
+            params![session_id, window],
         )?;
         Ok(())
     }
@@ -935,6 +951,7 @@ fn row_to_conv(r: &rusqlite::Row<'_>) -> rusqlite::Result<ConversationMeta> {
         completion_tokens: r.get::<_, Option<i64>>(7)?.unwrap_or(0),
         cost: r.get::<_, Option<f64>>(8)?.unwrap_or(0.0),
         context_tokens: r.get::<_, Option<i64>>(9)?.unwrap_or(0),
+        context_window: r.get::<_, Option<i64>>(10)?.unwrap_or(0),
     })
 }
 
@@ -1012,6 +1029,7 @@ mod tests {
             completion_tokens: 0,
             cost: 0.0,
             context_tokens: 0,
+            context_window: 0,
         }
     }
 
@@ -1125,6 +1143,18 @@ mod tests {
         assert_eq!(db.get_context_tokens("nope"), None);
         db.upsert_conversation(&conv("c2", "w1")).unwrap();
         assert_eq!(db.get_context_tokens("c2"), None);
+    }
+
+    #[test]
+    fn set_context_window_persists_and_lists() {
+        let db = ComboDb::in_memory();
+        db.upsert_conversation(&conv("c1", "w1")).unwrap();
+        db.set_context_window("c1", 131_072).unwrap();
+        let convs = db.list_conversations("w1").unwrap();
+        assert_eq!(convs[0].context_window, 131_072);
+        // 更新覆盖(模型切换后随下次 run 重写)
+        db.set_context_window("c1", 262_144).unwrap();
+        assert_eq!(db.list_conversations("w1").unwrap()[0].context_window, 262_144);
     }
 
     #[test]

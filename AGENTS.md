@@ -110,31 +110,31 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
 
 ## Architecture & data flow
 
-- **Token 用量与自动压缩(compact)**:token 计数全部来自 **rig 原生 usage**
+- **Token 用量记录与手动压缩(compact)**:token 计数全部来自 **rig 原生 usage**
   (`GetTokenUsage`,多轮工具循环中每次 completion 调用各自上报,serve 用 rig
   `Usage` 的 `AddAssign` 累计整轮消耗)。`agent.rs::RunUsage` 同时携带最后一次
   调用(input+output ≈ 当前上下文占用)与 run 累计(total_input/total_output);
   finish part 与 `run_complete` 的 `usage` JSON 内嵌两者(`input_tokens`/
-  `output_tokens` + `total_*_tokens`,wire 向后兼容)。sqlite `conversations`
-  表新增 `context_tokens` 列(每次 run 结束由 `add_usage` 覆盖为最后一次调用的
-  input+output,仅供前端用量环展示)。**compact 触发与切分由 rig 自动压缩窗口
-  策略决定**(`rig` crate `memory` feature → `rig-memory` 的 `TokenWindowMemory` +
-  `HeuristicTokenCounter`,`compact.rs::plan_compaction`):每次从 sqlite 加载
-  历史时逐消息统计 token(中文按 3 字节/token 保守估算,parts 全部内容含
-  tool_call/tool_result 计入),预算 = context_window×0.75 − 5000 固定开销,
-  从最新往旧累计、预算耗尽处切分,超出预算的前缀总结为摘要并删除。旧实现按
-  「上次 run 真实占用 + chars/3 估算 + 固定保留 10 条 + 12 条门槛」触发,中文
-  会话误差 2~3 倍、短会话大消息漏压,常在超窗报错时仍未压缩。压缩完成后
-  `set_context_tokens` 重置占用避免用量环显示旧值;摘要消息 `created_at` 取
-  "保留尾部第一条消息时间戳-1",保证 `list_messages`(按 created_at 升序)
-  中摘要在最近消息之前、注入 LLM 的历史顺序正确。**context_window 的单一来源
-  是 combo-cli 配置**:`compact.rs::context_window` 按 provider 模型列表(含
-  手动覆盖)→ 内置定义兜底 → 128k 默认;设置界面「上下文窗口(手动)」经
-  `POST /v1/providers/context-window` 写入配置 `[providers.<id>].context_windows`
-  (`config.rs::set_model_context_window`,`providers::apply_context_windows` 在
-  `workspace_effective_cfg`/`list_providers`/`find_provider` 统一应用,models JSON
-  额外回传 `context_window_override` 原始覆盖值),压缩阈值与前端
-  Composer 用量环共用同一份值;前端不再本地存 contextOverrides(已删除)。
+  `output_tokens` + `total_*_tokens`,wire 向后兼容)。run 结束时 serve 把两项
+  落库到 sqlite `conversations` 行:`context_tokens`(rig 上报的当前上下文占用,
+  由 `add_usage` 覆盖写入)与 `context_window`(本次所用模型的窗口大小,
+  `store.rs::set_context_window`;rig 的 openai 兼容客户端不提供模型窗口元数据,
+  按 `compact.rs::context_window` 的 provider 模型列表(含手动覆盖)→ 内置定义
+  → 128k 默认解析),`GET .../sessions` 列表 JSON 一并回传。**上下文压缩只手动
+  触发**:run 启动不再自动压缩(`start_agent_run` 原「3.5 自动压缩」已删),
+  由 agent 按需调用 `compact` 工具——工具用 rig `TokenWindowMemory` +
+  `HeuristicTokenCounter`(`compact.rs::plan_compaction`)逐消息统计 token
+  (中文按 3 字节/token 保守估算,parts 全部内容含 tool_call/tool_result 计入),
+  预算 = context_window×0.75 − 5000 固定开销,从最新往旧累计、预算耗尽处切分,
+  超出预算的前缀总结为摘要并删除;压缩完成后 `set_context_tokens` 重置占用;
+  摘要消息 `created_at` 取"保留尾部第一条消息时间戳-1",保证 `list_messages`
+  (按 created_at 升序)中摘要在最近消息之前、注入 LLM 的历史顺序正确。
+  **context_window 的单一来源是 combo-cli 配置**:设置界面「上下文窗口(手动)」
+  经 `POST /v1/providers/context-window` 写入配置
+  `[providers.<id>].context_windows`(`config.rs::set_model_context_window`,
+  `providers::apply_context_windows` 在 `workspace_effective_cfg`/
+  `list_providers`/`find_provider` 统一应用,models JSON 额外回传
+  `context_window_override` 原始覆盖值),与前端 Composer 用量环共用同一份值。
 - **File service** (`crates/combo-cli/src/fs.rs`): `GET .../files/list?path=`
   lists one directory (hidden files skipped, dirs first), `GET .../files/content`
   reads text (≤1MB, binary rejected), `PUT .../files/content` writes atomically.

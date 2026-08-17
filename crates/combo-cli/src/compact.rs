@@ -1,11 +1,11 @@
-//! 会话上下文自动压缩模块。
+//! 会话上下文手动压缩模块。
 //!
-//! 压缩时机由 rig 的自动压缩窗口策略(`rig::memory::TokenWindowMemory`)
-//! 决定:每次加载历史时逐消息统计 token,历史超出预算
+//! 压缩仅由 `compact` 工具(agent 主动调用,用户可要求 agent 压缩)触发,
+//! run 启动时不再自动压缩。工具被调用时按 rig 的压缩窗口策略
+//! (`rig::memory::TokenWindowMemory`)逐消息统计 token,历史超出预算
 //! (context_window × [`COMPACT_THRESHOLD_RATIO`],再预留 preamble/工具
-//! 定义开销)即触发,超出预算的旧消息前缀被总结为摘要并从 sqlite 删除,
-//! 释放上下文空间供后续对话使用。同时提供 `compact` 工具,供 agent
-//! 主动触发压缩。
+//! 定义开销)时,超出预算的旧消息前缀被总结为摘要并从 sqlite 删除,
+//! 释放上下文空间供后续对话使用。
 //!
 //! 旧实现的触发信号是「上一轮 run 结束时 rig usage 上报的真实占用,
 //! provider 未上报时回退 chars/3 字符估算」:中文会话估算偏低 2~3 倍,

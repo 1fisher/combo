@@ -331,7 +331,7 @@ where
 /// rig 的多轮流式循环中,每次 completion 调用都会重发全部历史并各自上报一份
 /// `Usage`(经 `GetTokenUsage` 读取);用 rig 的 `Add`/`AddAssign` 累计得到
 /// 整个 run 的真实消耗,同时保留最后一次调用的用量(其 input 即当前上下文
-//  窗口的实际占用,是触发 compact 的权威信号)。
+//  窗口的实际占用,由 serve 记录到会话表的 context_tokens 列)。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RunUsage {
     /// 最后一次 completion 调用的输入 token(含全部历史 + preamble + 工具定义,

@@ -354,7 +354,7 @@ pub(crate) async fn start_agent_run(
 
     // 2. 会话历史从本地 sqlite 解析(多轮上下文)。
     //    req 里旧客户端注入的 history 仅在 sqlite 无数据时兜底。
-    let mut history: Vec<Value> = match &req.history {
+    let history: Vec<Value> = match &req.history {
         Some(h) if !h.is_empty() => h.clone(),
         _ => state
             .meta
@@ -383,84 +383,8 @@ pub(crate) async fn start_agent_run(
         history.len(),
     );
 
-    // 3.5 自动压缩(rig TokenWindowMemory 策略):每次加载历史时逐消息
-    //     统计 token,超出 context_window × 0.75 预算(再预留 preamble/
-    //     工具定义开销)的旧消息前缀被总结为摘要并删除,释放上下文空间。
-    //     仅在从 sqlite 加载历史时触发(client body 传来的历史无 ID 无法删除)。
-    //     触发与切分由 rig 策略按消息粒度逐条判定,不再依赖上一轮 run 的
-    //     usage 上报或 chars/3 字符估算(中文偏低 2~3 倍,常在超窗报错时
-    //     仍未压缩)。
-    if req.history.as_ref().map_or(true, |h| h.is_empty()) {
-        if let Some(count) = compact::plan_compaction(&cfg, &history) {
-            let stored = state
-                .meta
-                .db()
-                .list_messages(ws_id, &req.session_id)
-                .unwrap_or_default();
-            let ids: Vec<String> = stored.iter().map(|m| m.id.clone()).collect();
-            if ids.len() == history.len() {
-                match compact::compact(&cfg, &history, &ids, count).await {
-                    Ok(Some(result)) => {
-                        let removed_ids = result.removed_ids.clone();
-                        let count = result.compacted_count;
-                        let tokens_before = result.tokens_before;
-                        let tokens_after = result.tokens_after;
-                        // 摘要时间戳:排在保留尾部第一条消息之前(list_messages 按 created_at 升序)
-                        let summary_at = stored
-                            .get(count)
-                            .map(|m| m.created_at - 1)
-                            .unwrap_or_else(now_secs);
-                        match compact::persist_compaction(
-                            &state.meta,
-                            ws_id,
-                            &req.session_id,
-                            &result,
-                            summary_at,
-                        ) {
-                            Ok(summary_id) => {
-                                // 重置上下文占用,避免旧值在后续轮次反复触发压缩
-                                let _ = state
-                                    .meta
-                                    .db()
-                                    .set_context_tokens(&req.session_id, tokens_after as i64);
-                                // 广播:删除旧消息
-                                for id in &removed_ids {
-                                    let _ = tx.send(msg_env(
-                                        "deleted",
-                                        json!({ "id": id, "session_id": &req.session_id }),
-                                    ));
-                                }
-                                // 广播:插入摘要消息
-                                let summary_msg = compact::summary_message_json(
-                                    &req.session_id,
-                                    &summary_id,
-                                    &result.summary,
-                                    count,
-                                    tokens_before,
-                                    tokens_after,
-                                    &cfg,
-                                    summary_at,
-                                );
-                                let _ = tx.send(msg_env("created", summary_msg));
-                                // 从压缩后的 sqlite 重建历史
-                                history = compact::load_compacted_history(
-                                    &state.meta,
-                                    ws_id,
-                                    &req.session_id,
-                                );
-                                eprintln!(
-                                    "自动压缩完成: {count} 条消息, tokens {tokens_before} → {tokens_after}"
-                                );
-                            }
-                            Err(e) => eprintln!("自动压缩持久化失败: {e}"),
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(e) => eprintln!("自动压缩失败(已跳过): {e}"),
-                }
-            }
-        }
-    }
+    // 3.5 上下文压缩为手动触发:run 启动不再自动压缩,
+    //     由 agent 按需调用 compact 工具(见 compact.rs)总结历史。
 
     // 4. 后台运行 agent,事件经广播流出
     let ws_id_tool = ws_id.to_string();
@@ -685,9 +609,8 @@ pub(crate) async fn start_agent_run(
 
         // 累加 token 用量与花费到会话:
         // - prompt/completion 累计 run 内全部 completion 调用(rig 原生 Usage 求和);
-        // - context_tokens 记录最后一次调用的 input+output(当前上下文窗口占用,
-        //   供前端用量环展示;compact 触发已改由 rig TokenWindowMemory 策略
-        //   逐消息判定,不再依赖此值)。
+        // - context_tokens 记录最后一次调用的 input+output(rig 上报的当前
+        //   上下文窗口占用;压缩已改为手动触发,不再据此自动判定)。
         if let Some(u) = usage {
             let (pin, pout) =
                 crate::providers::get_model_pricing(&cfg.provider, &cfg.model);
@@ -701,6 +624,14 @@ pub(crate) async fn start_agent_run(
                 u.context_tokens() as i64,
             );
         }
+
+        // 记录当前模型的上下文窗口大小(provider 模型列表/内置定义/手动覆盖
+        // 解析;rig 的 openai 兼容客户端不提供模型窗口元数据),与上面的
+        // rig 原生 usage 消耗(context_tokens)一同落库到会话行。
+        let _ = state2
+            .meta
+            .db()
+            .set_context_window(&session_id, compact::context_window(&cfg) as i64);
     });
 
     Ok(())
@@ -3380,6 +3311,7 @@ mod tests {
             completion_tokens: 0,
             cost: 0.0,
             context_tokens: 0,
+            context_window: 0,
         };
         state.meta.db().upsert_conversation(&conv).unwrap();
         assert!(state.runs.start_run("ws_t", "s_busy", "r1").is_some());
