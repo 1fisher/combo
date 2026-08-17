@@ -28,6 +28,7 @@ use crate::providers::{self, ProviderInfo};
 use crate::relay::{self, RelayManager};
 use crate::session;
 use crate::skills_api;
+use crate::store::WorkspaceModel;
 use crate::terminal;
 use crate::workspace;
 use anyhow::Result;
@@ -331,7 +332,7 @@ pub(crate) async fn start_agent_run(
         .map(|m| m.path)
         .or_else(|| req.workspace_dir.as_deref().map(std::path::PathBuf::from));
     let cfg = {
-        let base = state.cfg.lock().unwrap().clone();
+        let base = workspace_effective_cfg(state, ws_id);
         let ws_disabled = state.meta.db().get_disabled_skills(ws_id).unwrap_or_default();
         base.with_workspace(workspace_dir.clone(), &ws_disabled)
     };
@@ -1011,18 +1012,22 @@ fn mime_for(path: &std::path::Path) -> &'static str {
 }
 
 /// GET /v1/workspaces/{id}/config — rune 兼容的配置读取。
-/// disabled_skills 从本地 sqlite 读取(技能开关持久化)。
+/// disabled_skills 与模型选择均从本地 sqlite 读取(按 workspace 持久化)。
 async fn workspace_config_get(
     State(state): State<AppState>,
     Path(ws_id): Path<String>,
 ) -> Json<Value> {
     let disabled = state.meta.db().get_disabled_skills(&ws_id).unwrap_or_default();
+    let models = match state.meta.db().get_workspace_model(&ws_id) {
+        Ok(Some(sel)) => json!({ "large": { "model": sel.model, "provider": sel.provider } }),
+        _ => json!({}),
+    };
     Json(json!({
         "options": {
             "disabled_skills": disabled,
             "skills_paths": [],
         },
-        "models": {},
+        "models": models,
         "recent_models": {},
     }))
 }
@@ -2278,9 +2283,38 @@ async fn delete_provider(
     Ok(Json(json!({ "ok": true, "provider": pid })))
 }
 
+/// 解析 workspace 的生效配置:全局默认配置叠加该 workspace 自己记忆的模型
+/// 选择(provider/model/推理强度)。每个项目独立使用自己的模型,互不联动;
+/// 未单独设置过模型的项目回落全局默认(state.cfg)。
+fn workspace_effective_cfg(state: &AppState, ws_id: &str) -> AskConfig {
+    let mut cfg = state.cfg.lock().unwrap().clone();
+    match state.meta.db().get_workspace_model(ws_id) {
+        Ok(Some(sel)) => {
+            if sel.provider != cfg.provider.id {
+                let config_path =
+                    AppConfig::load_or_create(&crate::config::default_config_path())
+                        .unwrap_or_default();
+                match providers::find_provider(&sel.provider, &config_path.providers) {
+                    Ok(p) => cfg.provider = p,
+                    Err(e) => tracing::warn!(
+                        "workspace `{ws_id}` 记忆的 provider `{}` 解析失败,沿用全局默认: {e}",
+                        sel.provider
+                    ),
+                }
+            }
+            cfg.model = sel.model;
+            cfg.reasoning_effort = sel.reasoning_effort;
+        }
+        Ok(None) => {}
+        Err(e) => tracing::warn!("读取 workspace `{ws_id}` 模型选择失败,沿用全局默认: {e}"),
+    }
+    cfg
+}
+
 /// GET /v1/workspaces/{id}/agent — 返回 agent 信息(含当前模型与其 context_window)。
-async fn agent_info(State(state): State<AppState>) -> Json<Value> {
-    let cfg = state.cfg.lock().unwrap().clone();
+/// 模型按 workspace 解析:该项目自己的选择优先,未设置时回落全局默认。
+async fn agent_info(State(state): State<AppState>, Path(ws_id): Path<String>) -> Json<Value> {
+    let cfg = workspace_effective_cfg(&state, &ws_id);
 
     // 当前模型的 context_window:优先 provider 模型列表,其次内置定义兜底
     let mut context_window: Option<i64> = None;
@@ -2308,7 +2342,9 @@ async fn agent_info(State(state): State<AppState>) -> Json<Value> {
     }))
 }
 
-/// POST /v1/workspaces/{id}/config/model — 运行时切换模型。
+/// POST /v1/workspaces/{id}/config/model — 切换该 workspace 使用的模型。
+/// 选择记入 sqlite(workspace_config.model),仅对该项目生效;
+/// 不同项目各自记忆模型,互不联动;未设置的项目继续用全局默认。
 #[derive(Deserialize)]
 struct ConfigModelReq {
     model: Option<ConfigModelRef>,
@@ -2323,9 +2359,11 @@ struct ConfigModelRef {
 
 async fn config_model(
     State(state): State<AppState>,
+    Path(ws_id): Path<String>,
     Json(body): Json<ConfigModelReq>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let mut cfg = state.cfg.lock().unwrap().clone();
+    // 基准:该 workspace 当前生效配置(可能是已记忆的选择,或全局默认)
+    let mut cfg = workspace_effective_cfg(&state, &ws_id);
     if let Some(m) = &body.model {
         if let Some(provider_id) = &m.provider {
             if provider_id != &cfg.provider.id {
@@ -2352,8 +2390,21 @@ async fn config_model(
             cfg.reasoning_effort = if effort.is_empty() { None } else { Some(effort.clone()) };
         }
     }
-    *state.cfg.lock().unwrap() = cfg.clone();
-    tracing::info!("模型已切换:{} @ {}", cfg.model, cfg.provider.id);
+    let sel = WorkspaceModel {
+        provider: cfg.provider.id.clone(),
+        model: cfg.model.clone(),
+        reasoning_effort: cfg.reasoning_effort.clone(),
+    };
+    state
+        .meta
+        .db()
+        .set_workspace_model(&ws_id, &sel)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("保存模型选择失败: {e}")))?;
+    tracing::info!(
+        "workspace `{ws_id}` 模型已切换:{} @ {}",
+        cfg.model,
+        cfg.provider.id
+    );
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -3058,7 +3109,6 @@ mod tests {
         let state = multi_session_test_state();
         // 预置一个进行中的 run(不真正启动 agent,避免依赖 provider)
         assert!(state.runs.start_run("ws_t", "busy-sid", "run-1").is_some());
-
         fn req(v: Value) -> Json<AgentReq> {
             Json(serde_json::from_value(v).unwrap())
         }
@@ -3088,6 +3138,56 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         assert!(!state.runs.is_busy("other-sid"));
+    }
+
+    #[tokio::test]
+    async fn config_model_is_per_workspace_and_not_linked() {
+        let state = multi_session_test_state();
+        let global_model = state.cfg.lock().unwrap().model.clone();
+
+        // 为 ws_t 切换模型:应记入该 workspace,不写全局
+        config_model(
+            State(state.clone()),
+            Path("ws_t".into()),
+            Json(ConfigModelReq {
+                model: Some(ConfigModelRef {
+                    model: Some("test-model-a".into()),
+                    provider: None,
+                    reasoning_effort: Some("high".into()),
+                }),
+            }),
+        )
+        .await
+        .unwrap();
+
+        // 全局默认不受影响(其它未设置的项目继续用默认模型)
+        assert_eq!(state.cfg.lock().unwrap().model, global_model);
+
+        // agent_info 按 workspace 解析:ws_t 用自己的模型
+        let info = agent_info(State(state.clone()), Path("ws_t".into())).await;
+        assert_eq!(info.0["model_cfg"]["model"], json!("test-model-a"));
+        assert_eq!(
+            info.0["model_cfg"]["provider"],
+            json!(state.cfg.lock().unwrap().provider.id)
+        );
+
+        // 另一个 workspace 无记忆,回落全局默认,不联动 ws_t 的切换
+        let meta2 = state.meta.clone();
+        meta2.insert(crate::meta::WorkspaceMeta {
+            id: "ws_other".into(),
+            path: std::env::temp_dir(),
+            name: "other".into(),
+            backend_type: crate::store::BackendType::ComboCli,
+        });
+        let info2 = agent_info(State(state.clone()), Path("ws_other".into())).await;
+        assert_eq!(info2.0["model_cfg"]["model"], json!(global_model));
+
+        // 生效配置解析:ws_t 记忆生效,未设置的 workspace 等于全局
+        let eff = workspace_effective_cfg(&state, "ws_t");
+        assert_eq!(eff.model, "test-model-a");
+        assert_eq!(eff.reasoning_effort.as_deref(), Some("high"));
+        let eff_other = workspace_effective_cfg(&state, "ws_other");
+        assert_eq!(eff_other.model, state.cfg.lock().unwrap().model);
     }
 
     #[tokio::test]

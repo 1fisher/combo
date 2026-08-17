@@ -181,6 +181,13 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
 - **serve gotchas** (`crates/combo-cli/src/serve.rs`): CORS 由 `build_router` 的
   `CorsLayer` 处理,`allowed_origins` 为空则全开放(独立 `serve` 模式);
   Tauri 模式传 `tauri://localhost` 和 `http://localhost:5173`。
+- **模型选择按 workspace 隔离(不联动)**:`POST .../config/model` 把
+  provider/model/推理强度写入 sqlite `workspace_config.model` 列
+  (`store.rs::WorkspaceModel`),仅对该项目生效、跨重启保留;`agent_info` 与
+  `run_agent_ws` 经 `serve.rs::workspace_effective_cfg` 解析「全局默认 +
+  该 workspace 记忆」的生效配置,未单独设置的项目回落 `state.cfg` 全局默认。
+  切换某项目模型不再改写全局,并发 run 各自快照互不影响。前端
+  `agentStore.modelSelections` 本就按 workspace 键控持久化,与服务端双份记忆。
 
 ## Code organization & conventions
 

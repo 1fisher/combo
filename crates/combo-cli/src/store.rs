@@ -5,6 +5,7 @@
 
 use crate::meta::WorkspaceMeta;
 use rusqlite::{params, Connection};
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -32,6 +33,25 @@ impl BackendType {
             "combo-cli" | "combo_cli" | "combocli" | "crush" => BackendType::ComboCli,
             _ => BackendType::ComboCli,
         }
+    }
+}
+
+/// workspace 记忆的模型选择(provider/model/推理强度)。
+/// 每个项目独立保存,互不联动;未设置的项目回落全局默认配置。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct WorkspaceModel {
+    pub provider: String,
+    pub model: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+}
+
+impl WorkspaceModel {
+    fn from_json(raw: &str) -> Option<Self> {
+        if raw.is_empty() {
+            return None;
+        }
+        serde_json::from_str(raw).ok()
     }
 }
 
@@ -195,7 +215,8 @@ impl ComboDb {
             );
             CREATE TABLE IF NOT EXISTS workspace_config (
                 workspace_id    TEXT PRIMARY KEY,
-                disabled_skills TEXT NOT NULL DEFAULT '[]'
+                disabled_skills TEXT NOT NULL DEFAULT '[]',
+                model           TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS automations (
                 id            TEXT PRIMARY KEY,
@@ -231,6 +252,7 @@ impl ComboDb {
             "ALTER TABLE conversations ADD COLUMN completion_tokens INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE conversations ADD COLUMN cost REAL NOT NULL DEFAULT 0.0",
             "ALTER TABLE conversations ADD COLUMN context_tokens INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE workspace_config ADD COLUMN model TEXT NOT NULL DEFAULT ''",
         ];
         for sql in &mig {
             let _ = conn.execute(sql, []);
@@ -349,7 +371,39 @@ impl ComboDb {
         Ok(())
     }
 
-    // ---------- workspace 配置(技能开关) ----------
+    // ---------- workspace 配置(技能开关 / 模型选择) ----------
+
+    /// 读取 workspace 记忆的模型选择(未单独设置时返回 None)。
+    pub fn get_workspace_model(
+        &self,
+        workspace_id: &str,
+    ) -> anyhow::Result<Option<WorkspaceModel>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT model FROM workspace_config WHERE workspace_id=?1")?;
+        let mut rows = stmt.query(params![workspace_id])?;
+        match rows.next()? {
+            Some(row) => {
+                let raw: String = row.get(0)?;
+                Ok(WorkspaceModel::from_json(&raw))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// 保存 workspace 记忆的模型选择(仅更新该 workspace,不影响其它项目)。
+    pub fn set_workspace_model(
+        &self,
+        workspace_id: &str,
+        model: &WorkspaceModel,
+    ) -> anyhow::Result<()> {
+        let raw = serde_json::to_string(model)?;
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO workspace_config (workspace_id, model) VALUES (?1, ?2)
+             ON CONFLICT(workspace_id) DO UPDATE SET model=?2",
+            params![workspace_id, raw],
+        )?;
+        Ok(())
+    }
 
     /// 读取 workspace 禁用的 skill 名列表(JSON 数组;未设置时为空)。
     pub fn get_disabled_skills(&self, workspace_id: &str) -> anyhow::Result<Vec<String>> {
@@ -1182,6 +1236,44 @@ mod tests {
 
         // 不同 workspace 互不影响
         assert!(db.get_disabled_skills("ws-2").unwrap().is_empty());
+    }
+
+    #[test]
+    fn workspace_model_default_none_then_set_get() {
+        let db = ComboDb::in_memory();
+        // 未设置时返回 None(回落全局默认)
+        assert!(db.get_workspace_model("ws-1").unwrap().is_none());
+
+        let sel = WorkspaceModel {
+            provider: "opencode".into(),
+            model: "deepseek-v4-flash-free".into(),
+            reasoning_effort: Some("high".into()),
+        };
+        db.set_workspace_model("ws-1", &sel).unwrap();
+        let got = db.get_workspace_model("ws-1").unwrap().unwrap();
+        assert_eq!(got.provider, "opencode");
+        assert_eq!(got.model, "deepseek-v4-flash-free");
+        assert_eq!(got.reasoning_effort.as_deref(), Some("high"));
+
+        // 覆盖更新
+        let sel2 = WorkspaceModel {
+            provider: "zai".into(),
+            model: "glm-5.2".into(),
+            reasoning_effort: None,
+        };
+        db.set_workspace_model("ws-1", &sel2).unwrap();
+        let got = db.get_workspace_model("ws-1").unwrap().unwrap();
+        assert_eq!(got.provider, "zai");
+        assert_eq!(got.model, "glm-5.2");
+        assert!(got.reasoning_effort.is_none());
+
+        // 不同 workspace 互不影响(模型不联动)
+        assert!(db.get_workspace_model("ws-2").unwrap().is_none());
+
+        // 与 disabled_skills 同表共存,互不干扰
+        db.set_disabled_skills("ws-1", &["foo".into()]).unwrap();
+        assert_eq!(db.get_disabled_skills("ws-1").unwrap(), vec!["foo"]);
+        assert!(db.get_workspace_model("ws-1").unwrap().is_some());
     }
 
     fn auto(id: &str, ws: &str, next: Option<i64>) -> StoredAutomation {

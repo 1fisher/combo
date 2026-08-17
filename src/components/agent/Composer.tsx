@@ -279,8 +279,9 @@ export function Composer({
     return providers?.[0]?.id ?? '';
   }, [storedModel, agentInfo, currentModelId, modelList, providers]);
 
-  // 后端模型仅存内存,重启后会回退到默认。当本地有持久化的用户选择且与后端不一致时,
-  // 自动把用户选中的模型同步到后端,保证 agent 实际使用正确的模型。
+  // 模型选择按 workspace 独立(各项目互不联动):本地持久化 + 服务端 sqlite
+  // 双份记忆。本地选择与服务端不一致时(如换浏览器/清理 localStorage 后),
+  // 以本地为准同步到服务端,保证 agent 实际使用正确的模型。
   useEffect(() => {
     if (!workspaceId || !storedModel || !agentInfo || setModel.isPending) return;
     const backendModel = agentInfo.model_cfg?.model;
