@@ -903,8 +903,10 @@ fn build_router(
         .route("/v1/workspaces/:id/git/pull", post(git::pull))
         .route("/v1/workspaces/:id/git/fetch", post(git::fetch))
         .route("/v1/workspaces/:id/git/branch-info", get(git::branch_info))
-.route("/v1/workspaces/:id/git/branches", get(git::git_branches))
-.route("/v1/workspaces/:id/git/checkout", post(git::git_checkout))
+        .route("/v1/workspaces/:id/git/branches", get(git::git_branches))
+        .route("/v1/workspaces/:id/git/checkout", post(git::git_checkout))
+        .route("/v1/workspaces/:id/git/branch/create", post(git::git_branch_create))
+        .route("/v1/workspaces/:id/git/branch/delete", post(git::git_branch_delete))
         .route("/v1/workspaces/:id/git/commit/files", get(git::commit_files))
         .route("/v1/workspaces/:id/git/commit/diff", get(git::commit_diff))
         // ---- 自动化(定时任务) ----

@@ -739,6 +739,14 @@ pub struct BranchBody {
     pub repo: Option<String>,
 }
 
+/// 校验分支名:只允许 git ref 合法字符,防止参数注入。
+fn valid_branch_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._-/*".contains(c))
+}
+
 /// POST /v1/workspaces/{id}/git/checkout  body: { "branch": "xxx", "repo": "..." }
 /// 切换到指定本地分支。工作区存在未提交变更时 git 会拒绝,返回 stderr 错误。
 pub async fn git_checkout(
@@ -751,15 +759,66 @@ pub async fn git_checkout(
         Err(resp) => return resp,
     };
     // 分支名只允许 git ref 合法字符,防止参数注入
-    if body.branch.is_empty()
-        || !body
-            .branch
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || "._-/*".contains(c))
-    {
+    if !valid_branch_name(&body.branch) {
         return error(StatusCode::BAD_REQUEST, "非法的分支名");
     }
     match git_output(&root, ["checkout", &body.branch]) {
+        Ok(output) => ok_json(json!({ "ok": true, "output": output })),
+        Err(msg) => error(StatusCode::INTERNAL_SERVER_ERROR, &msg),
+    }
+}
+
+/// POST /v1/workspaces/{id}/git/branch/create  body: { "branch": "xxx", "repo": "..." }
+/// 新建本地分支(基于当前 HEAD,不切换)。
+pub async fn git_branch_create(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    axum::extract::Json(body): axum::extract::Json<BranchBody>,
+) -> Response {
+    let root = match resolve_git_dir(&state, &id, body.repo.as_deref()) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+    if !valid_branch_name(&body.branch) {
+        return error(StatusCode::BAD_REQUEST, "非法的分支名");
+    }
+    match git_output(&root, ["branch", &body.branch]) {
+        Ok(output) => ok_json(json!({ "ok": true, "output": output })),
+        Err(msg) => error(StatusCode::INTERNAL_SERVER_ERROR, &msg),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct BranchDeleteBody {
+    pub branch: String,
+    pub repo: Option<String>,
+    /// 强制删除(`-D`):丢弃未合并到上游/HEAD 的提交
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// POST /v1/workspaces/{id}/git/branch/delete  body: { "branch": "xxx", "repo": "...", "force": false }
+/// 删除本地分支。当前分支不可删除;默认安全删除(`-d`,未合并时 git 拒绝)。
+pub async fn git_branch_delete(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    axum::extract::Json(body): axum::extract::Json<BranchDeleteBody>,
+) -> Response {
+    let root = match resolve_git_dir(&state, &id, body.repo.as_deref()) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+    if !valid_branch_name(&body.branch) {
+        return error(StatusCode::BAD_REQUEST, "非法的分支名");
+    }
+    let current = git_output(&root, ["rev-parse", "--abbrev-ref", "HEAD"])
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    if body.branch == current {
+        return error(StatusCode::BAD_REQUEST, "不能删除当前所在分支");
+    }
+    let flag = if body.force { "-D" } else { "-d" };
+    match git_output(&root, ["branch", flag, &body.branch]) {
         Ok(output) => ok_json(json!({ "ok": true, "output": output })),
         Err(msg) => error(StatusCode::INTERNAL_SERVER_ERROR, &msg),
     }
@@ -949,6 +1008,100 @@ mod tests {
             "new_file.ts",
         );
         assert!(rewritten.contains("+++ b/new_file.ts"), "路径未重写: {rewritten}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 构造带临时 git 仓库 workspace 的测试 AppState。
+    async fn branch_test_state(tag: &str) -> (AppState, std::path::PathBuf, String) {
+        let dir = std::env::temp_dir().join(format!("combo-git-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        git_output(&dir, ["init", "-q"]).unwrap();
+        git_output(&dir, ["commit", "-q", "--allow-empty", "-m", "init"]).unwrap();
+        let current = git_output(&dir, ["rev-parse", "--abbrev-ref", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        let meta = std::sync::Arc::new(crate::meta::MetaStore::new());
+        meta.insert(crate::meta::WorkspaceMeta {
+            id: "ws".into(),
+            path: dir.clone(),
+            name: "test".into(),
+            backend_type: crate::store::BackendType::ComboCli,
+        });
+        (AppState::test_state(meta, None), dir, current)
+    }
+
+    #[tokio::test]
+    async fn branch_create_and_delete() {
+        let (state, dir, current) = branch_test_state("crud").await;
+
+        // 新建分支成功
+        let resp = git_branch_create(
+            State(state.clone()),
+            Path("ws".into()),
+            axum::extract::Json(BranchBody { branch: "feature/x".into(), repo: None }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        // 非法分支名被拒绝
+        let resp = git_branch_create(
+            State(state.clone()),
+            Path("ws".into()),
+            axum::extract::Json(BranchBody { branch: "bad name".into(), repo: None }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // 不能删除当前分支
+        let resp = git_branch_delete(
+            State(state.clone()),
+            Path("ws".into()),
+            axum::extract::Json(BranchDeleteBody { branch: current.clone(), repo: None, force: false }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // 删除已合并分支成功
+        let resp = git_branch_delete(
+            State(state.clone()),
+            Path("ws".into()),
+            axum::extract::Json(BranchDeleteBody { branch: "feature/x".into(), repo: None, force: false }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let refs = git_output(&dir, ["for-each-ref", "--format=%(refname:short)", "refs/heads"]).unwrap();
+        assert!(!refs.contains("feature/x"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn branch_delete_unmerged_requires_force() {
+        let (state, dir, current) = branch_test_state("force").await;
+        git_output(&dir, ["checkout", "-q", "-b", "wip"]).unwrap();
+        git_output(&dir, ["commit", "-q", "--allow-empty", "-m", "on wip"]).unwrap();
+        git_output(&dir, ["checkout", "-q", &current]).unwrap();
+
+        // 安全删除未合并分支:git 拒绝,返回 500
+        let resp = git_branch_delete(
+            State(state.clone()),
+            Path("ws".into()),
+            axum::extract::Json(BranchDeleteBody { branch: "wip".into(), repo: None, force: false }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        // 强制删除成功
+        let resp = git_branch_delete(
+            State(state.clone()),
+            Path("ws".into()),
+            axum::extract::Json(BranchDeleteBody { branch: "wip".into(), repo: None, force: true }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

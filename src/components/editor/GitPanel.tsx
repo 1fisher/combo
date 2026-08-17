@@ -15,6 +15,7 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Trash2,
 } from 'lucide-react';
 import {
   getGitStatus,
@@ -22,6 +23,8 @@ import {
   getGitBranchInfo,
   getGitBranches,
   gitCheckout,
+  gitCreateBranch,
+  gitDeleteBranch,
   gitStage,
   gitUnstage,
   gitDiscard,
@@ -137,6 +140,15 @@ export function GitPanel({ workspaceId, repo = '', onRepoChange, selectedDiffPat
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
   const [branchBusy, setBranchBusy] = useState<string | null>(null);
   const [branchError, setBranchError] = useState<string | null>(null);
+  const [branchCreateOpen, setBranchCreateOpen] = useState(false);
+  const [newBranchName, setNewBranchName] = useState('');
+  const [createAndSwitch, setCreateAndSwitch] = useState(false);
+  const [branchCreating, setBranchCreating] = useState(false);
+  const [branchCreateError, setBranchCreateError] = useState<string | null>(null);
+  const [branchDeleteTarget, setBranchDeleteTarget] = useState<string | null>(null);
+  const [branchDeleteForce, setBranchDeleteForce] = useState(false);
+  const [branchDeleting, setBranchDeleting] = useState(false);
+  const [branchDeleteError, setBranchDeleteError] = useState<string | null>(null);
   const [remoteBusy, setRemoteBusy] = useState<null | 'push' | 'pull' | 'fetch'>(null);
   const [remoteError, setRemoteError] = useState<string | null>(null);
   const [discardTarget, setDiscardTarget] = useState<string | null>(null);
@@ -282,6 +294,47 @@ export function GitPanel({ workspaceId, repo = '', onRepoChange, selectedDiffPat
     }
   }
 
+  async function handleCreateBranch() {
+    const name = newBranchName.trim();
+    if (!name || branchCreating) return;
+    setBranchCreateError(null);
+    if (branchList.some((b) => b.name === name)) {
+      setBranchCreateError('分支已存在');
+      return;
+    }
+    setBranchCreating(true);
+    try {
+      await gitCreateBranch(workspaceId, name, repo || undefined);
+      if (createAndSwitch) {
+        await gitCheckout(workspaceId, name, repo || undefined);
+      }
+      setBranchCreateOpen(false);
+      setNewBranchName('');
+      setCreateAndSwitch(false);
+      await refresh();
+    } catch (e) {
+      setBranchCreateError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBranchCreating(false);
+    }
+  }
+
+  async function handleDeleteBranch() {
+    if (!branchDeleteTarget || branchDeleting) return;
+    setBranchDeleting(true);
+    setBranchDeleteError(null);
+    try {
+      await gitDeleteBranch(workspaceId, branchDeleteTarget, repo || undefined, branchDeleteForce);
+      setBranchDeleteTarget(null);
+      setBranchDeleteForce(false);
+      await refresh();
+    } catch (e) {
+      setBranchDeleteError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBranchDeleting(false);
+    }
+  }
+
   return (
     <div className="flex h-full flex-col">
       {/* 头部:仓库选择(多仓库时) + 分支 + ahead/behind + 拉取/推送 + 刷新 */}
@@ -349,30 +402,63 @@ export function GitPanel({ workspaceId, repo = '', onRepoChange, selectedDiffPat
                     const isCurrent = b.name === branch;
                     const busy = branchBusy === b.name;
                     return (
-                      <button
+                      <div
                         key={b.name}
-                        onClick={() => void handleCheckout(b.name)}
-                        disabled={isCurrent || branchBusy !== null}
                         className={cn(
-                          'flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-[11px] transition-colors',
-                          isCurrent
-                            ? 'bg-accent/60 font-medium text-foreground'
-                            : 'text-muted-foreground hover:bg-accent hover:text-foreground',
-                          branchBusy !== null && 'cursor-default opacity-70',
+                          'group flex w-full items-center rounded transition-colors',
+                          isCurrent ? 'bg-accent/60' : 'hover:bg-accent',
                         )}
-                        title={isCurrent ? '当前分支' : `切换到 ${b.name}`}
                       >
-                        {isCurrent ? (
-                          <Check className="h-3 w-3 shrink-0 text-primary" />
-                        ) : (
-                          <GitBranch className="h-3 w-3 shrink-0 text-muted-foreground" />
+                        <button
+                          onClick={() => void handleCheckout(b.name)}
+                          disabled={isCurrent || branchBusy !== null}
+                          className={cn(
+                            'flex min-w-0 flex-1 items-center gap-1.5 rounded px-1.5 py-1 text-[11px] transition-colors',
+                            isCurrent
+                              ? 'font-medium text-foreground'
+                              : 'text-muted-foreground hover:text-foreground',
+                            branchBusy !== null && 'cursor-default opacity-70',
+                          )}
+                          title={isCurrent ? '当前分支' : `切换到 ${b.name}`}
+                        >
+                          {isCurrent ? (
+                            <Check className="h-3 w-3 shrink-0 text-primary" />
+                          ) : (
+                            <GitBranch className="h-3 w-3 shrink-0 text-muted-foreground" />
+                          )}
+                          <span className="truncate font-mono">{b.name}</span>
+                          {busy && <RefreshCw className="ml-auto h-2.5 w-2.5 shrink-0 animate-spin" />}
+                        </button>
+                        {!isCurrent && (
+                          <button
+                            onClick={() => {
+                              setBranchDeleteTarget(b.name);
+                              setBranchMenuOpen(false);
+                            }}
+                            disabled={branchBusy !== null}
+                            className="mr-1 shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-60 disabled:opacity-50"
+                            title={`删除分支 ${b.name}`}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </button>
                         )}
-                        <span className="truncate font-mono">{b.name}</span>
-                        {busy && <RefreshCw className="ml-auto h-2.5 w-2.5 shrink-0 animate-spin" />}
-                      </button>
+                      </div>
                     );
                   })
                 )}
+                <div className="my-0.5 border-t border-border/50" />
+                <button
+                  onClick={() => {
+                    setBranchMenuOpen(false);
+                    setBranchCreateError(null);
+                    setBranchCreateOpen(true);
+                  }}
+                  className="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  title="基于当前分支新建本地分支"
+                >
+                  <Plus className="h-3 w-3 shrink-0" />
+                  <span>新建分支</span>
+                </button>
               </div>
             )}
           </div>
@@ -634,6 +720,114 @@ export function GitPanel({ workspaceId, repo = '', onRepoChange, selectedDiffPat
               className="rounded bg-red-500 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-red-600 disabled:opacity-50"
             >
               {staging ? '撤销中...' : '确认撤销'}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 新建分支弹窗 */}
+      <Dialog
+        open={branchCreateOpen}
+        onOpenChange={(v) => {
+          setBranchCreateOpen(v);
+          if (!v) setBranchCreateError(null);
+        }}
+      >
+        <DialogContent className="max-w-xs">
+          <DialogHeader>
+            <DialogTitle>新建分支</DialogTitle>
+            <DialogDescription>
+              基于当前分支 <span className="font-mono text-foreground">{branch || '—'}</span> 创建新的本地分支。
+            </DialogDescription>
+          </DialogHeader>
+          <input
+            value={newBranchName}
+            onChange={(e) => setNewBranchName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                void handleCreateBranch();
+              }
+            }}
+            placeholder="分支名,如 feature/xxx"
+            autoFocus
+            className="w-full rounded border bg-background px-2 py-1.5 font-mono text-xs outline-none focus:border-primary/50"
+          />
+          <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={createAndSwitch}
+              onChange={(e) => setCreateAndSwitch(e.target.checked)}
+              className="h-3 w-3"
+            />
+            创建后切换到新分支
+          </label>
+          {branchCreateError && (
+            <div className="text-[10px] text-destructive">{branchCreateError}</div>
+          )}
+          <DialogFooter>
+            <button
+              onClick={() => setBranchCreateOpen(false)}
+              className="rounded border border-border px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              取消
+            </button>
+            <button
+              onClick={() => void handleCreateBranch()}
+              disabled={!newBranchName.trim() || branchCreating}
+              className="rounded bg-primary px-3 py-1 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-50"
+            >
+              {branchCreating ? '创建中...' : '创建'}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* 删除分支确认弹窗 */}
+      <Dialog
+        open={branchDeleteTarget !== null}
+        onOpenChange={(v) => {
+          if (!v) {
+            setBranchDeleteTarget(null);
+            setBranchDeleteForce(false);
+            setBranchDeleteError(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-xs">
+          <DialogHeader>
+            <DialogTitle>删除分支</DialogTitle>
+            <DialogDescription>
+              确定要删除本地分支 <span className="font-mono text-foreground">{branchDeleteTarget}</span> 吗?
+            </DialogDescription>
+          </DialogHeader>
+          <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={branchDeleteForce}
+              onChange={(e) => setBranchDeleteForce(e.target.checked)}
+              className="h-3 w-3"
+            />
+            强制删除(丢弃未合并的提交)
+          </label>
+          {branchDeleteError && (
+            <div className="text-[10px] text-destructive" title={branchDeleteError}>
+              {branchDeleteError}
+            </div>
+          )}
+          <DialogFooter>
+            <button
+              onClick={() => setBranchDeleteTarget(null)}
+              className="rounded border border-border px-3 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              取消
+            </button>
+            <button
+              onClick={() => void handleDeleteBranch()}
+              disabled={branchDeleting}
+              className="rounded bg-red-500 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-red-600 disabled:opacity-50"
+            >
+              {branchDeleting ? '删除中...' : '确认删除'}
             </button>
           </DialogFooter>
         </DialogContent>

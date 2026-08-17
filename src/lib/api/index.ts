@@ -335,6 +335,29 @@ export function gitCheckout(
   });
 }
 
+export function gitCreateBranch(
+  workspaceId: string,
+  branch: string,
+  repo?: string
+): Promise<{ ok: boolean; output: string }> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/branch/create`, {
+    method: 'POST',
+    body: { branch, ...(repo ? { repo } : {}) },
+  });
+}
+
+export function gitDeleteBranch(
+  workspaceId: string,
+  branch: string,
+  repo?: string,
+  force = false
+): Promise<{ ok: boolean; output: string }> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/branch/delete`, {
+    method: 'POST',
+    body: { branch, force, ...(repo ? { repo } : {}) },
+  });
+}
+
 export function getGitLog(
   workspaceId: string,
   limit?: number,
