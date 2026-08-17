@@ -75,13 +75,6 @@ interface AgentState {
   modelSelections: Record<string, ModelSelection>;
   setModelSelection: (workspaceId: string, sel: ModelSelection) => void;
   clearModelSelection: (workspaceId: string) => void;
-  /** 手动设置的模型上下文窗口上限(key = 模型 id,单位 token),跨重启保留。
-   *  按模型 id 而非 provider/model 存:同一模型(如 deepseek-v4-flash-free)可能
-   *  同时挂在 opencode / opencode-zen 等多个 provider 下,按 provider 区分会导致
-   *  设置值与当前会话模型对不上而"错乱"。 */
-  contextOverrides: Record<string, number>;
-  setContextOverride: (modelId: string, tokens: number) => void;
-  clearContextOverride: (modelId: string) => void;
   /** 最近使用的模型(全局,最近在前,最多 RECENT_MODELS_MAX 个),跨重启保留 */
   recentModels: RecentModel[];
   pushRecentModel: (entry: RecentModel) => void;
@@ -149,16 +142,6 @@ export const useAgentStore = create<AgentState>()(
     set((st) => {
       const { [workspaceId]: _drop, ...rest } = st.modelSelections;
       return { modelSelections: rest };
-    }),
-  contextOverrides: {},
-  setContextOverride: (modelId, tokens) =>
-    set((st) => ({
-      contextOverrides: { ...st.contextOverrides, [modelId]: tokens },
-    })),
-  clearContextOverride: (modelId) =>
-    set((st) => {
-      const { [modelId]: _drop, ...rest } = st.contextOverrides;
-      return { contextOverrides: rest };
     }),
   recentModels: [],
   pushRecentModel: (entry) =>
@@ -389,7 +372,6 @@ export const useAgentStore = create<AgentState>()(
         activeSessionId: s.activeSessionId,
         agentMode: s.agentMode,
         modelSelections: s.modelSelections,
-        contextOverrides: s.contextOverrides,
         recentModels: s.recentModels,
       }),
     }

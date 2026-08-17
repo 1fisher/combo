@@ -23,8 +23,7 @@ import {
 import { useUpdater } from '../../hooks/useUpdater';
 import { useCommitAttribution } from '../../hooks/useCommitAttribution';
 import { requestNotifyPermission } from '../../lib/notify';
-import { useFetchModels, useProviderCrud, useProviderKeys, useProviders, useSaveProviderKey } from '../../hooks/useAgentModel';
-import { useAgentStore } from '../../stores/agentStore';
+import { useFetchModels, useProviderCrud, useProviderKeys, useProviders, useSaveProviderKey, useSetModelContextWindow } from '../../hooks/useAgentModel';
 import { useUIPreferences } from '../../stores/uiPreferencesStore';
 import { formatTokenCount } from '../../lib/tokens';
 import { useQueryClient } from '@tanstack/react-query';
@@ -967,18 +966,18 @@ function defaultModelOf(p: {
 }
 
 /**
- * 按模型手动设置上下文窗口上限(token 数),存 agentStore contextOverrides
- * (key = 模型 id,localStorage 持久化,按模型全局生效),Composer 用量统计优先使用。
- * 输入留空 + 保存 = 清除该模型的覆盖值;未修改任何字段时点保存不生效。
+ * 按模型手动设置上下文窗口上限(token 数),写入 combo-cli 配置
+ * (POST /v1/providers/context-window,持久化到 `[providers.<id>].context_windows`)。
+ * 压缩触发阈值与 Composer 用量环共用后端解析出的同一份有效值,前后端
+ * 不再各存一份(旧版前端本地覆盖会导致「显示未满却频繁触发压缩」)。
+ * 输入留空 + 保存 = 恢复默认;未修改任何字段时点保存不生效。
  */
 const ContextWindowSection = forwardRef<
   { commit: () => void },
   { open: boolean }
 >(function ContextWindowSection({ open }, ref) {
   const { data: providers } = useProviders(null);
-  const contextOverrides = useAgentStore((s) => s.contextOverrides);
-  const setContextOverride = useAgentStore((s) => s.setContextOverride);
-  const clearContextOverride = useAgentStore((s) => s.clearContextOverride);
+  const { mutate: saveContextWindow, isPending } = useSetModelContextWindow();
 
   const [providerId, setProviderId] = useState('');
   const [modelId, setModelId] = useState('');
@@ -986,54 +985,70 @@ const ContextWindowSection = forwardRef<
   // 用户是否改动过输入(区分「没改」与「主动清空」,避免误清除已有配置)
   const dirtyRef = useRef(false);
 
-  // 打开时初始化:默认选中第一个 provider 及其默认/首个模型,回填已有覆盖值。
+  // 打开时初始化:默认选中第一个 provider 及其默认/首个模型。
   // providerId 非空说明已初始化过(providers 异步加载完成后),不再覆盖用户选择。
   useEffect(() => {
     if (!open || providerId) return;
     const p = (providers ?? [])[0];
     if (!p) return;
-    const defaultModel = defaultModelOf(p);
     setProviderId(p.id);
-    setModelId(defaultModel);
-    const v = contextOverrides[defaultModel];
-    setTokenInput(v != null ? String(v) : '');
+    setModelId(defaultModelOf(p));
     dirtyRef.current = false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, providers, providerId]);
 
-  // 切换 provider/model 时回填该模型的覆盖值(不标记 dirty)
+  // 回填某模型当前生效的窗口值(后端已合并手动覆盖)
+  const refillEffective = (pid: string, mid: string) => {
+    const p = (providers ?? []).find((pp) => pp.id === pid);
+    const m = (p?.models ?? []).find((mm) => mm.id === mid);
+    setTokenInput(typeof m?.context_window === 'number' ? String(m.context_window) : '');
+  };
+
+  // 切换 provider/model:回填该模型生效值并重置未修改标记
   useEffect(() => {
     if (!modelId) return;
-    const v = contextOverrides[modelId];
-    setTokenInput(v != null ? String(v) : '');
+    refillEffective(providerId, modelId);
+    dirtyRef.current = false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [providerId, modelId]);
+
+  // providers 数据刷新(保存后失效重取):用户未编辑输入时同步最新生效值,
+  // 编辑中(dirty)不覆盖
+  useEffect(() => {
+    if (!modelId || dirtyRef.current) return;
+    refillEffective(providerId, modelId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providers]);
 
   const provider = providers?.find((p) => p.id === providerId);
   const models = (provider && Array.isArray(provider.models) ? provider.models : []) as {
     id?: string;
     name?: string;
     context_window?: number;
+    /** 手动覆盖的原始值(后端返回;null = 未覆盖,前端据此显示清除入口)。 */
+    context_window_override?: number | null;
   }[];
   const model = models.find((m) => m.id === modelId);
-  const defaultWindow = typeof model?.context_window === 'number' ? model.context_window : undefined;
-  const hasOverride = !!modelId && contextOverrides[modelId] != null;
+  const effectiveWindow = typeof model?.context_window === 'number' ? model.context_window : undefined;
+  const hasOverride = model?.context_window_override != null;
 
   useImperativeHandle(
     ref,
     () => ({
       commit() {
-        if (!modelId || !dirtyRef.current) return;
+        if (!providerId || !modelId || !dirtyRef.current) return;
         dirtyRef.current = false;
-        const n = Number(tokenInput.trim());
-        if (tokenInput.trim() === '' || !Number.isFinite(n) || n <= 0) {
-          clearContextOverride(modelId);
+        const t = tokenInput.trim();
+        const n = Number(t);
+        if (t === '' || !Number.isFinite(n) || n <= 0) {
+          // 留空 = 清除后端覆盖、恢复默认
+          saveContextWindow({ providerId, modelId });
           return;
         }
-        setContextOverride(modelId, Math.round(n));
+        saveContextWindow({ providerId, modelId, contextWindow: Math.round(n) });
       },
     }),
-    [modelId, tokenInput, setContextOverride, clearContextOverride],
+    [providerId, modelId, tokenInput, saveContextWindow],
   );
 
   if (!providers?.length) return null;
@@ -1053,7 +1068,6 @@ const ContextWindowSection = forwardRef<
             // 切换 Provider 时同步重置模型为新 provider 的默认/首个模型,
             // 否则 modelId 残留旧值,模型下拉显示与实际保存的模型不一致(覆盖错模型)
             setModelId(defaultModelOf(providers?.find((p) => p.id === pid)));
-            dirtyRef.current = true;
           }}
           className={selectCls}
           aria-label="选择 Provider"
@@ -1068,7 +1082,6 @@ const ContextWindowSection = forwardRef<
           value={modelId}
           onChange={(e) => {
             setModelId(e.target.value);
-            dirtyRef.current = true;
           }}
           className={selectCls}
           aria-label="选择模型"
@@ -1093,6 +1106,16 @@ const ContextWindowSection = forwardRef<
           placeholder="token 数,留空 = 恢复默认"
           className="h-9 min-w-0 flex-1 rounded-lg border border-input-border bg-background px-2.5 font-mono text-[13px] text-foreground outline-none placeholder:text-foreground-subtlest focus-visible:border-input-border-focused [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none"
         />
+        {(hasOverride || isPending) && (
+          <span
+            className={cn(
+              'shrink-0 text-[11px] text-foreground-subtlest',
+              isPending && 'animate-pulse',
+            )}
+          >
+            {isPending ? '保存中…' : '已手动设置'}
+          </span>
+        )}
         {hasOverride && (
           <Button
             variant="ghost"
@@ -1120,15 +1143,15 @@ const ContextWindowSection = forwardRef<
             {q.label}
           </button>
         ))}
-        {defaultWindow && (
+        {effectiveWindow != null && (
           <span className="text-[11px] text-foreground-subtlest">
-            默认 {formatTokenCount(defaultWindow)}
+            {hasOverride ? '已手动覆盖' : '默认'} {formatTokenCount(effectiveWindow)}
           </span>
         )}
       </div>
       <div className="text-[12px] text-foreground-subtle">
-        按模型全局生效(与 Provider 无关):同一模型即使挂在多个 Provider 下也只
-        存一份,优先于后端上报值;输入框留空并保存即恢复默认。
+        写入 combo-cli 配置并即时生效:上下文压缩阈值与用量环共用该值,
+        前后端不再各存一份;输入框留空并保存即恢复默认。
       </div>
     </div>
   );

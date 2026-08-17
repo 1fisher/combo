@@ -95,11 +95,19 @@ pub fn count_tokens(history: &[Value]) -> u64 {
         .sum()
 }
 
-/// 获取当前模型的上下文窗口大小。
+/// 获取当前模型的上下文窗口大小:provider 模型列表(含 `[providers.<id>]
+/// .context_windows` 手动覆盖)→ 内置定义兜底(拉取模型缓存会丢该字段)→
+/// 128k 默认。与 agent_info / 前端用量展示同一口径。
 pub fn context_window(cfg: &AskConfig) -> u64 {
     cfg.provider
         .find_model(&cfg.model)
         .and_then(|m| m.context_window)
+        .or_else(|| {
+            crate::providers::builtin_context_map()
+                .get(&cfg.provider.id)
+                .and_then(|map| map.get(&cfg.model))
+                .copied()
+        })
         .unwrap_or(128_000) as u64
 }
 
@@ -549,6 +557,27 @@ mod tests {
         let cfg = test_cfg(8_000);
         let history: Vec<Value> = (0..4).map(|_| msg("user", &"压".repeat(800))).collect();
         assert_eq!(plan_compaction(&cfg, &history), Some(3));
+    }
+
+    #[test]
+    fn context_window_falls_back_to_builtin_definitions() {
+        // 拉取模型缓存/裸配置会丢 context_window:provider 列表无值时应回落
+        // 内置定义(与 agent_info 展示同口径),否则压缩预算按 128k 默认值
+        // 过于激进、频繁触发压缩。
+        let mut cfg = test_cfg(0);
+        cfg.provider.id = "opencode".into();
+        cfg.provider.models = vec![crate::providers::ModelInfo {
+            id: "deepseek-v4-flash-free".into(),
+            ..Default::default()
+        }];
+        cfg.model = "deepseek-v4-flash-free".into();
+        // 内置 opencode 的 deepseek-v4-flash-free 窗口为 1M
+        assert_eq!(context_window(&cfg), 1_000_000);
+        // 未知 provider + 无窗口 → 128k 默认
+        let mut unknown = test_cfg(0);
+        unknown.provider.id = "no-such-provider".into();
+        unknown.provider.models = Vec::new();
+        assert_eq!(context_window(&unknown), 128_000);
     }
 
     #[test]

@@ -817,6 +817,10 @@ fn build_router(
         )
         .route("/v1/workspaces/:id/providers/create", post(create_provider))
         .route("/v1/workspaces/:id/providers/remove", post(delete_provider))
+        .route(
+            "/v1/workspaces/:id/providers/context-window",
+            post(set_context_window),
+        )
         .route("/v1/providers", get(list_providers))
         .route("/v1/providers/fetch-models", post(fetch_models))
         .route("/v1/providers/save-key", post(save_provider_key))
@@ -835,6 +839,7 @@ fn build_router(
         )
         .route("/v1/providers/create", post(create_provider))
         .route("/v1/providers/remove", post(delete_provider))
+        .route("/v1/providers/context-window", post(set_context_window))
         .route("/v1/workspaces/:id/config/model", post(config_model))
         .route(
             "/v1/workspaces/:id/config",
@@ -1291,7 +1296,8 @@ fn finish_part(reason: &str, time: i64, usage: Option<&RunUsage>) -> Value {
 }
 
 /// 把运行错误转成对用户友好的中文提示;原始错误附在第二行便于排查。
-/// 覆盖常见场景:余额不足(402)、密钥无效(401)、限流(429),其余原样返回。
+/// 覆盖常见场景:余额不足(402)、密钥无效(401)、限流(429)、
+/// 内容风控(400 Content Exists Risk,智谱等),其余原样返回。
 /// 服务商返回体若是 JSON,解析并提取其中的 message 展示,而非整段原始 JSON。
 fn friendly_error(e: &anyhow::Error) -> String {
     let raw = e.to_string();
@@ -1302,6 +1308,12 @@ fn friendly_error(e: &anyhow::Error) -> String {
         "API 密钥无效或已过期:请在「设置」中检查当前 provider 的 API Key。"
     } else if low.contains("429") || low.contains("rate limit") || low.contains("too many requests") {
         "请求过于频繁(限流):请稍等片刻再试。"
+    } else if low.contains("content exists risk")
+        || low.contains("content risk")
+        || low.contains("content_filter")
+        || low.contains("content policy")
+    {
+        "内容触发服务商风控:服务商判定请求内容(含历史消息、文件内容或工具结果)存在风险,已拒绝本次请求。可切换 Provider/模型后重试,或新建会话(当前会话历史已含被拦截内容,原样重发大概率仍失败)。"
     } else if low.contains("maxturnserror") || low.contains("reached max turns limit") {
         "已达单次任务最大轮数上限:任务较为复杂,agent 在本轮工具调用次数过多。可在新会话中继续,或拆分为更小的子任务。"
     } else {
@@ -1929,6 +1941,15 @@ async fn list_providers(State(state): State<AppState>) -> Json<Value> {
         }
     }
 
+    // 手动上下文窗口覆盖(配置文件 `[providers.<id>.context_windows]`,由设置
+    // 界面写入):优先级最高,在内置/配置/缓存全部合并完之后应用,保证设置
+    // 界面、agent_info 与 compact 压缩预算看到同一份有效值
+    for p in &mut all {
+        if let Some(pc) = config_path.providers.get(&p.id) {
+            providers::apply_context_windows(&mut p.models, &pc.context_windows);
+        }
+    }
+
     // 若当前运行时 provider 不在内置列表中,也加入(兼容旧配置)
     if !all.iter().any(|p| p.id == cfg.provider.id) {
         all.insert(0, cfg.provider.clone());
@@ -1936,7 +1957,7 @@ async fn list_providers(State(state): State<AppState>) -> Json<Value> {
 
     // 内置模型定义的 context_window 兜底表(按 provider+model id);opencode-zen
     // 配置条目没有内置定义,沿用内置 opencode 的模型信息
-    let builtin_ctx = builtin_context_map();
+    let builtin_ctx = providers::builtin_context_map();
     let builtin_price = builtin_pricing_map();
 
     let arr: Vec<Value> = all
@@ -1980,12 +2001,19 @@ async fn list_providers(State(state): State<AppState>) -> Json<Value> {
                         .unwrap_or((None, None));
                     let pin = m.cost_per_1m_in.or(builtin_pin);
                     let pout = m.cost_per_1m_out.or(builtin_pout);
+                    // 手动覆盖的原始值(未覆盖为 null),前端据此显示「已手动设置」
+                    let overridden = config_path
+                        .providers
+                        .get(&p.id)
+                        .and_then(|pc| pc.context_windows.get(&m.id))
+                        .copied();
                     json!({
                         "id": m.id,
                         "name": m.name.as_deref().unwrap_or(&m.id),
                         "context_window": m.context_window.or_else(|| {
                             builtin_ctx.get(&p.id).and_then(|map| map.get(&m.id)).copied()
                         }),
+                        "context_window_override": overridden,
                         "cost_per_1m_in": pin,
                         "cost_per_1m_out": pout,
                     })
@@ -2005,26 +2033,6 @@ fn mask_api_key(key: &str) -> String {
     let head: String = chars[..4].iter().collect();
     let tail: String = chars[chars.len() - 4..].iter().collect();
     format!("{head}****{tail}")
-}
-
-/// 内置模型定义的 context_window 兜底表:provider id → (model id → context_window)。
-/// 配置/缓存 providers 覆盖 models 列表时经常丢失该字段(如拉取模型缓存里全为
-/// null),按此表回填真实值;`opencode-zen` 配置条目无内置定义,沿用内置
-/// `opencode` 的模型信息。
-fn builtin_context_map() -> HashMap<String, HashMap<String, i64>> {
-    let mut map: HashMap<String, HashMap<String, i64>> = HashMap::new();
-    for p in providers::builtin_providers() {
-        let models: HashMap<String, i64> = p
-            .models
-            .iter()
-            .filter_map(|m| m.context_window.map(|c| (m.id.clone(), c)))
-            .collect();
-        map.insert(p.id.clone(), models.clone());
-        if p.id == "opencode" {
-            map.entry("opencode-zen".into()).or_insert(models);
-        }
-    }
-    map
 }
 
 /// 内置模型定义的定价兜底表:provider id → (model id → (in, out))。
@@ -2123,6 +2131,51 @@ async fn fetch_models(
         })
         .collect();
     Ok(Json(json!({ "provider": body.provider_id, "models": arr })))
+}
+
+/// POST /v1/providers/context-window — 设置/清除某模型的上下文窗口(token 数)。
+/// 请求体:`{ provider_id, model_id, context_window?: i64 }`;context_window
+/// 缺省/为 null = 清除覆盖、恢复默认。写入配置文件
+/// `[providers.<id>.context_windows]`,压缩预算与前端用量展示共用该值,
+/// 避免前端手动调大窗口后后端仍按旧窗口频繁触发上下文压缩。
+#[derive(Deserialize)]
+struct ContextWindowReq {
+    provider_id: String,
+    model_id: String,
+    context_window: Option<i64>,
+}
+
+async fn set_context_window(
+    Json(body): Json<ContextWindowReq>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    if body.model_id.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "model_id 不能为空".into()));
+    }
+    if body.context_window.is_some_and(|w| w <= 0) {
+        return Err((StatusCode::BAD_REQUEST, "context_window 必须为正整数".into()));
+    }
+    // 校验 provider 存在(配置文件 → providers.json → 内置定义)
+    let config_path = AppConfig::load_or_create(&crate::config::default_config_path())
+        .unwrap_or_default();
+    providers::find_provider(&body.provider_id, &config_path.providers)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("未知 provider: {e}")))?;
+    crate::config::set_model_context_window(
+        &crate::config::default_config_path(),
+        &body.provider_id,
+        &body.model_id,
+        body.context_window,
+    )
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("保存失败: {e}")))?;
+    tracing::info!(
+        "provider `{}` 模型 `{}` 上下文窗口已{}",
+        body.provider_id,
+        body.model_id,
+        match body.context_window {
+            Some(w) => format!("设为 {w}"),
+            None => "恢复默认".to_string(),
+        }
+    );
+    Ok(Json(json!({ "ok": true })))
 }
 
 /// POST /v1/workspaces/{id}/providers/save-key
@@ -2332,6 +2385,14 @@ fn workspace_effective_cfg(state: &AppState, ws_id: &str) -> AskConfig {
         Ok(None) => {}
         Err(e) => tracing::warn!("读取 workspace `{ws_id}` 模型选择失败,沿用全局默认: {e}"),
     }
+    // 手动上下文窗口覆盖(配置文件 `[providers.<id>.context_windows]`):每次
+    // 从配置文件读取应用,设置界面保存后无需重启即对 agent_info 展示与
+    // compact 压缩预算生效;清除覆盖则自然回落 provider 模型列表/内置定义。
+    if let Ok(config_path) = AppConfig::load_or_create(&crate::config::default_config_path()) {
+        if let Some(pc) = config_path.providers.get(&cfg.provider.id) {
+            providers::apply_context_windows(&mut cfg.provider.models, &pc.context_windows);
+        }
+    }
     cfg
 }
 
@@ -2349,7 +2410,7 @@ async fn agent_info(State(state): State<AppState>, Path(ws_id): Path<String>) ->
         }
     }
     if context_window.is_none() {
-        context_window = builtin_context_map()
+        context_window = providers::builtin_context_map()
             .get(&cfg.provider.id)
             .and_then(|map| map.get(&cfg.model))
             .copied();
@@ -2646,6 +2707,12 @@ mod tests {
                 "CompletionError: HttpError: Invalid status code 429 Too Many Requests with message: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"Rate limit reached for test\"}}",
                 "限流",
                 Some("Rate limit reached for test"),
+            ),
+            // 内容风控:智谱等返回 "Content Exists Risk"(400)
+            (
+                "CompletionError: HttpError: Invalid status code 400 Bad Request with message: {\"error\":{\"message\":\"Content Exists Risk\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"invalid_request_error\"}}",
+                "风控",
+                Some("Content Exists Risk"),
             ),
             // 非 JSON 返回体:保留原始错误
             (

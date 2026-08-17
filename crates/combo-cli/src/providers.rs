@@ -7,6 +7,7 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// 单个模型条目(除 id 外均可选)。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -400,16 +401,35 @@ pub fn find_provider(
                     b.default_small_model_id = from_cfg.default_small_model_id;
                 }
                 if !from_cfg.models.is_empty() { b.models = from_cfg.models; }
+                // 手动上下文窗口覆盖:优先级最高(未命中模型也追加条目)
+                apply_context_windows(&mut b.models, &c.context_windows);
                 b
             } else {
                 from_cfg
             };
-        // 配置未指定默认模型时,从 combo providers.json 合并默认模型
-        if p.default_large_model_id.is_none() {
-            if let Ok(combo) = load_combo_providers() {
-                if let Some(cp) = combo.iter().find(|cp| cp.id == id) {
+        // 从 combo providers.json 补齐配置未给出的字段(缺啥补啥):自定义或
+        // 仅存在于 providers.json 的 provider(如 opencode-zen)配置条目只写
+        // 部分字段(如只设 context_windows)时,不丢 key/endpoint/模型信息
+        if let Ok(combo) = load_combo_providers() {
+            if let Some(cp) = combo.iter().find(|cp| cp.id == id) {
+                if p.api_key.is_none() { p.api_key = cp.api_key.clone(); }
+                if p.api_endpoint.is_none() { p.api_endpoint = cp.api_endpoint.clone(); }
+                if p.provider_type.is_none() { p.provider_type = cp.provider_type.clone(); }
+                if p.default_large_model_id.is_none() {
                     p.default_large_model_id = cp.default_large_model_id.clone();
+                }
+                if p.default_small_model_id.is_none() {
                     p.default_small_model_id = cp.default_small_model_id.clone();
+                }
+                for cm in &cp.models {
+                    match p.models.iter_mut().find(|m| m.id == cm.id) {
+                        Some(m) => {
+                            if m.context_window.is_none() {
+                                m.context_window = cm.context_window;
+                            }
+                        }
+                        None => p.models.push(cm.clone()),
+                    }
                 }
             }
         }
@@ -425,6 +445,46 @@ pub fn find_provider(
         .into_iter()
         .find(|p| p.id == id)
         .ok_or_else(|| anyhow::anyhow!("未知提供商 `{id}`(可配置 providers 或运行 `combo-cli config import`)"))
+}
+
+/// 把配置里的手动上下文窗口覆盖(`[providers.<id>.context_windows]`)应用到
+/// 模型列表:命中 id 则覆盖其 `context_window`,未命中则追加仅含窗口的条目。
+/// 压缩预算(compact)与前端用量展示共用该覆盖,清除后自然回落内置/模型
+/// 列表定义。
+pub fn apply_context_windows(
+    models: &mut Vec<ModelInfo>,
+    overrides: &std::collections::BTreeMap<String, i64>,
+) {
+    for (model_id, window) in overrides {
+        match models.iter_mut().find(|m| &m.id == model_id) {
+            Some(m) => m.context_window = Some(*window),
+            None => models.push(ModelInfo {
+                id: model_id.clone(),
+                context_window: Some(*window),
+                ..Default::default()
+            }),
+        }
+    }
+}
+
+/// 内置模型定义的 context_window 兜底表:provider id → (model id → context_window)。
+/// 配置/缓存 providers 覆盖 models 列表时经常丢失该字段(如拉取模型缓存里全为
+/// null),按此表回填真实值;`opencode-zen` 配置条目无内置定义,沿用内置
+/// `opencode` 的模型信息。
+pub fn builtin_context_map() -> HashMap<String, HashMap<String, i64>> {
+    let mut map: HashMap<String, HashMap<String, i64>> = HashMap::new();
+    for p in builtin_providers() {
+        let models: HashMap<String, i64> = p
+            .models
+            .iter()
+            .filter_map(|m| m.context_window.map(|c| (m.id.clone(), c)))
+            .collect();
+        map.insert(p.id.clone(), models.clone());
+        if p.id == "opencode" {
+            map.entry("opencode-zen".into()).or_insert(models);
+        }
+    }
+    map
 }
 
 impl ProviderInfo {
@@ -443,6 +503,8 @@ impl ProviderInfo {
                 });
             }
         }
+        // 手动上下文窗口覆盖:命中默认模型则覆盖,其余模型追加条目
+        apply_context_windows(&mut models, &c.context_windows);
         Self {
             id: id.to_string(),
             // 显示名称透传配置(未设置时由调用方回落到 id,内置 provider 覆盖场景

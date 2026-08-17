@@ -73,6 +73,11 @@ pub struct ProviderConfig {
     pub default_large_model_id: Option<String>,
     /// 默认小模型 id。
     pub default_small_model_id: Option<String>,
+    /// 手动设置的模型上下文窗口(token 数,key = 模型 id)。前端设置界面
+    /// 写入;运行时压缩预算与前端用量展示共用该覆盖,清除即恢复默认,
+    /// 避免前后端各存一份导致「显示未满却频繁触发上下文压缩」。
+    #[serde(default)]
+    pub context_windows: BTreeMap<String, i64>,
 }
 
 /// 模型引用(large/small)。
@@ -630,6 +635,7 @@ pub fn add_provider(
         base_url: base_url.map(String::from),
         default_large_model_id: default_large_model_id.map(String::from),
         default_small_model_id: None,
+        context_windows: BTreeMap::new(),
     };
     // 提供 key 时同时入列表并激活(与 save_provider_key 行为一致)
     if let Some(k) = api_key {
@@ -647,6 +653,41 @@ pub fn remove_provider(path: &PathBuf, provider_id: &str) -> Result<()> {
     let mut cfg = load_config(path)?;
     if cfg.providers.remove(provider_id).is_none() {
         return Err(anyhow::anyhow!("provider `{provider_id}` 未在配置文件中定义"));
+    }
+    write_config(path, &cfg)
+}
+
+/// 设置/清除某 provider 下某模型的上下文窗口覆盖(token 数)。
+///
+/// 写入 `[providers.{provider_id}.context_windows]`;`window` 为 `None` 时删除
+/// 该模型的覆盖条目(恢复默认)。压缩预算与前端用量展示共用该配置。
+pub fn set_model_context_window(
+    path: &PathBuf,
+    provider_id: &str,
+    model_id: &str,
+    window: Option<i64>,
+) -> Result<()> {
+    let model_id = model_id.trim();
+    if model_id.is_empty() {
+        return Err(anyhow::anyhow!("model_id 不能为空"));
+    }
+    let mut cfg = load_config(path)?;
+    match window {
+        Some(w) => {
+            if w <= 0 {
+                return Err(anyhow::anyhow!("上下文窗口必须为正整数"));
+            }
+            let entry = cfg
+                .providers
+                .entry(provider_id.to_string())
+                .or_insert_with(ProviderConfig::default);
+            entry.context_windows.insert(model_id.to_string(), w);
+        }
+        None => {
+            if let Some(entry) = cfg.providers.get_mut(provider_id) {
+                entry.context_windows.remove(model_id);
+            }
+        }
     }
     write_config(path, &cfg)
 }
@@ -1217,6 +1258,47 @@ mod tests {
         let info2 =
             crate::providers::ProviderInfo::from_config("my-relay", &ProviderConfig::default());
         assert_eq!(info2.name, None);
+    }
+
+    #[test]
+    fn model_context_window_set_clear_and_applies_to_find_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("combo-cli.toml");
+
+        // 设置覆盖:写入 [providers.deepseek.context_windows]
+        set_model_context_window(&path, "deepseek", "deepseek-chat", Some(262_144)).unwrap();
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        assert_eq!(
+            cfg.providers
+                .get("deepseek")
+                .unwrap()
+                .context_windows
+                .get("deepseek-chat"),
+            Some(&262_144)
+        );
+
+        // find_provider 解析后模型的 context_window 被覆盖(压缩预算/展示共用)
+        let info = crate::providers::find_provider("deepseek", &cfg.providers).unwrap();
+        assert_eq!(
+            info.find_model("deepseek-chat").unwrap().context_window,
+            Some(262_144)
+        );
+
+        // 清除覆盖:恢复默认(覆盖表清空)
+        set_model_context_window(&path, "deepseek", "deepseek-chat", None).unwrap();
+        let cfg2 = AppConfig::load_or_create(&path).unwrap();
+        assert!(
+            cfg2
+                .providers
+                .get("deepseek")
+                .unwrap()
+                .context_windows
+                .is_empty()
+        );
+
+        // 非法值被拒绝
+        assert!(set_model_context_window(&path, "deepseek", "m", Some(0)).is_err());
+        assert!(set_model_context_window(&path, "deepseek", "  ", None).is_err());
     }
 
     #[test]

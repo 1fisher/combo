@@ -497,6 +497,20 @@ export function getGlobalProviders(): Promise<Api.ProviderEntry[]> {
   return apiRequest('/v1/providers');
 }
 
+/** 设置/清除某模型的上下文窗口覆盖(写入 combo-cli 配置,压缩预算与用量展示共用)。 */
+export function setGlobalModelContextWindow(
+  req: { providerId: string; modelId: string; contextWindow?: number },
+): Promise<{ ok: boolean }> {
+  return apiRequest('/v1/providers/context-window', {
+    method: 'POST',
+    body: {
+      provider_id: req.providerId,
+      model_id: req.modelId,
+      context_window: req.contextWindow ?? null,
+    },
+  });
+}
+
 /** 拉取 provider 支持的远程模型列表(需要 API Key)。 */
 export function fetchProviderModels(
   workspaceId: string,

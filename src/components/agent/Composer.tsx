@@ -347,17 +347,11 @@ export function Composer({
   const currentThoughtId = storedModel?.reasoningEffort ?? 'high';
   const thought = THOUGHT_LEVELS.find((t) => t.id === currentThoughtId) ?? THOUGHT_LEVELS[1];
 
-  // 手动设置的模型上下文窗口(key = 模型 id,按模型全局生效),优先级最高
-  const contextOverrides = useAgentStore((s) => s.contextOverrides);
-  // 当前模型的上下文窗口上限:手动设置优先,其次 agent_info(后端按当前模型解析真实值),
-  // 再按模型 id 在 provider 列表查,最后用兜底值。
-  // 手动值先精确匹配 provider/model(兼容旧版本按 provider 存储的 key),
-  // 查不到再按模型 id 全局匹配(同一模型挂多个 provider 时也能命中)。
+  // 当前模型的上下文窗口上限:全部来自后端 combo-cli 配置——agent_info
+  // (后端按当前模型解析真实值,含设置界面写入的手动覆盖)优先,再按模型
+  // id 在 provider 列表查,最后用兜底值。前端不再单独存一份覆盖值,
+  // 与 compact 压缩预算共用同一来源,避免「显示未满却频繁触发压缩」。
   const contextWindow = useMemo(() => {
-    const exactKey = currentProviderId ? `${currentProviderId}/${currentModelId}` : '';
-    const manual =
-      (exactKey ? contextOverrides[exactKey] : undefined) ?? contextOverrides[currentModelId];
-    if (typeof manual === 'number' && manual > 0) return manual;
     const fromInfo =
       typeof agentInfo?.model?.context_window === 'number'
         ? agentInfo.model.context_window
@@ -365,7 +359,7 @@ export function Composer({
     if (fromInfo) return fromInfo;
     const hit = modelList.find((m) => m.id === currentModelId);
     return hit?.contextWindow ?? DEFAULT_CONTEXT_WINDOW;
-  }, [agentInfo, modelList, currentModelId, currentProviderId, contextOverrides]);
+  }, [agentInfo, modelList, currentModelId]);
 
   // 活跃会话的消息 → 上下文已用 token(真实 usage 优先,缺失时本地估算)
   const activeRuntime = useAgentStore((s) =>

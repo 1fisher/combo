@@ -2182,7 +2182,14 @@ export namespace Api {
     id: string;
     name?: string;
     type?: string;
-    models?: { id?: string; name?: string; context_window?: number; [k: string]: unknown }[];
+    models?: {
+      id?: string;
+      name?: string;
+      context_window?: number;
+      /** 手动覆盖的原始上下文窗口(设置界面写入;null = 未覆盖)。 */
+      context_window_override?: number | null;
+      [k: string]: unknown;
+    }[];
     /** 是否已配置 API Key(后端不回传明文,只给脱敏结果)。 */
     has_api_key?: boolean;
     /** 当前激活 API Key 的脱敏展示,如 `sk-a****1234`。 */

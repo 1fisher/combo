@@ -127,7 +127,14 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   会话误差 2~3 倍、短会话大消息漏压,常在超窗报错时仍未压缩。压缩完成后
   `set_context_tokens` 重置占用避免用量环显示旧值;摘要消息 `created_at` 取
   "保留尾部第一条消息时间戳-1",保证 `list_messages`(按 created_at 升序)
-  中摘要在最近消息之前、注入 LLM 的历史顺序正确。
+  中摘要在最近消息之前、注入 LLM 的历史顺序正确。**context_window 的单一来源
+  是 combo-cli 配置**:`compact.rs::context_window` 按 provider 模型列表(含
+  手动覆盖)→ 内置定义兜底 → 128k 默认;设置界面「上下文窗口(手动)」经
+  `POST /v1/providers/context-window` 写入配置 `[providers.<id>].context_windows`
+  (`config.rs::set_model_context_window`,`providers::apply_context_windows` 在
+  `workspace_effective_cfg`/`list_providers`/`find_provider` 统一应用,models JSON
+  额外回传 `context_window_override` 原始覆盖值),压缩阈值与前端
+  Composer 用量环共用同一份值;前端不再本地存 contextOverrides(已删除)。
 - **File service** (`crates/combo-cli/src/fs.rs`): `GET .../files/list?path=`
   lists one directory (hidden files skipped, dirs first), `GET .../files/content`
   reads text (≤1MB, binary rejected), `PUT .../files/content` writes atomically.

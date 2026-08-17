@@ -20,6 +20,7 @@ import {
   renameProviderKey,
   saveGlobalProviderKey,
   saveProviderKey,
+  setGlobalModelContextWindow,
   setWorkspaceModel,
 } from '../lib/api';
 import type { Api } from '../lib/api/types';
@@ -67,6 +68,24 @@ export function useSetModel(workspaceId: string | null | undefined) {
     }) => setWorkspaceModel(workspaceId!, vars.model, vars.modelType),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['agent-info', workspaceId] });
+    },
+  });
+}
+
+/**
+ * 设置/清除某模型的上下文窗口(全局,写入 combo-cli 配置)。
+ * 压缩预算与 Composer 用量展示共用后端配置的同一份数值,避免
+ * 前端手动调大后后端仍按旧窗口频繁触发上下文压缩。
+ * contextWindow 缺省 = 恢复默认;成功后刷新 providers/agent-info。
+ */
+export function useSetModelContextWindow() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (vars: { providerId: string; modelId: string; contextWindow?: number }) =>
+      setGlobalModelContextWindow(vars),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['providers'] });
+      qc.invalidateQueries({ queryKey: ['agent-info'] });
     },
   });
 }

@@ -3,7 +3,6 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SettingsDialog } from './SettingsDialog';
-import { useAgentStore } from '../../stores/agentStore';
 import { useUIPreferences } from '../../stores/uiPreferencesStore';
 import {
   clearExternalUrl,
@@ -21,6 +20,7 @@ const removeKeyMutate = vi.fn();
 const createProviderMutate = vi.fn();
 const removeProviderMutate = vi.fn();
 const attributionToggle = vi.fn();
+const contextWindowMutate = vi.fn();
 
 // mock 内用真实 useState,保证开关点击后重渲染与真实 hook 行为一致
 vi.mock('../../hooks/useCommitAttribution', async () => {
@@ -90,6 +90,7 @@ vi.mock('../../hooks/useAgentModel', () => ({
     create: { mutateAsync: createProviderMutate, isPending: false },
     remove: { mutateAsync: removeProviderMutate, isPending: false },
   }),
+  useSetModelContextWindow: () => ({ mutate: contextWindowMutate, isPending: false }),
 }));
 
 function renderWithProviders(ui: React.ReactElement) {
@@ -105,6 +106,8 @@ describe('SettingsDialog', () => {
   beforeEach(() => {
     fetchModelsMutate.mockReset();
     fetchModelsMutate.mockResolvedValue({ provider: 'opencode', models: [{ id: 'm1', name: 'M1' }] });
+    contextWindowMutate.mockReset();
+    contextWindowMutate.mockResolvedValue({ ok: true });
     saveKeyMutate.mockReset();
     saveKeyMutate.mockResolvedValue({ ok: true });
     addKeyMutate.mockReset();
@@ -314,14 +317,17 @@ describe('SettingsDialog', () => {
     // 切到 DeepSeek:模型应联动为新 provider 的默认/首个模型
     await userEvent.selectOptions(providerSel, 'deepseek');
     expect((modelSel as HTMLSelectElement).value).toBe('deepseek-v4-flash');
-    // 设置 1M 并保存
+    // 仅切换不修改输入不应写入(保存走后端配置,不再本地存覆盖)
+    await userEvent.click(screen.getByRole('button', { name: '保存' }));
+    expect(contextWindowMutate).not.toHaveBeenCalled();
+    // 设置 1M 并保存:同步写入 combo-cli 配置(新 provider + 当前模型)
     await userEvent.click(screen.getByRole('button', { name: '1M' }));
     await userEvent.click(screen.getByRole('button', { name: '保存' }));
-    // 只写入当前模型,旧模型(deepseek-v4-flash-free)不受影响
-    expect(useAgentStore.getState().contextOverrides).toEqual({
-      'deepseek-v4-flash': 1_048_576,
+    expect(contextWindowMutate).toHaveBeenCalledWith({
+      providerId: 'deepseek',
+      modelId: 'deepseek-v4-flash',
+      contextWindow: 1_048_576,
     });
-    useAgentStore.getState().clearContextOverride('deepseek-v4-flash');
   });
 
   it('关闭任务结束通知与交互请求通知开关', async () => {
