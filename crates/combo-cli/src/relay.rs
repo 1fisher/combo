@@ -27,6 +27,10 @@ pub struct RelayManager {
     last_error: Arc<std::sync::Mutex<Option<String>>>,
     /// WebRTC P2P 直连管理器:信令经隧道收发,随隧道启停。
     pub p2p: Arc<P2pManager>,
+    /// 系统保活子进程(macOS caffeinate;非 macOS 恒为 None)。
+    /// 远程访问启用期间阻止系统休眠(允许屏幕关闭),
+    /// 类似远程控制软件的保活行为。
+    keep_awake: std::sync::Mutex<Option<std::process::Child>>,
 }
 
 impl RelayManager {
@@ -37,7 +41,52 @@ impl RelayManager {
             connected: Arc::new(AtomicBool::new(false)),
             last_error: Arc::new(std::sync::Mutex::new(None)),
             p2p: P2pManager::new(),
+            keep_awake: std::sync::Mutex::new(None),
         })
+    }
+
+    /// 持有系统保活断言(macOS):caffeinate -i -s -w <pid>。
+    /// 阻止系统空闲休眠(允许屏幕自动关闭),子进程随本进程退出自动释放。
+    fn hold_awake(&self) {
+        #[cfg(target_os = "macos")]
+        {
+            let mut guard = self.keep_awake.lock().unwrap();
+            if guard.is_some() {
+                return;
+            }
+            match std::process::Command::new("caffeinate")
+                .args([
+                    "-i",
+                    "-s",
+                    "-w",
+                    &std::process::id().to_string(),
+                ])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+            {
+                Ok(child) => {
+                    tracing::info!("[relay] 系统保活已启用(caffeinate,阻止休眠/允许息屏)");
+                    *guard = Some(child);
+                }
+                Err(e) => {
+                    tracing::warn!("[relay] caffeinate 启动失败(不影响隧道): {e}");
+                }
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = &self.keep_awake;
+    }
+
+    /// 释放系统保活断言(停止远程访问时恢复系统默认休眠策略)。
+    fn release_awake(&self) {
+        if let Ok(mut guard) = self.keep_awake.lock() {
+            if let Some(mut child) = guard.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+                tracing::info!("[relay] 系统保活已释放");
+            }
+        }
     }
 
     pub async fn start(&self, url: String, token: String, local_proxy_url: String) {
@@ -56,6 +105,7 @@ impl RelayManager {
             token,
             local_proxy_url,
         };
+        self.hold_awake();
         let config_clone = config.clone();
         let connected_flag = self.connected.clone();
         let last_error = self.last_error.clone();
@@ -93,6 +143,7 @@ impl RelayManager {
         if let Some(old) = task_guard.take() {
             old.abort();
         }
+        self.release_awake();
         self.connected.store(false, Ordering::Relaxed);
         if let Ok(mut guard) = self.last_error.lock() {
             *guard = None;

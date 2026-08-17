@@ -40,3 +40,19 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
   }
   globalThis.ResizeObserver = MockResizeObserver as unknown as typeof ResizeObserver;
 }
+
+// jsdom 25 未实现 window.matchMedia(useIsMobile 等断点检测依赖),
+// stub 固定 matches=false(桌面视口行为),change 事件静默忽略
+if (typeof window.matchMedia !== 'function') {
+  window.matchMedia = ((query: string): MediaQueryList =>
+    ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }) as MediaQueryList) as typeof window.matchMedia;
+}

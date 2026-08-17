@@ -243,11 +243,26 @@ async fn connect_and_serve(
         })
     };
 
-    // 写入任务:从通道读取消息写入 WebSocket
+    // 写入任务:从通道读取消息写入 WebSocket。
+    // 同时每 20s 主动发一次 Ping:保持 NAT/防火墙映射 + 尽早发现半开连接
+    // (系统休眠唤醒后 TCP 已死但可能收不到 RST,靠写失败/读超时兜底)。
+    let mut ping_interval = tokio::time::interval(Duration::from_secs(20));
+    ping_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    ping_interval.tick().await; // 消耗立即触发的首拍
     let write_task = tokio::spawn(async move {
-        while let Some(msg) = ws_rx.recv().await {
-            if ws_sink.send(msg).await.is_err() {
-                break;
+        loop {
+            tokio::select! {
+                msg = ws_rx.recv() => {
+                    let Some(msg) = msg else { break };
+                    if ws_sink.send(msg).await.is_err() {
+                        break;
+                    }
+                }
+                _ = ping_interval.tick() => {
+                    if ws_sink.send(Message::Ping(Vec::new())).await.is_err() {
+                        break;
+                    }
+                }
             }
         }
     });
@@ -261,8 +276,18 @@ async fn connect_and_serve(
     // 活跃的 WS 隧道连接表:relay 下发的 WsData/WsClose 通过 id 路由到对应的本地 WS。
     let ws_tunnels: WsTunnelMap = Arc::new(Mutex::new(HashMap::new()));
 
-    // 读取循环:解析中转发来的请求,分发到独立 task 处理
-    while let Some(msg) = ws_stream_rx.next().await {
+    // 读取循环:解析中转发来的请求,分发到独立 task 处理。
+    // 读空闲超时:中转每 30s 发 Ping,超过 75s 无任何帧说明连接已死
+    // (休眠唤醒/NAT 失效的半开连接),主动断开交给外层重连循环。
+    loop {
+        let msg = match tokio::time::timeout(Duration::from_secs(75), ws_stream_rx.next()).await {
+            Ok(m) => m,
+            Err(_) => {
+                eprintln!("COMBO_TUNNEL_IDLE=75s 未收到任何帧,判定连接失效");
+                break;
+            }
+        };
+        let Some(msg) = msg else { break };
         let text = match msg {
             Ok(Message::Text(t)) => t,
             Ok(Message::Binary(d)) => String::from_utf8_lossy(&d).into_owned(),

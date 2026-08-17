@@ -446,6 +446,20 @@ health 都走同一 base,跨域由 CORS 放开。
     前端静态服务 + SPA fallback(index.html)。非 `/v1/` 路径走静态文件,
     不受鉴权中间件保护(前端资源为公开内容)。Tauri 应用在 `init_backend` 中
     自动检测 dist/(`COMBO_STATIC_DIR` → Tauri resource_dir → 开发模式 auto-detect)。
+- **隧道保活与断线重连(远程软件式)**:防「手机锁屏 / 桌面息屏后连接死亡」:
+  - **双向心跳 + 半开检测**:桌面端隧道写循环每 20s 发 WS Ping
+    (`tunnel.rs`),中转每 30s Ping;**两端读循环各设 75s 空闲超时**——
+    休眠唤醒/NAT 失效造成的半开 TCP(收不到 RST、写进缓冲不报错)会被
+    超时判定死亡:桌面端 break 后由外层指数退避重连(1s→30s),中转端
+    break 后清理 `tunnels` 表(`remove_tunnel_if_owned` 已处理同 token
+    快速重连竞态),手机端请求立刻拿到干净的 502 而非长时间挂起。
+  - **系统保活**:远程访问启用期间(`RelayManager::start`)macOS 持有
+    `caffeinate -i -s -w <pid>`(阻止系统休眠、允许屏幕关闭;子进程随本
+    进程退出自动释放),`stop` 时 kill 恢复默认休眠策略;非 macOS 为 no-op。
+  - **手机端恢复**:SSE(`WorkspaceEventSource`)监听 `visibilitychange`/
+    `online` 立即重连(退避可被唤醒);P2P dead 状态在页面恢复可见时清零
+    冷却立即重试(`bindResumeRetry`,绕过 2 分钟 RETRY_AFTER_MS);终端 WS
+    断开后自动退避重连(1s→10s,页面恢复可见立即重连,`TerminalPanel`)。
 - **P2P 直连(扫码后优先直连,中转兜底)**:移动端扫码后的连接方式按优先级
   自动选择,三级回退,**LAN 直连 → WebRTC P2P → relay 中转**:
   1. **局域网直连**:桌面端(Tauri 模式)默认绑定 `0.0.0.0`(可用

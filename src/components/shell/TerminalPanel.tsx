@@ -82,27 +82,44 @@ export function TerminalPanel({
     });
     resizeObserver.observe(containerRef.current);
 
-    // 代理地址可能尚未由 connectLoop 解析完成:等待就绪后再建连
-    void ensureProxyBaseUrl().then((httpBase) => {
-      if (cancelled) return;
-      const wsBase = httpBase.replace(/^http/, 'ws');
+    // 自动重连:断开(手机锁屏/网络切换/休眠唤醒)后按退避重试,
+    // 页面恢复可见时立即重连,不显示裸的「终端已断开」死终点。
+    let reconnectDelay = 1000;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let wsBase = '';
+
+    const scheduleReconnect = (reason: string) => {
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      const wait = Math.round(reconnectDelay / 1000);
+      term.writeln(`\r\n\x1b[33m终端已断开(${reason}),${wait}s 后重连\x1b[0m`);
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        if (!cancelled) connect(wsBase);
+      }, reconnectDelay);
+      reconnectDelay = Math.min(reconnectDelay * 2, 10_000);
+    };
+
+    const connect = (base: string) => {
+      if (!base || cancelled) return;
       // WebSocket 无法设置 Authorization header,通过 query 参数传递令牌
       const token = getAccessToken();
       const tokenQs = token ? `?token=${encodeURIComponent(token)}` : '';
       const wsUrl = workspaceId
-        ? `${wsBase}/v1/workspaces/${workspaceId}/terminal${tokenQs}`
-        : `${wsBase}/v1/terminal${tokenQs}`;
+        ? `${base}/v1/workspaces/${workspaceId}/terminal${tokenQs}`
+        : `${base}/v1/terminal${tokenQs}`;
 
-      socket = new WebSocket(wsUrl);
-      socket.binaryType = 'arraybuffer';
-      wsRef.current = socket;
+      const sock = new WebSocket(wsUrl);
+      sock.binaryType = 'arraybuffer';
+      socket = sock;
+      wsRef.current = sock;
 
-      socket.onopen = () => {
+      sock.onopen = () => {
+        reconnectDelay = 1000;
         // 发送初始尺寸
-        sendResize(socket!, term.cols, term.rows);
+        sendResize(sock, term.cols, term.rows);
       };
 
-      socket.onmessage = (ev) => {
+      sock.onmessage = (ev) => {
         if (ev.data instanceof ArrayBuffer) {
           term.write(new Uint8Array(ev.data));
         } else if (typeof ev.data === 'string') {
@@ -110,18 +127,38 @@ export function TerminalPanel({
         }
       };
 
-      socket.onerror = () => {
-        term.writeln('\r\n\x1b[31m连接错误\x1b[0m');
-      };
+      // 错误信息统一由 onclose 的重连提示呈现,避免重复刷屏
+      sock.onerror = () => {};
 
-      socket.onclose = (ev) => {
+      sock.onclose = (ev) => {
+        if (socket === sock) socket = null;
         const detail = ev.reason
-          ? `(原因: ${ev.reason})`
+          ? `原因: ${ev.reason}`
           : ev.code !== 1000 && ev.code !== 1001
-            ? `(code ${ev.code})`
-            : '';
-        term.writeln(`\r\n\x1b[33m终端已断开${detail}\x1b[0m`);
+            ? `code ${ev.code}`
+            : '连接中断';
+        if (!cancelled) scheduleReconnect(detail);
       };
+    };
+
+    const onVisible = () => {
+      if (cancelled) return;
+      if (!socket || socket.readyState === WebSocket.CLOSED) {
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+        reconnectDelay = 1000;
+        connect(wsBase);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+
+    // 代理地址可能尚未由 connectLoop 解析完成:等待就绪后再建连
+    void ensureProxyBaseUrl().then((httpBase) => {
+      if (cancelled) return;
+      wsBase = httpBase.replace(/^http/, 'ws');
+      connect(wsBase);
     });
 
     // 聚焦终端
@@ -129,6 +166,8 @@ export function TerminalPanel({
 
     return () => {
       cancelled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      document.removeEventListener('visibilitychange', onVisible);
       dataDisposable.dispose();
       resizeDisposable.dispose();
       window.removeEventListener('resize', onWindowResize);

@@ -267,8 +267,18 @@ async fn tunnel_task(state: RelayState, token: String, socket: WebSocket) {
         }
     });
 
-    // 接收循环:从 WebSocket 读取桌面客户端的响应,分发给待响应请求
-    while let Some(msg) = ws_stream.next().await {
+    // 接收循环:从 WebSocket 读取桌面客户端的响应,分发给待响应请求。
+    // 读空闲超时:桌面端每 20s 发 Ping,超过 75s 无任何帧说明隧道已死
+    // (对端休眠/网络中断的半开连接),及时清理避免手机端请求长时间挂起。
+    loop {
+        let msg = match tokio::time::timeout(Duration::from_secs(75), ws_stream.next()).await {
+            Ok(m) => m,
+            Err(_) => {
+                warn!("隧道 75s 无数据帧,判定连接失效: token={:.8}", token);
+                break;
+            }
+        };
+        let Some(msg) = msg else { break };
         let msg = match msg {
             Ok(Message::Text(t)) => t,
             Ok(Message::Close(_)) | Err(_) => break,

@@ -210,4 +210,38 @@ describe('Composer 模型选择', () => {
     expect(screen.queryByText('最近使用')).toBeNull();
     expect(screen.getByText('未找到匹配的模型。')).toBeTruthy();
   });
+
+  it('移动端:模型菜单 fixed 定位并钳制在视口内,不向左溢出', async () => {
+    // 模拟 375px 宽移动端视口;锚点按钮位于屏幕中间偏左(右边缘 194px),
+    // 288px 宽菜单若沿用 right-0 会向左溢出到 -94px(显示不全)
+    const mm = {
+      matches: true,
+      media: '(max-width: 767px)',
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    } as unknown as MediaQueryList;
+    vi.spyOn(window, 'matchMedia').mockReturnValue(mm);
+    const rect = {
+      left: 162, right: 194, top: 600, bottom: 628, width: 32, height: 28, x: 162, y: 600,
+      toJSON: () => ({}),
+    } as DOMRect;
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(rect);
+
+    const user = userEvent.setup();
+    renderComposer();
+    await user.click(screen.getByRole('button', { name: '切换模型' }));
+
+    const menu = screen.getByPlaceholderText('搜索模型').closest('.bg-popover') as HTMLElement;
+    expect(menu).toBeTruthy();
+    // 移动端改用 fixed,水平钳制到视口左缘 8px(而非溢出),垂直贴合锚点上方
+    expect(menu.className).toContain('fixed');
+    expect(menu.style.left).toBe('8px');
+    expect(menu.style.bottom).toBe(`${window.innerHeight - 600 + 8}px`);
+    // 菜单右缘仍在视口内(左侧 8 + 宽 288)
+    expect(menu.getBoundingClientRect().right).toBeLessThanOrEqual(window.innerWidth - 8);
+  });
 });

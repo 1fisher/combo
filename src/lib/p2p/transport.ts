@@ -416,10 +416,33 @@ export class P2pHttpError extends Error {
 }
 
 let transport: P2pTransport | null = null;
+/** visibility/online 恢复监听只挂一次(随页面生命周期)。 */
+let lifecycleBound = false;
+
+/**
+ * 页面恢复可见(手机解锁/切回前台)或网络恢复时,P2P 可能已被系统冻结:
+ * 立即清除 dead 冷却并重试,避免最长 2 分钟内一直走中转慢路径。
+ */
+function bindResumeRetry(t: P2pTransport): void {
+  if (lifecycleBound) return;
+  lifecycleBound = true;
+  const retry = () => {
+    if (t.state !== 'dead') return;
+    (t as unknown as { lastAttempt: number }).lastAttempt = 0;
+    void t.ensureConnected();
+  };
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') retry();
+  });
+  window.addEventListener('online', retry);
+}
 
 export function getP2pTransport(): P2pTransport | null {
   if (typeof window === 'undefined') return null;
-  if (!transport) transport = new P2pTransport();
+  if (!transport) {
+    transport = new P2pTransport();
+    bindResumeRetry(transport);
+  }
   return transport;
 }
 

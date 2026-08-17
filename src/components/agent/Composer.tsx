@@ -1,4 +1,4 @@
-import { useLayoutEffect, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useLayoutEffect, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import {
   ArrowUp,
@@ -28,6 +28,7 @@ import { useSessions } from '../../hooks/useSessions';
 import { useAgentInfo, useProviders, useSetModel, useWorkspaceConfig } from '../../hooks/useAgentModel';
 import type { Api } from '../../lib/api/types';
 import { cn, usageColor } from '../../lib/utils';
+import { useIsMobile } from '../../hooks/useIsMobile';
 import { AttachmentPicker } from './AttachmentPicker';
 import { ProviderLogo } from './ProviderLogo';
 import { FlameWrap } from '../canvasui/FlameWrap';
@@ -107,6 +108,44 @@ const THOUGHT_LEVELS = [
   { id: 'max', label: '最高' },
 ] as const;
 
+/**
+ * 弹层锚点定位(移动端适配):fixed 弹层相对锚点元素定位,水平方向钳制在视口内
+ * (左右各留 8px),避免 w-72 等较宽下拉在窄屏向左溢出被裁剪(如 Composer 模型菜单
+ * 移动端偏左显示不全);垂直方向贴合锚点上方 8px。桌面端不启用,沿用 absolute 定位。
+ * 默认右对齐锚点右边缘(与 right-0 语义一致),空间不足时钳制进视口。
+ */
+function useAnchorPopover(
+  open: boolean,
+  anchorRef: RefObject<HTMLElement | null>,
+  opts: { width: number; enabled: boolean }
+): { left: number; bottom: number } | null {
+  const [pos, setPos] = useState<{ left: number; bottom: number } | null>(null);
+  useLayoutEffect(() => {
+    if (!open || !opts.enabled) {
+      setPos(null);
+      return;
+    }
+    const el = anchorRef.current;
+    if (!el) return;
+    function update() {
+      const anchor = anchorRef.current;
+      if (!anchor) return;
+      const rect = anchor.getBoundingClientRect();
+      const vw = window.innerWidth;
+      const left = Math.min(Math.max(rect.right - opts.width, 8), Math.max(8, vw - opts.width - 8));
+      setPos({ left, bottom: window.innerHeight - rect.top + 8 });
+    }
+    update();
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+    return () => {
+      window.removeEventListener('scroll', update, true);
+      window.removeEventListener('resize', update);
+    };
+  }, [open, anchorRef, opts.width, opts.enabled]);
+  return pos;
+}
+
 const SLASH_COMMANDS = [
   { id: 'clear', label: '/clear', description: '清空当前对话上下文' },
   { id: 'new', label: '/new', description: '开始新的任务' },
@@ -155,6 +194,14 @@ export function Composer({
   const { data: wsConfig } = useWorkspaceConfig(workspaceId);
   const setModel = useSetModel(workspaceId);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  // 移动端(<768px)弹层用 fixed 定位并钳制在视口内,避免宽菜单向左溢出裁剪
+  const isMobile = useIsMobile();
+  const modeBtnRef = useRef<HTMLButtonElement>(null);
+  const modelBtnRef = useRef<HTMLButtonElement>(null);
+  const thoughtBtnRef = useRef<HTMLButtonElement>(null);
+  const modePopoverPos = useAnchorPopover(modeMenuOpen, modeBtnRef, { width: 256, enabled: isMobile });
+  const modelPopoverPos = useAnchorPopover(modelMenuOpen, modelBtnRef, { width: 288, enabled: isMobile });
+  const thoughtPopoverPos = useAnchorPopover(thoughtMenuOpen, thoughtBtnRef, { width: 160, enabled: isMobile });
   const [modelErr, setModelErr] = useState('');
   const [modelSearch, setModelSearch] = useState('');
   // 最近使用的模型(全局记录,持久化),用于菜单顶部快速切换
@@ -674,6 +721,7 @@ export function Composer({
                   </Button>
                   <button
                     type="button"
+                    ref={modeBtnRef}
                     onClick={() => {
                       setModeMenuOpen((o) => !o);
                       setModelMenuOpen(false);
@@ -694,7 +742,17 @@ export function Composer({
                         className="z-40 fixed inset-0"
                         onClick={() => setModeMenuOpen(false)}
                       />
-                      <div className="bottom-full left-0 z-50 absolute bg-popover shadow-xl mb-2 p-1.5 border border-border rounded-xl w-64">
+                      <div
+                        className={cn(
+                          'z-50 bg-popover shadow-xl p-1.5 border border-border rounded-xl w-64',
+                          isMobile ? 'fixed' : 'bottom-full left-0 absolute mb-2'
+                        )}
+                        style={
+                          isMobile && modePopoverPos
+                            ? { left: modePopoverPos.left, bottom: modePopoverPos.bottom }
+                            : undefined
+                        }
+                      >
                         <div className="px-2 py-1 font-medium text-foreground-subtlest text-xs">
                           Agent 模式
                         </div>
@@ -731,6 +789,7 @@ export function Composer({
                   <div className="relative shrink-0">
                     <button
                       type="button"
+                      ref={modelBtnRef}
                       onClick={() => {
                         if (!modelMenuOpen) setModelSearch('');
                         setModelMenuOpen((o) => !o);
@@ -767,7 +826,17 @@ export function Composer({
                         />
                         {/* 弹层为 flex 纵向布局:标题 + 搜索框固定顶部,模型列表单独滚动,
                             列表滚动时搜索框保持可见 */}
-                        <div className="right-0 bottom-full z-50 absolute flex flex-col bg-popover shadow-xl mb-2 p-1.5 border border-border rounded-xl w-72 max-h-80">
+                        <div
+                          className={cn(
+                            'z-50 flex flex-col bg-popover shadow-xl p-1.5 border border-border rounded-xl w-72 max-h-80',
+                            isMobile ? 'fixed' : 'right-0 bottom-full absolute mb-2'
+                          )}
+                          style={
+                            isMobile && modelPopoverPos
+                              ? { left: modelPopoverPos.left, bottom: modelPopoverPos.bottom }
+                              : undefined
+                          }
+                        >
                           <div className="flex justify-between items-center px-2 py-1 font-medium text-foreground-subtlest text-xs">
                             <span>选择模型</span>
                             {currentModelId && (
@@ -907,6 +976,7 @@ export function Composer({
                   <div className="relative shrink-0">
                     <button
                       type="button"
+                      ref={thoughtBtnRef}
                       onClick={() => {
                         setThoughtMenuOpen((o) => !o);
                         setModelMenuOpen(false);
@@ -925,7 +995,17 @@ export function Composer({
                           className="z-40 fixed inset-0"
                           onClick={() => setThoughtMenuOpen(false)}
                         />
-                        <div className="right-0 bottom-full z-50 absolute bg-popover shadow-xl mb-2 p-1.5 border border-border rounded-xl w-40">
+                        <div
+                          className={cn(
+                            'z-50 bg-popover shadow-xl p-1.5 border border-border rounded-xl w-40',
+                            isMobile ? 'fixed' : 'right-0 bottom-full absolute mb-2'
+                          )}
+                          style={
+                            isMobile && thoughtPopoverPos
+                              ? { left: thoughtPopoverPos.left, bottom: thoughtPopoverPos.bottom }
+                              : undefined
+                          }
+                        >
                           <div className="px-2 py-1 font-medium text-foreground-subtlest text-xs">
                             思考等级
                           </div>
