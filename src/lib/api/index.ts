@@ -288,6 +288,19 @@ export function gitCommit(
   });
 }
 
+/** 读取「git 提交署名」全局开关(配置文件缺省时后端默认开启)。 */
+export function getCommitAttribution(): Promise<{ enabled: boolean }> {
+  return apiRequest('/v1/settings/commit-attribution');
+}
+
+/** 写入「git 提交署名」全局开关(持久化到 combo-cli.toml)。 */
+export function setCommitAttribution(enabled: boolean): Promise<{ enabled: boolean }> {
+  return apiRequest('/v1/settings/commit-attribution', {
+    method: 'POST',
+    body: { enabled },
+  });
+}
+
 export function gitPush(workspaceId: string, repo?: string): Promise<{ ok: boolean; output: string }> {
   return apiRequest(`/v1/workspaces/${workspaceId}/git/push`, {
     method: 'POST',

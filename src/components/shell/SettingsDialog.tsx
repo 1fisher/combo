@@ -21,6 +21,7 @@ import {
   setProxyUrlOverride,
 } from '../../lib/connection';
 import { useUpdater } from '../../hooks/useUpdater';
+import { useCommitAttribution } from '../../hooks/useCommitAttribution';
 import { requestNotifyPermission } from '../../lib/notify';
 import { useFetchModels, useProviderCrud, useProviderKeys, useProviders, useSaveProviderKey } from '../../hooks/useAgentModel';
 import { useAgentStore } from '../../stores/agentStore';
@@ -39,9 +40,10 @@ interface SettingsDialogProps {
  * 设置对话框:
  * 1. 模型 Provider 配置 — 为各 provider 填入 API Key 并拉取可用模型。
  * 2. 特效与音效 — Liquid 流体特效 / Combo 连击气泡音。
- * 3. 系统通知 — 免打扰 / 任务结束 / 需要交互时发送系统通知(可选同时播放提示音)。
- * 4. 外部访问域名 — 域名部署时填写公开访问地址。
- * 5. 代理地址 — 前后端分离部署时指定 combo-cli serve 服务地址。
+ * 3. Git 提交署名 — 提交时自动追加 Generated with Combo(服务端全局配置)。
+ * 4. 系统通知 — 免打扰 / 任务结束 / 需要交互时发送系统通知(可选同时播放提示音)。
+ * 5. 外部访问域名 — 域名部署时填写公开访问地址。
+ * 6. 代理地址 — 前后端分离部署时指定 combo-cli serve 服务地址。
  */
 export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [proxyInput, setProxyInput] = useState('');
@@ -66,6 +68,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const setNotifySoundEnabled = useUIPreferences((s) => s.setNotifySoundEnabled);
   // 通知权限被拒时的提示(开启开关时请求权限,失败则提示去系统设置开启)
   const [notifyBlocked, setNotifyBlocked] = useState(false);
+  const attribution = useCommitAttribution();
 
   async function toggleNotify(next: boolean, apply: (v: boolean) => void) {
     apply(next);
@@ -149,6 +152,22 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               checked={comboSoundEnabled}
               onCheckedChange={setComboSoundEnabled}
               aria-label="Combo 特效音效"
+            />
+          </div>
+
+          {/* Git 提交署名 */}
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-0.5">
+              <label className="text-[13px] font-medium text-foreground">Git 提交署名</label>
+              <span className="text-[12px] text-foreground-subtle">
+                在 git 视图提交时自动于信息末尾追加 Generated with Combo 署名
+              </span>
+            </div>
+            <Switch
+              checked={attribution.enabled}
+              onCheckedChange={attribution.toggle}
+              disabled={attribution.isPending}
+              aria-label="Git 提交署名"
             />
           </div>
 

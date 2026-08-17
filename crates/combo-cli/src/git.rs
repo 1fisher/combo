@@ -14,6 +14,9 @@ use std::process::Command;
 use crate::fs::{error, ok_json, resolve_root, safe_join};
 use crate::serve::AppState;
 
+/// 提交时自动追加的署名。
+pub const COMMIT_ATTRIBUTION: &str = "Generated with Combo";
+
 #[derive(Deserialize)]
 pub struct PathQuery {
     pub path: Option<String>,
@@ -499,9 +502,40 @@ pub async fn commit(
     if msg.is_empty() {
         return error(StatusCode::BAD_REQUEST, "提交信息不能为空");
     }
-    match git_output(&root, ["commit", "-m", msg]) {
+    // 自动追加署名,标识由 Combo 生成的提交;已含署名时不重复追加。
+    // 开关存于配置文件 commit_attribution(默认开启),每次提交时读取、即时生效。
+    let attribution_on =
+        crate::config::commit_attribution_enabled(&crate::config::default_config_path());
+    let full_msg = if !attribution_on || msg.contains(COMMIT_ATTRIBUTION) {
+        msg.to_string()
+    } else {
+        format!("{msg}\n\n{COMMIT_ATTRIBUTION}")
+    };
+    match git_output(&root, ["commit", "-m", &full_msg]) {
         Ok(output) => ok_json(json!({ "ok": true, "output": output })),
         Err(msg) => error(StatusCode::INTERNAL_SERVER_ERROR, &msg),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct AttributionBody {
+    pub enabled: bool,
+}
+
+/// GET /v1/settings/commit-attribution — 读取「git 提交署名」开关。
+pub async fn attribution_get() -> Response {
+    let enabled = crate::config::commit_attribution_enabled(&crate::config::default_config_path());
+    ok_json(json!({ "enabled": enabled }))
+}
+
+/// POST /v1/settings/commit-attribution — 写入「git 提交署名」开关(持久化到配置文件)。
+pub async fn attribution_set(
+    axum::extract::Json(body): axum::extract::Json<AttributionBody>,
+) -> Response {
+    match crate::config::set_commit_attribution(&crate::config::default_config_path(), body.enabled)
+    {
+        Ok(()) => ok_json(json!({ "enabled": body.enabled })),
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, &format!("保存署名开关失败: {e}")),
     }
 }
 
@@ -1110,5 +1144,100 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 提交时应自动追加 "Generated with Combo" 署名;已含署名时不重复追加;
+    /// 配置 commit_attribution = false 时完全不追加。
+    #[tokio::test]
+    async fn commit_appends_attribution() {
+        // 隔离配置目录:署名开关读配置文件,不能依赖开发机真实 ~/.config/combo
+        let _env = crate::paths::ENV_LOCK.lock().unwrap();
+        let cfg_dir = tempfile::tempdir().unwrap();
+        let prev_cfg = std::env::var_os("COMBO_CONFIG_DIR");
+        std::env::set_var("COMBO_CONFIG_DIR", cfg_dir.path());
+
+        let (state, dir, _current) = branch_test_state("attr").await;
+        std::fs::write(dir.join("a.txt"), "v1\n").unwrap();
+        git_output(&dir, ["add", "."]).unwrap();
+
+        let resp = commit(
+            State(state.clone()),
+            Path("ws".into()),
+            axum::extract::Json(CommitBody { message: "测试提交".into(), repo: None }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = git_output(&dir, ["log", "-1", "--pretty=%B"]).unwrap();
+        assert!(body.contains("测试提交"), "缺少原始信息: {body}");
+        assert!(body.contains(COMMIT_ATTRIBUTION), "缺少署名: {body}");
+
+        // 信息中已含署名时不重复追加
+        std::fs::write(dir.join("a.txt"), "v2\n").unwrap();
+        git_output(&dir, ["add", "."]).unwrap();
+        let resp = commit(
+            State(state.clone()),
+            Path("ws".into()),
+            axum::extract::Json(CommitBody {
+                message: format!("再次提交\n\n{COMMIT_ATTRIBUTION}"),
+                repo: None,
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = git_output(&dir, ["log", "-1", "--pretty=%B"]).unwrap();
+        assert_eq!(body.matches(COMMIT_ATTRIBUTION).count(), 1, "署名重复: {body}");
+
+        // 关闭开关后提交不再追加署名,原始信息原样保留
+        crate::config::set_commit_attribution(&cfg_dir.path().join("combo-cli.toml"), false)
+            .unwrap();
+        std::fs::write(dir.join("a.txt"), "v3\n").unwrap();
+        git_output(&dir, ["add", "."]).unwrap();
+        let resp = commit(
+            State(state.clone()),
+            Path("ws".into()),
+            axum::extract::Json(CommitBody { message: "无署名提交".into(), repo: None }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = git_output(&dir, ["log", "-1", "--pretty=%B"]).unwrap();
+        assert!(!body.contains(COMMIT_ATTRIBUTION), "关闭后仍追加署名: {body}");
+        assert!(body.contains("无署名提交"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+        match prev_cfg {
+            Some(v) => std::env::set_var("COMBO_CONFIG_DIR", v),
+            None => std::env::remove_var("COMBO_CONFIG_DIR"),
+        }
+    }
+
+    /// GET/POST /v1/settings/commit-attribution:缺省开启、POST 持久化到配置文件。
+    #[tokio::test]
+    async fn attribution_endpoint_roundtrip() {
+        let _env = crate::paths::ENV_LOCK.lock().unwrap();
+        let cfg_dir = tempfile::tempdir().unwrap();
+        let prev_cfg = std::env::var_os("COMBO_CONFIG_DIR");
+        std::env::set_var("COMBO_CONFIG_DIR", cfg_dir.path());
+        let cfg_path = cfg_dir.path().join("combo-cli.toml");
+
+        // 无配置时默认开启
+        let resp = attribution_get().await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+        let val: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(val["enabled"], serde_json::json!(true));
+
+        // 关闭并持久化
+        let resp = attribution_set(axum::extract::Json(AttributionBody { enabled: false })).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let cfg = crate::config::AppConfig::load_or_create(&cfg_path).unwrap();
+        assert_eq!(cfg.commit_attribution, Some(false));
+
+        // 重新读取生效
+        assert!(!crate::config::commit_attribution_enabled(&cfg_path));
+
+        match prev_cfg {
+            Some(v) => std::env::set_var("COMBO_CONFIG_DIR", v),
+            None => std::env::remove_var("COMBO_CONFIG_DIR"),
+        }
     }
 }

@@ -842,6 +842,10 @@ fn build_router(
         .route("/v1/mcp", get(list_mcp).post(upsert_mcp))
         .route("/v1/mcp/remove", post(remove_mcp))
         .route("/v1/mcp/test", post(test_mcp))
+        .route(
+            "/v1/settings/commit-attribution",
+            get(git::attribution_get).post(git::attribution_set),
+        )
         .route("/v1/stats/usage", get(usage_stats))
         .route("/v1/terminal", get(terminal::terminal_default))
         .route("/v1/workspaces/:id/terminal", get(terminal::terminal))

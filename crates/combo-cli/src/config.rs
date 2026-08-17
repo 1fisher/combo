@@ -285,6 +285,8 @@ pub struct AppConfig {
     /// 禁用的 skill 名列表。
     #[serde(default)]
     pub disabled_skills: Vec<String>,
+    /// git 提交时是否自动追加 "Generated with Combo" 署名(默认 true)。
+    pub commit_attribution: Option<bool>,
 }
 
 impl AppConfig {
@@ -705,6 +707,20 @@ pub fn remove_mcp_server(path: &PathBuf, name: &str) -> Result<()> {
     write_config(path, &cfg)
 }
 
+/// 读取「git 提交署名」开关(配置文件缺省时默认开启)。
+pub fn commit_attribution_enabled(path: &PathBuf) -> bool {
+    AppConfig::load_or_create(path)
+        .map(|c| c.commit_attribution.unwrap_or(true))
+        .unwrap_or(true)
+}
+
+/// 写入「git 提交署名」开关到配置文件。
+pub fn set_commit_attribution(path: &PathBuf, enabled: bool) -> Result<()> {
+    let mut cfg = load_config(path)?;
+    cfg.commit_attribution = Some(enabled);
+    write_config(path, &cfg)
+}
+
 /// 写入默认配置文件模板。`overwrite=false` 时若文件已存在则不写。
 pub fn write_default(path: &PathBuf, overwrite: bool) -> Result<()> {
     if path.exists() && !overwrite {
@@ -725,6 +741,9 @@ pub fn write_default(path: &PathBuf, overwrite: bool) -> Result<()> {
 
 # 是否启用内置工具(当前时间/日期),默认 true
 # tools = true
+
+# git 提交时是否自动追加 "Generated with Combo" 署名,默认 true
+# commit_attribution = true
 
 # ========== 多 API key 配置 ==========
 # 每个 provider 一个表,key = provider id;api_key 可为明文或 $ENV_VAR。
@@ -941,6 +960,7 @@ mod tests {
             lsp: BTreeMap::new(),
             skills_paths: vec![],
             disabled_skills: vec![],
+            commit_attribution: None,
         };
         let r = cfg.resolve(Some("openai"), None, None, None, None, Some("http://mcp:1"));
         assert_eq!(r.provider, "openai", "CLI 参数优先");

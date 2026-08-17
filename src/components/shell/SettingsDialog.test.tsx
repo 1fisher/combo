@@ -20,6 +20,26 @@ const renameKeyMutate = vi.fn();
 const removeKeyMutate = vi.fn();
 const createProviderMutate = vi.fn();
 const removeProviderMutate = vi.fn();
+const attributionToggle = vi.fn();
+
+// mock 内用真实 useState,保证开关点击后重渲染与真实 hook 行为一致
+vi.mock('../../hooks/useCommitAttribution', async () => {
+  const React = await import('react');
+  return {
+    useCommitAttribution: () => {
+      const [enabled, setEnabled] = React.useState(true);
+      return {
+        enabled,
+        isLoading: false,
+        toggle: (v: boolean) => {
+          setEnabled(v);
+          attributionToggle(v);
+        },
+        isPending: false,
+      };
+    },
+  };
+});
 
 vi.mock('../../hooks/useAgentModel', () => ({
   useProviders: () => ({
@@ -99,6 +119,7 @@ describe('SettingsDialog', () => {
     createProviderMutate.mockResolvedValue({ ok: true });
     removeProviderMutate.mockReset();
     removeProviderMutate.mockResolvedValue({ ok: true });
+    attributionToggle.mockReset();
     // confirmDialog 在浏览器模式走 window.confirm
     vi.spyOn(window, 'confirm').mockReturnValue(true);
   });
@@ -130,6 +151,18 @@ describe('SettingsDialog', () => {
     renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
     await userEvent.click(screen.getByRole('button', { name: '清除域名配置' }));
     expect(getExternalUrl()).toBeNull();
+  });
+
+  it('toggles commit attribution switch off and on', async () => {
+    renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
+    const sw = screen.getByRole('switch', { name: 'Git 提交署名' });
+    expect(sw.getAttribute('aria-checked')).toBe('true');
+    await userEvent.click(sw);
+    expect(attributionToggle).toHaveBeenCalledWith(false);
+    expect(sw.getAttribute('aria-checked')).toBe('false');
+    await userEvent.click(sw);
+    expect(attributionToggle).toHaveBeenCalledWith(true);
+    expect(sw.getAttribute('aria-checked')).toBe('true');
   });
 
   it('shows masked api key when provider has one configured', async () => {
