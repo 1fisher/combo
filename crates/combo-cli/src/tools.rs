@@ -775,32 +775,12 @@ fn bash_tool(ws: PathBuf) -> DynamicTool {
                     return Ok(ToolOutput::text("错误: command 不能为空"));
                 }
 
+                let started = std::time::Instant::now();
                 match run_bash_command(command, &ws, timeout).await {
-                    Ok(output) => {
-                        let mut out = String::new();
-                        if !output.stdout.is_empty() {
-                            out.push_str(&output.stdout);
-                        }
-                        if !output.stderr.is_empty() {
-                            if !output.stdout.is_empty() {
-                                out.push_str("\n");
-                            }
-                            out.push_str(&output.stderr);
-                        }
-                        if output.timed_out {
-                            out.push_str(&format!(
-                                "\n⚠ 命令执行超时({timeout} 秒),已终止进程"
-                            ));
-                        } else if output.success {
-                            out.push_str("\n✅ 命令执行成功");
-                        } else {
-                            out.push_str(&format!(
-                                "\n❌ 命令执行失败(退出码 {})",
-                                output.code.unwrap_or(-1)
-                            ));
-                        }
-                        Ok(ToolOutput::text(out))
-                    }
+                    Ok(output) => Ok(bash_output_envelope(
+                        &output,
+                        started.elapsed().as_millis() as u64,
+                    )),
                     Err(e) => Ok(ToolOutput::text(format!("命令执行失败: {e}"))),
                 }
             })
@@ -812,9 +792,30 @@ fn bash_tool(ws: PathBuf) -> DynamicTool {
 struct BashOutput {
     stdout: String,
     stderr: String,
-    success: bool,
     code: Option<i32>,
     timed_out: bool,
+}
+
+/// 把 bash 执行结果组装成结构化工具输出:内容与状态字段分离。
+/// 完成/失败/超时不再拼进输出文本,由 agent 解析字段、serve 标记到
+/// tool_result 消息项(前端据此在卡片上直接展示状态)。
+fn bash_output_envelope(output: &BashOutput, duration_ms: u64) -> ToolOutput {
+    let mut out = String::new();
+    if !output.stdout.is_empty() {
+        out.push_str(&output.stdout);
+    }
+    if !output.stderr.is_empty() {
+        if !output.stdout.is_empty() {
+            out.push_str("\n");
+        }
+        out.push_str(&output.stderr);
+    }
+    ToolOutput::json(json!({
+        "content": out,
+        "exit_code": output.code,
+        "timed_out": output.timed_out,
+        "duration_ms": duration_ms,
+    }))
 }
 
 /// 实际执行命令:选择 shell(Unix 用 $SHELL 或 /bin/sh,Windows 用 cmd.exe),
@@ -879,7 +880,6 @@ async fn run_bash_command(
 
     let timed_out = status.is_none();
     let code = status.as_ref().and_then(|s| s.code());
-    let success = status.map(|s| s.success()).unwrap_or(false);
 
     const MAX_OUTPUT: usize = 30_000;
     let truncate = |bytes: Vec<u8>| -> String {
@@ -899,7 +899,6 @@ async fn run_bash_command(
     Ok(BashOutput {
         stdout: truncate(stdout_bytes),
         stderr: truncate(stderr_bytes),
-        success,
         code,
         timed_out,
     })
@@ -1493,7 +1492,6 @@ mod tests {
         let out = run_bash_command("echo hello", Path::new("/tmp"), 10)
             .await
             .unwrap();
-        assert!(out.success);
         assert_eq!(out.code, Some(0));
         assert!(out.stdout.contains("hello"));
         assert!(!out.timed_out);
@@ -1505,7 +1503,6 @@ mod tests {
         let out = run_bash_command("exit 3", Path::new("/tmp"), 10)
             .await
             .unwrap();
-        assert!(!out.success);
         assert_eq!(out.code, Some(3));
         assert!(!out.timed_out);
     }
@@ -1526,7 +1523,7 @@ mod tests {
     async fn bash_runs_in_workspace_dir() {
         let dir = tempfile::tempdir().unwrap();
         let out = run_bash_command("pwd", dir.path(), 10).await.unwrap();
-        assert!(out.success);
+        assert_eq!(out.code, Some(0));
         assert!(out.stdout.trim().ends_with(dir.path().to_str().unwrap()));
     }
 
@@ -1536,7 +1533,7 @@ mod tests {
         let out = run_bash_command("echo err >&2", Path::new("/tmp"), 10)
             .await
             .unwrap();
-        assert!(out.success);
+        assert_eq!(out.code, Some(0));
         assert!(out.stderr.contains("err"));
     }
 
@@ -1550,8 +1547,45 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(out.success);
+        assert_eq!(out.code, Some(0));
         assert_eq!(out.stdout.trim(), "a");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn bash_envelope_keeps_status_out_of_content() {
+        // 成功:内容为纯输出,状态字段单独携带,不再拼进文本
+        let out = run_bash_command("echo hi", Path::new("/tmp"), 10)
+            .await
+            .unwrap();
+        let env = bash_output_envelope(&out, 12);
+        let json = env.as_json().unwrap();
+        assert_eq!(json["content"], "hi\n");
+        assert_eq!(json["exit_code"], 0);
+        assert_eq!(json["timed_out"], false);
+        assert_eq!(json["duration_ms"], 12);
+        let content = json["content"].as_str().unwrap();
+        assert!(!content.contains("命令执行成功"));
+
+        // 失败:退出码非 0
+        let out = run_bash_command("exit 7", Path::new("/tmp"), 10)
+            .await
+            .unwrap();
+        let env = bash_output_envelope(&out, 3);
+        let json = env.as_json().unwrap();
+        assert_eq!(json["exit_code"], 7);
+        assert_eq!(json["timed_out"], false);
+        assert!(!json["content"].as_str().unwrap().contains("命令执行失败"));
+
+        // 超时:timed_out=true
+        let out = run_bash_command("sleep 30", Path::new("/tmp"), 1)
+            .await
+            .unwrap();
+        assert!(out.timed_out);
+        let env = bash_output_envelope(&out, 1000);
+        let json = env.as_json().unwrap();
+        assert_eq!(json["timed_out"], true);
+        assert!(!json["content"].as_str().unwrap().contains("命令执行超时"));
     }
 
     // ============================= replace 工具测试 =============================

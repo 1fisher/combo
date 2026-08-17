@@ -16,6 +16,7 @@ use rig::completion::{CompletionModel, GetTokenUsage, Message};
 use rig::prelude::AgentClientExt;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingChat, StreamingPrompt};
 use rig::tool::DynamicTool;
+use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -380,7 +381,19 @@ pub enum RunEvent {
     /// 完整工具调用(rig 已执行并自动回填结果)。
     ToolCall { id: String, name: String, input: String },
     /// 工具执行结果。
-    ToolResult { id: String, name: String, content: String },
+    ToolResult {
+        id: String,
+        name: String,
+        content: String,
+        /// 命令/工具失败(退出码非 0 或超时):serve 标记消息项为错误态。
+        is_error: bool,
+        /// 命令退出码(bash 等)。
+        exit_code: Option<i32>,
+        /// 是否超时被终止。
+        timed_out: bool,
+        /// 执行耗时(毫秒)。
+        duration_ms: Option<u64>,
+    },
     /// run 结束后的真实 token 用量(rig 原生 Usage,含最后调用与 run 累计)。
     Usage(RunUsage),
 }
@@ -558,26 +571,58 @@ where
                 tool_result,
                 ..
             }) => {
-                // text / json 内容块都转成字符串;image 块跳过
-                let content = tool_result
-                    .content
-                    .iter()
-                    .filter_map(|c| match c {
-                        ToolResultContent::Text(t) => Some(t.text.clone()),
-                        ToolResultContent::Json { value } => Some(value.to_string()),
-                        ToolResultContent::Image(_) => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
                 let name = tool_names
                     .get(&tool_result.id)
                     .cloned()
                     .unwrap_or_default();
+                // text / json 内容块都转成字符串;image 块跳过。bash 工具返回
+                // 结构化 JSON({content, exit_code, timed_out, duration_ms}),
+                // 解析出干净内容与状态标记,其余工具原样拼接。
+                let mut content = String::new();
+                let mut is_error = false;
+                let mut exit_code: Option<i32> = None;
+                let mut timed_out = false;
+                let mut duration_ms: Option<u64> = None;
+                for c in tool_result.content.iter() {
+                    match c {
+                        ToolResultContent::Text(t) => content.push_str(&t.text),
+                        ToolResultContent::Json { value } => {
+                            if name == "bash" {
+                                if let Some(inner) = value.get("content").and_then(Value::as_str) {
+                                    content.push_str(inner);
+                                }
+                                if let Some(code) = value.get("exit_code").and_then(Value::as_i64) {
+                                    exit_code = Some(code as i32);
+                                }
+                                if value
+                                    .get("timed_out")
+                                    .and_then(Value::as_bool)
+                                    .unwrap_or(false)
+                                {
+                                    timed_out = true;
+                                }
+                                if let Some(ms) = value.get("duration_ms").and_then(Value::as_u64) {
+                                    duration_ms = Some(ms);
+                                }
+                            } else {
+                                content.push_str(&value.to_string());
+                            }
+                        }
+                        ToolResultContent::Image(_) => {}
+                    }
+                }
+                if exit_code != Some(0) || timed_out {
+                    is_error = true;
+                }
                 running_tools.remove(&tool_result.id);
                 on_event(RunEvent::ToolResult {
                     id: tool_result.id,
                     name,
                     content,
+                    is_error,
+                    exit_code,
+                    timed_out,
+                    duration_ms,
                 });
             }
             MultiTurnStreamItem::CompletionCall(call) => {

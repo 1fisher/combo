@@ -136,6 +136,80 @@ describe('ToolResultCard · bash 结果去重', () => {
     expect(pre?.textContent).not.toContain('$ cargo test');
   });
 
+  it('bash 成功:状态标记在卡片摘要上(成功),不拼进输出内容', () => {
+    seedToolCall('tb2', 'bash', '{"command":"echo hi"}');
+    render(
+      <ToolResultCard
+        result={{
+          tool_call_id: 'tb2',
+          name: 'bash',
+          content: 'hi',
+          metadata: JSON.stringify({ exit_code: 0, timed_out: false, duration_ms: 5 }),
+        }}
+      />,
+    );
+    const summary = document.querySelector('summary')?.textContent ?? '';
+    expect(summary).toContain('成功');
+    const pre = document.querySelector('pre');
+    expect(pre?.textContent).toBe('hi');
+    expect(pre?.textContent).not.toContain('命令执行成功');
+  });
+
+  it('bash 失败:摘要标记失败与退出码,is_error 置红', () => {
+    seedToolCall('tb3', 'bash', '{"command":"exit 7"}');
+    render(
+      <ToolResultCard
+        result={{
+          tool_call_id: 'tb3',
+          name: 'bash',
+          content: '',
+          is_error: true,
+          metadata: JSON.stringify({ exit_code: 7, timed_out: false, duration_ms: 3 }),
+        }}
+      />,
+    );
+    const summary = document.querySelector('summary')?.textContent ?? '';
+    expect(summary).toContain('失败(7)');
+    expect(document.querySelector('.text-red-500')).toBeTruthy();
+  });
+
+  it('bash 超时:摘要标记超时,内容不含超时文案', () => {
+    seedToolCall('tb4', 'bash', '{"command":"sleep 30"}');
+    render(
+      <ToolResultCard
+        result={{
+          tool_call_id: 'tb4',
+          name: 'bash',
+          content: 'partial output',
+          is_error: true,
+          metadata: JSON.stringify({ exit_code: null, timed_out: true, duration_ms: 1000 }),
+        }}
+      />,
+    );
+    const summary = document.querySelector('summary')?.textContent ?? '';
+    expect(summary).toContain('超时');
+    const pre = document.querySelector('pre');
+    expect(pre?.textContent).toBe('partial output');
+    expect(pre?.textContent).not.toContain('命令执行超时');
+  });
+
+  it('bash 空输出但成功:仍渲染卡片展示状态', () => {
+    seedToolCall('tb5', 'bash', '{"command":"true"}');
+    render(
+      <ToolResultCard
+        result={{
+          tool_call_id: 'tb5',
+          name: 'bash',
+          content: '',
+          metadata: JSON.stringify({ exit_code: 0, timed_out: false, duration_ms: 1 }),
+        }}
+      />,
+    );
+    const summary = document.querySelector('summary')?.textContent ?? '';
+    expect(summary).toContain('成功');
+    expect(document.querySelector('details')).toBeTruthy();
+  });
+
   it('独立 shell_command(command 显式传入):保留命令摘要与命令体,输出剥离回显', () => {
     render(
       <ToolResultCard

@@ -564,14 +564,46 @@ pub(crate) async fn start_agent_run(
                     sparts.tool_call(&id, &name, &input);
                     force_persist = true;
                 }
-                RunEvent::ToolResult { id, name, content } => {
+                RunEvent::ToolResult {
+                    id,
+                    name,
+                    content,
+                    is_error,
+                    exit_code,
+                    timed_out,
+                    duration_ms,
+                } => {
                     crate::request_log::log_event(
                         &run_id_for_task,
                         &session_id,
                         "tool_result",
                         json!({ "id": &id, "name": &name, "content_preview": content.chars().take(2000).collect::<String>() }),
                     );
-                    let msg = tool_result_message_json(&session_id, &id, &name, &content);
+                    // 状态标记到消息项本身:失败/超时置 is_error,执行信息进 metadata
+                    let metadata = match (exit_code, timed_out, duration_ms) {
+                        (None, false, None) => None,
+                        _ => {
+                            let mut m = serde_json::Map::new();
+                            if let Some(code) = exit_code {
+                                m.insert("exit_code".into(), json!(code));
+                            }
+                            if timed_out {
+                                m.insert("timed_out".into(), json!(true));
+                            }
+                            if let Some(ms) = duration_ms {
+                                m.insert("duration_ms".into(), json!(ms));
+                            }
+                            Some(serde_json::Value::Object(m).to_string())
+                        }
+                    };
+                    let msg = tool_result_message_json(
+                        &session_id,
+                        &id,
+                        &name,
+                        &content,
+                        is_error,
+                        metadata,
+                    );
                     persist_msg(meta_p.as_ref(), &ws_p, &msg);
                     let _ = tx_ev.send(msg_env("created", msg));
                 }
@@ -1250,11 +1282,26 @@ fn tool_call_part(id: &str, name: &str, input: &str) -> Value {
     })
 }
 
-fn tool_result_part(tool_call_id: &str, name: &str, content: &str) -> Value {
-    json!({
+fn tool_result_part(
+    tool_call_id: &str,
+    name: &str,
+    content: &str,
+    is_error: bool,
+    metadata: Option<String>,
+) -> Value {
+    let mut data = json!({
         "type": "tool_result",
-        "data": { "tool_call_id": tool_call_id, "name": name, "content": content, "is_error": false },
-    })
+        "data": {
+            "tool_call_id": tool_call_id,
+            "name": name,
+            "content": content,
+            "is_error": is_error,
+        }
+    });
+    if let Some(m) = metadata {
+        data["data"]["metadata"] = json!(m);
+    }
+    data
 }
 
 fn tool_result_message_json(
@@ -1262,12 +1309,14 @@ fn tool_result_message_json(
     tool_call_id: &str,
     name: &str,
     content: &str,
+    is_error: bool,
+    metadata: Option<String>,
 ) -> Value {
     json!({
         "id": uuid::Uuid::new_v4().to_string(),
         "session_id": session_id,
         "role": "user",
-        "parts": [tool_result_part(tool_call_id, name, content)],
+        "parts": [tool_result_part(tool_call_id, name, content, is_error, metadata)],
         "created_at": now_secs(),
         "updated_at": now_secs(),
     })

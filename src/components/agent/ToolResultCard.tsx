@@ -119,19 +119,27 @@ export function ToolResultCard({
     !diffLines && !readView && parsedJson === null && content.length > COLLAPSE_THRESHOLD;
   const visibleContent = expanded || !isLong ? content : content.slice(0, COLLAPSE_THRESHOLD);
 
-  // 提取 metadata 信息
-  let metaInfo = '';
+  // 提取 metadata 信息(执行状态:退出码/超时/耗时)
+  let meta: Record<string, unknown> | null = null;
   if (result.metadata) {
     try {
-      const meta = JSON.parse(result.metadata) as Record<string, unknown>;
-      const parts: string[] = [];
-      if (typeof meta.rows === 'number') parts.push(`${meta.rows} 行`);
-      if (typeof meta.exit_code === 'number' && meta.exit_code !== 0) parts.push(`退出码 ${meta.exit_code}`);
-      if (typeof meta.duration_ms === 'number') parts.push(`${meta.duration_ms}ms`);
-      metaInfo = parts.join(' · ');
+      meta = JSON.parse(result.metadata) as Record<string, unknown>;
     } catch {
       /* ignore */
     }
+  }
+  const timedOut = meta?.timed_out === true;
+  const exitCode = typeof meta?.exit_code === 'number' ? meta.exit_code : undefined;
+  // 失败(退出码非 0)或超时都算错误态;成功态仅 bash 类工具携带状态信息
+  const showError = isError || timedOut;
+  let metaInfo = '';
+  if (meta) {
+    const parts: string[] = [];
+    if (typeof meta.rows === 'number') parts.push(`${meta.rows} 行`);
+    if (timedOut) parts.push('超时');
+    if (typeof meta.exit_code === 'number' && meta.exit_code !== 0) parts.push(`退出码 ${meta.exit_code}`);
+    if (typeof meta.duration_ms === 'number') parts.push(`${meta.duration_ms}ms`);
+    metaInfo = parts.join(' · ');
   }
 
   // 摘要标题
@@ -144,16 +152,30 @@ export function ToolResultCard({
         : `${name} 返回`;
 
   return (
-    <details className="group rounded-md border bg-muted/20" open={isError || !!diffLines}>
+    <details className="group rounded-md border bg-muted/20" open={showError || !!diffLines}>
       <summary className="flex cursor-pointer items-center gap-2 px-3 py-1.5">
         <ChevronRight className="size-3 text-muted-foreground transition-transform group-open:rotate-90" />
-        {isError ? (
+        {showError ? (
           <XCircle className="size-3.5 text-red-500" />
         ) : (
           <CheckCircle className="size-3.5 text-green-500" />
         )}
         {isBash && <Terminal className="size-3 text-muted-foreground" />}
         <span className="font-mono text-[11px] text-muted-foreground">{titleLabel}</span>
+        {/* 完成/失败/超时状态:标记在消息项上,不再拼进输出内容 */}
+        {(isBash || showError) && (
+          <span
+            className={
+              timedOut
+                ? 'rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-500'
+                : showError
+                  ? 'rounded bg-red-500/10 px-1.5 py-0.5 text-[10px] font-medium text-red-500'
+                  : 'rounded bg-green-500/10 px-1.5 py-0.5 text-[10px] font-medium text-green-500'
+            }
+          >
+            {timedOut ? '超时' : showError ? `失败${exitCode != null ? `(${exitCode})` : ''}` : '成功'}
+          </span>
+        )}
         {/* 增删统计 */}
         {changeStats && (changeStats.additions > 0 || changeStats.deletions > 0) && (
           <span className="flex items-center gap-1 font-mono text-[10px]">

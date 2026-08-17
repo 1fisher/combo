@@ -168,14 +168,16 @@ export const MessageItem = memo(function MessageItem({
                       metadata?: string;
                       is_error?: boolean;
                     };
-                    // 结构化内容(对象/数组)转为字符串;空内容的 tool_result 不渲染
+                    // 结构化内容(对象/数组)转为字符串;空内容但携带状态
+                    // (is_error/metadata,如 bash 成功但无输出)仍需渲染卡片展示状态
                     const content =
                       typeof tr.content === 'string'
                         ? tr.content
                         : tr.content
                           ? JSON.stringify(tr.content, null, 2)
                           : '';
-                    if (!content || content.trim() === '') return null;
+                    const hasStatus = !!tr.is_error || !!tr.metadata;
+                    if ((!content || content.trim() === '') && !hasStatus) return null;
                     return (
                       <div key={i}>
                         <ToolResultCard
