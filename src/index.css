@@ -283,9 +283,10 @@
 }
 
 /* ---- 运行中指示器(RunningIndicator)流光特效:品牌色高光沿胶囊自左向右
-   循环扫过。实现为 ::before 斜切光带(width 45%,left -60%)做 translateX
-   位移:终点 380%(自身宽度的 3.8 倍 ≈ 容器宽度的 171%)保证光带完全滑出
-   右缘后循环,不出现回扫;外层 .run-shimmer overflow-hidden 裁掉容器外部分。 */
+   循环扫过。宽度自适应:光带宽度按容器钳制(clamp(36px, 45%, 72px),不随
+   胶囊加宽而等比变宽),扫过区间以容器百分比锚定两端(left -100% → 100%),
+   起止都完全滑出左右边缘;胶囊宽度变化(流式速度/耗时位数增减)时百分比
+   实时重算,无需 JS 介入。外层 .run-shimmer overflow-hidden 裁掉容器外部分。 */
 .run-shimmer {
   position: absolute;
   inset: 0;
@@ -297,8 +298,9 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  left: -60%;
-  width: 45%;
+  left: -100%;
+  width: clamp(36px, 45%, 72px);
+  transform: skewX(-16deg);
   background: linear-gradient(
     100deg,
     transparent,
@@ -310,8 +312,8 @@
   animation: run-shimmer-sweep 1.8s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
 @keyframes run-shimmer-sweep {
-  0%   { transform: translateX(0) skewX(-16deg); }
-  100% { transform: translateX(380%) skewX(-16deg); }
+  from { left: -100%; }
+  to   { left: 100%; }
 }
 
 /* 首屏 Combo 线框字与粒子流光已全部改由 canvas 渲染
