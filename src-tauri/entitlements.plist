@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- hardened runtime 下 TCC 要求显式声明麦克风权限:
+         缺失时 macOS 静默拒绝,不弹授权框、系统设置列表也不显示应用。 -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+</dict>
+</plist>

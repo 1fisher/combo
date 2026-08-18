@@ -302,14 +302,21 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   关闭音在收尾时播放,自动取消不播)。
   最终文本经 `appendTranscript` 追加进输入框(中英边界智能补空格)。macOS
   麦克风权限声明在 `src-tauri/Info.plist`(`NSMicrophoneUsageDescription`)。
-  **注意 TCC 与 ad-hoc 签名**:macOS 按「代码签名身份」记录麦克风等隐私权限;
-  ad-hoc 签名(`signingIdentity "-"`,当前回退值)每次构建 CDHash 都变,TCC
-  视为新应用,系统设置 → 隐私与安全性 → 麦克风列表可能不显示 Combo、无法开启。
-  根治靠 Developer ID 签名(稳定的 designated requirement):release.yml 已按
-  secrets 是否配置自动启用「Developer ID 签名 + 公证」(需在 GitHub 配置
+  **注意 TCC 权限的两道门槛**:① hardened runtime 应用必须带
+  `com.apple.security.device.audio-input` entitlement(见
+  `src-tauri/entitlements.plist`,tauri.conf.json `bundle.macOS.entitlements`
+  引用)——缺失时 macOS **静默拒绝**麦克风,不弹授权框、系统设置列表也不显示
+  应用(tccd 日志: "requires entitlement com.apple.security.device.audio-input
+  but it is missing ... Policy disallows prompt ... denied");② macOS 按「代码
+  签名身份」记录隐私权限,ad-hoc 签名(`signingIdentity "-"`)每次构建 CDHash
+  都变,TCC 视为新应用、列表不显示。根治靠 Developer ID 签名(稳定
+  designated requirement):release.yml 已按 secrets 是否配置自动启用
+  「Developer ID 签名 + 公证」(需在 GitHub 配置
   APPLE_CERTIFICATE/APPLE_CERTIFICATE_PASSWORD/APPLE_SIGNING_IDENTITY/
   APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID 六项,见 CI 注释)。排查/重置命令:
   `sudo tccutil reset Microphone dev.combo.ide && sudo killall tccd` 后重启应用。
+  本地开发可 `bash scripts/macos-sign-dev.sh`(自动建自签名证书并带 entitlement
+  重签 Combo.app,身份稳定,TCC 列表可正常显示;每次重新构建后重跑一次)。
 - **Frontend layout:** `src/components/{ui,shell,agent}` — `ui/` is generated
   shadcn primitives, `shell/` is app chrome, `agent/` is the chat/tool/modal UI.
   The shell is a 1:1 仿写 ZCode 的 agent 布局:左侧 `WorkspaceSidebar`(默认 372px,
