@@ -946,7 +946,7 @@ export function getWorkspaceGraph(workspaceId: string): Promise<Api.WorkspaceGra
   return apiRequest(`/v1/workspaces/${workspaceId}/graph`);
 }
 
-// ---------- 本地语音识别(ASR,Paraformer 双语流式) ----------
+// ---------- 本地语音识别(ASR,中文 SenseVoice / Moonshine 中英) ----------
 
 /** 查询语音模型状态(未就绪/下载中/加载中/就绪/失败)。 */
 export function getTranscribeStatus(): Promise<Api.TranscribeStatus> {
@@ -956,6 +956,18 @@ export function getTranscribeStatus(): Promise<Api.TranscribeStatus> {
 /** 触发语音模型下载/加载(幂等,后台执行)。 */
 export function prepareTranscribe(): Promise<{ ok: boolean; phase: Api.TranscribePhase }> {
   return apiRequest('/v1/transcribe/prepare', { method: 'POST' });
+}
+
+/**
+ * 切换语音识别模型并持久化到配置(`[asr] model`)。
+ * `model` 取值:`sense-voice`(中文)/ `moonshine-zh`(中文)/ `moonshine-en`(英文);
+ * 切换后回到未就绪状态,首次使用自动下载对应模型。
+ */
+export function setTranscribeModel(model: string): Promise<Api.TranscribeModelResult> {
+  return apiRequest('/v1/transcribe/model', {
+    method: 'POST',
+    body: { model },
+  });
 }
 
 /**

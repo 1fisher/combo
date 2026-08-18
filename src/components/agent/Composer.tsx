@@ -586,11 +586,21 @@ export function Composer({
     setPickerOpen(false);
   }
 
-  // 语音听写:后端本地 Paraformer 双语流式模型,边说边出字,结果追加到输入框
+  // 语音听写:识别文本以「预输入」方式实时拼进输入框末尾(类似输入法组合,
+  // 不写入受控 value),停止后 final 经 appendTranscript 正式追加;录音中
+  // 手动编辑输入框会取消识别
   const dictation = useDictation((text) => {
     onChange(appendTranscript(value, text));
     requestAnimationFrame(() => areaRef.current?.focus());
   });
+  // 录音中显示在输入框末尾的预输入文本(停止后清空,由 onText 追加 final)
+  const asrPending = dictation.state !== 'idle' ? dictation.partialText : '';
+
+  // 预输入文本变化时同步输入框高度(与用户输入共用同一高度策略)
+  useEffect(() => {
+    if (asrPending) autosize();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [asrPending]);
 
   return (
     <div className="px-4 py-2 w-full shrink-0">
@@ -675,9 +685,15 @@ export function Composer({
                 <textarea
                   ref={areaRef}
                   rows={1}
-                  value={value}
+                  value={value + asrPending}
                   onChange={(e) => {
-                    onChange(e.target.value);
+                    // 听写进行中手动编辑:放弃当前识别;受控值里拼着预输入尾巴,
+                    // 需要剥离后再写入,避免 pending 文本污染用户输入
+                    if (dictation.state !== 'idle') dictation.cancel();
+                    const v = e.target.value;
+                    onChange(
+                      asrPending && v.endsWith(asrPending) ? v.slice(0, -asrPending.length) : v
+                    );
                     autosize();
                   }}
                   onCompositionStart={() => {
@@ -702,27 +718,16 @@ export function Composer({
                       submit();
                     }
                   }}
-                  placeholder="向 combo 提问,@ 提及文件或文件夹,/ 使用命令或子智能体,$ 使用技能,# 关联对话"
+                  placeholder={
+                    value || asrPending
+                      ? undefined
+                      : '向 combo 提问,@ 提及文件或文件夹,/ 使用命令或子智能体,$ 使用技能,# 关联对话'
+                  }
                   disabled={disabled}
                   className="bg-transparent disabled:opacity-50 shadow-none p-0 border-0 outline-none w-full min-h-10 max-h-40 text-foreground placeholder:text-foreground-subtlest text-sm leading-5 resize-none disabled:cursor-not-allowed"
                   aria-label="输入消息"
                 />
               </div>
-              {/* 语音实时识别:流式边说边出字;首录下载模型时展示进度 */}
-              {dictation.state !== 'idle' && (dictation.partialText || dictation.modelProgress != null) && (
-                <div className="flex items-start gap-2 text-xs text-foreground-subtle leading-5">
-                  {dictation.state === 'recording' && (
-                    <span className="bg-destructive rounded-full size-1.5 mt-1.5 animate-pulse shrink-0" />
-                  )}
-                  {dictation.partialText ? (
-                    <span className="min-w-0 break-all line-clamp-3">{dictation.partialText}</span>
-                  ) : (
-                    <span className="tabular-nums shrink-0">
-                      模型下载中 {Math.round((dictation.modelProgress ?? 0) * 100)}%
-                    </span>
-                  )}
-                </div>
-              )}
               {/* 工具栏 */}
               <div className="flex items-end gap-3">
                 <div className="flex flex-1 items-center gap-1 min-w-0">
@@ -1049,7 +1054,7 @@ export function Composer({
                       </>
                     )}
                   </div>
-                  {/* 语音输入(本地 Paraformer 双语流式识别) */}
+                  {/* 语音输入(本地离线模型:中文 SenseVoice / 英文 Moonshine,分段模拟流式) */}
                   <div className="flex items-center gap-1 shrink-0">
                     <Button
                       type="button"
@@ -1090,7 +1095,7 @@ export function Composer({
                         {dictation.seconds}s
                       </span>
                     )}
-                    {dictation.state === 'transcribing' && dictation.modelProgress != null && (
+                    {dictation.state !== 'idle' && dictation.modelProgress != null && (
                       <span className="text-[11px] tabular-nums text-foreground-subtle shrink-0">
                         模型 {Math.round(dictation.modelProgress * 100)}%
                       </span>

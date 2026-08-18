@@ -292,6 +292,27 @@ pub struct AppConfig {
     pub disabled_skills: Vec<String>,
     /// git 提交时是否自动追加 "Generated with Combo" 署名(默认 true)。
     pub commit_attribution: Option<bool>,
+    /// 语音识别(ASR)设置。
+    #[serde(default)]
+    pub asr: AsrConfig,
+}
+
+/// 语音识别(ASR)配置(`[asr]` 段)。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AsrConfig {
+    /// ASR 模型 id:`sense-voice`(中文,默认)/ `moonshine-zh`(中文)/ `moonshine-en`(英文)。
+    pub model: Option<String>,
+}
+
+impl AsrConfig {
+    /// 解析为模型枚举;未设置或非法值回落默认(sense-voice)。
+    pub fn resolve_model(&self) -> crate::asr::AsrModel {
+        self.model
+            .as_deref()
+            .and_then(crate::asr::AsrModel::parse)
+            .unwrap_or(crate::asr::AsrModel::SenseVoice)
+    }
 }
 
 impl AppConfig {
@@ -692,6 +713,16 @@ pub fn set_model_context_window(
     write_config(path, &cfg)
 }
 
+/// 设置语音识别(ASR)模型,写入 `[asr] model = "<id>"`,跨重启保留。
+pub fn set_asr_model(path: &PathBuf, model: &str) -> Result<()> {
+    if crate::asr::AsrModel::parse(model).is_none() {
+        return Err(anyhow::anyhow!("未知 ASR 模型 id: {model}"));
+    }
+    let mut cfg = load_config(path)?;
+    cfg.asr.model = Some(model.to_string());
+    write_config(path, &cfg)
+}
+
 /// 新增或更新一个 MCP server 配置(写入 `[mcp.<name>]` 段)。
 ///
 /// name 仅允许字母/数字/`-`/`_`(TOML key 安全);`transport` 为 `stdio` / `http`。
@@ -785,6 +816,13 @@ pub fn write_default(path: &PathBuf, overwrite: bool) -> Result<()> {
 
 # git 提交时是否自动追加 "Generated with Combo" 署名,默认 true
 # commit_attribution = true
+
+# ========== 语音识别(ASR)==========
+# 输入框语音输入的本地模型:
+#   sense-voice(中文,默认)/ moonshine-zh(Moonshine v2 中英)/ moonshine-en(英文)。
+# 首次使用自动下载模型文件;也可在应用「设置」中切换。
+# [asr]
+# model = "sense-voice"
 
 # ========== 多 API key 配置 ==========
 # 每个 provider 一个表,key = provider id;api_key 可为明文或 $ENV_VAR。
@@ -985,6 +1023,26 @@ mod tests {
     }
 
     #[test]
+    fn asr_model_config_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("combo-cli.toml");
+        // 未设置时回落默认(中文)
+        assert_eq!(AppConfig::default().asr.resolve_model(), crate::asr::AsrModel::SenseVoice);
+        // 非法值同样回落默认
+        let cfg: AppConfig = toml::from_str(r#"[asr]
+model = "nope""#).unwrap();
+        assert_eq!(cfg.asr.resolve_model(), crate::asr::AsrModel::SenseVoice);
+
+        // 写入 → 重读生效
+        set_asr_model(&path, "moonshine-en").unwrap();
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        assert_eq!(cfg.asr.resolve_model(), crate::asr::AsrModel::MoonshineEn);
+
+        // 非法 id 拒绝写入
+        assert!(set_asr_model(&path, "unknown").is_err());
+    }
+
+    #[test]
     fn resolve_prefers_cli_over_file() {
         let cfg = AppConfig {
             provider: Some("ollama".into()),
@@ -1002,6 +1060,7 @@ mod tests {
             skills_paths: vec![],
             disabled_skills: vec![],
             commit_attribution: None,
+            asr: AsrConfig::default(),
         };
         let r = cfg.resolve(Some("openai"), None, None, None, None, Some("http://mcp:1"));
         assert_eq!(r.provider, "openai", "CLI 参数优先");

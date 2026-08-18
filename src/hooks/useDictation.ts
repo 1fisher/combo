@@ -3,7 +3,7 @@ import { getTranscribeStatus, prepareTranscribe, ApiError } from '../lib/api';
 import { float32ToPcm16 } from '../lib/audio';
 import { AsrStream } from '../lib/asrStream';
 
-/** 单次录音上限(秒):流式模型按端点分段重置,放宽到 10 分钟兜底。 */
+/** 单次录音上限(秒):离线模型按静音分段,放宽到 10 分钟兜底。 */
 const MAX_RECORD_SECONDS = 600;
 /** 等待模型下载/就绪的上限(毫秒)。 */
 const PREPARE_TIMEOUT_MS = 15 * 60_000;
@@ -44,10 +44,11 @@ export type DictationState = 'idle' | 'recording' | 'transcribing';
 /**
  * 语音听写:点击开始录音,再点停止并把识别文本追加到输入框。
  *
- * - 后端本地 Paraformer 双语(中英)流式模型,WebSocket 边说边出字(`partial`
- *   实时刷新,停止后 `final` 一次性追加),不上传音频到第三方;
+ * - 后端本地离线识别模型(设置中可选 SenseVoice 中文 / Moonshine 中英),
+ *   WebSocket 边说边出字(`partial` 实时刷新,停止后 `final` 一次性追加),
+ *   不上传音频到第三方;
  * - 16kHz 单声道经 AudioWorklet 直接采集,无需 MediaRecorder 离线解码;
- * - 开始录音时即触发模型准备(首次使用需下载约 240MB,期间音频在客户端
+ * - 开始录音时即触发模型准备(首次使用需下载约 272MB,期间音频在客户端
  *   缓冲,模型就绪后自动建立连接并补发,录音与下载并行)。
  */
 export function useDictation(onText: (text: string) => void) {
@@ -310,5 +311,16 @@ export function useDictation(onText: (text: string) => void) {
     if (state === 'idle') void startRecording();
   }, [state, startRecording, finishRecording]);
 
-  return { state, seconds, partialText, modelProgress, error, toggle };
+  /** 放弃当前识别:停止录音、丢弃未提交的识别文本(不追加到输入框)。 */
+  const cancel = useCallback(() => {
+    cancelledRef.current = true;
+    cleanupCapture();
+    teardownSession();
+    setModelProgress(null);
+    setPartialText('');
+    setError('');
+    setState('idle');
+  }, [cleanupCapture, teardownSession]);
+
+  return { state, seconds, partialText, modelProgress, error, toggle, cancel };
 }

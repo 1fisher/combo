@@ -82,7 +82,7 @@ pub struct AppState {
     pub todos: Arc<TodoStore>,
     /// 自动化(定时任务)调度器:后台 tick 扫描到期的任务并触发 agent 运行。
     pub automations: Arc<AutomationScheduler>,
-    /// 本地语音识别(SenseVoice int8,输入框语音输入)。
+    /// 本地语音识别(Moonshine base 英文 int8,输入框语音输入)。
     pub asr: Arc<asr::AsrService>,
 }
 
@@ -107,8 +107,12 @@ impl AppState {
             questions: QuestionRegistry::new(),
             todos: TodoStore::new(),
             automations: Arc::new(AutomationScheduler::new()),
+            // ASR 模型取自配置 [asr] model(未设置/非法回落 sense-voice)
             asr: Arc::new(asr::AsrService::new(
                 crate::paths::default_data_dir().join("models"),
+                AppConfig::load_or_create(&crate::config::default_config_path())
+                    .map(|c| c.asr.resolve_model())
+                    .unwrap_or(asr::AsrModel::SenseVoice),
             )),
         })
     }
@@ -159,6 +163,7 @@ impl AppState {
             // 指向临时目录下的空路径:测试中模型永远未就绪(transcribe 返回 503)
             asr: Arc::new(asr::AsrService::new(
                 std::env::temp_dir().join("combo-asr-test-models"),
+                asr::AsrModel::SenseVoice,
             )),
         }
     }

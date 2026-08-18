@@ -28,7 +28,7 @@ import { useUIPreferences } from '../../stores/uiPreferencesStore';
 import { formatTokenCount } from '../../lib/tokens';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { confirmDialog } from '../../lib/confirm';
-import { listDirGrants, revokeDirGrant } from '../../lib/api';
+import { listDirGrants, revokeDirGrant, getTranscribeStatus, setTranscribeModel } from '../../lib/api';
 import { cn } from '../../lib/utils';
 
 interface SettingsDialogProps {
@@ -271,6 +271,9 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
 
           {/* 手动上下文窗口 */}
           <ContextWindowSection open={open} ref={ctxSectionRef} />
+
+          {/* 语音识别(ASR)模型 */}
+          <AsrModelSection open={open} />
 
           {/* 目录访问授权(敏感目录允许一次后持久记住) */}
           <DirGrantsSection open={open} />
@@ -1018,6 +1021,81 @@ function defaultModelOf(p: {
   return p.default_large_model_id && models.some((m) => m.id === p.default_large_model_id)
     ? p.default_large_model_id
     : (models[0]?.id ?? '');
+}
+
+/** ---------- 语音识别(ASR)模型设置区 ---------- */
+
+/** 可选的本地语音识别模型(与后端 AsrModel 一致)。 */
+const ASR_MODELS = [
+  {
+    id: 'sense-voice',
+    label: 'SenseVoice · 中文',
+    desc: '中英日韩粤多语,自带标点与数字规整,约 230MB',
+  },
+  {
+    id: 'moonshine-zh',
+    label: 'Moonshine · 中文',
+    desc: 'Moonshine v2 中英双语,约 135MB',
+  },
+  {
+    id: 'moonshine-en',
+    label: 'Moonshine · 英文',
+    desc: 'Moonshine v2 英文,约 135MB',
+  },
+] as const;
+
+/**
+ * 选择语音输入的本地识别模型:POST /v1/transcribe/model 即时切换并写入
+ * 配置 `[asr] model`,跨重启保留;切换后回到未就绪,首次使用自动下载。
+ */
+function AsrModelSection({ open }: { open: boolean }) {
+  const { data: status } = useQuery({
+    queryKey: ['asr-model-status'],
+    queryFn: getTranscribeStatus,
+    enabled: open,
+  });
+  const [current, setCurrent] = useState<string>('sense-voice');
+  const [error, setError] = useState('');
+  const switchModel = useMutation({
+    mutationFn: (model: string) => setTranscribeModel(model),
+    onSuccess: (_d, model) => {
+      setCurrent(model);
+      setError('');
+    },
+    onError: (e) => setError(e instanceof Error ? e.message : '切换失败'),
+  });
+
+  // 后端状态返回后同步当前模型(覆盖本地默认值)
+  useEffect(() => {
+    if (status?.model) setCurrent(status.model);
+  }, [status?.model]);
+
+  const desc = ASR_MODELS.find((m) => m.id === current)?.desc;
+  const selectCls =
+    'h-9 w-full rounded-lg border border-input-border bg-background px-2.5 text-[13px] text-foreground outline-none [color-scheme:dark] focus-visible:border-input-border-focused disabled:opacity-50';
+
+  return (
+    <div className="flex flex-col gap-2">
+      <label className="text-[13px] font-medium text-foreground">语音识别模型</label>
+      <select
+        value={current}
+        disabled={switchModel.isPending}
+        onChange={(e) => switchModel.mutate(e.target.value)}
+        className={selectCls}
+        aria-label="选择语音识别模型"
+      >
+        {ASR_MODELS.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.label}
+          </option>
+        ))}
+      </select>
+      <div className="text-[12px] text-foreground-subtle">
+        {desc}。切换即时生效并跨重启保留;新模型首次使用时自动下载,输入框语音输入即触发。
+      </div>
+      {error && <div className="text-[12px] text-destructive">{error}</div>}
+    </div>
+  );
 }
 
 /**
