@@ -171,4 +171,30 @@ describe('WorkspaceSidebar', () => {
     await screen.findByText('项目A');
     expect(changeWorkspacePath).toHaveBeenCalledWith('w1', '/proj/new-a');
   });
+
+  it('project tab shows projects only, without the task list', async () => {
+    sessionsByWs.set('w1', [
+      { id: 's1', title: 'A的任务', prompt_tokens: 0, completion_tokens: 0, cost: 0, created_at: 1 },
+    ]);
+    wrap();
+    await screen.findByText('项目A');
+    expect(screen.getByText('项目B')).toBeTruthy();
+    // 「项目」视图下不再展示任务列表
+    expect(screen.queryByText('A的任务')).toBeNull();
+  });
+
+  it('tasks tab shows only the active project sessions', async () => {
+    sessionsByWs.set('w1', [
+      { id: 's1', title: 'A的任务', prompt_tokens: 0, completion_tokens: 0, cost: 0, created_at: 1 },
+    ]);
+    sessionsByWs.set('w2', [
+      { id: 's2', title: 'B的任务', prompt_tokens: 0, completion_tokens: 0, cost: 0, created_at: 1 },
+    ]);
+    wrap();
+    await userEvent.click(await screen.findByRole('tab', { name: '任务' }));
+    // 默认自动选中第一个项目(w1=项目A):分区标题显示项目名,只列出该项目的任务
+    expect(await screen.findByRole('button', { name: '项目A' })).toBeTruthy();
+    expect(await screen.findByText('A的任务')).toBeTruthy();
+    expect(screen.queryByText('B的任务')).toBeNull();
+  });
 });

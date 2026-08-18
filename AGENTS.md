@@ -407,8 +407,10 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
 - **Frontend layout:** `src/components/{ui,shell,agent}` — `ui/` is generated
   shadcn primitives, `shell/` is app chrome, `agent/` is the chat/tool/modal UI.
   The shell is a 1:1 仿写 ZCode 的 agent 布局:左侧 `WorkspaceSidebar`(默认 372px,
-  可拖拽调宽/收起,含 新建任务/搜索/自动化/技能 按钮、「分组/项目」视图切换、
-  「项目/任务/文件」可折叠分区、底部用户与连接状态) + 可拖拽分隔条 + 主内容区
+  可拖拽调宽/收起,含 新建任务/搜索/自动化/技能 按钮、「任务/项目」视图切换:
+  「项目」视图只列项目(可折叠分区),「任务」视图以当前项目名为分区标题、只列出
+  当前项目的任务(`ConversationList`,不再展示所有项目的分组任务)、
+  底部用户与连接状态) + 可拖拽分隔条 + 主内容区
   (顶栏帮助/终端按钮;无会话时显示 `ChatEmptyState` 问候语 + 订阅横幅 + 模板卡片,
   会话中显示消息列表,底部为 ZCode 风格 `Composer` 输入坞:项目 chip + 工具栏
   [添加上下文/模式/用量环/Provider/模型/思考等级/发送;Provider 切换后模型列表按该

@@ -41,11 +41,9 @@ import { useActiveWorkspaceId } from '../../hooks/useActiveWorkspaceId';
 import { useAgentStore } from '../../stores/agentStore';
 import { useConnectionStore } from '../../stores/connectionStore';
 import { isTauri } from '../../lib/connection';
-import { deleteSessionWithConfirm } from './sessionDelete';
 import { createSession as createSessionApi, listSessions } from '../../lib/api';
 import type { Api } from '../../lib/api/types';
 import { ConversationList } from './ConversationList';
-import { SessionRow } from './SessionRow';
 import { DirectoryPicker } from './DirectoryPicker';
 import { SettingsDialog } from './SettingsDialog';
 import type { AppView, SideView } from './AppShell';
@@ -182,83 +180,6 @@ function Section({
   );
 }
 
-/** 分组视图:每个项目一个分区,展开其下的任务 */
-function WorkspaceGroup({
-  ws,
-  onContextMenu,
-  onContextMenuAt,
-  onNavigate,
-}: {
-  ws: { id: string; name?: string; path: string };
-  onContextMenu: (e: React.MouseEvent, ws: { id: string; name?: string; path: string }) => void;
-  onContextMenuAt: (x: number, y: number, ws: { id: string; name?: string; path: string }) => void;
-  onNavigate?: () => void;
-}) {
-  const [open, setOpen] = useState(true);
-  const { sessions, activate, remove, rename } = useSessions(ws.id);
-  const setActive = useAgentStore((s) => s.setActiveWorkspace);
-  const activeSessionId = useAgentStore((s) => s.activeSessionId);
-
-  return (
-    <section className="group/section" aria-label={projectName(ws)}>
-      <div className="flex h-7 min-w-0 items-center">
-        <button
-          type="button"
-          onClick={() => setOpen((o) => !o)}
-          onContextMenu={(e) => onContextMenu(e, ws)}
-          aria-expanded={open}
-          className="flex h-7 min-w-0 flex-1 items-center gap-1.5 px-2.5 text-left text-[13px] font-medium text-foreground-subtlest outline-none transition-colors hover:text-foreground"
-        >
-          <Folder className="size-3.5 shrink-0 text-foreground-subtlest" />
-          <span className="min-w-0 truncate">{projectName(ws)}</span>
-        </button>
-        <WorkspaceTokenBadge sessions={sessions} />
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-            onContextMenuAt(
-              Math.min(r.right - 140, window.innerWidth - 150),
-              r.bottom + 4,
-              ws
-            );
-          }}
-          aria-label="更多操作"
-          title="更多操作"
-          className="shrink-0 rounded-md p-1 text-foreground-subtle md:hidden hover:bg-surface-hover hover:text-foreground"
-        >
-          <MoreHorizontal className="size-3.5" />
-        </button>
-      </div>
-      {open && (
-        <div className="pb-1">
-          {sessions?.map((s) => (
-            <SessionRow
-              key={s.id}
-              session={s}
-              isActive={activeSessionId === s.id}
-              rowClassName="pl-7"
-              showTime={false}
-              iconClassName="text-foreground-subtlest"
-              onActivate={() => {
-                setActive(ws.id);
-                void activate(s.id);
-                onNavigate?.();
-              }}
-              onRename={(title) => rename({ id: s.id, title })}
-              onDelete={() => void deleteSessionWithConfirm(s, remove)}
-            />
-          ))}
-          {!sessions?.length && (
-            <div className="px-7 py-1.5 text-[13px] text-foreground-subtle">还没有任务</div>
-          )}
-        </div>
-      )}
-    </section>
-  );
-}
-
 export function WorkspaceSidebar({
   onNavigate,
   onOpenView,
@@ -283,7 +204,7 @@ export function WorkspaceSidebar({
     activate: activateSession,
   } = useSessions(active);
 
-  const [tab, setTab] = useState<'grouped' | 'project'>('project');
+  const [tab, setTab] = useState<'tasks' | 'project'>('project');
   const [projOpen, setProjOpen] = useState(true);
   const [taskOpen, setTaskOpen] = useState(true);
   // 服务器目录选择器(浏览器/移动端):add=添加项目,change=更换目录
@@ -538,6 +459,8 @@ export function WorkspaceSidebar({
       : connStatus === 'connecting'
         ? '连接中'
         : '离线') + transportLabel;
+  // 「任务」视图标题:当前项目名(无选中项目时回退「任务」),标识列表归属
+  const activeWs = workspaces?.find((w) => w.id === active);
 
   return (
     <aside className="flex h-full select-none flex-col overflow-hidden">
@@ -596,21 +519,21 @@ export function WorkspaceSidebar({
               aria-hidden
               className={cn(
                 'pointer-events-none absolute inset-y-0.5 rounded-full bg-background transition-[opacity,transform,width] duration-200 ease-out',
-                tab === 'grouped' ? 'left-0.5 w-[58px]' : 'left-[62px] w-[58px]'
+                tab === 'tasks' ? 'left-0.5 w-[58px]' : 'left-[62px] w-[58px]'
               )}
             />
             <button
               type="button"
               role="tab"
-              aria-selected={tab === 'grouped'}
-              onClick={() => setTab('grouped')}
+              aria-selected={tab === 'tasks'}
+              onClick={() => setTab('tasks')}
               className={cn(
                 'relative z-10 flex h-6 flex-none items-center gap-1 rounded-full py-0 pl-1.5 pr-2 text-[13px] font-medium transition-colors',
-                tab === 'grouped' ? 'text-foreground' : 'text-foreground-subtle hover:text-foreground'
+                tab === 'tasks' ? 'text-foreground' : 'text-foreground-subtle hover:text-foreground'
               )}
             >
               <Hash className="size-3 shrink-0" />
-              <span>分组</span>
+              <span>任务</span>
             </button>
             <button
               type="button"
@@ -712,119 +635,103 @@ export function WorkspaceSidebar({
             </div>
           )}
           {tab === 'project' ? (
-            <>
-              <Section
-                title="项目"
-                open={projOpen}
-                onToggle={() => setProjOpen((o) => !o)}
-                onAdd={onAddProjectClick}
-                addLabel="添加项目"
-              >
-                {isLoading && (
-                  <div className="px-2.5 py-1.5 text-[13px] text-foreground-subtle">加载中…</div>
-                )}
-                {workspaces?.map((w) => (
-                  <div
-                    key={w.id}
+            <Section
+              title="项目"
+              open={projOpen}
+              onToggle={() => setProjOpen((o) => !o)}
+              onAdd={onAddProjectClick}
+              addLabel="添加项目"
+            >
+              {isLoading && (
+                <div className="px-2.5 py-1.5 text-[13px] text-foreground-subtle">加载中…</div>
+              )}
+              {workspaces?.map((w) => (
+                <div
+                  key={w.id}
+                  className={cn(
+                    'group flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-hover',
+                    active === w.id && 'bg-surface-hover'
+                  )}
+                  onClick={() => {
+                    setActive(w.id);
+                    onNavigate?.();
+                  }}
+                  onContextMenu={(e) => openContextMenu(e, w)}
+                >
+                  <Folder
                     className={cn(
-                      'group flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-hover',
-                      active === w.id && 'bg-surface-hover'
+                      'size-4 shrink-0',
+                      active === w.id ? 'text-foreground' : 'text-foreground-subtlest'
                     )}
-                    onClick={() => {
-                      setActive(w.id);
-                      onNavigate?.();
-                    }}
-                    onContextMenu={(e) => openContextMenu(e, w)}
-                  >
-                    <Folder
-                      className={cn(
-                        'size-4 shrink-0',
-                        active === w.id ? 'text-foreground' : 'text-foreground-subtlest'
-                      )}
+                  />
+                  {editingId === w.id ? (
+                    <input
+                      autoFocus
+                      value={draftName}
+                      onChange={(e) => setDraftName(e.target.value)}
+                      onBlur={() => commitRename(w.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') commitRename(w.id);
+                        if (e.key === 'Escape') setEditingId(null);
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-full min-w-0 flex-1 rounded border border-input-border bg-background px-1.5 py-0.5 text-[13px] outline-none"
                     />
-                    {editingId === w.id ? (
-                      <input
-                        autoFocus
-                        value={draftName}
-                        onChange={(e) => setDraftName(e.target.value)}
-                        onBlur={() => commitRename(w.id)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') commitRename(w.id);
-                          if (e.key === 'Escape') setEditingId(null);
+                  ) : (
+                    <>
+                      <span className="min-w-0 flex-1 truncate font-medium" title={w.path}>
+                        {projectName(w)}
+                      </span>
+                      <ProjectTokenBadge wsId={w.id} />
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          startRename(w);
                         }}
-                        onClick={(e) => e.stopPropagation()}
-                        className="w-full min-w-0 flex-1 rounded border border-input-border bg-background px-1.5 py-0.5 text-[13px] outline-none"
-                      />
-                    ) : (
-                      <>
-                        <span className="min-w-0 flex-1 truncate font-medium" title={w.path}>
-                          {projectName(w)}
-                        </span>
-                        <ProjectTokenBadge wsId={w.id} />
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            startRename(w);
-                          }}
-                          title="重命名项目"
-                          className="shrink-0 rounded-md p-1 text-foreground-subtle opacity-100 transition-opacity hover:bg-surface-hover hover:text-foreground md:opacity-0 md:group-hover:opacity-100"
-                        >
-                          <Pencil className="size-3" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                            openContextMenuAt(
-                              Math.min(r.right - 140, window.innerWidth - 150),
-                              r.bottom + 4,
-                              w
-                            );
-                          }}
-                          aria-label="更多操作"
-                          title="更多操作"
-                          className="shrink-0 rounded-md p-1 text-foreground-subtle md:hidden hover:bg-surface-hover hover:text-foreground"
-                        >
-                          <MoreHorizontal className="size-3.5" />
-                        </button>
-                      </>
-                    )}
-                  </div>
-                ))}
-                {!isLoading && workspaces?.length === 0 && (
-                  <div className="px-2.5 py-1.5 text-[13px] leading-relaxed text-foreground-subtle">
-                    还没有项目,点击右上角「+」添加。
-                  </div>
-                )}
-              </Section>
-              <Section
-                title="任务"
-                open={taskOpen}
-                onToggle={() => setTaskOpen((o) => !o)}
-                onAdd={() => {
-                  void onNewTask();
-                }}
-                addLabel="新建任务"
-              >
-                <ConversationList onNavigate={onNavigate} sortMode={sortMode} archiveOpen={archiveOpen} />
-              </Section>
-            </>
+                        title="重命名项目"
+                        className="shrink-0 rounded-md p-1 text-foreground-subtle opacity-100 transition-opacity hover:bg-surface-hover hover:text-foreground md:opacity-0 md:group-hover:opacity-100"
+                      >
+                        <Pencil className="size-3" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                          openContextMenuAt(
+                            Math.min(r.right - 140, window.innerWidth - 150),
+                            r.bottom + 4,
+                            w
+                          );
+                        }}
+                        aria-label="更多操作"
+                        title="更多操作"
+                        className="shrink-0 rounded-md p-1 text-foreground-subtle md:hidden hover:bg-surface-hover hover:text-foreground"
+                      >
+                        <MoreHorizontal className="size-3.5" />
+                      </button>
+                    </>
+                  )}
+                </div>
+              ))}
+              {!isLoading && workspaces?.length === 0 && (
+                <div className="px-2.5 py-1.5 text-[13px] leading-relaxed text-foreground-subtle">
+                  还没有项目,点击右上角「+」添加。
+                </div>
+              )}
+            </Section>
           ) : (
-            workspaces?.map((w) => (
-              <WorkspaceGroup
-                key={w.id}
-                ws={w}
-                onContextMenu={openContextMenu}
-                onContextMenuAt={openContextMenuAt}
-                onNavigate={onNavigate}
-              />
-            ))
-          )}
-          {!isLoading && tab === 'grouped' && workspaces?.length === 0 && (
-            <div className="px-3 py-2 text-[13px] leading-relaxed text-foreground-subtle">
-              还没有项目,切换到「项目」视图添加。
-            </div>
+            <Section
+              title={activeWs ? projectName(activeWs) : '任务'}
+              open={taskOpen}
+              onToggle={() => setTaskOpen((o) => !o)}
+              onAdd={() => {
+                void onNewTask();
+              }}
+              addLabel="新建任务"
+            >
+              <ConversationList onNavigate={onNavigate} sortMode={sortMode} archiveOpen={archiveOpen} />
+            </Section>
           )}
         </div>
       </div>
