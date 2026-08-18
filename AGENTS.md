@@ -145,7 +145,10 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   两个全局开关均持久化在 combo-cli.toml——①「提交携带署名」
   (`commit_attribution`,`GET/POST /v1/settings/commit-attribution`,开启时
   serve 安装全局 commit-msg hook 给 `core.hooksPath`,命令行/其他工具的提交
-  也自动追加 `Generated with Combo`);②「生成提交信息使用全局模型」
+  也自动追加 `Generated with Combo v<版本>`;署名含构建期版本号
+  (`git.rs::commit_attribution` 用 `CARGO_PKG_VERSION`,`scripts/version.sh`
+  统一四文件版本),hook 每次启动重新同步,版本升级后自动携带新版本号;
+  重复检测按稳定前缀 `Generated with Combo` 匹配,旧版本署名不重复追加);②「生成提交信息使用全局模型」
   (`[git]` 段 `commit_model_enabled/_provider/_model`,
   `GET/POST /v1/settings/commit-model`)。前端 GitPanel 提交框「AI 生成」按钮
   调 `POST .../git/commit-message`:后端取 staged diff(截断 16k)+ 最近 10

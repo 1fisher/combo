@@ -14,14 +14,26 @@ use std::process::Command;
 use crate::fs::{error, ok_json, resolve_root, safe_join};
 use crate::serve::AppState;
 
-/// 提交时自动追加的署名。
-pub const COMMIT_ATTRIBUTION: &str = "Generated with Combo";
+/// 提交时自动追加的署名稳定前缀(不含版本号);重复检测与 hook 内 grep
+/// 都用它匹配,这样旧版本写入的署名(如 v0.2.11)也不会被重复追加。
+pub const ATTRIBUTION_PREFIX: &str = "Generated with Combo";
+
+/// 提交时自动追加的署名(含 combo 版本号,便于区分各版本生成的提交):
+/// `Generated with Combo v0.2.12`。版本来自构建期 crate 版本,与
+/// package.json / tauri.conf.json 保持一致(`scripts/version.sh` 统一升级)。
+pub fn commit_attribution() -> String {
+    format!("Generated with Combo v{}", env!("CARGO_PKG_VERSION"))
+}
 
 /// 全局 commit-msg hook 脚本:combo 开启「git 提交署名」时安装到
 /// `core.hooksPath` 指向的目录,让 bash / IDE / 其他工具的一切提交
 /// 都自动追加署名(已含署名时跳过)。关闭开关后 hook 被移除。
-const ATTRIBUTION_HOOK_SCRIPT: &str = r#"#!/bin/sh
-# 由 combo 生成:git 提交自动追加 "Generated with Combo" 署名。
+/// 署名行在安装时写入当前 combo 版本;启动/切换开关都会重新同步,
+/// 版本升级后新提交自动携带新版本号。
+fn attribution_hook_script() -> String {
+    format!(
+        r#"#!/bin/sh
+# 由 combo 生成:git 提交自动追加 "Generated with Combo vX.Y.Z" 署名(含版本号)。
 # 在 combo 设置中关闭「git 提交署名」后,本 hook 会被移除。
 MSG_FILE="$1"
 [ -f "$MSG_FILE" ] || exit 0
@@ -31,9 +43,12 @@ fi
 if [ "$(tail -c 1 "$MSG_FILE" | wc -l)" -eq 0 ]; then
   printf '\n' >> "$MSG_FILE"
 fi
-printf '\nGenerated with Combo\n' >> "$MSG_FILE"
+printf '\n{}\n' >> "$MSG_FILE"
 exit 0
-"#;
+"#,
+        commit_attribution()
+    )
+}
 
 /// 全局 hook 安装目录(数据目录下,`COMBO_DATA_DIR` 可覆盖)。
 fn attribution_hook_dir() -> std::path::PathBuf {
@@ -106,7 +121,7 @@ fn sync_attribution_hook_to(
                 let _ = std::fs::remove_file(&prev_file);
             }
         }
-        std::fs::write(&hook_file, ATTRIBUTION_HOOK_SCRIPT)
+        std::fs::write(&hook_file, attribution_hook_script())
             .map_err(|e| format!("写入 commit-msg hook 失败: {e}"))?;
         #[cfg(unix)]
         {
@@ -615,14 +630,15 @@ pub async fn commit(
     if msg.is_empty() {
         return error(StatusCode::BAD_REQUEST, "提交信息不能为空");
     }
-    // 自动追加署名,标识由 Combo 生成的提交;已含署名时不重复追加。
-    // 开关存于配置文件 commit_attribution(默认开启),每次提交时读取、即时生效。
+    // 自动追加署名(含版本号),标识由 Combo 生成的提交;已含署名时不重复追加
+    // (按稳定前缀匹配,旧版本写入的署名也不会重复)。开关存于配置文件
+    // commit_attribution(默认开启),每次提交时读取、即时生效。
     let attribution_on =
         crate::config::commit_attribution_enabled(&crate::config::default_config_path());
-    let full_msg = if !attribution_on || msg.contains(COMMIT_ATTRIBUTION) {
+    let full_msg = if !attribution_on || msg.contains(ATTRIBUTION_PREFIX) {
         msg.to_string()
     } else {
-        format!("{msg}\n\n{COMMIT_ATTRIBUTION}")
+        format!("{msg}\n\n{}", commit_attribution())
     };
     match git_output(&root, ["commit", "-m", &full_msg]) {
         Ok(output) => ok_json(json!({ "ok": true, "output": output })),
@@ -1483,8 +1499,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 提交时应自动追加 "Generated with Combo" 署名;已含署名时不重复追加;
-    /// 配置 commit_attribution = false 时完全不追加。
+    /// 提交时应自动追加 "Generated with Combo vX.Y.Z" 署名(含版本号);
+    /// 已含署名时不重复追加;配置 commit_attribution = false 时完全不追加。
     #[tokio::test]
     async fn commit_appends_attribution() {
         // 隔离配置目录:署名开关读配置文件,不能依赖开发机真实 ~/.config/combo
@@ -1506,7 +1522,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = git_output(&dir, ["log", "-1", "--pretty=%B"]).unwrap();
         assert!(body.contains("测试提交"), "缺少原始信息: {body}");
-        assert!(body.contains(COMMIT_ATTRIBUTION), "缺少署名: {body}");
+        assert!(body.contains(&commit_attribution()), "缺少署名: {body}");
 
         // 信息中已含署名时不重复追加
         std::fs::write(dir.join("a.txt"), "v2\n").unwrap();
@@ -1515,14 +1531,14 @@ mod tests {
             State(state.clone()),
             Path("ws".into()),
             axum::extract::Json(CommitBody {
-                message: format!("再次提交\n\n{COMMIT_ATTRIBUTION}"),
+                message: format!("再次提交\n\n{}", commit_attribution()),
                 repo: None,
             }),
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body = git_output(&dir, ["log", "-1", "--pretty=%B"]).unwrap();
-        assert_eq!(body.matches(COMMIT_ATTRIBUTION).count(), 1, "署名重复: {body}");
+        assert_eq!(body.matches(ATTRIBUTION_PREFIX).count(), 1, "署名重复: {body}");
 
         // 关闭开关后提交不再追加署名,原始信息原样保留
         crate::config::set_commit_attribution(&cfg_dir.path().join("combo-cli.toml"), false)
@@ -1537,7 +1553,7 @@ mod tests {
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
         let body = git_output(&dir, ["log", "-1", "--pretty=%B"]).unwrap();
-        assert!(!body.contains(COMMIT_ATTRIBUTION), "关闭后仍追加署名: {body}");
+        assert!(!body.contains(ATTRIBUTION_PREFIX), "关闭后仍追加署名: {body}");
         assert!(body.contains("无署名提交"));
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1591,7 +1607,8 @@ mod tests {
         let hook_file = hooks_dir.join("commit-msg");
         assert!(hook_file.is_file(), "hook 文件未创建");
         let script = std::fs::read_to_string(&hook_file).unwrap();
-        assert!(script.contains(COMMIT_ATTRIBUTION), "hook 脚本缺少署名文本");
+        assert!(script.contains(&commit_attribution()), "hook 脚本缺少署名文本");
+        assert!(script.contains(ATTRIBUTION_PREFIX), "hook 脚本缺少署名前缀");
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -1660,7 +1677,7 @@ mod tests {
         );
         let body = git_output(&repo, ["log", "-1", "--pretty=%B"]).unwrap();
         assert!(body.contains("纯命令行提交"));
-        assert!(body.contains(COMMIT_ATTRIBUTION), "命令行提交缺少署名: {body}");
+        assert!(body.contains(&commit_attribution()), "命令行提交缺少署名: {body}");
 
         // 已含署名时不重复追加
         std::fs::write(repo.join("a.txt"), "v2\n").unwrap();
@@ -1668,12 +1685,12 @@ mod tests {
         let output = Command::new("git")
             .current_dir(&repo)
             .env("GIT_CONFIG_GLOBAL", &cfg_file)
-            .args(["commit", "-m", format!("再次提交\n\n{COMMIT_ATTRIBUTION}").as_str()])
+            .args(["commit", "-m", format!("再次提交\n\n{}", commit_attribution()).as_str()])
             .output()
             .unwrap();
         assert!(output.status.success());
         let body = git_output(&repo, ["log", "-1", "--pretty=%B"]).unwrap();
-        assert_eq!(body.matches(COMMIT_ATTRIBUTION).count(), 1, "署名重复: {body}");
+        assert_eq!(body.matches(ATTRIBUTION_PREFIX).count(), 1, "署名重复: {body}");
 
         // 关闭开关后命令行提交不再署名
         sync_attribution_hook_to(&hooks_dir, false, Some(&cfg_file)).unwrap();
@@ -1687,6 +1704,18 @@ mod tests {
             .unwrap();
         assert!(output.status.success());
         let body = git_output(&repo, ["log", "-1", "--pretty=%B"]).unwrap();
-        assert!(!body.contains(COMMIT_ATTRIBUTION), "关闭后仍署名: {body}");
+        assert!(!body.contains(ATTRIBUTION_PREFIX), "关闭后仍署名: {body}");
+    }
+
+    /// 署名格式:以稳定前缀开头,并携带构建期版本号(vX.Y.Z)。
+    #[test]
+    fn attribution_includes_version() {
+        let line = commit_attribution();
+        assert!(line.starts_with("Generated with Combo v"), "署名前缀异常: {line}");
+        let ver = line.trim_start_matches("Generated with Combo v");
+        assert!(
+            ver.chars().next().is_some_and(|c| c.is_ascii_digit()),
+            "署名缺少版本号: {line}"
+        );
     }
 }

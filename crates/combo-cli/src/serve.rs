@@ -762,7 +762,8 @@ pub async fn serve_listener(
     // 启动自动化调度器(定时任务后台扫描;服务退出时随进程结束)。
     state.automations.start(state.clone());
     // 同步 git 提交署名 hook(全局 core.hooksPath):开关开启时所有 git
-    // 提交(含命令行/其他工具)自动追加 "Generated with Combo",关闭时移除。
+    // 提交(含命令行/其他工具)自动追加 "Generated with Combo vX.Y.Z"(含
+    // 版本号,每次启动重新同步),关闭时移除。
     if let Err(e) = crate::git::sync_attribution_hook(crate::config::commit_attribution_enabled(
         &crate::config::default_config_path(),
     )) {

@@ -290,7 +290,7 @@ pub struct AppConfig {
     /// 禁用的 skill 名列表。
     #[serde(default)]
     pub disabled_skills: Vec<String>,
-    /// git 提交时是否自动追加 "Generated with Combo" 署名(默认 true)。
+    /// git 提交时是否自动追加 "Generated with Combo vX.Y.Z" 署名(默认 true)。
     pub commit_attribution: Option<bool>,
     /// Git 提交设置(`[git]` 段)。
     #[serde(default)]
@@ -948,7 +948,7 @@ pub fn write_default(path: &PathBuf, overwrite: bool) -> Result<()> {
 # 是否启用内置工具(当前时间/日期),默认 true
 # tools = true
 
-# git 提交时是否自动追加 "Generated with Combo" 署名,默认 true
+# git 提交时是否自动追加 "Generated with Combo vX.Y.Z" 署名,默认 true
 # commit_attribution = true
 
 # ========== Git 提交 ==========

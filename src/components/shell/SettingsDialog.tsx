@@ -72,7 +72,7 @@ const SETTINGS_TABS = [
  * 1. 模型 — Provider 配置(API Key/多 Key 切换/自定义 Provider)+ 上下文窗口(手动)。
  * 2. 语音 — 本地语音识别(ASR)模型 + 语音朗读(TTS)开关/模型/语速。
  * 3. 通知 — 免打扰 / 任务结束 / 需要交互时发送系统通知(可选提示音、语音播报)。
- * 4. Git — 提交署名(Generated with Combo 全局 hook)与 AI 生成提交信息的全局模型。
+ * 4. Git — 提交署名(Generated with Combo vX.Y.Z 全局 hook)与 AI 生成提交信息的全局模型。
  * 5. 连接 — 外部访问域名(域名远程部署)与代理地址(前后端分离部署)。
  * 6. 通用 — Liquid 流体特效、Combo 音效、目录访问授权、应用更新(仅桌面模式)。
  *
@@ -585,7 +585,7 @@ function GitSection({ open }: { open: boolean }) {
         <div className="flex flex-col gap-0.5">
           <label className="text-[13px] font-medium text-foreground">提交携带署名</label>
           <span className="text-[12px] text-foreground-subtle">
-            git 提交自动追加 Generated with Combo 署名,覆盖命令行与其他工具
+            git 提交自动追加带版本号的 Generated with Combo 署名,覆盖命令行与其他工具
           </span>
         </div>
         <Switch
