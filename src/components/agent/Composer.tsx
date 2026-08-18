@@ -32,6 +32,7 @@ import { cn, usageColor } from '../../lib/utils';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { useDictation } from '../../hooks/useDictation';
 import { appendTranscript } from '../../lib/audio';
+import { openMicSettings } from '../../lib/openMicSettings';
 import { AttachmentPicker } from './AttachmentPicker';
 import { ProviderLogo } from './ProviderLogo';
 import { FlameWrap } from '../canvasui/FlameWrap';
@@ -1198,9 +1199,20 @@ export function Composer({
                 </div>
               )}
               {(modelErr || dictation.error) && (
-                <p className="px-1 text-destructive text-xs" role="alert">
-                  {modelErr || dictation.error}
-                </p>
+                <div className="flex items-center gap-2 px-1 text-destructive text-xs" role="alert">
+                  <span className="min-w-0 flex-1">{modelErr || dictation.error}</span>
+                  {!modelErr && dictation.errorAction === 'open-settings' && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="xs"
+                      onClick={() => void openMicSettings()}
+                      className="shrink-0 text-destructive border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+                    >
+                      打开权限设置
+                    </Button>
+                  )}
+                </div>
               )}
             </div>
             </FlameComposerBox>

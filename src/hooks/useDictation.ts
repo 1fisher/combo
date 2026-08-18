@@ -41,6 +41,37 @@ registerProcessor('combo-pcm-collector', ComboPcmCollector);
 
 export type DictationState = 'idle' | 'recording' | 'transcribing';
 
+/** 麦克风访问失败的分类结果:用户可读文案 + 是否需要引导打开系统权限设置。 */
+function describeMicError(err: unknown): { message: string; openSettings: boolean } {
+  // 非安全上下文(远程 http 访问等)下浏览器直接拒绝,引导系统设置是误导
+  if (typeof window !== 'undefined' && window.isSecureContext === false) {
+    return {
+      message: '当前页面不是安全上下文(需 HTTPS 或 localhost),浏览器禁止访问麦克风',
+      openSettings: false,
+    };
+  }
+  const name = err instanceof DOMException ? err.name : (err as Error)?.name;
+  switch (name) {
+    case 'NotAllowedError':
+    case 'PermissionDeniedError':
+      // 桌面端:系统设置里允许麦克风;浏览器端:站点权限或系统设置
+      return {
+        message: '无法访问麦克风:权限被拒绝,请在系统设置中允许 Combo 使用麦克风',
+        openSettings: true,
+      };
+    case 'NotFoundError':
+    case 'DevicesNotFoundError':
+      return { message: '未检测到可用的麦克风设备,请检查连接后重试', openSettings: false };
+    case 'NotReadableError':
+    case 'TrackStartError':
+      return { message: '麦克风正被其他应用占用,请关闭占用后重试', openSettings: false };
+    case 'AbortError':
+      return { message: '麦克风访问被中断,请重试', openSettings: false };
+    default:
+      return { message: '无法访问麦克风,请检查系统权限', openSettings: false };
+  }
+}
+
 /**
  * 语音听写:点击开始录音,再点停止并把识别文本追加到输入框。
  *
@@ -61,6 +92,8 @@ export function useDictation(onText: (text: string) => void) {
   /** 模型下载进度(0~1);null 表示无需展示。 */
   const [modelProgress, setModelProgress] = useState<number | null>(null);
   const [error, setError] = useState('');
+  /** 麦克风权限被拒时提示「打开系统权限设置」的引导。 */
+  const [errorAction, setErrorAction] = useState<'open-settings' | null>(null);
 
   const ctxRef = useRef<AudioContext | null>(null);
   const trackRef = useRef<MediaStreamTrack[] | null>(null);
@@ -235,6 +268,7 @@ export function useDictation(onText: (text: string) => void) {
 
   const startRecording = useCallback(async () => {
     setError('');
+    setErrorAction(null);
     setPending({ confirmed: '', partial: '' });
     cancelledRef.current = false;
     teardownSession();
@@ -247,8 +281,10 @@ export function useDictation(onText: (text: string) => void) {
       stream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
       });
-    } catch {
-      setError('无法访问麦克风,请检查系统权限');
+    } catch (e) {
+      const detail = describeMicError(e);
+      setError(detail.message);
+      setErrorAction(detail.openSettings ? 'open-settings' : null);
       return;
     }
     trackRef.current = stream.getTracks();
@@ -332,6 +368,7 @@ export function useDictation(onText: (text: string) => void) {
     setModelProgress(null);
     setPending({ confirmed: '', partial: '' });
     setError('');
+    setErrorAction(null);
     setState('idle');
   }, [cleanupCapture, teardownSession]);
 
@@ -344,6 +381,8 @@ export function useDictation(onText: (text: string) => void) {
     partialText: pending.partial,
     modelProgress,
     error,
+    /** 麦克风权限被拒时置为 'open-settings',前端据此渲染「打开权限设置」按钮。 */
+    errorAction,
     toggle,
     cancel,
   };

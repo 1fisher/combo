@@ -41,6 +41,34 @@ fn open_url(url: String) {
     let _ = open::that(trimmed);
 }
 
+/// 打开系统「麦克风」隐私设置页(录音权限被拒时前端引导用户跳转)。
+/// macOS 走系统设置深链,Windows 走 ms-settings;其余平台为 no-op。
+#[tauri::command]
+fn open_privacy_settings(settings: String) {
+    let target = match settings.as_str() {
+        "microphone" => open_mic_settings_url(),
+        _ => return,
+    };
+    if !target.is_empty() {
+        let _ = open::that(target);
+    }
+}
+
+fn open_mic_settings_url() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone".to_string()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        "ms-settings:privacy-microphone".to_string()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        String::new()
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -48,7 +76,11 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .manage(ProxyPort::default())
-        .invoke_handler(tauri::generate_handler![get_proxy_port, open_url])
+        .invoke_handler(tauri::generate_handler![
+            get_proxy_port,
+            open_url,
+            open_privacy_settings
+        ])
         .setup(|app| {
             // 调试:COMBO_DEVTOOLS=1 时自动打开 WebView 开发者工具
             if std::env::var("COMBO_DEVTOOLS").is_ok() {
