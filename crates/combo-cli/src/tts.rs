@@ -8,6 +8,13 @@
 //! - `POST /v1/speech` 按句合成,`enabled=false` 时返回 400 `tts_disabled`
 //!   (开关以后端配置 `[tts] enabled` 为准)。
 
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+use tokio::io::AsyncWriteExt;
+use tokio::sync::Mutex as AsyncMutex;
+use futures::StreamExt;
+use sherpa_onnx::{GenerationConfig, OfflineTts, OfflineTtsConfig, OfflineTtsVitsModelConfig};
+
 /// 可选的 TTS 模型。新增模型时同步更新:parse/下载地址/文件查找/加载。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TtsModel {
@@ -78,11 +85,286 @@ impl TtsModel {
             _ => 0,
         }
     }
+
+    /// 在模型根目录下查找该模型的文件;未下载返回 None。
+    /// 优先模型专属子目录(新布局);找不到再全目录搜索(兼容散落布局)。
+    fn find_files(&self, root: &Path) -> Option<TtsFiles> {
+        let files = self.find_in(&self.subdir(root));
+        if files.is_some() {
+            return files;
+        }
+        self.find_in(root)
+    }
+
+    fn find_in(&self, root: &Path) -> Option<TtsFiles> {
+        find_tts_files(root)
+    }
+}
+
+/// TTS 模型文件集合(piper 与 HF 布局统一:onnx + tokens + lexicon + fst 规则)。
+#[derive(Debug, Clone)]
+pub struct TtsFiles {
+    model: std::path::PathBuf,
+    tokens: std::path::PathBuf,
+    lexicon: Option<std::path::PathBuf>,
+    /// 顶层 OfflineTtsConfig.rule_fsts:`phone.fst,date.fst,number.fst`(逗号拼接)。
+    rule_fsts: Option<String>,
+}
+
+/// 查找 TTS 模型文件:任意 `*.onnx`(排除 `.onnx.json` 旁车文件)+ `tokens.txt` +
+/// `lexicon.txt`(可选);模型根目录存在 `phone.fst` 时拼接 rule_fsts。
+fn find_tts_files(root: &Path) -> Option<TtsFiles> {
+    let mut model: Option<std::path::PathBuf> = None;
+    let mut tokens: Option<std::path::PathBuf> = None;
+    let mut lexicon: Option<std::path::PathBuf> = None;
+    let mut has_fst = false;
+    for entry in walkdir::WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .flatten()
+    {
+        if !entry.metadata().map(|m| m.is_file()).unwrap_or(false) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy();
+        if name.ends_with(".onnx") && !name.ends_with(".onnx.json") {
+            model = Some(entry.path().to_path_buf());
+        } else if name == "tokens.txt" {
+            tokens = Some(entry.path().to_path_buf());
+        } else if name == "lexicon.txt" {
+            lexicon = Some(entry.path().to_path_buf());
+        } else if name == "phone.fst" {
+            has_fst = true;
+        }
+    }
+    let model = model?;
+    let tokens = tokens?;
+    let rule_fsts = if has_fst {
+        let dir = model.parent()?;
+        let join = |n: &str| dir.join(n).display().to_string();
+        Some(format!("{},{},{}", join("phone.fst"), join("date.fst"), join("number.fst")))
+    } else {
+        None
+    };
+    Some(TtsFiles { model, tokens, lexicon, rule_fsts })
+}
+
+/// 把 f32 采样封装为 16-bit PCM WAV 字节(44 字节标准头,单声道)。
+fn f32_to_wav(samples: &[f32], sample_rate: u32) -> Vec<u8> {
+    let data_len = samples.len() * 2;
+    let mut out = Vec::with_capacity(44 + data_len);
+    out.extend_from_slice(b"RIFF");
+    out.extend_from_slice(&((36 + data_len) as u32).to_le_bytes());
+    out.extend_from_slice(b"WAVE");
+    out.extend_from_slice(b"fmt ");
+    out.extend_from_slice(&16u32.to_le_bytes());
+    out.extend_from_slice(&1u16.to_le_bytes()); // PCM
+    out.extend_from_slice(&1u16.to_le_bytes()); // mono
+    out.extend_from_slice(&sample_rate.to_le_bytes());
+    out.extend_from_slice(&(sample_rate * 2).to_le_bytes()); // byte rate
+    out.extend_from_slice(&2u16.to_le_bytes()); // block align
+    out.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+    out.extend_from_slice(b"data");
+    out.extend_from_slice(&(data_len as u32).to_le_bytes());
+    for &s in samples {
+        let v = (s.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out
+}
+
+/// 统一的离线合成器:屏蔽模型差异,`synthesize` 阻塞(调用方须在
+/// spawn_blocking 中执行),多线程下经外层互斥锁串行。
+pub struct Synthesizer {
+    inner: OfflineTts,
+    sid: i32,
+}
+
+impl Synthesizer {
+    /// 按模型配置创建合成器(阻塞,CPU 密集)。
+    fn new(model: TtsModel, files: &TtsFiles, threads: i32) -> anyhow::Result<Self> {
+        let mut cfg = OfflineTtsConfig::default();
+        cfg.model.num_threads = threads;
+        cfg.model.vits = OfflineTtsVitsModelConfig {
+            model: Some(files.model.display().to_string()),
+            tokens: Some(files.tokens.display().to_string()),
+            lexicon: files.lexicon.as_ref().map(|p| p.display().to_string()),
+            ..Default::default()
+        };
+        cfg.rule_fsts = files.rule_fsts.clone();
+        cfg.max_num_sentences = 1;
+        let inner = OfflineTts::create(&cfg)
+            .ok_or_else(|| anyhow::anyhow!("初始化 {} 合成器失败", model.label()))?;
+        Ok(Self { inner, sid: model.default_sid() })
+    }
+
+    /// 合成文本,返回 WAV 字节(阻塞)。
+    fn synthesize(&self, text: &str) -> Option<Vec<u8>> {
+        let gen = GenerationConfig { sid: self.sid, ..Default::default() };
+        let audio = self
+            .inner
+            .generate_with_config(text, &gen, None::<fn(&[f32], f32) -> bool>)?;
+        let sr = self.inner.sample_rate().max(1) as u32;
+        Some(f32_to_wav(audio.samples(), sr))
+    }
+}
+
+/// 本地 TTS 服务:当前模型 + 懒加载合成器 + 模型下载状态;支持运行时切换模型。
+pub struct TtsService {
+    /// 模型搜索根目录(`<数据目录>/models`)。
+    model_root: std::path::PathBuf,
+    /// 当前选用的模型(运行时可切)。
+    model: Mutex<TtsModel>,
+    /// 已加载的合成器(随模型懒加载;切换模型时清空)。
+    synth: Mutex<Option<Arc<Synthesizer>>>,
+    /// 下载/加载阶段(复用 asr.rs 的 Phase,供 status 端点与前端进度展示)。
+    phase: Mutex<crate::asr::Phase>,
+    /// 串行化下载/加载/切换,防止并发竞争。
+    prepare_lock: AsyncMutex<()>,
+}
+
+impl TtsService {
+    pub fn new(model_root: std::path::PathBuf, model: TtsModel) -> Self {
+        Self {
+            model_root,
+            model: Mutex::new(model),
+            synth: Mutex::new(None),
+            phase: Mutex::new(crate::asr::Phase::NotReady),
+            prepare_lock: AsyncMutex::new(()),
+        }
+    }
+
+    /// 当前选用的模型。
+    pub fn current_model(&self) -> TtsModel {
+        *self.model.lock().unwrap()
+    }
+
+    /// 已加载的合成器(未加载返回 None)。
+    pub(crate) fn synthesizer(&self) -> Option<Arc<Synthesizer>> {
+        self.synth.lock().unwrap().clone()
+    }
+
+    /// 模型根目录(展示用)。
+    pub fn model_dir(&self) -> &Path {
+        &self.model_root
+    }
+
+    pub(crate) fn set_phase(&self, phase: crate::asr::Phase) {
+        *self.phase.lock().unwrap() = phase;
+    }
+
+    pub(crate) fn phase_snapshot(&self) -> crate::asr::Phase {
+        self.phase.lock().unwrap().clone()
+    }
+
+    /// 切换模型:清空已加载合成器并回到未就绪(与进行中的下载/加载互斥)。
+    pub async fn set_model(self: &Arc<Self>, model: TtsModel) {
+        let _guard = self.prepare_lock.lock().await;
+        if self.current_model() == model {
+            return;
+        }
+        *self.synth.lock().unwrap() = None;
+        *self.model.lock().unwrap() = model;
+        self.set_phase(crate::asr::Phase::NotReady);
+    }
+
+    /// 确保当前模型的合成器就绪:缺失则下载,然后加载。幂等,可并发调用。
+    pub async fn ensure_ready(self: &Arc<Self>) -> anyhow::Result<()> {
+        let _guard = self.prepare_lock.lock().await;
+        if self.synthesizer().is_some() {
+            return Ok(());
+        }
+        let model = self.current_model();
+        if model.find_files(&self.model_root).is_none() {
+            if let Err(e) = self.download(model).await {
+                self.set_phase(crate::asr::Phase::Failed(format!("模型下载失败: {e:#}")));
+                return Err(e);
+            }
+        }
+        self.set_phase(crate::asr::Phase::Loading);
+        let this = self.clone();
+        let synth = tokio::task::spawn_blocking(move || this.load_synthesizer())
+            .await
+            .map_err(|e| anyhow::anyhow!("加载线程失败: {e}"))??;
+        *self.synth.lock().unwrap() = Some(Arc::new(synth));
+        self.set_phase(crate::asr::Phase::Ready);
+        Ok(())
+    }
+
+    /// 按当前模型加载合成器(阻塞,CPU 密集)。
+    fn load_synthesizer(&self) -> anyhow::Result<Synthesizer> {
+        let model = self.current_model();
+        let files = model
+            .find_files(&self.model_root)
+            .ok_or_else(|| anyhow::anyhow!("模型文件缺失"))?;
+        let threads = std::thread::available_parallelism()
+            .map(|n| n.get().min(4) as i32)
+            .unwrap_or(2);
+        Synthesizer::new(model, &files, threads)
+    }
+
+    /// 下载指定模型的压缩包并解压到其专属子目录(镜像 asr.rs::download)。
+    async fn download(&self, model: TtsModel) -> anyhow::Result<()> {
+        let url =
+            std::env::var("COMBO_TTS_MODEL_URL").unwrap_or_else(|_| model.download_url().to_string());
+        let extract_root = model.subdir(&self.model_root);
+        std::fs::create_dir_all(&extract_root)?;
+        let archive_path = extract_root.join(model.archive_name());
+
+        tracing::info!("开始下载语音合成模型({}): {url}", model.label());
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .build()?;
+        let resp = client.get(&url).send().await?.error_for_status()?;
+        let total = resp.content_length().unwrap_or(0) as f64;
+
+        let mut file = tokio::fs::File::create(&archive_path).await?;
+        let mut downloaded: u64 = 0;
+        let mut stream = resp.bytes_stream();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            file.write_all(&chunk).await?;
+            downloaded += chunk.len() as u64;
+            if total > 0.0 {
+                let progress = (downloaded as f64 / total).clamp(0.0, 1.0);
+                self.set_phase(crate::asr::Phase::Downloading { progress });
+            }
+        }
+        file.flush().await?;
+        drop(file);
+
+        // 解压(阻塞,放后台线程):tar.bz2 → 模型子目录,随后删除压缩包。
+        let extract_root_clone = extract_root.clone();
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let f = std::fs::File::open(&archive_path)?;
+            let dec = bzip2::read::BzDecoder::new(f);
+            let mut archive = tar::Archive::new(dec);
+            archive.unpack(&extract_root_clone)?;
+            let _ = std::fs::remove_file(&archive_path);
+            Ok(())
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("解压线程失败: {e}"))??;
+
+        if model.find_files(&self.model_root).is_none() {
+            anyhow::bail!("压缩包解压后未找到 {} 的模型文件", model.label());
+        }
+        tracing::info!("语音合成模型下载完成: {}", extract_root.display());
+        Ok(())
+    }
+
+    /// 合成文本 → WAV 字节(阻塞,须在 spawn_blocking 中执行)。
+    fn synthesize_blocking(synth: &Synthesizer, text: String) -> anyhow::Result<Vec<u8>> {
+        synth
+            .synthesize(&text)
+            .ok_or_else(|| anyhow::anyhow!("语音合成失败"))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     #[test]
     fn tts_model_parse_and_ids() {
@@ -98,5 +380,53 @@ mod tests {
         assert!(TtsModel::VitsZhFanchenC.download_url().contains("fanchen-C"));
         assert_eq!(TtsModel::VitsZhFanchenC.default_sid(), 100);
         assert_eq!(TtsModel::PiperZhXiaoya.default_sid(), 0);
+    }
+
+    #[test]
+    fn f32_to_wav_header_is_standard() {
+        let samples = vec![0.0f32, 0.5, -0.5, 1.0, -1.0];
+        let wav = f32_to_wav(&samples, 22050);
+        // 44 字节头 + 5 采样 * 2 字节
+        assert_eq!(wav.len(), 44 + 10);
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+        assert_eq!(&wav[12..16], b"fmt ");
+        assert_eq!(u32::from_le_bytes(wav[16..20].try_into().unwrap()), 16);
+        assert_eq!(u16::from_le_bytes(wav[20..22].try_into().unwrap()), 1, "PCM");
+        assert_eq!(u16::from_le_bytes(wav[22..24].try_into().unwrap()), 1, "mono");
+        assert_eq!(u32::from_le_bytes(wav[24..28].try_into().unwrap()), 22050);
+        assert_eq!(u32::from_le_bytes(wav[28..32].try_into().unwrap()), 22050 * 2);
+        assert_eq!(u16::from_le_bytes(wav[32..34].try_into().unwrap()), 2, "block align");
+        assert_eq!(u16::from_le_bytes(wav[34..36].try_into().unwrap()), 16, "bits");
+        assert_eq!(&wav[36..40], b"data");
+        assert_eq!(u32::from_le_bytes(wav[40..44].try_into().unwrap()), 10);
+        // PCM16 采样:0.5 → 16384(0x4000),-0.5 → -16384
+        let s1 = i16::from_le_bytes([wav[46], wav[47]]);
+        assert_eq!(s1, 16384);
+        let s2 = i16::from_le_bytes([wav[48], wav[49]]);
+        assert_eq!(s2, -16384);
+    }
+
+    #[test]
+    fn find_tts_files_detects_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("m");
+        std::fs::create_dir_all(&root).unwrap();
+        // 模拟 piper 布局:onnx + tokens + lexicon + fst 文件
+        let mut f = std::fs::File::create(root.join("zh_CN-xiao_ya-medium.onnx")).unwrap();
+        f.write_all(b"onnx").unwrap();
+        std::fs::write(root.join("tokens.txt"), "t").unwrap();
+        std::fs::write(root.join("lexicon.txt"), "l").unwrap();
+        std::fs::write(root.join("phone.fst"), "p").unwrap();
+        std::fs::write(root.join("date.fst"), "d").unwrap();
+        std::fs::write(root.join("number.fst"), "n").unwrap();
+        let files = TtsModel::PiperZhXiaoya.find_files(&root).expect("应找到模型文件");
+        assert!(files.model.file_name().unwrap().to_string_lossy().ends_with(".onnx"));
+        assert!(files.tokens.ends_with("tokens.txt"));
+        assert!(files.lexicon.is_some());
+        assert!(files.rule_fsts.is_some(), "应识别 fst 规则文件");
+        // 缺 tokens 视为未就绪
+        std::fs::remove_file(root.join("tokens.txt")).unwrap();
+        assert!(TtsModel::PiperZhXiaoya.find_files(&root).is_none());
     }
 }
