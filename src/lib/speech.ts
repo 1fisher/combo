@@ -9,12 +9,14 @@ export const SPEECH_POLL_INTERVAL_MS = 1000;
 /**
  * 等待语音合成模型就绪:未就绪/失败时自动触发后台下载(POST /v1/speech/prepare),
  * 轮询 /v1/speech/status 并把下载进度经 onProgress 回传(0~1,null 表示无需展示);
- * 就绪即返回,超时抛错。朗读 hook 与设置区「试听」共用。
+ * 就绪即返回,超时抛错。朗读 hook 与设置区「试听」共用;通知语音播报传更短的
+ * timeoutMs,等不到就放弃当次播报而不是干等 15 分钟。
  */
 export async function waitSpeechModelReady(
-  onProgress?: (p: number | null) => void
+  onProgress?: (p: number | null) => void,
+  timeoutMs: number = SPEECH_PREPARE_TIMEOUT_MS,
 ): Promise<void> {
-  const deadline = Date.now() + SPEECH_PREPARE_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
   for (;;) {
     let status: Api.SpeechStatus | undefined;
     try {

@@ -2,6 +2,14 @@ import { isTauri } from './connection';
 import { useUIPreferences } from '../stores/uiPreferencesStore';
 import { useAgentStore } from '../stores/agentStore';
 import { playNotifyAttention, playNotifyDone } from './sfx';
+import {
+  pickVoicePhrase,
+  speakNotifyVoice,
+  VOICE_AWAIT_ANSWER,
+  VOICE_AWAIT_CONFIRM,
+  VOICE_RUN_DONE,
+  VOICE_RUN_ERROR,
+} from './notifyVoice';
 
 /**
  * 系统通知:任务结束 / 需要用户交互(确认、提问)时提醒用户。
@@ -9,14 +17,17 @@ import { playNotifyAttention, playNotifyDone } from './sfx';
  *
  * - 任务结束:agent 处理完成(run 收尾)即发送,窗口聚焦也通知 —
  *   任务完成是用户等待的确定性事件;不想被打扰可在设置中关闭。
- * - 免打扰模式:设置中一键开启后,任务结束/交互请求的全部通知与提示音
- *   静默(优先级最高),关闭时恢复上述各开关的提醒行为。
+ * - 免打扰模式:设置中一键开启后,任务结束/交互请求的全部通知、提示音与
+ *   语音播报静默(优先级最高),关闭时恢复上述各开关的提醒行为。
  * - 交互请求(确认/提问):保持免打扰 — 窗口聚焦且正看着该会话时不弹
  *   (弹窗就在眼前,通知反而多余),切走/看别的会话时才提醒。
  *   焦点判定优先用 Tauri 原生窗口事件:macOS WKWebView 在应用切后台时
  *   document.hasFocus() 仍可能返回 true,会把「切走」误判成「正在看」。
  * - 「通知音效」开启时同时播放提示音(音效独立于系统通知权限,
  *   权限被拒也能听到)。
+ * - 「通知语音播报」开启时,再用 TTS 语音模型念一句随机提示语
+ *   (随对应的通知开关生效:任务结束通知 → 完成播报,交互请求通知 →
+ *   确认/提问播报;见 notifyVoice.ts)。
  */
 
 function truncate(text: string, max = 120): string {
@@ -168,6 +179,9 @@ export function notifyRunComplete(
     ? truncate(error)
     : truncate(summary || '会话任务已结束,点击返回查看结果');
   if (useUIPreferences.getState().notifySoundEnabled) playNotifyDone();
+  if (useUIPreferences.getState().notifyVoiceEnabled) {
+    speakNotifyVoice(pickVoicePhrase(error ? VOICE_RUN_ERROR : VOICE_RUN_DONE));
+  }
   void sendNotification(title, body);
 }
 
@@ -180,6 +194,9 @@ export function notifyPermissionRequest(p: {
   if (!useUIPreferences.getState().notifyInteraction) return;
   if (!sessionNeedsNotification(p.session_id)) return;
   if (useUIPreferences.getState().notifySoundEnabled) playNotifyAttention();
+  if (useUIPreferences.getState().notifyVoiceEnabled) {
+    speakNotifyVoice(pickVoicePhrase(VOICE_AWAIT_CONFIRM));
+  }
   void sendNotification('等待确认', `Agent 请求执行 ${p.tool_name},需要你的批准`);
 }
 
@@ -192,6 +209,9 @@ export function notifyQuestionRequest(p: {
   if (!useUIPreferences.getState().notifyInteraction) return;
   if (!sessionNeedsNotification(p.session_id)) return;
   if (useUIPreferences.getState().notifySoundEnabled) playNotifyAttention();
+  if (useUIPreferences.getState().notifyVoiceEnabled) {
+    speakNotifyVoice(pickVoicePhrase(VOICE_AWAIT_ANSWER));
+  }
   const first = p.questions?.[0]?.question;
   void sendNotification('等待回答', first ? truncate(first, 80) : 'Agent 提出了问题,需要你的输入');
 }

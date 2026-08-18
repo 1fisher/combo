@@ -24,6 +24,7 @@ import { useUpdater } from '../../hooks/useUpdater';
 import { useCommitAttribution } from '../../hooks/useCommitAttribution';
 import { useCommitModel } from '../../hooks/useCommitModel';
 import { requestNotifyPermission } from '../../lib/notify';
+import { pickVoicePhrase, speakNotifyVoice, VOICE_RUN_DONE } from '../../lib/notifyVoice';
 import { useFetchModels, useProviderCrud, useProviderKeys, useProviders, useSaveProviderKey, useSetModelContextWindow } from '../../hooks/useAgentModel';
 import { useUIPreferences } from '../../stores/uiPreferencesStore';
 import { formatTokenCount } from '../../lib/tokens';
@@ -44,7 +45,8 @@ interface SettingsDialogProps {
  * 1. 模型 Provider 配置 — 为各 provider 填入 API Key 并拉取可用模型。
  * 2. 特效与音效 — Liquid 流体特效 / Combo 连击气泡音。
  * 3. Git 提交 — 提交署名(Generated with Combo 全局 hook)与 AI 生成提交信息的全局模型配置。
- * 4. 系统通知 — 免打扰 / 任务结束 / 需要交互时发送系统通知(可选同时播放提示音)。
+ * 4. 系统通知 — 免打扰 / 任务结束 / 需要交互时发送系统通知(可选同时播放
+ *    提示音、用语音模型播报随机提示语)。
  * 5. 目录访问授权 — 管理已记住的敏感目录授权(允许一次后不再询问)。
  * 6. 外部访问域名 — 域名部署时填写公开访问地址。
  * 7. 代理地址 — 前后端分离部署时指定 combo-cli serve 服务地址。
@@ -70,6 +72,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const setNotifyInteraction = useUIPreferences((s) => s.setNotifyInteraction);
   const notifySoundEnabled = useUIPreferences((s) => s.notifySoundEnabled);
   const setNotifySoundEnabled = useUIPreferences((s) => s.setNotifySoundEnabled);
+  const notifyVoiceEnabled = useUIPreferences((s) => s.notifyVoiceEnabled);
+  const setNotifyVoiceEnabled = useUIPreferences((s) => s.setNotifyVoiceEnabled);
   // 通知权限被拒时的提示(开启开关时请求权限,失败则提示去系统设置开启)
   const [notifyBlocked, setNotifyBlocked] = useState(false);
 
@@ -167,7 +171,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
               <div className="flex flex-col gap-0.5">
                 <label className="text-[13px] font-medium text-foreground">免打扰模式</label>
                 <span className="text-[12px] text-foreground-subtle">
-                  开启后暂停任务结束与交互请求的全部通知及提示音,下方通知开关暂不生效
+                  开启后暂停任务结束与交互请求的全部通知、提示音及语音播报,下方通知开关暂不生效
                 </span>
               </div>
               <Switch
@@ -247,6 +251,41 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                 disabled={dndEnabled}
                 aria-label="通知音效"
               />
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-0.5">
+                <label
+                  className={cn(
+                    'text-[13px] font-medium',
+                    dndEnabled ? 'text-foreground-subtle' : 'text-foreground',
+                  )}
+                >
+                  通知语音播报
+                </label>
+                <span className="text-[12px] text-foreground-subtle">
+                  任务完成与需要交互时,用语音模型播报随机提示语(跟随对应通知开关生效)
+                  {dndEnabled && (
+                    <span className="text-amber-500">(免打扰模式开启期间不生效)</span>
+                  )}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2.5 text-[12px]"
+                  onClick={() => speakNotifyVoice(pickVoicePhrase(VOICE_RUN_DONE))}
+                  aria-label="试听通知播报"
+                >
+                  试听
+                </Button>
+                <Switch
+                  checked={notifyVoiceEnabled}
+                  onCheckedChange={setNotifyVoiceEnabled}
+                  disabled={dndEnabled}
+                  aria-label="通知语音播报"
+                />
+              </div>
             </div>
             {notifyBlocked && (
               <div className="text-[12px] text-amber-500">

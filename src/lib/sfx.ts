@@ -15,7 +15,12 @@ let ctx: AudioContext | null = null;
 /** 缓存的白噪声 buffer(气泡破裂瞬态复用) */
 let noiseBuf: AudioBuffer | null = null;
 
-function audioCtx(): AudioContext | null {
+/**
+ * 共享 AudioContext:音效与通知语音播报复用同一个(惰性创建、调用时 resume),
+ * 一次用户手势解锁后两边的播放都不再受自动播放策略限制。
+ * 环境不支持(jsdom/旧内核)时返回 null,调用方各自静默跳过。
+ */
+export function getSharedAudioContext(): AudioContext | null {
   if (typeof window === 'undefined') return null;
   const AC: typeof AudioContext | undefined =
     window.AudioContext ??
@@ -77,7 +82,7 @@ function tone(
 
 /** 连击气泡音:combo 越高气泡越大(起始更低)、越饱满,不刺耳 */
 export function playComboHit(combo: number): void {
-  const c = audioCtx();
+  const c = getSharedAudioContext();
   if (!c) return;
   try {
     const t = c.currentTime;
@@ -138,7 +143,7 @@ export function playComboHit(combo: number): void {
 
 /** 任务完成:双音上行(A5 → E6,纯五度),轻快不刺耳 */
 export function playNotifyDone(): void {
-  const c = audioCtx();
+  const c = getSharedAudioContext();
   if (!c) return;
   try {
     const t = c.currentTime;
@@ -152,7 +157,7 @@ export function playNotifyDone(): void {
 
 /** 需要交互(确认/提问):双短音上行(F#5 → B5),比完成音略急促 */
 export function playNotifyAttention(): void {
-  const c = audioCtx();
+  const c = getSharedAudioContext();
   if (!c) return;
   try {
     const t = c.currentTime;

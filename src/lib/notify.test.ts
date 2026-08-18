@@ -7,6 +7,7 @@ import {
   runCompleteSummary,
 } from './notify';
 import { playNotifyAttention, playNotifyDone } from './sfx';
+import { speakNotifyVoice } from './notifyVoice';
 import { useUIPreferences } from '../stores/uiPreferencesStore';
 import { useAgentStore } from '../stores/agentStore';
 
@@ -14,6 +15,14 @@ vi.mock('./connection', () => ({ isTauri: () => false }));
 vi.mock('./sfx', () => ({
   playNotifyDone: vi.fn(),
   playNotifyAttention: vi.fn(),
+}));
+vi.mock('./notifyVoice', () => ({
+  speakNotifyVoice: vi.fn(),
+  pickVoicePhrase: (pool: string[]) => pool[0] ?? '',
+  VOICE_RUN_DONE: ['任务完成啦,快回来看看结果吧。'],
+  VOICE_RUN_ERROR: ['哎呀,任务出错了,快回来看看。'],
+  VOICE_AWAIT_CONFIRM: ['有个操作在等你确认,别让我等太久。'],
+  VOICE_AWAIT_ANSWER: ['有个问题在等你回答,快来吧。'],
 }));
 
 class NotificationStub {
@@ -42,11 +51,13 @@ describe('notify', () => {
       notifyRunComplete: true,
       notifyInteraction: true,
       notifySoundEnabled: true,
+      notifyVoiceEnabled: false,
       dndEnabled: false,
     });
     useAgentStore.setState({ activeSessionId: null, bySession: {} });
     vi.mocked(playNotifyDone).mockClear();
     vi.mocked(playNotifyAttention).mockClear();
+    vi.mocked(speakNotifyVoice).mockClear();
   });
 
   afterEach(() => {
@@ -137,13 +148,14 @@ describe('notify', () => {
   });
 
   it('免打扰模式开启时全部通知静音(优先级最高,失焦也不提醒)', () => {
-    useUIPreferences.setState({ dndEnabled: true });
+    useUIPreferences.setState({ dndEnabled: true, notifyVoiceEnabled: true });
     notifyRunComplete('s1', undefined, '已完成');
     notifyPermissionRequest({ session_id: 's1', tool_name: 'bash' });
     notifyQuestionRequest({ session_id: 's1', questions: [{ question: '继续吗' }] });
     expect(created).toHaveLength(0);
     expect(playNotifyDone).not.toHaveBeenCalled();
     expect(playNotifyAttention).not.toHaveBeenCalled();
+    expect(speakNotifyVoice).not.toHaveBeenCalled();
   });
 
   it('权限确认与提问通知包含工具名/问题文本', () => {
@@ -171,6 +183,56 @@ describe('notify', () => {
     expect(created).toHaveLength(2);
     expect(playNotifyDone).not.toHaveBeenCalled();
     expect(playNotifyAttention).not.toHaveBeenCalled();
+  });
+
+  // --- 通知语音播报(随机提示语经 pickVoicePhrase mock 固定取池内第一句) ---
+
+  it('语音播报开启时:任务完成/出错与确认/提问各播报对应随机提示语', () => {
+    useUIPreferences.setState({ notifyVoiceEnabled: true });
+    notifyRunComplete('s1');
+    expect(speakNotifyVoice).toHaveBeenLastCalledWith('任务完成啦,快回来看看结果吧。');
+    notifyRunComplete('s1', 'provider 429');
+    expect(speakNotifyVoice).toHaveBeenLastCalledWith('哎呀,任务出错了,快回来看看。');
+    notifyPermissionRequest({ session_id: 's1', tool_name: 'bash' });
+    expect(speakNotifyVoice).toHaveBeenLastCalledWith('有个操作在等你确认,别让我等太久。');
+    notifyQuestionRequest({ session_id: 's1', questions: [{ question: '继续吗' }] });
+    expect(speakNotifyVoice).toHaveBeenLastCalledWith('有个问题在等你回答,快来吧。');
+    expect(speakNotifyVoice).toHaveBeenCalledTimes(4);
+  });
+
+  it('语音播报关闭时不播报(通知本体不受影响)', () => {
+    useUIPreferences.setState({ notifyVoiceEnabled: false });
+    notifyRunComplete('s1');
+    notifyPermissionRequest({ session_id: 's1', tool_name: 'bash' });
+    notifyQuestionRequest({ session_id: 's1', questions: [{ question: '继续吗' }] });
+    expect(created).toHaveLength(3);
+    expect(speakNotifyVoice).not.toHaveBeenCalled();
+  });
+
+  it('语音播报跟随对应通知开关:任务结束通知关闭则完成不播报,交互通知关闭则确认/提问不播报', () => {
+    useUIPreferences.setState({ notifyVoiceEnabled: true, notifyRunComplete: false });
+    notifyRunComplete('s1');
+    expect(speakNotifyVoice).not.toHaveBeenCalled();
+    // 交互开关仍开 → 确认请求照常播报
+    notifyPermissionRequest({ session_id: 's1', tool_name: 'bash' });
+    expect(speakNotifyVoice).toHaveBeenCalledTimes(1);
+    useUIPreferences.setState({ notifyRunComplete: true, notifyInteraction: false });
+    notifyRunComplete('s1');
+    notifyPermissionRequest({ session_id: 's1', tool_name: 'bash' });
+    notifyQuestionRequest({ session_id: 's1', questions: [{ question: '继续吗' }] });
+    // 完成开关恢复 → 完成播报;交互开关关闭 → 确认/提问不再播报
+    expect(speakNotifyVoice).toHaveBeenCalledTimes(2);
+  });
+
+  it('交互语音播报与交互通知同规则:聚焦且正看该会话时不播报,任务完成播报不受焦点影响', () => {
+    useUIPreferences.setState({ notifyVoiceEnabled: true });
+    vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+    useAgentStore.setState({ activeSessionId: 's1' });
+    notifyRunComplete('s1');
+    notifyPermissionRequest({ session_id: 's1', tool_name: 'bash' });
+    notifyQuestionRequest({ session_id: 's1', questions: [{ question: '继续吗' }] });
+    expect(speakNotifyVoice).toHaveBeenCalledTimes(1);
+    expect(speakNotifyVoice).toHaveBeenCalledWith('任务完成啦,快回来看看结果吧。');
   });
 
   it('窗口聚焦且查看该会话:任务完成音效仍播放,交互音效不播放', () => {

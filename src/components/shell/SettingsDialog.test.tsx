@@ -404,25 +404,37 @@ describe('SettingsDialog', () => {
     useUIPreferences.setState({ dndEnabled: false });
   });
 
-  it('免打扰开启时三个通知开关被标记为不生效并禁用,关闭后恢复', async () => {
+  it('免打扰开启时四个通知开关被标记为不生效并禁用,关闭后恢复', async () => {
     useUIPreferences.setState({ dndEnabled: false });
     renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
     await userEvent.click(screen.getByRole('switch', { name: '免打扰模式' }));
-    // 三个子开关禁用,且每项都显示「不生效」标记
+    // 四个子开关禁用,且每项都显示「不生效」标记
     const runSwitch = screen.getByRole('switch', { name: '任务结束通知' }) as HTMLButtonElement;
     const interactSwitch = screen.getByRole('switch', { name: '交互请求通知' }) as HTMLButtonElement;
     const soundSwitch = screen.getByRole('switch', { name: '通知音效' }) as HTMLButtonElement;
+    const voiceSwitch = screen.getByRole('switch', { name: '通知语音播报' }) as HTMLButtonElement;
     expect(runSwitch.disabled).toBe(true);
     expect(interactSwitch.disabled).toBe(true);
     expect(soundSwitch.disabled).toBe(true);
-    expect(screen.getAllByText(/免打扰模式开启期间不生效/).length).toBe(3);
+    expect(voiceSwitch.disabled).toBe(true);
+    expect(screen.getAllByText(/免打扰模式开启期间不生效/).length).toBe(4);
     // 关闭免打扰后恢复可操作,标记消失
     await userEvent.click(screen.getByRole('switch', { name: '免打扰模式' }));
     expect(runSwitch.disabled).toBe(false);
     expect(interactSwitch.disabled).toBe(false);
     expect(soundSwitch.disabled).toBe(false);
+    expect(voiceSwitch.disabled).toBe(false);
     expect(screen.queryByText(/免打扰模式开启期间不生效/)).toBeNull();
     useUIPreferences.setState({ dndEnabled: false });
+  });
+
+  it('关闭通知语音播报开关(jsdom 无 AudioContext,试听为静默空操作)', async () => {
+    useUIPreferences.setState({ notifyVoiceEnabled: true });
+    renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
+    await userEvent.click(screen.getByRole('switch', { name: '通知语音播报' }));
+    expect(useUIPreferences.getState().notifyVoiceEnabled).toBe(false);
+    await userEvent.click(screen.getByRole('button', { name: '试听通知播报' }));
+    useUIPreferences.setState({ notifyVoiceEnabled: true });
   });
 
   // --- 语音朗读(TTS)设置区 ---
