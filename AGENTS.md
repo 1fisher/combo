@@ -326,11 +326,20 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   `model=*.onnx + tokens=tokens.txt + lexicon=lexicon.txt + rule_fsts=
   phone.fst,date.fst,number.fst`(fst 在模型根目录,fanchen-C 多说话人用
   `sid=100`),合成结果封装 44 字节 WAV 头(PCM16)返回。端点:
-  `GET /v1/speech/status`(开关 + 模型 + 下载/加载阶段)、
+  `GET /v1/speech/status`(开关 + 模型 + 下载/加载阶段 + 进度)、
+  `POST /v1/speech/prepare`(幂等触发下载/加载,后台执行,镜像
+  `/v1/transcribe/prepare`)、
   `POST /v1/speech/config`(`{enabled}`,写 `[tts] enabled`)、
   `POST /v1/speech/model`(切模型并持久化)、`POST /v1/speech`(单句文本 →
   `audio/wav`;关闭时 400 `tts_disabled`,未就绪 503 `tts_not_ready`,
-  超 500 字符 400 `tts_text_invalid`)。前端 `useSpeechOutput`
+  超 500 字符 400 `tts_text_invalid`)。**模型下载进度前端展示**:
+  首次合成未就绪时后端后台触发下载并立即 503(不阻塞请求,避免下载期间
+  挂起 30s 合成超时);前端 `useSpeechOutput` 捕获 `tts_not_ready` 后轮询
+  status(镜像 `useDictation::ensureModelReady`:not_ready/failed 触发
+  prepare,downloading 更新进度),把 `modelProgress`(0~1)返回
+  `AppShellInner` 在顶栏显示「朗读模型 NN%」,就绪后重试该句;设置
+  `TtsSection` 提供「立即下载」按钮 + 进度条(downloading/loading 阶段
+  `refetchInterval` 1s 轮询),失败显示错误文案。前端 `useSpeechOutput`
   (`src/hooks/useSpeechOutput.ts`,挂 `AppShellInner`)订阅 agentStore 当前
   会话 assistant **text part** 文本增量(只读本次 run 的增量:run 开始时把
   已有消息全部标记已消费,避免朗读历史),按句末标点/换行断句(代码块围栏

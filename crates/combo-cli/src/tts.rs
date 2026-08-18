@@ -408,6 +408,26 @@ async fn status(State(state): State<AppState>) -> Json<serde_json::Value> {
     }))
 }
 
+/// POST /v1/speech/prepare — 触发模型下载/加载(幂等;后台执行,立即返回)。
+async fn prepare(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let tts = state.tts.clone();
+    if tts.synthesizer().is_none()
+        && !matches!(&*tts.phase.lock().unwrap(), crate::asr::Phase::Downloading { .. })
+    {
+        let worker = tts.clone();
+        tokio::spawn(async move {
+            if let Err(e) = worker.ensure_ready().await {
+                tracing::warn!("语音合成模型准备失败: {e:#}");
+            }
+        });
+    }
+    let phase = tts.phase_snapshot();
+    Json(json!({
+        "ok": true,
+        "phase": phase.name(),
+    }))
+}
+
 /// POST /v1/speech/config — 打开/关闭朗读,写入配置 `[tts] enabled`。
 #[derive(Deserialize)]
 struct SetEnabledReq {
@@ -487,16 +507,22 @@ async fn synthesize(
             Some("tts_text_invalid"),
         );
     }
-    // 首次合成前自动确保模型就绪(幂等:已加载直接返回,缺文件先下载再加载)
+    // 首次合成前确保模型就绪:未就绪则后台触发下载/加载并立即返回 503(不阻塞
+    // 请求),前端轮询 /v1/speech/status 展示下载进度,就绪后重试合成。
     if state.tts.synthesizer().is_none() {
-        if let Err(e) = state.tts.ensure_ready().await {
-            tracing::warn!("语音合成模型准备失败: {e:#}");
-            return err_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "语音合成模型准备失败,请稍后重试",
-                Some("tts_not_ready"),
-            );
+        let tts = state.tts.clone();
+        if !matches!(&*tts.phase.lock().unwrap(), crate::asr::Phase::Downloading { .. }) {
+            tokio::spawn(async move {
+                if let Err(e) = tts.ensure_ready().await {
+                    tracing::warn!("语音合成模型准备失败: {e:#}");
+                }
+            });
         }
+        return err_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "语音合成模型正在下载/加载,请稍后重试",
+            Some("tts_not_ready"),
+        );
     }
     let Some(synth) = state.tts.synthesizer() else {
         return err_response(
@@ -533,6 +559,7 @@ async fn synthesize(
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/v1/speech/status", get(status))
+        .route("/v1/speech/prepare", post(prepare))
         .route("/v1/speech/config", post(set_enabled))
         .route("/v1/speech/model", post(set_model))
         .route("/v1/speech", post(synthesize))

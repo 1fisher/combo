@@ -5,6 +5,7 @@ import {
   ArrowRight,
   CalendarClock,
   CircleHelp,
+  Loader2,
   PanelLeftClose,
   PanelRight,
   SquareTerminal,
@@ -80,7 +81,7 @@ export function AppShell() {
 }
 
 function AppShellInner() {
-  useSpeechOutput();
+  const { modelProgress } = useSpeechOutput();
   const workspaceId = useActiveWorkspaceId();
   const resetOpenFiles = useEditorStore((s) => s.resetOpenFiles);
 
@@ -243,6 +244,15 @@ function AppShellInner() {
           <div className="h-1 w-full" />
           <section className="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border bg-background">
             <header className="relative flex h-10 shrink-0 items-center justify-end gap-0.5 pr-2.5">
+              {modelProgress != null && (
+                <div
+                  className="mr-auto flex items-center gap-1.5 pl-2 text-[11px] tabular-nums text-foreground-subtle"
+                  title="语音朗读模型下载中"
+                >
+                  <Loader2 className="size-3 animate-spin" />
+                  朗读模型 {Math.round(modelProgress * 100)}%
+                </div>
+              )}
               <Button variant="ghost" size="icon-sm" aria-label="帮助" title="帮助"
                 onClick={() => setHelpOpen(true)}
               >

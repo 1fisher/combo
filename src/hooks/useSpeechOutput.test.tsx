@@ -129,4 +129,70 @@ describe('useSpeechOutput', () => {
       expect(JSON.parse(calls[1][1].body).text).toBe('世界真大。');
     });
   });
+
+  it('模型未就绪时触发后台下载并轮询展示进度,就绪后重试该句', async () => {
+    // 状态机:status 首次 not_ready(prepare 触发) → downloading(0.42) → ready;
+    // 合成首次 503 tts_not_ready,就绪后重试成功。
+    let speechCalls = 0;
+    let statusCalls = 0;
+    let prepared = false;
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes('/v1/speech/status')) {
+        statusCalls += 1;
+        const ready = statusCalls >= 4;
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              enabled: true,
+              ready,
+              phase: ready ? 'ready' : prepared ? 'downloading' : 'not_ready',
+              progress: ready ? null : 0.42,
+              model: 'piper-zh-xiaoya',
+            }),
+        };
+      }
+      if (url.includes('/v1/speech/prepare')) {
+        prepared = true;
+        return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true }) };
+      }
+      if (url.includes('/v1/speech?')) {
+        speechCalls += 1;
+        if (speechCalls === 1) {
+          return {
+            ok: false,
+            status: 503,
+            json: async () => ({ message: '模型下载中', code: 'tts_not_ready' }),
+            text: async () => JSON.stringify({ message: '模型下载中', code: 'tts_not_ready' }),
+          };
+        }
+        return { ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(44 + 8) };
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    const { useSpeechOutput } = await import('./useSpeechOutput');
+    const { result } = renderHook(() => useSpeechOutput(), { wrapper: makeWrapper() });
+    useAgentStore.getState().setActiveSessionId('s1');
+    useAgentStore.getState().markRun('s1', 'r1', 'running');
+    useAgentStore
+      .getState()
+      .upsertMessage('s1', {
+        id: 'm1',
+        role: 'assistant',
+        session_id: 's1',
+        model: 'm',
+        provider: 'p',
+        created_at: 1,
+        updated_at: 1,
+        parts: [{ type: 'text', data: { text: '你好。' } }],
+      });
+    // 首次合成失败 → 触发后台准备
+    await waitFor(() => expect(prepared).toBe(true), { timeout: 4000 });
+    // 轮询中展示下载进度
+    await waitFor(() => expect(result.current.modelProgress).toBe(0.42), { timeout: 4000 });
+    // 就绪后重试合成成功,进度清除
+    await waitFor(() => expect(speechCalls).toBe(2), { timeout: 4000 });
+    await waitFor(() => expect(result.current.modelProgress).toBeNull(), { timeout: 4000 });
+  });
 });

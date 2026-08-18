@@ -991,6 +991,11 @@ export function getSpeechStatus(): Promise<Api.SpeechStatus> {
   return apiRequest('/v1/speech/status');
 }
 
+/** 触发语音模型下载/加载(幂等,后台执行,立即返回)。 */
+export function prepareSpeech(): Promise<{ ok: boolean; phase: Api.TranscribePhase }> {
+  return apiRequest('/v1/speech/prepare', { method: 'POST' });
+}
+
 /** 打开/关闭语音朗读并持久化到配置(`[tts] enabled`)。 */
 export function setSpeechEnabled(enabled: boolean): Promise<Api.SpeechConfigResult> {
   return apiRequest('/v1/speech/config', { method: 'POST', body: { enabled } });

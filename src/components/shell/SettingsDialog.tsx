@@ -28,7 +28,8 @@ import { useUIPreferences } from '../../stores/uiPreferencesStore';
 import { formatTokenCount } from '../../lib/tokens';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { confirmDialog } from '../../lib/confirm';
-import { listDirGrants, revokeDirGrant, getTranscribeStatus, setTranscribeModel, getSpeechStatus, setSpeechEnabled, setSpeechModel } from '../../lib/api';
+import { listDirGrants, revokeDirGrant, getTranscribeStatus, setTranscribeModel, getSpeechStatus, setSpeechEnabled, setSpeechModel, prepareSpeech } from '../../lib/api';
+import type { Api } from '../../lib/api/types';
 import { cn } from '../../lib/utils';
 
 interface SettingsDialogProps {
@@ -1133,6 +1134,13 @@ function TtsSection({ open }: { open: boolean }) {
     queryKey: ['tts-status'],
     queryFn: getSpeechStatus,
     enabled: open,
+    // 下载/加载进行中持续轮询,展示实时进度;就绪后停止
+    refetchInterval: open
+      ? (q) => {
+          const st = q.state.data as Api.SpeechStatus | undefined;
+          return st && (st.phase === 'downloading' || st.phase === 'loading') ? 1000 : false;
+        }
+      : false,
   });
   const [current, setCurrent] = useState<string>('piper-zh-xiaoya');
   const [error, setError] = useState('');
@@ -1152,6 +1160,12 @@ function TtsSection({ open }: { open: boolean }) {
       setError('');
     },
     onError: (e) => setError(e instanceof Error ? e.message : '切换失败'),
+  });
+  /** 手动触发模型下载/加载(幂等;后台执行,轮询状态展示进度)。 */
+  const prepare = useMutation({
+    mutationFn: () => prepareSpeech(),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['tts-status'] }),
+    onError: (e) => setError(e instanceof Error ? e.message : '下载触发失败'),
   });
 
   // 后端状态返回后同步当前模型(覆盖本地默认值)
@@ -1193,8 +1207,43 @@ function TtsSection({ open }: { open: boolean }) {
         ))}
       </select>
       <div className="text-[12px] text-foreground-subtle">
-        {desc}。切换即时生效并跨重启保留;新模型首次使用时自动下载,朗读时触发。
+        {desc}。切换即时生效并跨重启保留;新模型首次使用时自动下载,也可点下方按钮提前下载。
       </div>
+      {status && !status.ready && (
+        <div className="flex items-center gap-2">
+          {status.phase === 'downloading' && typeof status.progress === 'number' ? (
+            <>
+              <div className="h-1 min-w-0 flex-1 overflow-hidden rounded-full bg-surface-hover">
+                <div
+                  className="h-full rounded-full bg-brand"
+                  style={{ width: `${Math.round(status.progress * 100)}%` }}
+                />
+              </div>
+              <span className="shrink-0 text-[11px] tabular-nums text-foreground-subtle">
+                模型下载 {Math.round(status.progress * 100)}%
+              </span>
+            </>
+          ) : status.phase === 'failed' ? (
+            <span className="shrink-0 text-[11px] text-destructive">
+              模型下载失败:{status.error ?? '请重试'}
+            </span>
+          ) : (
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-[12px]"
+              onClick={() => prepare.mutate()}
+              disabled={prepare.isPending}
+            >
+              {prepare.isPending
+                ? '准备中…'
+                : status.phase === 'loading'
+                  ? '模型加载中…'
+                  : '立即下载'}
+            </Button>
+          )}
+        </div>
+      )}
       {error && <div className="text-[12px] text-destructive">{error}</div>}
     </div>
   );

@@ -102,6 +102,8 @@ pub struct TtsService {
 
 - `GET /v1/speech/status` → `{ enabled, model, model_label, phase, model_dir, error? }`
   (镜像 `/v1/transcribe/status`;`enabled` 来自 `state.cfg.tts.resolve_enabled()`)。
+- `POST /v1/speech/prepare` → 触发模型下载/加载(幂等,后台执行,立即返回
+  `{ ok, phase }`;镜像 `/v1/transcribe/prepare`)。
 - `POST /v1/speech/config`,body `{ enabled: bool }` → 调
   `config::set_tts_enabled(default_config_path(), enabled)`,返回 `{ ok }`
   (镜像 `/v1/transcribe/model` 的持久化写法)。
@@ -111,7 +113,8 @@ pub struct TtsService {
 - `POST /v1/speech`,body `{ text: String }`:
   - `enabled == false` → 400 `{ code: "tts_disabled" }`(后端配置是开关唯一来源)。
   - `text` 空或超 500 字符 → 400 `{ code: "tts_text_invalid" }`(句子级文本)。
-  - 模型未就绪 → 503 `{ code: "tts_not_ready" }`。
+  - 模型未就绪 → 后台触发下载/加载后**立即** 503 `{ code: "tts_not_ready" }`
+    (不阻塞请求;前端轮询 status 展示进度、就绪后重试)。
   - 成功:`200`,`Content-Type: audio/wav`,body 为 WAV 字节。
   - 文本走 JSON body,无需放宽请求体上限(与 transcribe 的音频流不同)。
 - `serve.rs` 的 `AppState` 构造、`build_router` 与测试态同步补齐 `tts` 字段
@@ -123,6 +126,7 @@ pub struct TtsService {
 
 - `getSpeechStatus()` → `GET /v1/speech/status`,返回
   `Api.SpeechStatus { enabled, model, phase, ... }`。
+- `prepareSpeech()` → `POST /v1/speech/prepare`,触发下载/加载。
 - `setSpeechEnabled(enabled)` → `POST /v1/speech/config`。
 - `setSpeechModel(model)` → `POST /v1/speech/model`。
 - `synthesizeSpeech(text)` → `POST /v1/speech`,请求 JSON,响应按
@@ -138,8 +142,9 @@ pub struct TtsService {
   立即停读(通过共享 store 或事件通知 useSpeechOutput)。
 - 模型下拉:`TTS_MODELS` 常量(3 个模型 id + label),切换走
   `setSpeechModel`;文案说明「切换后首次使用自动下载」。
-- `useQuery(['tts-status'], getSpeechStatus, { enabled: open })` +
-  `useMutation`(镜像 asr 段写法)。
+- 设置 UI(`TtsSection`):`refetchInterval` 在 downloading/loading 阶段持续
+  轮询,进度条 + 「模型下载 NN%」;未就绪时显示「立即下载」按钮(手动
+  `prepareSpeech`),失败显示错误文案。
 
 ### 朗读 hook(`src/hooks/useSpeechOutput.ts`,新文件)
 
@@ -158,6 +163,9 @@ pub struct TtsService {
   `decodeAudioData` → FIFO 队列顺序播放;队列中后句失败时跳过继续
   (不阻塞朗读);`AudioContext` 懒创建(浏览器自动播放策略:用户已与页面
   交互过,combo 交互型应用无碍;Tauri webview 同理)。
+  - **模型未就绪(`tts_not_ready`)**:触发 `prepareSpeech` 并轮询
+    `getSpeechStatus` 展示下载进度(`modelProgress` 0~1,AppShell 顶栏显示
+    「朗读模型 NN%」),就绪后重试该句;准备超时/失败则跳过该句。
 - **打断**:用户新发消息 / 切换会话 / 关闭开关 / run 被取消 → `stop()`
   (停播当前音频、清 FIFO、abort 进行中的 fetch、清缓冲与偏移)。
 - **去重/防抖**:同一文本偏移不重复合成;流式 updated 事件高频时按

@@ -1,11 +1,15 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { getSpeechStatus, synthesizeSpeech } from '../lib/api';
+import { ApiError, getSpeechStatus, prepareSpeech, synthesizeSpeech } from '../lib/api';
 import { useAgentStore } from '../stores/agentStore';
 import { splitSentences } from '../lib/ttsSplit';
 
 /** 待处理缓冲上限(字符):防止超长未成句内容(如大段代码块)无限累积。 */
 const MAX_PENDING_CHARS = 4000;
+/** 模型下载/加载等待超时(镜像 useDictation)。 */
+const PREPARE_TIMEOUT_MS = 15 * 60_000;
+/** 模型就绪轮询间隔。 */
+const POLL_INTERVAL_MS = 1000;
 
 /** 提取一条消息的全部 text part 文本(非 assistant 返回空)。 */
 function textOf(m: { role: string; parts: Array<{ type: string; data?: unknown }> }): string {
@@ -32,6 +36,8 @@ export function useSpeechOutput() {
     queryKey: ['tts-status'],
     queryFn: getSpeechStatus,
   }).data?.enabled ?? false;
+  /** 模型下载进度(0~1);null 表示无需展示(未下载或已就绪)。 */
+  const [modelProgress, setModelProgress] = useState<number | null>(null);
 
   const sessionId = useAgentStore((s) => s.activeSessionId);
   const messages = useAgentStore((s) =>
@@ -61,6 +67,46 @@ export function useSpeechOutput() {
     abortRef.current = null;
     activeSrcRef.current?.stop();
     activeSrcRef.current = null;
+    setModelProgress(null);
+  }, []);
+
+  /**
+   * 等待语音模型就绪:未就绪/失败时触发后台下载(POST /v1/speech/prepare),
+   * 轮询 /v1/speech/status 并把下载进度写入 modelProgress;就绪即返回。
+   */
+  const waitModelReady = useCallback(async (): Promise<void> => {
+    const deadline = Date.now() + PREPARE_TIMEOUT_MS;
+    for (;;) {
+      let status: Awaited<ReturnType<typeof getSpeechStatus>> | undefined;
+      try {
+        status = await getSpeechStatus();
+      } catch {
+        /* 状态查询失败按未就绪处理,下一轮重试 */
+      }
+      if (status) {
+        if (status.ready) {
+          setModelProgress(null);
+          return;
+        }
+        setModelProgress(
+          status.phase === 'downloading' && typeof status.progress === 'number'
+            ? status.progress
+            : null
+        );
+        if (status.phase === 'not_ready' || status.phase === 'failed') {
+          try {
+            await prepareSpeech();
+          } catch {
+            /* 触发失败由下一轮 status 反映 */
+          }
+        }
+      }
+      if (Date.now() > deadline) {
+        setModelProgress(null);
+        throw new Error('语音模型准备超时,请检查网络后重试');
+      }
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    }
   }, []);
 
   /** 把一句文本合成并播放(入队,顺序播放)。 */
@@ -76,8 +122,23 @@ export function useSpeechOutput() {
         let wav: ArrayBuffer;
         try {
           wav = await synthesizeSpeech(text, abortRef.current.signal);
-        } catch {
-          return; // tts_disabled / tts_not_ready / 已取消:静默跳过
+        } catch (e) {
+          // 模型未就绪(首次朗读触发下载):等待就绪并展示进度,然后重试该句
+          if (e instanceof ApiError && e.code === 'tts_not_ready') {
+            try {
+              await waitModelReady();
+            } catch {
+              return; // 准备超时/失败:跳过该句
+            }
+            if (epoch !== epochRef.current) return;
+            try {
+              wav = await synthesizeSpeech(text, abortRef.current.signal);
+            } catch {
+              return; // 仍失败(如已关闭朗读):静默跳过
+            }
+          } else {
+            return; // tts_disabled / 已取消:静默跳过
+          }
         }
         if (epoch !== epochRef.current) return;
         const ctx =
@@ -188,4 +249,6 @@ export function useSpeechOutput() {
       ctxRef.current = null;
     };
   }, [stop]);
+
+  return { modelProgress };
 }
