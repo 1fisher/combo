@@ -295,6 +295,9 @@ pub struct AppConfig {
     /// 语音识别(ASR)设置。
     #[serde(default)]
     pub asr: AsrConfig,
+    /// 语音合成(TTS)设置。
+    #[serde(default)]
+    pub tts: TtsConfig,
 }
 
 /// 语音识别(ASR)配置(`[asr]` 段)。
@@ -312,6 +315,31 @@ impl AsrConfig {
             .as_deref()
             .and_then(crate::asr::AsrModel::parse)
             .unwrap_or(crate::asr::AsrModel::SenseVoice)
+    }
+}
+
+/// 语音合成(TTS)配置(`[tts]` 段)。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TtsConfig {
+    /// 朗读开关,默认关闭。
+    pub enabled: Option<bool>,
+    /// TTS 模型 id:piper-zh-xiaoya(默认)/ piper-zh-chaowen / vits-zh-fanchen-c。
+    pub model: Option<String>,
+}
+
+impl TtsConfig {
+    /// 朗读开关;未设置默认关闭。
+    pub fn resolve_enabled(&self) -> bool {
+        self.enabled.unwrap_or(false)
+    }
+
+    /// 解析为模型枚举;未设置或非法值回落默认(piper-zh-xiaoya)。
+    pub fn resolve_model(&self) -> crate::tts::TtsModel {
+        self.model
+            .as_deref()
+            .and_then(crate::tts::TtsModel::parse)
+            .unwrap_or(crate::tts::TtsModel::PiperZhXiaoya)
     }
 }
 
@@ -723,6 +751,23 @@ pub fn set_asr_model(path: &PathBuf, model: &str) -> Result<()> {
     write_config(path, &cfg)
 }
 
+/// 设置语音合成(TTS)开关,写入 `[tts] enabled`,跨重启保留。
+pub fn set_tts_enabled(path: &PathBuf, enabled: bool) -> Result<()> {
+    let mut cfg = load_config(path)?;
+    cfg.tts.enabled = Some(enabled);
+    write_config(path, &cfg)
+}
+
+/// 设置语音合成(TTS)模型,写入 `[tts] model = "<id>"`,跨重启保留。
+pub fn set_tts_model(path: &PathBuf, model: &str) -> Result<()> {
+    if crate::tts::TtsModel::parse(model).is_none() {
+        return Err(anyhow::anyhow!("未知 TTS 模型 id: {model}"));
+    }
+    let mut cfg = load_config(path)?;
+    cfg.tts.model = Some(model.to_string());
+    write_config(path, &cfg)
+}
+
 /// 新增或更新一个 MCP server 配置(写入 `[mcp.<name>]` 段)。
 ///
 /// name 仅允许字母/数字/`-`/`_`(TOML key 安全);`transport` 为 `stdio` / `http`。
@@ -823,6 +868,14 @@ pub fn write_default(path: &PathBuf, overwrite: bool) -> Result<()> {
 # 首次使用自动下载模型文件;也可在应用「设置」中切换。
 # [asr]
 # model = "sense-voice"
+
+# ========== 语音合成(TTS)==========
+# 朗读 agent 回复的本地模型:
+#   piper-zh-xiaoya(中文女声,默认)/ piper-zh-chaowen(中文男声)/ vits-zh-fanchen-c(高质量女声)。
+# 首次使用自动下载模型文件;也可在应用「设置」中打开朗读开关并切换模型。
+# [tts]
+# enabled = false
+# model = "piper-zh-xiaoya"
 
 # ========== 多 API key 配置 ==========
 # 每个 provider 一个表,key = provider id;api_key 可为明文或 $ENV_VAR。
@@ -1043,6 +1096,29 @@ model = "nope""#).unwrap();
     }
 
     #[test]
+    fn tts_config_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("combo-cli.toml");
+        // 未设置时默认关闭 + 默认模型(中文女声)
+        assert_eq!(AppConfig::default().tts.resolve_enabled(), false);
+        assert_eq!(AppConfig::default().tts.resolve_model(), crate::tts::TtsModel::PiperZhXiaoya);
+        // 非法模型值同样回落默认
+        let cfg: AppConfig = toml::from_str(r#"[tts]
+model = "nope""#).unwrap();
+        assert_eq!(cfg.tts.resolve_model(), crate::tts::TtsModel::PiperZhXiaoya);
+
+        // 写入 → 重读生效
+        set_tts_enabled(&path, true).unwrap();
+        set_tts_model(&path, "vits-zh-fanchen-c").unwrap();
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        assert!(cfg.tts.resolve_enabled());
+        assert_eq!(cfg.tts.resolve_model(), crate::tts::TtsModel::VitsZhFanchenC);
+
+        // 非法 id 拒绝写入
+        assert!(set_tts_model(&path, "unknown").is_err());
+    }
+
+    #[test]
     fn resolve_prefers_cli_over_file() {
         let cfg = AppConfig {
             provider: Some("ollama".into()),
@@ -1061,6 +1137,7 @@ model = "nope""#).unwrap();
             disabled_skills: vec![],
             commit_attribution: None,
             asr: AsrConfig::default(),
+            tts: TtsConfig::default(),
         };
         let r = cfg.resolve(Some("openai"), None, None, None, None, Some("http://mcp:1"));
         assert_eq!(r.provider, "openai", "CLI 参数优先");
