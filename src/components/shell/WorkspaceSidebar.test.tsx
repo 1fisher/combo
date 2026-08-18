@@ -9,8 +9,12 @@ import { changeWorkspacePath, createWorkspace } from '../../lib/api';
 
 const workspaces: { id: string; path: string; name?: string }[] = [];
 
+// 每个 workspace 的会话列表(徽章按项目求和 token 消耗;按 ws id 区分返回)
+const sessionsByWs = new Map<string, unknown[]>();
+
 vi.mock('../../lib/api', () => ({
   listWorkspaces: vi.fn(async () => [...workspaces]),
+  listSessions: vi.fn(async (wsId: string) => [...(sessionsByWs.get(wsId) ?? [])]),
   createWorkspace: vi.fn(async (path: string) => {
     const w = { id: `w${workspaces.length + 1}`, path };
     workspaces.push(w);
@@ -56,6 +60,7 @@ beforeEach(() => {
     { id: 'w1', path: '/proj/a', name: '项目A' },
     { id: 'w2', path: '/proj/b', name: '项目B' }
   );
+  sessionsByWs.clear();
 });
 
 function wrap() {
@@ -73,6 +78,30 @@ describe('WorkspaceSidebar', () => {
     expect(await screen.findByText('项目A')).toBeTruthy();
     expect(screen.getByText('项目B')).toBeTruthy();
     expect(screen.queryByText('/proj/a')).toBeNull();
+  });
+
+  it('shows token usage badge on each project row, summed from its sessions', async () => {
+    sessionsByWs.set('w1', [
+      { id: 's1', title: '任务1', prompt_tokens: 1200, completion_tokens: 300, cost: 0.012, created_at: 1 },
+      { id: 's2', title: '任务2', prompt_tokens: 400, completion_tokens: 100, cost: 0.004, created_at: 2 },
+    ]);
+    // w2 无任何消耗 → 不渲染徽章
+    wrap();
+    // 项目A 徽章:1200+300+400+100 = 2000 → 2.0K,且在项目A 行内
+    const badges = await screen.findAllByText('2.0K');
+    expect(badges).toHaveLength(1);
+    const rowA = screen.getByText('项目A').closest('div')!;
+    expect(rowA.contains(badges[0])).toBe(true);
+    const rowB = screen.getByText('项目B').closest('div')!;
+    expect(rowB.textContent).not.toContain('2.0K');
+  });
+
+  it('hides project token badge when the project has no token usage', async () => {
+    sessionsByWs.set('w1', [{ id: 's1', title: '空会话', prompt_tokens: 0, completion_tokens: 0, cost: 0, created_at: 1 }]);
+    wrap();
+    await screen.findByText('项目A');
+    const rowA = screen.getByText('项目A').closest('div')!;
+    expect(rowA.textContent).not.toMatch(/\d+(\.\d+)?[KM]/);
   });
 
   it('falls back to directory basename when name is missing', async () => {

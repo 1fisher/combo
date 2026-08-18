@@ -33,7 +33,7 @@ import {
   DialogTitle,
 } from '../ui/dialog';
 import { cn, usageColor } from '../../lib/utils';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useWorkspaces } from '../../hooks/useWorkspaces';
 import { useDirPermission } from '../../hooks/useDirPermission';
 import { useSessions, markCreated } from '../../hooks/useSessions';
@@ -42,7 +42,8 @@ import { useAgentStore } from '../../stores/agentStore';
 import { useConnectionStore } from '../../stores/connectionStore';
 import { isTauri } from '../../lib/connection';
 import { deleteSessionWithConfirm } from './sessionDelete';
-import { createSession as createSessionApi } from '../../lib/api';
+import { createSession as createSessionApi, listSessions } from '../../lib/api';
+import type { Api } from '../../lib/api/types';
 import { ConversationList } from './ConversationList';
 import { SessionRow } from './SessionRow';
 import { DirectoryPicker } from './DirectoryPicker';
@@ -62,6 +63,57 @@ function basename(p: string): string {
 /** 项目名:优先后端返回的 name,回退到目录 basename。 */
 function projectName(w: { name?: string; path: string }): string {
   return w.name && w.name.trim() ? w.name : basename(w.path);
+}
+
+/** token 数紧凑格式化(与任务行徽章一致:1.2K / 3.4M)。 */
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
+/** 汇总一组会话的 token 消耗(输入+输出)与花费。 */
+function sumSessionUsage(sessions: Api.Session[] | undefined) {
+  return (sessions ?? []).reduce(
+    (acc, s) => ({
+      tokens: acc.tokens + (s.prompt_tokens ?? 0) + (s.completion_tokens ?? 0),
+      prompt: acc.prompt + (s.prompt_tokens ?? 0),
+      completion: acc.completion + (s.completion_tokens ?? 0),
+      cost: acc.cost + (s.cost ?? 0),
+    }),
+    { tokens: 0, prompt: 0, completion: 0, cost: 0 },
+  );
+}
+
+/**
+ * 项目 token 消耗徽章:该项目全部任务的 输入+输出 token 总和,
+ * 样式与任务行(SessionRow)上的 tokens 徽章一致;无消耗时不渲染。
+ */
+function WorkspaceTokenBadge({ sessions }: { sessions: Api.Session[] | undefined }) {
+  const totals = sumSessionUsage(sessions);
+  if (totals.tokens === 0) return null;
+  return (
+    <span
+      className="shrink-0 rounded bg-surface-hover px-1 text-[10px] tabular-nums text-foreground-subtlest"
+      title={`该项目任务 token 消耗:输入 ${formatTokens(totals.prompt)} / 输出 ${formatTokens(totals.completion)}${totals.cost > 0 ? ` · 花费 $${totals.cost < 0.01 ? totals.cost.toFixed(4) : totals.cost.toFixed(2)}` : ''}`}
+    >
+      {formatTokens(totals.tokens)}
+    </span>
+  );
+}
+
+/**
+ * 「项目」视图行的 token 徽章:按 workspace 拉会话列表求和。
+ * 直接用 useQuery 复用 useSessions 的 ['sessions', wsId] 缓存(同 key 去重,
+ * 不产生额外请求),但**不用** useSessions —— 它附带的
+ * 「activeSessionId 不属于该项目时清除」副作用对徽章实例是误伤。
+ */
+function ProjectTokenBadge({ wsId }: { wsId: string }) {
+  const q = useQuery({
+    queryKey: ['sessions', wsId],
+    queryFn: () => listSessions(wsId),
+  });
+  return <WorkspaceTokenBadge sessions={q.data} />;
 }
 
 /** 可折叠分区:标题 + 折叠箭头 + 悬停操作(+ 等) */
@@ -160,6 +212,7 @@ function WorkspaceGroup({
           <Folder className="size-3.5 shrink-0 text-foreground-subtlest" />
           <span className="min-w-0 truncate">{projectName(ws)}</span>
         </button>
+        <WorkspaceTokenBadge sessions={sessions} />
         <button
           type="button"
           onClick={(e) => {
@@ -707,6 +760,7 @@ export function WorkspaceSidebar({
                         <span className="min-w-0 flex-1 truncate font-medium" title={w.path}>
                           {projectName(w)}
                         </span>
+                        <ProjectTokenBadge wsId={w.id} />
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
@@ -776,19 +830,9 @@ export function WorkspaceSidebar({
       </div>
       {/* 用量统计 */}
       {(() => {
-        const totals = (activeSessions ?? []).reduce(
-          (acc, s) => ({
-            tokens: acc.tokens + (s.prompt_tokens ?? 0) + (s.completion_tokens ?? 0),
-            cost: acc.cost + (s.cost ?? 0),
-          }),
-          { tokens: 0, cost: 0 },
-        );
+        const totals = sumSessionUsage(activeSessions);
         if (totals.tokens === 0) return null;
-        const fmtTokens = totals.tokens >= 1_000_000
-          ? `${(totals.tokens / 1_000_000).toFixed(1)}M`
-          : totals.tokens >= 1_000
-            ? `${(totals.tokens / 1_000).toFixed(1)}K`
-            : String(totals.tokens);
+        const fmtTokens = formatTokens(totals.tokens);
         const fmtCost = totals.cost < 0.01
           ? `$${totals.cost.toFixed(4)}`
           : `$${totals.cost.toFixed(2)}`;
