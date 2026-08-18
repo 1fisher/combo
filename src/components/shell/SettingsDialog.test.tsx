@@ -642,3 +642,34 @@ describe('SettingsDialog', () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe('SettingsDialog 分组 Tab', () => {
+  it('六个分组 tab 均渲染,默认激活「模型」,点击切换激活态', async () => {
+    renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
+    expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual([
+      '模型',
+      '语音',
+      '通知',
+      'Git',
+      '连接',
+      '通用',
+    ]);
+    expect(screen.getByRole('tab', { name: '模型' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('tab', { name: '语音' }).getAttribute('aria-selected')).toBe('false');
+    await userEvent.click(screen.getByRole('tab', { name: '语音' }));
+    expect(screen.getByRole('tab', { name: '语音' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('tab', { name: '模型' }).getAttribute('aria-selected')).toBe('false');
+  });
+
+  it('非激活分组仅 CSS 隐藏、内容常驻挂载:未切 tab 也能查到其他分组内容', () => {
+    renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
+    // 默认 tab 为「模型」,其余分组经 forceMount 常驻(切 tab 不丢状态、保存始终可提交)
+    expect(screen.getAllByRole('tabpanel')).toHaveLength(6);
+    expect(screen.getByRole('tabpanel', { name: '模型' }).dataset.state).toBe('active');
+    expect(screen.getByRole('tabpanel', { name: '连接' }).dataset.state).toBe('inactive');
+    // 连接(代理地址)/ 通知(免打扰)/ Git(署名)分组内容仍可直接查询
+    expect(screen.getByPlaceholderText('http://127.0.0.1:18236')).toBeTruthy();
+    expect(screen.getByRole('switch', { name: '免打扰模式' })).toBeTruthy();
+    expect(screen.getByRole('switch', { name: 'Git 提交署名' })).toBeTruthy();
+  });
+});

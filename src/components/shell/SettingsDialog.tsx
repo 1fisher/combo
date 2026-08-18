@@ -1,7 +1,23 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { Check, CheckCircle2, ChevronDown, Loader2, Pencil, Plus, Trash2, Zap } from 'lucide-react';
+import {
+  AudioLines,
+  Bell,
+  Boxes,
+  Check,
+  CheckCircle2,
+  ChevronDown,
+  GitBranch,
+  Globe,
+  Loader2,
+  Pencil,
+  Plus,
+  Settings2,
+  Trash2,
+  Zap,
+} from 'lucide-react';
 import { Button } from '../ui/button';
 import { Switch } from '../ui/switch';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
 import {
   Dialog,
   DialogContent,
@@ -41,16 +57,27 @@ interface SettingsDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
+/** 设置分组 tab(顺序即展示顺序,value 与下方各 TabsContent 对应)。 */
+const SETTINGS_TABS = [
+  { value: 'model', label: '模型', icon: Boxes },
+  { value: 'voice', label: '语音', icon: AudioLines },
+  { value: 'notify', label: '通知', icon: Bell },
+  { value: 'git', label: 'Git', icon: GitBranch },
+  { value: 'connection', label: '连接', icon: Globe },
+  { value: 'general', label: '通用', icon: Settings2 },
+] as const;
+
 /**
- * 设置对话框:
- * 1. 模型 Provider 配置 — 为各 provider 填入 API Key 并拉取可用模型。
- * 2. 特效与音效 — Liquid 流体特效 / Combo 连击气泡音。
- * 3. Git 提交 — 提交署名(Generated with Combo 全局 hook)与 AI 生成提交信息的全局模型配置。
- * 4. 系统通知 — 免打扰 / 任务结束 / 需要交互时发送系统通知(可选同时播放
- *    提示音、用语音模型播报随机提示语)。
- * 5. 目录访问授权 — 管理已记住的敏感目录授权(允许一次后不再询问)。
- * 6. 外部访问域名 — 域名部署时填写公开访问地址。
- * 7. 代理地址 — 前后端分离部署时指定 combo-cli serve 服务地址。
+ * 设置对话框:设置内容按分组通过 Tab 区分,方便管理 ——
+ * 1. 模型 — Provider 配置(API Key/多 Key 切换/自定义 Provider)+ 上下文窗口(手动)。
+ * 2. 语音 — 本地语音识别(ASR)模型 + 语音朗读(TTS)开关/模型/语速。
+ * 3. 通知 — 免打扰 / 任务结束 / 需要交互时发送系统通知(可选提示音、语音播报)。
+ * 4. Git — 提交署名(Generated with Combo 全局 hook)与 AI 生成提交信息的全局模型。
+ * 5. 连接 — 外部访问域名(域名远程部署)与代理地址(前后端分离部署)。
+ * 6. 通用 — Liquid 流体特效、Combo 音效、目录访问授权、应用更新(仅桌面模式)。
+ *
+ * 各分组 TabsContent 均以 forceMount 常驻挂载、非激活仅 CSS 隐藏:
+ * 切换 Tab 不丢分组内部状态,底部「保存」也始终能提交代理/域名/上下文窗口。
  */
 export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const [proxyInput, setProxyInput] = useState('');
@@ -128,306 +155,331 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>设置</DialogTitle>
-          <DialogDescription>
-            配置模型 Provider、域名远程访问和代理服务地址。
-          </DialogDescription>
+          <DialogDescription>按分组管理模型、语音、通知、Git、连接与通用偏好。</DialogDescription>
         </DialogHeader>
 
-        <div className="flex flex-col gap-4">
-          {/* Liquid 流体特效 */}
-          <div className="flex items-center justify-between">
-            <div className="flex flex-col gap-0.5">
-              <label className="text-[13px] font-medium text-foreground">Liquid 流体特效</label>
-              <span className="text-[12px] text-foreground-subtle">
-                鼠标移动时的全屏 WebGL 流体动效
-              </span>
-            </div>
-            <Switch checked={liquidEnabled} onCheckedChange={setLiquidEnabled} aria-label="Liquid 流体特效" />
+        <Tabs defaultValue="model" className="gap-3">
+          {/* 分组 tab 条(窄窗口下可横向滚动) */}
+          <div className="overflow-x-auto pb-px">
+            <TabsList>
+              {SETTINGS_TABS.map((t) => (
+                <TabsTrigger key={t.value} value={t.value}>
+                  <t.icon />
+                  {t.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
           </div>
 
-          {/* Combo 特效音效 */}
-          <div className="flex items-center justify-between">
-            <div className="flex flex-col gap-0.5">
-              <label className="text-[13px] font-medium text-foreground">Combo 特效音效</label>
-              <span className="text-[12px] text-foreground-subtle">
-                连击特效弹出与增长时播放气泡音,连击越高气泡越大越饱满
-              </span>
-            </div>
-            <Switch
-              checked={comboSoundEnabled}
-              onCheckedChange={setComboSoundEnabled}
-              aria-label="Combo 特效音效"
-            />
-          </div>
-
-          {/* Git 提交(署名 + AI 生成提交信息的全局模型) */}
-          <GitSection open={open} />
-
-          {/* 系统通知 */}
-          <div className="flex flex-col gap-2">
-            <div className="flex items-center justify-between">
-              <div className="flex flex-col gap-0.5">
-                <label className="text-[13px] font-medium text-foreground">免打扰模式</label>
-                <span className="text-[12px] text-foreground-subtle">
-                  开启后暂停任务结束与交互请求的全部通知、提示音及语音播报,下方通知开关暂不生效
-                </span>
+          {/* 分组内容:统一滚动区域,高度封顶避免撑爆小屏 */}
+          <div className="max-h-[min(58vh,540px)] overflow-y-auto pr-1">
+            {/* 模型:Provider 配置 + 手动上下文窗口 */}
+            <TabsContent forceMount value="model" className="data-[state=inactive]:hidden">
+              <div className="flex flex-col gap-5">
+                <ProviderConfigSection open={open} />
+                <ContextWindowSection open={open} ref={ctxSectionRef} />
               </div>
-              <Switch
-                checked={dndEnabled}
-                onCheckedChange={setDndEnabled}
-                aria-label="免打扰模式"
-              />
-            </div>
-            <div className="flex items-center justify-between">
-              <div className="flex flex-col gap-0.5">
-                <label
-                  className={cn(
-                    'text-[13px] font-medium',
-                    dndEnabled ? 'text-foreground-subtle' : 'text-foreground',
-                  )}
-                >
-                  任务结束通知
-                </label>
-                <span className="text-[12px] text-foreground-subtle">
-                  任务运行结束时发送系统通知
-                  {dndEnabled && (
-                    <span className="text-amber-500">(免打扰模式开启期间不生效)</span>
-                  )}
-                </span>
+            </TabsContent>
+
+            {/* 语音:语音识别模型 + 语音朗读 */}
+            <TabsContent forceMount value="voice" className="data-[state=inactive]:hidden">
+              <div className="flex flex-col gap-5">
+                <AsrModelSection open={open} />
+                <TtsSection open={open} />
               </div>
-              <Switch
-                checked={notifyRunComplete}
-                onCheckedChange={(v) => void toggleNotify(v, setNotifyRunComplete)}
-                disabled={dndEnabled}
-                aria-label="任务结束通知"
-              />
-            </div>
-            <div className="flex items-center justify-between">
-              <div className="flex flex-col gap-0.5">
-                <label
-                  className={cn(
-                    'text-[13px] font-medium',
-                    dndEnabled ? 'text-foreground-subtle' : 'text-foreground',
-                  )}
-                >
-                  交互请求通知
-                </label>
-                <span className="text-[12px] text-foreground-subtle">
-                  需要确认工具或回答问题时发送系统通知
-                  {dndEnabled && (
-                    <span className="text-amber-500">(免打扰模式开启期间不生效)</span>
-                  )}
-                </span>
-              </div>
-              <Switch
-                checked={notifyInteraction}
-                onCheckedChange={(v) => void toggleNotify(v, setNotifyInteraction)}
-                disabled={dndEnabled}
-                aria-label="交互请求通知"
-              />
-            </div>
-            <div className="flex items-center justify-between">
-              <div className="flex flex-col gap-0.5">
-                <label
-                  className={cn(
-                    'text-[13px] font-medium',
-                    dndEnabled ? 'text-foreground-subtle' : 'text-foreground',
-                  )}
-                >
-                  通知音效
-                </label>
-                <span className="text-[12px] text-foreground-subtle">
-                  发送系统通知时同时播放提示音(任务完成与交互提醒音色不同)
-                  {dndEnabled && (
-                    <span className="text-amber-500">(免打扰模式开启期间不生效)</span>
-                  )}
-                </span>
-              </div>
-              <Switch
-                checked={notifySoundEnabled}
-                onCheckedChange={setNotifySoundEnabled}
-                disabled={dndEnabled}
-                aria-label="通知音效"
-              />
-            </div>
-            <div className="flex items-center justify-between">
-              <div className="flex flex-col gap-0.5">
-                <label
-                  className={cn(
-                    'text-[13px] font-medium',
-                    dndEnabled ? 'text-foreground-subtle' : 'text-foreground',
-                  )}
-                >
-                  通知语音播报
-                </label>
-                <span className="text-[12px] text-foreground-subtle">
-                  任务完成与需要交互时,用语音模型播报随机提示语(跟随对应通知开关生效)
-                  {dndEnabled && (
-                    <span className="text-amber-500">(免打扰模式开启期间不生效)</span>
-                  )}
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 px-2.5 text-[12px]"
-                  onClick={() => speakNotifyVoice(pickVoicePhrase(VOICE_RUN_DONE))}
-                  aria-label="试听通知播报"
-                >
-                  试听
-                </Button>
-                <Switch
-                  checked={notifyVoiceEnabled}
-                  onCheckedChange={setNotifyVoiceEnabled}
-                  disabled={dndEnabled}
-                  aria-label="通知语音播报"
-                />
-              </div>
-            </div>
-            {notifyBlocked && (
-              <div className="text-[12px] text-amber-500">
-                未能获取通知权限,请在系统或浏览器设置中允许 combo 发送通知。
-              </div>
-            )}
-          </div>
+            </TabsContent>
 
-          {/* 模型 Provider 配置 */}
-          <ProviderConfigSection open={open} />
-
-          {/* 手动上下文窗口 */}
-          <ContextWindowSection open={open} ref={ctxSectionRef} />
-
-          {/* 语音识别(ASR)模型 */}
-          <AsrModelSection open={open} />
-
-          {/* 语音合成(TTS)朗读 */}
-          <TtsSection open={open} />
-
-          {/* 目录访问授权(敏感目录允许一次后持久记住) */}
-          <DirGrantsSection open={open} />
-
-          {/* 外部访问域名 */}
-          <div className="flex flex-col gap-2">
-            <label className="text-[13px] font-medium text-foreground">外部访问域名</label>
-            <input
-              value={domainInput}
-              onChange={(e) => setDomainInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') save();
-              }}
-              placeholder="https://proxy.apesoft.cn"
-              className="h-9 w-full rounded-lg border border-input-border bg-background px-2.5 text-[13px] outline-none placeholder:text-foreground-subtlest focus-visible:border-input-border-focused"
-            />
-            <div className="text-[12px] text-foreground-subtle">
-              {hasDomain
-                ? '已配置自定义域名,移动端扫码将使用此地址连接'
-                : '留空则使用默认中转域名(proxy.apesoft.cn),扫码即可远程访问'}
-            </div>
-            {hasDomain && (
-              <Button variant="ghost" size="sm" className="h-7 w-fit text-[12px]" onClick={resetDomain}>
-                清除域名配置
-              </Button>
-            )}
-          </div>
-
-          {/* 代理地址 */}
-          <div className="flex flex-col gap-2">
-            <label className="text-[13px] font-medium text-foreground">代理地址</label>
-            <input
-              value={proxyInput}
-              onChange={(e) => setProxyInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') save();
-              }}
-              placeholder={isTauri() ? '桌面模式使用内置代理' : 'http://127.0.0.1:18236'}
-              className="h-9 w-full rounded-lg border border-input-border bg-background px-2.5 text-[13px] outline-none placeholder:text-foreground-subtlest focus-visible:border-input-border-focused"
-            />
-            <div className="text-[12px] text-foreground-subtle">
-              当前地址:{getProxyBaseUrl() || '未连接'}
-            </div>
-            {isTauri() && (
-              <div className="text-[12px] text-foreground-subtle">
-                桌面模式使用内置代理,无需手动配置。
-              </div>
-            )}
-          </div>
-
-          {/* 应用更新(仅桌面模式) */}
-          {isTauri() && (
-            <div className="flex flex-col gap-2">
-              <label className="text-[13px] font-medium text-foreground">应用更新</label>
-              {appVersion && (
-                <div className="text-[12px] text-foreground-subtle">
-                  当前版本 <span className="font-medium text-foreground">v{appVersion}</span>
+            {/* 通知 */}
+            <TabsContent forceMount value="notify" className="data-[state=inactive]:hidden">
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between">
+                  <div className="flex flex-col gap-0.5">
+                    <label className="text-[13px] font-medium text-foreground">免打扰模式</label>
+                    <span className="text-[12px] text-foreground-subtle">
+                      开启后暂停任务结束与交互请求的全部通知、提示音及语音播报,下方通知开关暂不生效
+                    </span>
+                  </div>
+                  <Switch
+                    checked={dndEnabled}
+                    onCheckedChange={setDndEnabled}
+                    aria-label="免打扰模式"
+                  />
                 </div>
-              )}
-              {(updater.status === 'idle' || updater.status === 'latest') && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="h-8 w-fit text-[12px]"
-                  onClick={() => updater.checkForUpdate()}
-                >
-                  检查更新
-                </Button>
-              )}
-              {updater.status === 'latest' && (
-                <div className="flex items-center gap-1.5 text-[12px] text-green-500">
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                  已是最新版本
+                <div className="flex items-center justify-between">
+                  <div className="flex flex-col gap-0.5">
+                    <label
+                      className={cn(
+                        'text-[13px] font-medium',
+                        dndEnabled ? 'text-foreground-subtle' : 'text-foreground',
+                      )}
+                    >
+                      任务结束通知
+                    </label>
+                    <span className="text-[12px] text-foreground-subtle">
+                      任务运行结束时发送系统通知
+                      {dndEnabled && (
+                        <span className="text-amber-500">(免打扰模式开启期间不生效)</span>
+                      )}
+                    </span>
+                  </div>
+                  <Switch
+                    checked={notifyRunComplete}
+                    onCheckedChange={(v) => void toggleNotify(v, setNotifyRunComplete)}
+                    disabled={dndEnabled}
+                    aria-label="任务结束通知"
+                  />
                 </div>
-              )}
-              {updater.status === 'checking' && (
-                <div className="text-[12px] text-foreground-subtle">正在检查更新…</div>
-              )}
-              {updater.status === 'available' && updater.updateInfo && (
+                <div className="flex items-center justify-between">
+                  <div className="flex flex-col gap-0.5">
+                    <label
+                      className={cn(
+                        'text-[13px] font-medium',
+                        dndEnabled ? 'text-foreground-subtle' : 'text-foreground',
+                      )}
+                    >
+                      交互请求通知
+                    </label>
+                    <span className="text-[12px] text-foreground-subtle">
+                      需要确认工具或回答问题时发送系统通知
+                      {dndEnabled && (
+                        <span className="text-amber-500">(免打扰模式开启期间不生效)</span>
+                      )}
+                    </span>
+                  </div>
+                  <Switch
+                    checked={notifyInteraction}
+                    onCheckedChange={(v) => void toggleNotify(v, setNotifyInteraction)}
+                    disabled={dndEnabled}
+                    aria-label="交互请求通知"
+                  />
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex flex-col gap-0.5">
+                    <label
+                      className={cn(
+                        'text-[13px] font-medium',
+                        dndEnabled ? 'text-foreground-subtle' : 'text-foreground',
+                      )}
+                    >
+                      通知音效
+                    </label>
+                    <span className="text-[12px] text-foreground-subtle">
+                      发送系统通知时同时播放提示音(任务完成与交互提醒音色不同)
+                      {dndEnabled && (
+                        <span className="text-amber-500">(免打扰模式开启期间不生效)</span>
+                      )}
+                    </span>
+                  </div>
+                  <Switch
+                    checked={notifySoundEnabled}
+                    onCheckedChange={setNotifySoundEnabled}
+                    disabled={dndEnabled}
+                    aria-label="通知音效"
+                  />
+                </div>
+                <div className="flex items-center justify-between">
+                  <div className="flex flex-col gap-0.5">
+                    <label
+                      className={cn(
+                        'text-[13px] font-medium',
+                        dndEnabled ? 'text-foreground-subtle' : 'text-foreground',
+                      )}
+                    >
+                      通知语音播报
+                    </label>
+                    <span className="text-[12px] text-foreground-subtle">
+                      任务完成与需要交互时,用语音模型播报随机提示语(跟随对应通知开关生效)
+                      {dndEnabled && (
+                        <span className="text-amber-500">(免打扰模式开启期间不生效)</span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-2.5 text-[12px]"
+                      onClick={() => speakNotifyVoice(pickVoicePhrase(VOICE_RUN_DONE))}
+                      aria-label="试听通知播报"
+                    >
+                      试听
+                    </Button>
+                    <Switch
+                      checked={notifyVoiceEnabled}
+                      onCheckedChange={setNotifyVoiceEnabled}
+                      disabled={dndEnabled}
+                      aria-label="通知语音播报"
+                    />
+                  </div>
+                </div>
+                {notifyBlocked && (
+                  <div className="text-[12px] text-amber-500">
+                    未能获取通知权限,请在系统或浏览器设置中允许 combo 发送通知。
+                  </div>
+                )}
+              </div>
+            </TabsContent>
+
+            {/* Git:提交署名 + AI 生成提交信息的全局模型 */}
+            <TabsContent forceMount value="git" className="data-[state=inactive]:hidden">
+              <GitSection open={open} />
+            </TabsContent>
+
+            {/* 连接:外部访问域名 + 代理地址 */}
+            <TabsContent forceMount value="connection" className="data-[state=inactive]:hidden">
+              <div className="flex flex-col gap-5">
                 <div className="flex flex-col gap-2">
+                  <label className="text-[13px] font-medium text-foreground">外部访问域名</label>
+                  <input
+                    value={domainInput}
+                    onChange={(e) => setDomainInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') save();
+                    }}
+                    placeholder="https://proxy.apesoft.cn"
+                    className="h-9 w-full rounded-lg border border-input-border bg-background px-2.5 text-[13px] outline-none placeholder:text-foreground-subtlest focus-visible:border-input-border-focused"
+                  />
                   <div className="text-[12px] text-foreground-subtle">
-                    发现新版本 <span className="font-medium text-foreground">v{updater.updateInfo.version}</span>
+                    {hasDomain
+                      ? '已配置自定义域名,移动端扫码将使用此地址连接'
+                      : '留空则使用默认中转域名(proxy.apesoft.cn),扫码即可远程访问'}
                   </div>
-                  {updater.updateInfo.body && (
-                    <pre className="max-h-32 overflow-auto whitespace-pre-wrap rounded-lg border border-input-border bg-background p-2.5 text-[11px] text-foreground-subtle">
-                      {updater.updateInfo.body}
-                    </pre>
+                  {hasDomain && (
+                    <Button variant="ghost" size="sm" className="h-7 w-fit text-[12px]" onClick={resetDomain}>
+                      清除域名配置
+                    </Button>
                   )}
-                  <div className="flex gap-2">
-                    <Button
-                      variant="default"
-                      size="sm"
-                      className="h-8 text-[12px]"
-                      onClick={() => updater.downloadAndInstall()}
-                    >
-                      下载并安装
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-8 text-[12px]"
-                      onClick={() => updater.checkForUpdate()}
-                    >
-                      重新检查
-                    </Button>
+                </div>
+
+                <div className="flex flex-col gap-2">
+                  <label className="text-[13px] font-medium text-foreground">代理地址</label>
+                  <input
+                    value={proxyInput}
+                    onChange={(e) => setProxyInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') save();
+                    }}
+                    placeholder={isTauri() ? '桌面模式使用内置代理' : 'http://127.0.0.1:18236'}
+                    className="h-9 w-full rounded-lg border border-input-border bg-background px-2.5 text-[13px] outline-none placeholder:text-foreground-subtlest focus-visible:border-input-border-focused"
+                  />
+                  <div className="text-[12px] text-foreground-subtle">
+                    当前地址:{getProxyBaseUrl() || '未连接'}
                   </div>
+                  {isTauri() && (
+                    <div className="text-[12px] text-foreground-subtle">
+                      桌面模式使用内置代理,无需手动配置。
+                    </div>
+                  )}
                 </div>
-              )}
-              {(updater.status === 'downloading' || updater.status === 'installing') && (
-                <div className="text-[12px] text-foreground-subtle">
-                  {updater.status === 'downloading' ? '正在下载更新…' : '正在安装更新…'}
+              </div>
+            </TabsContent>
+
+            {/* 通用:特效/音效 + 目录访问授权 + 应用更新(仅桌面) */}
+            <TabsContent forceMount value="general" className="data-[state=inactive]:hidden">
+              <div className="flex flex-col gap-5">
+                <div className="flex items-center justify-between">
+                  <div className="flex flex-col gap-0.5">
+                    <label className="text-[13px] font-medium text-foreground">Liquid 流体特效</label>
+                    <span className="text-[12px] text-foreground-subtle">
+                      鼠标移动时的全屏 WebGL 流体动效
+                    </span>
+                  </div>
+                  <Switch checked={liquidEnabled} onCheckedChange={setLiquidEnabled} aria-label="Liquid 流体特效" />
                 </div>
-              )}
-              {updater.status === 'done' && (
-                <div className="text-[12px] text-green-500">更新已安装,请重启应用。</div>
-              )}
-              {updater.status === 'error' && (
-                <div className="text-[12px] text-red-500">更新失败:{updater.error}</div>
-              )}
-            </div>
-          )}
-        </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="flex flex-col gap-0.5">
+                    <label className="text-[13px] font-medium text-foreground">Combo 特效音效</label>
+                    <span className="text-[12px] text-foreground-subtle">
+                      连击特效弹出与增长时播放气泡音,连击越高气泡越大越饱满
+                    </span>
+                  </div>
+                  <Switch
+                    checked={comboSoundEnabled}
+                    onCheckedChange={setComboSoundEnabled}
+                    aria-label="Combo 特效音效"
+                  />
+                </div>
+
+                <DirGrantsSection open={open} />
+
+                {isTauri() && (
+                  <div className="flex flex-col gap-2">
+                    <label className="text-[13px] font-medium text-foreground">应用更新</label>
+                    {appVersion && (
+                      <div className="text-[12px] text-foreground-subtle">
+                        当前版本 <span className="font-medium text-foreground">v{appVersion}</span>
+                      </div>
+                    )}
+                    {(updater.status === 'idle' || updater.status === 'latest') && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 w-fit text-[12px]"
+                        onClick={() => updater.checkForUpdate()}
+                      >
+                        检查更新
+                      </Button>
+                    )}
+                    {updater.status === 'latest' && (
+                      <div className="flex items-center gap-1.5 text-[12px] text-green-500">
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                        已是最新版本
+                      </div>
+                    )}
+                    {updater.status === 'checking' && (
+                      <div className="text-[12px] text-foreground-subtle">正在检查更新…</div>
+                    )}
+                    {updater.status === 'available' && updater.updateInfo && (
+                      <div className="flex flex-col gap-2">
+                        <div className="text-[12px] text-foreground-subtle">
+                          发现新版本 <span className="font-medium text-foreground">v{updater.updateInfo.version}</span>
+                        </div>
+                        {updater.updateInfo.body && (
+                          <pre className="max-h-32 overflow-auto whitespace-pre-wrap rounded-lg border border-input-border bg-background p-2.5 text-[11px] text-foreground-subtle">
+                            {updater.updateInfo.body}
+                          </pre>
+                        )}
+                        <div className="flex gap-2">
+                          <Button
+                            variant="default"
+                            size="sm"
+                            className="h-8 text-[12px]"
+                            onClick={() => updater.downloadAndInstall()}
+                          >
+                            下载并安装
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-8 text-[12px]"
+                            onClick={() => updater.checkForUpdate()}
+                          >
+                            重新检查
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                    {(updater.status === 'downloading' || updater.status === 'installing') && (
+                      <div className="text-[12px] text-foreground-subtle">
+                        {updater.status === 'downloading' ? '正在下载更新…' : '正在安装更新…'}
+                      </div>
+                    )}
+                    {updater.status === 'done' && (
+                      <div className="text-[12px] text-green-500">更新已安装,请重启应用。</div>
+                    )}
+                    {updater.status === 'error' && (
+                      <div className="text-[12px] text-red-500">更新失败:{updater.error}</div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </TabsContent>
+          </div>
+        </Tabs>
 
         <DialogFooter>
           {hasProxyOverride && (
