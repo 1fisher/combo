@@ -302,6 +302,14 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   关闭音在收尾时播放,自动取消不播)。
   最终文本经 `appendTranscript` 追加进输入框(中英边界智能补空格)。macOS
   麦克风权限声明在 `src-tauri/Info.plist`(`NSMicrophoneUsageDescription`)。
+  **注意 TCC 与 ad-hoc 签名**:macOS 按「代码签名身份」记录麦克风等隐私权限;
+  ad-hoc 签名(`signingIdentity "-"`,当前回退值)每次构建 CDHash 都变,TCC
+  视为新应用,系统设置 → 隐私与安全性 → 麦克风列表可能不显示 Combo、无法开启。
+  根治靠 Developer ID 签名(稳定的 designated requirement):release.yml 已按
+  secrets 是否配置自动启用「Developer ID 签名 + 公证」(需在 GitHub 配置
+  APPLE_CERTIFICATE/APPLE_CERTIFICATE_PASSWORD/APPLE_SIGNING_IDENTITY/
+  APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID 六项,见 CI 注释)。排查/重置命令:
+  `sudo tccutil reset Microphone dev.combo.ide && sudo killall tccd` 后重启应用。
 - **Frontend layout:** `src/components/{ui,shell,agent}` — `ui/` is generated
   shadcn primitives, `shell/` is app chrome, `agent/` is the chat/tool/modal UI.
   The shell is a 1:1 仿写 ZCode 的 agent 布局:左侧 `WorkspaceSidebar`(默认 372px,
