@@ -402,6 +402,7 @@ impl TtsService {
 
     /// 合成文本 → WAV 字节(阻塞,须在 spawn_blocking 中执行)。
     fn synthesize_blocking(synth: &Synthesizer, text: String, speed: f32) -> anyhow::Result<Vec<u8>> {
+        let text = localize_latin_text(&text);
         synth
             .synthesize(&text, speed)
             .ok_or_else(|| anyhow::anyhow!("语音合成失败"))
@@ -410,6 +411,54 @@ impl TtsService {
 
 /// 单句合成文本上限(字符):句子级朗读,超长拒绝。
 const MAX_TEXT_CHARS: usize = 500;
+
+/// 拉丁字母 → 中文读音(按中国人读英文的习惯逐字母念出)。
+const LETTER_NAMES: &[(&str, &str); 26] = &[
+    ("a", "诶"), ("b", "比"), ("c", "西"), ("d", "迪"), ("e", "衣"),
+    ("f", "艾弗"), ("g", "吉"), ("h", "艾尺"), ("i", "爱"), ("j", "杰"),
+    ("k", "开"), ("l", "艾勒"), ("m", "艾姆"), ("n", "恩"), ("o", "欧"),
+    ("p", "皮"), ("q", "扣"), ("r", "阿尔"), ("s", "艾斯"), ("t", "提"),
+    ("u", "优"), ("v", "维"), ("w", "达布流"), ("x", "艾克斯"), ("y", "歪"),
+    ("z", "贼"),
+];
+
+/// 把文本中的拉丁字母串改写为中文逐字母读音。
+///
+/// 中文 TTS 模型(char 级词库,如 vits-zh-fanchen-c / piper-zh-*)没有英文字母
+/// token,直接合成会被当作 OOV 静默丢弃(sherpa-onnx 日志 `Ignore OOV 'Combo'`),
+/// 导致英文词从音频里消失。逐字母转成中文读音后,英文词/标识符可完整念出。
+fn localize_latin_text(text: &str) -> String {
+    fn spell(buf: &mut Vec<char>, out: &mut String) {
+        if buf.is_empty() {
+            return;
+        }
+        for (i, letter) in buf.iter().enumerate() {
+            if i > 0 {
+                out.push(' ');
+            }
+            let lower = letter.to_ascii_lowercase();
+            let name = LETTER_NAMES
+                .iter()
+                .find(|(l, _)| l.as_bytes()[0] == lower as u8)
+                .map(|(_, n)| *n)
+                .unwrap_or("");
+            out.push_str(name);
+        }
+        buf.clear();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut buf: Vec<char> = Vec::new();
+    for ch in text.chars() {
+        if ch.is_ascii_alphabetic() {
+            buf.push(ch);
+        } else {
+            spell(&mut buf, &mut out);
+            out.push(ch);
+        }
+    }
+    spell(&mut buf, &mut out);
+    out
+}
 
 /// GET /v1/speech/status — TTS 状态(开关 + 模型 + 下载/加载进度)。
 async fn status(State(state): State<AppState>) -> Json<serde_json::Value> {
@@ -650,6 +699,24 @@ mod tests {
         assert!(TtsModel::VitsZhFanchenC.download_url().contains("fanchen-C"));
         assert_eq!(TtsModel::VitsZhFanchenC.default_sid(), 100);
         assert_eq!(TtsModel::PiperZhXiaoya.default_sid(), 0);
+    }
+
+    #[test]
+    fn localize_latin_text_spells_letters_and_keeps_cjk() {
+        // 纯中文与标点不动
+        assert_eq!(localize_latin_text("你好,世界!"), "你好,世界!");
+        // 英文词逐字母转中文读音(大小写不敏感)
+        assert_eq!(localize_latin_text("Combo"), "西 欧 艾姆 比 欧");
+        assert_eq!(localize_latin_text("AI"), "诶 爱");
+        assert_eq!(localize_latin_text("api"), "诶 皮 爱");
+        // 混排:中文与标点原样,仅拉丁串转写;中文全角标点前不留多余空格
+        assert_eq!(
+            localize_latin_text("Combo 是一个 IDE 助手。"),
+            "西 欧 艾姆 比 欧 是一个 爱 迪 衣 助手。"
+        );
+        // 数字与符号保留(数字由 rule_fsts 处理)
+        assert_eq!(localize_latin_text("GPT-4"), "吉 皮 提-4");
+        assert_eq!(localize_latin_text(""), "");
     }
 
     #[test]

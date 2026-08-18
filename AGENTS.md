@@ -325,7 +325,11 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   (`COMBO_TTS_MODEL_URL` 可换镜像);加载配置统一为
   `model=*.onnx + tokens=tokens.txt + lexicon=lexicon.txt + rule_fsts=
   phone.fst,date.fst,number.fst`(fst 在模型根目录,fanchen-C 多说话人用
-  `sid=100`),合成结果封装 44 字节 WAV 头(PCM16)返回。端点:
+  `sid=100`),合成结果封装 44 字节 WAV 头(PCM16)返回。**拉丁文本本地化**:
+  中文 TTS 模型是 char 级词库,英文字母/英文词直接合成会被当作 OOV 静默丢弃
+  (sherpa-onnx 日志 `Ignore OOV 'Combo'`),合成前 `localize_latin_text` 把
+  拉丁字母串逐字母转成中文读音(如 `Combo`→`西 欧 艾姆 比 欧`),保证英文
+  词/标识符可完整念出(数字与符号保留,由 rule_fsts 处理)。端点:
   `GET /v1/speech/status`(开关 + 模型 + 下载/加载阶段 + 进度 + 语速)、
   `POST /v1/speech/prepare`(幂等触发下载/加载,后台执行,镜像
   `/v1/transcribe/prepare`)、
