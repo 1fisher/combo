@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { connectLoop } from '../../lib/connection';
 import { useIsMobile } from '../../hooks/useIsMobile';
+import { useSpeechOutput } from '../../hooks/useSpeechOutput';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
 import { AutomationPanel } from './AutomationPanel';
 import { SearchView } from './SearchView';
@@ -79,6 +80,7 @@ export function AppShell() {
 }
 
 function AppShellInner() {
+  useSpeechOutput();
   const workspaceId = useActiveWorkspaceId();
   const resetOpenFiles = useEditorStore((s) => s.resetOpenFiles);
 
