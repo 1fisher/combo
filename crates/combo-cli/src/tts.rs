@@ -599,3 +599,29 @@ mod tests {
         assert_eq!(body.0["model"], serde_json::json!("piper-zh-xiaoya"));
     }
 }
+
+#[cfg(test)]
+mod smoke {
+    use super::*;
+
+    /// 手动冒烟(需真实模型在 /tmp/combo-tts-smoke):
+    /// `cargo test -p combo-cli --lib tts::smoke::tts_synthesize_piper_smoke -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn tts_synthesize_piper_smoke() {
+        let svc = Arc::new(TtsService::new(
+            std::path::PathBuf::from("/tmp/combo-tts-smoke"),
+            TtsModel::PiperZhXiaoya,
+        ));
+        svc.ensure_ready().await.expect("模型应就绪");
+        let synth = svc.synthesizer().expect("合成器应已加载");
+        let wav = TtsService::synthesize_blocking(&synth, "你好,这是语音朗读测试。".into())
+            .expect("合成应成功");
+        assert!(wav.len() > 44, "WAV 应包含音频数据: {} bytes", wav.len());
+        assert_eq!(&wav[0..4], b"RIFF");
+        let sr = u32::from_le_bytes(wav[24..28].try_into().unwrap());
+        let seconds = (wav.len() - 44) as f64 / (sr as f64 * 2.0);
+        println!("WAV {} bytes, {}Hz, 约 {:.1}s", wav.len(), sr, seconds);
+        assert!(seconds > 0.5, "应合成出可听音频");
+    }
+}

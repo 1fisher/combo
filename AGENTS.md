@@ -317,6 +317,27 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   `sudo tccutil reset Microphone dev.combo.ide && sudo killall tccd` 后重启应用。
   本地开发可 `bash scripts/macos-sign-dev.sh`(自动建自签名证书并带 entitlement
   重签 Combo.app,身份稳定,TCC 列表可正常显示;每次重新构建后重跑一次)。
+- **本地语音合成(TTS,`tts.rs`,朗读 agent 回复)**:与 ASR 对称的语音输出。
+  配置 `[tts] enabled`(开关,默认关)+ `[tts] model`(默认 `piper-zh-xiaoya`;
+  可选 `piper-zh-chaowen`/`vits-zh-fanchen-c`)。模型为 k2-fsa/sherpa-onnx
+  `tts-models` release 资产(piper 中文 int8 各 ~14MB、HF 高质量 ~113MB),
+  与 ASR 共用 `<数据目录>/models/<id>/` 下载/解压/懒加载流程
+  (`COMBO_TTS_MODEL_URL` 可换镜像);加载配置统一为
+  `model=*.onnx + tokens=tokens.txt + lexicon=lexicon.txt + rule_fsts=
+  phone.fst,date.fst,number.fst`(fst 在模型根目录,fanchen-C 多说话人用
+  `sid=100`),合成结果封装 44 字节 WAV 头(PCM16)返回。端点:
+  `GET /v1/speech/status`(开关 + 模型 + 下载/加载阶段)、
+  `POST /v1/speech/config`(`{enabled}`,写 `[tts] enabled`)、
+  `POST /v1/speech/model`(切模型并持久化)、`POST /v1/speech`(单句文本 →
+  `audio/wav`;关闭时 400 `tts_disabled`,未就绪 503 `tts_not_ready`,
+  超 500 字符 400 `tts_text_invalid`)。前端 `useSpeechOutput`
+  (`src/hooks/useSpeechOutput.ts`,挂 `AppShellInner`)订阅 agentStore 当前
+  会话 assistant **text part** 文本增量(只读本次 run 的增量:run 开始时把
+  已有消息全部标记已消费,避免朗读历史),按句末标点/换行断句(代码块围栏
+  内容跳过、围栏状态跨增量保留,`src/lib/ttsSplit.ts` 纯函数,单句 >100 字符
+  强制切),完整句子经 `synthesizeSpeech` 合成后 `AudioContext` FIFO 顺序
+  播放;打断(新发消息/切会话/关开关/run 出错)停播 + 清缓冲。设置界面
+  `TtsSection`(开关 + 模型下拉,开关写 `[tts] enabled` 并联动朗读 hook)。
 - **Frontend layout:** `src/components/{ui,shell,agent}` — `ui/` is generated
   shadcn primitives, `shell/` is app chrome, `agent/` is the chat/tool/modal UI.
   The shell is a 1:1 仿写 ZCode 的 agent 布局:左侧 `WorkspaceSidebar`(默认 372px,
