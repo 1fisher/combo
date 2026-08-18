@@ -225,6 +225,8 @@ pub struct TtsService {
     model_root: std::path::PathBuf,
     /// 当前选用的模型(运行时可切)。
     model: Mutex<TtsModel>,
+    /// 朗读开关(启动时从 `[tts] enabled` 加载;运行时经 set_enabled 切换)。
+    enabled: Mutex<bool>,
     /// 已加载的合成器(随模型懒加载;切换模型时清空)。
     synth: Mutex<Option<Arc<Synthesizer>>>,
     /// 下载/加载阶段(复用 asr.rs 的 Phase,供 status 端点与前端进度展示)。
@@ -238,10 +240,21 @@ impl TtsService {
         Self {
             model_root,
             model: Mutex::new(model),
+            enabled: Mutex::new(false),
             synth: Mutex::new(None),
             phase: Mutex::new(crate::asr::Phase::NotReady),
             prepare_lock: AsyncMutex::new(()),
         }
+    }
+
+    /// 朗读开关状态。
+    pub fn enabled(&self) -> bool {
+        *self.enabled.lock().unwrap()
+    }
+
+    /// 设置朗读开关(运行时;持久化由调用方写 `[tts] enabled`)。
+    pub fn set_enabled(&self, enabled: bool) {
+        *self.enabled.lock().unwrap() = enabled;
     }
 
     /// 当前选用的模型。
@@ -377,9 +390,7 @@ const MAX_TEXT_CHARS: usize = 500;
 /// GET /v1/speech/status — TTS 状态(开关 + 模型 + 下载/加载进度)。
 async fn status(State(state): State<AppState>) -> Json<serde_json::Value> {
     let tts = state.tts.clone();
-    let enabled = crate::config::AppConfig::load_or_create(&crate::config::default_config_path())
-        .map(|c| c.tts.resolve_enabled())
-        .unwrap_or(false);
+    let enabled = tts.enabled();
     let phase = tts.phase_snapshot();
     let (progress, error) = match &phase {
         crate::asr::Phase::Downloading { progress } => (Some(*progress), None),
@@ -404,7 +415,7 @@ struct SetEnabledReq {
 }
 
 async fn set_enabled(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Json(body): Json<SetEnabledReq>,
 ) -> Response {
     if let Err(e) = crate::config::set_tts_enabled(&crate::config::default_config_path(), body.enabled) {
@@ -414,6 +425,7 @@ async fn set_enabled(
             None,
         );
     }
+    state.tts.set_enabled(body.enabled);
     tracing::info!("语音朗读已{}", if body.enabled { "开启" } else { "关闭" });
     Json(json!({ "ok": true, "enabled": body.enabled })).into_response()
 }
@@ -460,10 +472,7 @@ async fn synthesize(
     State(state): State<AppState>,
     Json(body): Json<SynthesizeReq>,
 ) -> Response {
-    let enabled = crate::config::AppConfig::load_or_create(&crate::config::default_config_path())
-        .map(|c| c.tts.resolve_enabled())
-        .unwrap_or(false);
-    if !enabled {
+    if !state.tts.enabled() {
         return err_response(
             StatusCode::BAD_REQUEST,
             "语音朗读未开启,请先在设置中打开",
@@ -477,6 +486,17 @@ async fn synthesize(
             "文本为空或超过 500 字符上限",
             Some("tts_text_invalid"),
         );
+    }
+    // 首次合成前自动确保模型就绪(幂等:已加载直接返回,缺文件先下载再加载)
+    if state.tts.synthesizer().is_none() {
+        if let Err(e) = state.tts.ensure_ready().await {
+            tracing::warn!("语音合成模型准备失败: {e:#}");
+            return err_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "语音合成模型准备失败,请稍后重试",
+                Some("tts_not_ready"),
+            );
+        }
     }
     let Some(synth) = state.tts.synthesizer() else {
         return err_response(

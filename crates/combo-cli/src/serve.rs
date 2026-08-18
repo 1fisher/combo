@@ -95,6 +95,20 @@ impl AppState {
         let meta = Arc::new(MetaStore::open_default()?);
         // 存量 crush 数据迁移为 combo-cli
         workspace::reconcile_all(&meta);
+        // TTS 模型与开关取自配置 [tts](未设置回落默认)
+        let app_cfg = AppConfig::load_or_create(&crate::config::default_config_path());
+        let tts = tts::TtsService::new(
+            crate::paths::default_data_dir().join("models"),
+            app_cfg
+                .as_ref()
+                .map(|c| c.tts.resolve_model())
+                .unwrap_or(tts::TtsModel::PiperZhXiaoya),
+        );
+        tts.set_enabled(
+            app_cfg
+                .map(|c| c.tts.resolve_enabled())
+                .unwrap_or(false),
+        );
         Ok(Self {
             cfg: Arc::new(Mutex::new(cfg)),
             shutdown: Arc::new(Notify::new()),
@@ -117,13 +131,7 @@ impl AppState {
                     .map(|c| c.asr.resolve_model())
                     .unwrap_or(asr::AsrModel::SenseVoice),
             )),
-            // TTS 模型取自配置 [tts] model(未设置/非法回落 piper-zh-xiaoya)
-            tts: Arc::new(tts::TtsService::new(
-                crate::paths::default_data_dir().join("models"),
-                AppConfig::load_or_create(&crate::config::default_config_path())
-                    .map(|c| c.tts.resolve_model())
-                    .unwrap_or(tts::TtsModel::PiperZhXiaoya),
-            )),
+            tts: Arc::new(tts),
         })
     }
 
