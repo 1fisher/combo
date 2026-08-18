@@ -591,6 +591,7 @@ async fn automation_crud_run_now_and_history() {
     assert_eq!(got["enabled"], false);
 
     // 4. 更新:改调度 → next_run_at 重算且仍是未来
+    //    传旧格式单值 weekday,验证兼容;输出统一归一化为 weekdays 数组
     let resp = client
         .patch(format!("{base}/v1/automations/{id}"))
         .json(&serde_json::json!({
@@ -601,7 +602,7 @@ async fn automation_crud_run_now_and_history() {
         .unwrap();
     let got: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(got["schedule"]["type"].as_str().unwrap(), "weekly");
-    assert_eq!(got["schedule"]["weekday"].as_i64().unwrap(), 5);
+    assert_eq!(got["schedule"]["weekdays"], serde_json::json!([5]));
     assert!(got["next_run_at"].as_i64().unwrap() > 0);
 
     // 5. 非法调度被拒绝

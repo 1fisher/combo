@@ -2252,7 +2252,9 @@ export namespace Api {
     every_seconds?: number | null;
     /** daily / weekly / monthly / quarterly / yearly:触发时刻 "HH:MM"。 */
     time?: string | null;
-    /** weekly:星期几(1=周一 .. 7=周日)。 */
+    /** weekly:星期几列表(1=周一 .. 7=周日,升序;可多选,如 [1, 3] = 周一与周三)。 */
+    weekdays?: number[] | null;
+    /** weekly(旧格式):单值星期几,1=周一 .. 7=周日;仅兼容历史数据,新数据统一用 weekdays。 */
     weekday?: number | null;
     /** monthly / quarterly / yearly:每月几号(1..31;超过当月天数时取当月最后一天)。 */
     day?: number | null;

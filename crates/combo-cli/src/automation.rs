@@ -4,7 +4,7 @@
 //! - `once`      一次性,指定 run_at(unix 秒)执行一次,执行后不再调度;
 //! - `interval`  每隔 every_seconds 秒执行一次;
 //! - `daily`     每天 HH:MM 执行一次;
-//! - `weekly`    每周 weekday(1=周一..7=周日)的 HH:MM 执行一次;
+//! - `weekly`    每周 weekdays(1=周一..7=周日,可多个)的 HH:MM 各执行一次;
 //! - `monthly`   每月 day 日(1..31)的 HH:MM 执行一次;
 //! - `quarterly` 每季度 month(1..3,季度内第几个月)的 day 日 HH:MM 执行一次;
 //! - `yearly`    每年 month 月(1..12)day 日的 HH:MM 执行一次。
@@ -58,8 +58,9 @@ pub struct Schedule {
     pub every_seconds: Option<i64>,
     /// daily / weekly / monthly / quarterly / yearly:触发时刻 "HH:MM"(24 小时制)。
     pub time: Option<String>,
-    /// weekly:星期几(1=周一 .. 7=周日)。
-    pub weekday: Option<u32>,
+    /// weekly:星期几列表(1=周一 .. 7=周日,升序去重)。
+    /// 解析时兼容旧数据的单值 `weekday` 字段;输出统一为 `weekdays` 数组。
+    pub weekdays: Vec<u32>,
     /// monthly / quarterly / yearly:每月几号(1..31;超过当月天数取当月最后一天)。
     pub day: Option<u32>,
     /// quarterly:季度内第几个月(1..3);yearly:几月(1..12)。
@@ -80,7 +81,7 @@ impl Schedule {
                     run_at: Some(run_at),
                     every_seconds: None,
                     time: None,
-                    weekday: None,
+                    weekdays: vec![],
                     day: None,
                     month: None,
                 })
@@ -96,7 +97,7 @@ impl Schedule {
                     run_at: None,
                     every_seconds: Some(secs),
                     time: None,
-                    weekday: None,
+                    weekdays: vec![],
                     day: None,
                     month: None,
                 })
@@ -113,18 +114,46 @@ impl Schedule {
                     run_at: None,
                     every_seconds: None,
                     time: Some(time),
-                    weekday: None,
+                    weekdays: vec![],
                     day: None,
                     month: None,
                 })
             }
             "weekly" => {
-                let weekday = v
-                    .get("weekday")
-                    .and_then(Value::as_u64)
-                    .map(|w| w as u32)
-                    .filter(|w| (1..=7).contains(w))
-                    .ok_or("weekly 调度需要 weekday(1=周一..7=周日)")?;
+                // 兼容两种输入:新格式 weekdays 数组(可多选)与旧格式 weekday 单值
+                let mut days: Vec<u32> = Vec::new();
+                match v.get("weekdays") {
+                    Some(Value::Array(arr)) => {
+                        for d in arr {
+                            let d = d
+                                .as_u64()
+                                .map(|w| w as u32)
+                                .filter(|w| (1..=7).contains(w));
+                            match d {
+                                Some(w) => days.push(w),
+                                None => {
+                                    return Err(
+                                        "weekly 调度的 weekdays 每项需为 1=周一..7=周日".into()
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        let w = v
+                            .get("weekday")
+                            .and_then(Value::as_u64)
+                            .map(|w| w as u32)
+                            .filter(|w| (1..=7).contains(w))
+                            .ok_or("weekly 调度需要 weekday/weekdays(1=周一..7=周日)")?;
+                        days.push(w);
+                    }
+                }
+                if days.is_empty() {
+                    return Err("weekly 调度需要至少选择一个星期".into());
+                }
+                days.sort_unstable();
+                days.dedup();
                 let time = v
                     .get("time")
                     .and_then(Value::as_str)
@@ -136,7 +165,7 @@ impl Schedule {
                     run_at: None,
                     every_seconds: None,
                     time: Some(time),
-                    weekday: Some(weekday),
+                    weekdays: days,
                     day: None,
                     month: None,
                 })
@@ -149,7 +178,7 @@ impl Schedule {
                     run_at: None,
                     every_seconds: None,
                     time: Some(time),
-                    weekday: None,
+                    weekdays: vec![],
                     day: Some(day),
                     month: None,
                 })
@@ -168,7 +197,7 @@ impl Schedule {
                     run_at: None,
                     every_seconds: None,
                     time: Some(time),
-                    weekday: None,
+                    weekdays: vec![],
                     day: Some(day),
                     month: Some(month),
                 })
@@ -187,7 +216,7 @@ impl Schedule {
                     run_at: None,
                     every_seconds: None,
                     time: Some(time),
-                    weekday: None,
+                    weekdays: vec![],
                     day: Some(day),
                     month: Some(month),
                 })
@@ -223,8 +252,8 @@ impl Schedule {
         if let Some(t) = &self.time {
             v["time"] = json!(t);
         }
-        if let Some(w) = self.weekday {
-            v["weekday"] = json!(w);
+        if !self.weekdays.is_empty() {
+            v["weekdays"] = json!(self.weekdays);
         }
         if let Some(d) = self.day {
             v["day"] = json!(d);
@@ -239,7 +268,7 @@ impl Schedule {
     /// - once:run_at 在未来则返回它,已过返回 None(不再调度);
     /// - interval:from + every_seconds;
     /// - daily:当天 HH:MM(已过则次日);
-    /// - weekly:最近一个匹配 weekday 的 HH:MM(当天且未过则当天);
+    /// - weekly:最近一个匹配 weekdays 的 HH:MM(当天且未过则当天);
     /// - monthly:最近一个月份的 day 日 HH:MM(已过则下月);
     /// - quarterly:最近一个季度内目标月份的 day 日 HH:MM;
     /// - yearly:今年 month 月 day 日 HH:MM(已过则明年)。
@@ -263,16 +292,27 @@ impl Schedule {
             }
             ScheduleType::Weekly => {
                 let (h, m) = parse_time(self.time.as_deref()?).ok()?;
-                // 输入 1=周一..7=周日 → chrono num_days_from_monday(0=周一..6=周日)
-                let target = (self.weekday? - 1) % 7;
                 let cur = from.weekday().num_days_from_monday();
-                let mut add_days = (target + 7 - cur) % 7;
-                let mut dt = day_at(&(from.date_naive() + chrono::Duration::days(add_days as i64)), h, m)?;
-                if dt <= from {
-                    add_days += 7;
-                    dt = day_at(&(from.date_naive() + chrono::Duration::days(add_days as i64)), h, m)?;
+                // 对每个选中的星期计算最近的下一次触发,再取其中最小
+                let mut best: Option<DateTime<Local>> = None;
+                for &wd in &self.weekdays {
+                    // 输入 1=周一..7=周日 → chrono num_days_from_monday(0=周一..6=周日)
+                    let target = (wd - 1) % 7;
+                    let add_days = (target + 7 - cur) % 7;
+                    let mut dt =
+                        day_at(&(from.date_naive() + chrono::Duration::days(add_days as i64)), h, m)?;
+                    if dt <= from {
+                        dt = day_at(
+                            &(from.date_naive() + chrono::Duration::days(add_days as i64 + 7)),
+                            h,
+                            m,
+                        )?;
+                    }
+                    if best.map_or(true, |b| dt < b) {
+                        best = Some(dt);
+                    }
                 }
-                Some(dt)
+                best
             }
             ScheduleType::Monthly => {
                 let (h, m) = parse_time(self.time.as_deref()?).ok()?;
@@ -931,7 +971,7 @@ mod tests {
             json!({ "type": "once", "run_at": 1_700_000_000 }),
             json!({ "type": "interval", "every_seconds": 3600 }),
             json!({ "type": "daily", "time": "09:30" }),
-            json!({ "type": "weekly", "weekday": 5, "time": "18:00" }),
+            json!({ "type": "weekly", "weekdays": [1, 3, 5], "time": "18:00" }),
             json!({ "type": "monthly", "day": 15, "time": "09:30" }),
             json!({ "type": "quarterly", "month": 2, "day": 1, "time": "10:00" }),
             json!({ "type": "yearly", "month": 12, "day": 31, "time": "23:59" }),
@@ -952,6 +992,12 @@ mod tests {
         assert!(Schedule::from_json(&json!({ "type": "daily", "time": "9" })).is_err());
         assert!(Schedule::from_json(&json!({ "type": "weekly", "weekday": 8, "time": "09:00" })).is_err());
         assert!(Schedule::from_json(&json!({ "type": "weekly", "weekday": 0, "time": "09:00" })).is_err());
+        // weekdays 数组:空 / 越界 / 含非数字 均拒绝;weeks 字段缺失也拒绝
+        assert!(Schedule::from_json(&json!({ "type": "weekly", "weekdays": [], "time": "09:00" })).is_err());
+        assert!(Schedule::from_json(&json!({ "type": "weekly", "weekdays": [0], "time": "09:00" })).is_err());
+        assert!(Schedule::from_json(&json!({ "type": "weekly", "weekdays": [1, 8], "time": "09:00" })).is_err());
+        assert!(Schedule::from_json(&json!({ "type": "weekly", "weekdays": ["周一"], "time": "09:00" })).is_err());
+        assert!(Schedule::from_json(&json!({ "type": "weekly", "time": "09:00" })).is_err());
         assert!(Schedule::from_json(&json!({ "type": "once" })).is_err());
         assert!(Schedule::from_json(&json!({ "type": "monthly", "day": 0, "time": "09:00" })).is_err());
         assert!(Schedule::from_json(&json!({ "type": "monthly", "day": 32, "time": "09:00" })).is_err());
@@ -1018,6 +1064,46 @@ mod tests {
         assert_eq!(next.weekday().num_days_from_monday(), 0);
         assert!(next > from);
         assert!((next - from).num_days() <= 7);
+    }
+
+    #[test]
+    fn weekly_accepts_legacy_scalar_and_normalizes() {
+        // 旧数据落库的是单值 weekday:解析后归一化为 weekdays 数组,输出统一为数组
+        let s = schedule_json(json!({ "type": "weekly", "weekday": 3, "time": "09:00" }));
+        assert_eq!(s.weekdays, vec![3]);
+        assert_eq!(
+            s.to_json(),
+            json!({ "type": "weekly", "weekdays": [3], "time": "09:00" })
+        );
+        // 数组输入会排序去重
+        let s = schedule_json(json!({ "type": "weekly", "weekdays": [5, 1, 3, 1], "time": "09:00" }));
+        assert_eq!(s.weekdays, vec![1, 3, 5]);
+    }
+
+    #[test]
+    fn weekly_multi_days_pick_nearest_occurrence() {
+        // 周一 + 周三 09:00。2025-01-06 是周一。
+        let s = schedule_json(json!({ "type": "weekly", "weekdays": [1, 3], "time": "09:00" }));
+
+        // 周一 10:00(当天已过)→ 下一次是周三 09:00
+        let from = Local.with_ymd_and_hms(2025, 1, 6, 10, 0, 0).unwrap();
+        let next = s.next_after(from).unwrap();
+        assert_eq!(next, Local.with_ymd_and_hms(2025, 1, 8, 9, 0, 0).unwrap());
+
+        // 周一 08:00(当天未过)→ 当天 09:00
+        let from = Local.with_ymd_and_hms(2025, 1, 6, 8, 0, 0).unwrap();
+        let next = s.next_after(from).unwrap();
+        assert_eq!(next, Local.with_ymd_and_hms(2025, 1, 6, 9, 0, 0).unwrap());
+
+        // 周三 09:30(两天当天均已过)→ 下周一 09:00
+        let from = Local.with_ymd_and_hms(2025, 1, 8, 9, 30, 0).unwrap();
+        let next = s.next_after(from).unwrap();
+        assert_eq!(next, Local.with_ymd_and_hms(2025, 1, 13, 9, 0, 0).unwrap());
+
+        // 周三 08:00 → 当天 09:00
+        let from = Local.with_ymd_and_hms(2025, 1, 8, 8, 0, 0).unwrap();
+        let next = s.next_after(from).unwrap();
+        assert_eq!(next, Local.with_ymd_and_hms(2025, 1, 8, 9, 0, 0).unwrap());
     }
 
     #[test]

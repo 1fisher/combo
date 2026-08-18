@@ -72,6 +72,13 @@ function formatInterval(secs: number): string {
   return `每 ${secs} 秒`;
 }
 
+/** weekly:归一化星期列表(新 weekdays 数组优先,兼容旧 weekday 单值),升序去重。 */
+function scheduleWeekdays(s: Api.AutomationSchedule): number[] {
+  const days = (s.weekdays ?? []).filter((d) => d >= 1 && d <= 7);
+  if (days.length) return [...new Set(days)].sort((a, b) => a - b);
+  return [s.weekday && s.weekday >= 1 && s.weekday <= 7 ? s.weekday : 1];
+}
+
 function scheduleDesc(s: Api.AutomationSchedule): string {
   switch (s.type) {
     case 'once':
@@ -81,7 +88,9 @@ function scheduleDesc(s: Api.AutomationSchedule): string {
     case 'daily':
       return `每天 ${s.time ?? '—'}`;
     case 'weekly':
-      return `每周${WEEKDAYS[(((s.weekday ?? 1) - 1) % 7 + 7) % 7]} ${s.time ?? '—'}`;
+      return `每周${scheduleWeekdays(s)
+        .map((d) => WEEKDAYS[d - 1] ?? d)
+        .join('、')} ${s.time ?? '—'}`;
     case 'monthly':
       return `每月 ${s.day ?? '—'} 日 ${s.time ?? '—'}`;
     case 'quarterly':
@@ -136,8 +145,8 @@ type Draft = {
   every: string;
   /** daily / weekly / monthly / quarterly / yearly:HH:MM */
   time: string;
-  /** weekly:1..7 */
-  weekday: string;
+  /** weekly:选中的星期(1..7,升序;可多选) */
+  weekdays: number[];
   /** monthly / quarterly / yearly:每月几号(1..31) */
   day: string;
   /** quarterly:季度内第几个月(1..3);yearly:几月(1..12) */
@@ -168,7 +177,7 @@ function emptyDraft(): Draft {
     runAt: '',
     every: '60',
     time: '09:00',
-    weekday: '1',
+    weekdays: [1],
     day: '1',
     month: '1',
     providerId: '',
@@ -186,7 +195,7 @@ function draftFromAutomation(a: Api.Automation): Draft {
     runAt: a.schedule.run_at ? toDatetimeLocal(a.schedule.run_at) : '',
     every: String(Math.max(1, Math.round((a.schedule.every_seconds ?? 3600) / 60))),
     time: a.schedule.time ?? '09:00',
-    weekday: String(a.schedule.weekday ?? 1),
+    weekdays: scheduleWeekdays(a.schedule),
     day: String(a.schedule.day ?? 1),
     month: String(a.schedule.month ?? 1),
     providerId: a.model?.provider ?? '',
@@ -231,7 +240,7 @@ const AUTOMATION_TEMPLATES: {
       prompt:
         '请查看这个项目最近的 Git 提交记录,生成一份本周的站会摘要,包含亮点、风险与下一步计划。',
       scheduleType: 'weekly',
-      weekday: '5',
+      weekdays: [5],
       time: '17:00',
     },
   },
@@ -316,12 +325,11 @@ export function AutomationPanel() {
       }
       case 'daily':
         return { type: 'daily', time: d.time || '09:00' };
-      case 'weekly':
-        return {
-          type: 'weekly',
-          weekday: parseInt(d.weekday, 10) || 1,
-          time: d.time || '09:00',
-        };
+      case 'weekly': {
+        const days = [...new Set(draft.weekdays)].sort((a, b) => a - b);
+        if (!days.length) return null;
+        return { type: 'weekly', weekdays: days, time: draft.time || '09:00' };
+      }
       case 'monthly': {
         const day = parseInt(d.day, 10);
         if (!Number.isFinite(day) || day < 1 || day > 31) return null;
@@ -351,7 +359,7 @@ export function AutomationPanel() {
     if (!prompt) return setErr('请填写任务提示词(agent 执行的内容)');
     if (!draft.workspaceId) return setErr('请选择目标项目');
     const schedule = buildSchedule(draft);
-    if (!schedule) return setErr('请检查调度设置(一次性任务需选择未来时间)');
+    if (!schedule) return setErr('请检查调度设置(一次性任务需选择未来时间,每周任务需勾选至少一个星期)');
     // 单独指定模型:providerId 与 modelId 都选上才生效,否则跟随项目默认(null 清除)
     const model =
       draft.providerId && draft.modelId
@@ -765,27 +773,39 @@ export function AutomationPanel() {
                     </div>
                   )}
                   {draft.scheduleType === 'weekly' && (
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className={LABEL_CLS}>
-                          星期
-                        </label>
-                        <select
-                          className={SELECT_CLS}
-                          value={draft.weekday}
-                          onChange={(e) => setDraft({ ...draft, weekday: e.target.value })}
-                        >
-                          {WEEKDAYS.map((w, i) => (
-                            <option key={w} value={String(i + 1)}>
+                    <div>
+                      <label className={LABEL_CLS}>星期(可多选)</label>
+                      <div className="mt-1 flex flex-wrap gap-2">
+                        {WEEKDAYS.map((w, i) => {
+                          const day = i + 1;
+                          const active = draft.weekdays.includes(day);
+                          return (
+                            <button
+                              key={w}
+                              type="button"
+                              aria-pressed={active}
+                              onClick={() =>
+                                setDraft({
+                                  ...draft,
+                                  weekdays: active
+                                    ? draft.weekdays.filter((d) => d !== day)
+                                    : [...draft.weekdays, day].sort((a, b) => a - b),
+                                })
+                              }
+                              className={cn(
+                                'h-9 min-w-[52px] rounded-lg border px-2 text-sm transition-colors',
+                                active
+                                  ? 'border-ring/60 bg-surface-hover font-medium text-brand shadow-sm'
+                                  : 'border-border/60 bg-surface-hover/40 text-foreground-subtle hover:bg-surface-hover hover:text-foreground'
+                              )}
+                            >
                               {w}
-                            </option>
-                          ))}
-                        </select>
+                            </button>
+                          );
+                        })}
                       </div>
-                      <div>
-                        <label className={LABEL_CLS}>
-                          执行时间
-                        </label>
+                      <div className="mt-3">
+                        <label className={LABEL_CLS}>执行时间</label>
                         <input
                           type="time"
                           className={INPUT_CLS}
@@ -793,6 +813,9 @@ export function AutomationPanel() {
                           onChange={(e) => setDraft({ ...draft, time: e.target.value })}
                         />
                       </div>
+                      <p className="mt-1.5 text-xs text-foreground-subtlest">
+                        所选的日子都会在该时间各触发一次,按本机时区执行。
+                      </p>
                     </div>
                   )}
                   {draft.scheduleType === 'monthly' && (
