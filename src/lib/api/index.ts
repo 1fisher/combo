@@ -996,6 +996,13 @@ export function prepareSpeech(): Promise<{ ok: boolean; phase: Api.TranscribePha
   return apiRequest('/v1/speech/prepare', { method: 'POST' });
 }
 
+/**
+ * 设置朗读语速倍率(0.5~2.0,1.0 为正常语速),持久化到配置 `[tts] speed`。
+ */
+export function setSpeechSpeed(speed: number): Promise<Api.SpeechSpeedResult> {
+  return apiRequest('/v1/speech/speed', { method: 'POST', body: { speed } });
+}
+
 /** 打开/关闭语音朗读并持久化到配置(`[tts] enabled`)。 */
 export function setSpeechEnabled(enabled: boolean): Promise<Api.SpeechConfigResult> {
   return apiRequest('/v1/speech/config', { method: 'POST', body: { enabled } });

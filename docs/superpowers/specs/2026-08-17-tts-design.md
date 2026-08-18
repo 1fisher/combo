@@ -100,13 +100,18 @@ pub struct TtsService {
 
 新增路由(挂到与 transcribe 相同的位置,`AppState` 注入):
 
-- `GET /v1/speech/status` → `{ enabled, model, model_label, phase, model_dir, error? }`
-  (镜像 `/v1/transcribe/status`;`enabled` 来自 `state.cfg.tts.resolve_enabled()`)。
+- `GET /v1/speech/status` → `{ enabled, model, model_label, phase, model_dir, speed, error? }`
+  (镜像 `/v1/transcribe/status`;`enabled` 来自 `state.cfg.tts.resolve_enabled()`,
+  `speed` 为朗读语速倍率)。
 - `POST /v1/speech/prepare` → 触发模型下载/加载(幂等,后台执行,立即返回
   `{ ok, phase }`;镜像 `/v1/transcribe/prepare`)。
 - `POST /v1/speech/config`,body `{ enabled: bool }` → 调
   `config::set_tts_enabled(default_config_path(), enabled)`,返回 `{ ok }`
   (镜像 `/v1/transcribe/model` 的持久化写法)。
+- `POST /v1/speech/speed`,body `{ speed: f32 }` → 语速倍率 0.5~2.0(越界
+  400),调 `config::set_tts_speed` 写 `[tts] speed` + `state.tts.set_speed`
+  运行时生效;合成时传入 `GenerationConfig.speed`(piper 直接用,vits 由
+  sherpa-onnx 内部映射 `length_scale = 1/speed`)。
 - `POST /v1/speech/model`,body `{ model }` → 校验 id、持久化
   `config::set_tts_model`、`state.tts.set_model(model)` 热切换,返回新的
   status(镜像 `/v1/transcribe/model`)。
@@ -125,9 +130,10 @@ pub struct TtsService {
 ### API 封装(`src/lib/api/index.ts` + `types.ts` 手写 Api 命名空间段)
 
 - `getSpeechStatus()` → `GET /v1/speech/status`,返回
-  `Api.SpeechStatus { enabled, model, phase, ... }`。
+  `Api.SpeechStatus { enabled, model, phase, speed, ... }`。
 - `prepareSpeech()` → `POST /v1/speech/prepare`,触发下载/加载。
 - `setSpeechEnabled(enabled)` → `POST /v1/speech/config`。
+- `setSpeechSpeed(speed)` → `POST /v1/speech/speed`。
 - `setSpeechModel(model)` → `POST /v1/speech/model`。
 - `synthesizeSpeech(text)` → `POST /v1/speech`,请求 JSON,响应按
   `arrayBuffer` 读取(`apiRequest` 需支持 ArrayBuffer 响应,或单独用 fetch,
@@ -142,6 +148,8 @@ pub struct TtsService {
   立即停读(通过共享 store 或事件通知 useSpeechOutput)。
 - 模型下拉:`TTS_MODELS` 常量(3 个模型 id + label),切换走
   `setSpeechModel`;文案说明「切换后首次使用自动下载」。
+- 语速滑块:0.5x~2.0x(`setSpeechSpeed`),拖动实时预览、松手提交(镜像
+  `[tts] speed` 持久化,status 回传当前值)。
 - 设置 UI(`TtsSection`):`refetchInterval` 在 downloading/loading 阶段持续
   轮询,进度条 + 「模型下载 NN%」;未就绪时显示「立即下载」按钮(手动
   `prepareSpeech`),失败显示错误文案。

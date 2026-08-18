@@ -2363,6 +2363,14 @@ export namespace Api {
     /** 当前 TTS 模型 id:piper-zh-xiaoya / piper-zh-chaowen / vits-zh-fanchen-c。 */
     model?: string;
     model_dir?: string;
+    /** 朗读语速倍率(0.5~2.0,1.0 为正常语速)。 */
+    speed?: number;
+  };
+
+  /** POST /v1/speech/speed 响应。 */
+  export type SpeechSpeedResult = {
+    ok: boolean;
+    speed: number;
   };
 
   /** POST /v1/speech/config 响应。 */

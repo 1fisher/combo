@@ -326,6 +326,8 @@ pub struct TtsConfig {
     pub enabled: Option<bool>,
     /// TTS 模型 id:piper-zh-xiaoya(默认)/ piper-zh-chaowen / vits-zh-fanchen-c。
     pub model: Option<String>,
+    /// 朗读语速倍率(0.5~2.0,1.0 为正常语速)。
+    pub speed: Option<f32>,
 }
 
 impl TtsConfig {
@@ -340,6 +342,11 @@ impl TtsConfig {
             .as_deref()
             .and_then(crate::tts::TtsModel::parse)
             .unwrap_or(crate::tts::TtsModel::PiperZhXiaoya)
+    }
+
+    /// 朗读语速倍率;未设置或非法值回落 1.0(正常语速)。
+    pub fn resolve_speed(&self) -> f32 {
+        self.speed.filter(|s| (0.5..=2.0).contains(s)).unwrap_or(1.0)
     }
 }
 
@@ -768,6 +775,16 @@ pub fn set_tts_model(path: &PathBuf, model: &str) -> Result<()> {
     write_config(path, &cfg)
 }
 
+/// 设置语音合成(TTS)语速倍率(0.5~2.0),写入 `[tts] speed`,跨重启保留。
+pub fn set_tts_speed(path: &PathBuf, speed: f32) -> Result<()> {
+    if !(0.5..=2.0).contains(&speed) {
+        return Err(anyhow::anyhow!("语速倍率需在 0.5~2.0 之间"));
+    }
+    let mut cfg = load_config(path)?;
+    cfg.tts.speed = Some(speed);
+    write_config(path, &cfg)
+}
+
 /// 新增或更新一个 MCP server 配置(写入 `[mcp.<name>]` 段)。
 ///
 /// name 仅允许字母/数字/`-`/`_`(TOML key 安全);`transport` 为 `stdio` / `http`。
@@ -876,6 +893,8 @@ pub fn write_default(path: &PathBuf, overwrite: bool) -> Result<()> {
 # [tts]
 # enabled = false
 # model = "piper-zh-xiaoya"
+# 朗读语速倍率(0.5~2.0,1.0 为正常语速,2.0 最快)
+# speed = 1.0
 
 # ========== 多 API key 配置 ==========
 # 每个 provider 一个表,key = provider id;api_key 可为明文或 $ENV_VAR。
@@ -1106,16 +1125,28 @@ model = "nope""#).unwrap();
         let cfg: AppConfig = toml::from_str(r#"[tts]
 model = "nope""#).unwrap();
         assert_eq!(cfg.tts.resolve_model(), crate::tts::TtsModel::PiperZhXiaoya);
+        // 未设置/非法语速回落 1.0
+        assert_eq!(AppConfig::default().tts.resolve_speed(), 1.0);
+        let cfg: AppConfig = toml::from_str(r#"[tts]
+speed = 9"#).unwrap();
+        assert_eq!(cfg.tts.resolve_speed(), 1.0);
+        let cfg: AppConfig = toml::from_str(r#"[tts]
+speed = 1.4"#).unwrap();
+        assert_eq!(cfg.tts.resolve_speed(), 1.4);
 
         // 写入 → 重读生效
         set_tts_enabled(&path, true).unwrap();
         set_tts_model(&path, "vits-zh-fanchen-c").unwrap();
+        set_tts_speed(&path, 1.5).unwrap();
         let cfg = AppConfig::load_or_create(&path).unwrap();
         assert!(cfg.tts.resolve_enabled());
         assert_eq!(cfg.tts.resolve_model(), crate::tts::TtsModel::VitsZhFanchenC);
+        assert_eq!(cfg.tts.resolve_speed(), 1.5);
 
-        // 非法 id 拒绝写入
+        // 非法 id / 语速拒绝写入
         assert!(set_tts_model(&path, "unknown").is_err());
+        assert!(set_tts_speed(&path, 0.1).is_err());
+        assert!(set_tts_speed(&path, 3.0).is_err());
     }
 
     #[test]

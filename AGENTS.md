@@ -326,10 +326,14 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   `model=*.onnx + tokens=tokens.txt + lexicon=lexicon.txt + rule_fsts=
   phone.fst,date.fst,number.fst`(fst 在模型根目录,fanchen-C 多说话人用
   `sid=100`),合成结果封装 44 字节 WAV 头(PCM16)返回。端点:
-  `GET /v1/speech/status`(开关 + 模型 + 下载/加载阶段 + 进度)、
+  `GET /v1/speech/status`(开关 + 模型 + 下载/加载阶段 + 进度 + 语速)、
   `POST /v1/speech/prepare`(幂等触发下载/加载,后台执行,镜像
   `/v1/transcribe/prepare`)、
   `POST /v1/speech/config`(`{enabled}`,写 `[tts] enabled`)、
+  `POST /v1/speech/speed`(`{speed}`,语速倍率 0.5~2.0,写 `[tts] speed`,
+  越界 400;运行时经 `TtsService::set_speed` 生效,合成时传入
+  `GenerationConfig.speed`——piper 直接用,vits 由 sherpa-onnx 内部映射
+  `length_scale=1/speed`)、
   `POST /v1/speech/model`(切模型并持久化)、`POST /v1/speech`(单句文本 →
   `audio/wav`;关闭时 400 `tts_disabled`,未就绪 503 `tts_not_ready`,
   超 500 字符 400 `tts_text_invalid`)。**模型下载进度前端展示**:

@@ -208,9 +208,10 @@ impl Synthesizer {
         Ok(Self { inner, sid: model.default_sid() })
     }
 
-    /// 合成文本,返回 WAV 字节(阻塞)。
-    fn synthesize(&self, text: &str) -> Option<Vec<u8>> {
-        let gen = GenerationConfig { sid: self.sid, ..Default::default() };
+    /// 合成文本,返回 WAV 字节(阻塞)。`speed` 为语速倍率(0.5~2.0,1.0 正常);
+    /// piper 直接用,HF vits 由 sherpa-onnx 内部映射为 length_scale=1/speed。
+    fn synthesize(&self, text: &str, speed: f32) -> Option<Vec<u8>> {
+        let gen = GenerationConfig { sid: self.sid, speed, ..Default::default() };
         let audio = self
             .inner
             .generate_with_config(text, &gen, None::<fn(&[f32], f32) -> bool>)?;
@@ -227,6 +228,8 @@ pub struct TtsService {
     model: Mutex<TtsModel>,
     /// 朗读开关(启动时从 `[tts] enabled` 加载;运行时经 set_enabled 切换)。
     enabled: Mutex<bool>,
+    /// 朗读语速倍率(启动时从 `[tts] speed` 加载;运行时经 set_speed 切换)。
+    speed: Mutex<f32>,
     /// 已加载的合成器(随模型懒加载;切换模型时清空)。
     synth: Mutex<Option<Arc<Synthesizer>>>,
     /// 下载/加载阶段(复用 asr.rs 的 Phase,供 status 端点与前端进度展示)。
@@ -241,6 +244,7 @@ impl TtsService {
             model_root,
             model: Mutex::new(model),
             enabled: Mutex::new(false),
+            speed: Mutex::new(1.0),
             synth: Mutex::new(None),
             phase: Mutex::new(crate::asr::Phase::NotReady),
             prepare_lock: AsyncMutex::new(()),
@@ -265,6 +269,16 @@ impl TtsService {
     /// 已加载的合成器(未加载返回 None)。
     pub(crate) fn synthesizer(&self) -> Option<Arc<Synthesizer>> {
         self.synth.lock().unwrap().clone()
+    }
+
+    /// 当前朗读语速倍率(1.0 为正常语速)。
+    pub fn speed(&self) -> f32 {
+        *self.speed.lock().unwrap()
+    }
+
+    /// 设置朗读语速倍率(运行时;持久化由调用方写 `[tts] speed`)。
+    pub fn set_speed(&self, speed: f32) {
+        *self.speed.lock().unwrap() = speed.clamp(0.5, 2.0);
     }
 
     /// 模型根目录(展示用)。
@@ -377,9 +391,9 @@ impl TtsService {
     }
 
     /// 合成文本 → WAV 字节(阻塞,须在 spawn_blocking 中执行)。
-    fn synthesize_blocking(synth: &Synthesizer, text: String) -> anyhow::Result<Vec<u8>> {
+    fn synthesize_blocking(synth: &Synthesizer, text: String, speed: f32) -> anyhow::Result<Vec<u8>> {
         synth
-            .synthesize(&text)
+            .synthesize(&text, speed)
             .ok_or_else(|| anyhow::anyhow!("语音合成失败"))
     }
 }
@@ -405,6 +419,7 @@ async fn status(State(state): State<AppState>) -> Json<serde_json::Value> {
         "error": error,
         "model": tts.current_model().id(),
         "model_dir": tts.model_dir().display().to_string(),
+        "speed": tts.speed(),
     }))
 }
 
@@ -482,6 +497,31 @@ async fn set_model(
     .into_response()
 }
 
+/// POST /v1/speech/speed — 设置朗读语速倍率(0.5~2.0),持久化到配置 `[tts] speed`。
+#[derive(Deserialize)]
+struct SetSpeedReq {
+    speed: f32,
+}
+
+async fn set_speed(
+    State(state): State<AppState>,
+    Json(body): Json<SetSpeedReq>,
+) -> Response {
+    if !(0.5..=2.0).contains(&body.speed) {
+        return err_response(StatusCode::BAD_REQUEST, "语速倍率需在 0.5~2.0 之间", None);
+    }
+    if let Err(e) = crate::config::set_tts_speed(&crate::config::default_config_path(), body.speed) {
+        return err_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("保存配置失败: {e}"),
+            None,
+        );
+    }
+    state.tts.set_speed(body.speed);
+    tracing::info!("语音朗读语速已设置为 {}x", body.speed);
+    Json(json!({ "ok": true, "speed": body.speed })).into_response()
+}
+
 /// POST /v1/speech — 合成单句文本为 WAV(响应体为 audio/wav 字节)。
 #[derive(Deserialize)]
 struct SynthesizeReq {
@@ -531,7 +571,8 @@ async fn synthesize(
             Some("tts_not_ready"),
         );
     };
-    let wav = match tokio::task::spawn_blocking(move || TtsService::synthesize_blocking(&synth, text))
+    let speed = state.tts.speed();
+    let wav = match tokio::task::spawn_blocking(move || TtsService::synthesize_blocking(&synth, text, speed))
         .await
     {
         Ok(Ok(wav)) => wav,
@@ -561,6 +602,7 @@ pub fn router() -> Router<AppState> {
         .route("/v1/speech/status", get(status))
         .route("/v1/speech/prepare", post(prepare))
         .route("/v1/speech/config", post(set_enabled))
+        .route("/v1/speech/speed", post(set_speed))
         .route("/v1/speech/model", post(set_model))
         .route("/v1/speech", post(synthesize))
 }
@@ -640,10 +682,20 @@ mod tests {
         // 默认配置朗读关闭 → synthesize 返回 400 tts_disabled
         let resp = synthesize(State(state.clone()), Json(SynthesizeReq { text: "你好".into() })).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        // status 端点返回 enabled=false 与默认模型
-        let body = status(State(state)).await;
+        // status 端点返回 enabled=false 与默认模型、默认语速
+        let body = status(State(state.clone())).await;
         assert_eq!(body.0["enabled"], serde_json::Value::Bool(false));
         assert_eq!(body.0["model"], serde_json::json!("piper-zh-xiaoya"));
+        assert_eq!(body.0["speed"], serde_json::json!(1.0));
+        // 语速越界 400
+        let resp = set_speed(State(state.clone()), Json(SetSpeedReq { speed: 3.0 })).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let resp = set_speed(State(state.clone()), Json(SetSpeedReq { speed: 0.1 })).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        // 合法值写入运行态(配置写入走真实配置路径,测试态仅断言运行态切换)
+        state.tts.set_speed(1.5);
+        let body = status(State(state)).await;
+        assert_eq!(body.0["speed"], serde_json::json!(1.5));
     }
 }
 
@@ -662,7 +714,7 @@ mod smoke {
         ));
         svc.ensure_ready().await.expect("模型应就绪");
         let synth = svc.synthesizer().expect("合成器应已加载");
-        let wav = TtsService::synthesize_blocking(&synth, "你好,这是语音朗读测试。".into())
+        let wav = TtsService::synthesize_blocking(&synth, "你好,这是语音朗读测试。".into(), 1.0)
             .expect("合成应成功");
         assert!(wav.len() > 44, "WAV 应包含音频数据: {} bytes", wav.len());
         assert_eq!(&wav[0..4], b"RIFF");
@@ -670,5 +722,16 @@ mod smoke {
         let seconds = (wav.len() - 44) as f64 / (sr as f64 * 2.0);
         println!("WAV {} bytes, {}Hz, 约 {:.1}s", wav.len(), sr, seconds);
         assert!(seconds > 0.5, "应合成出可听音频");
+        // 语速 2.0 → 时长约为 1.0 的一半(允许 ±30% 抖动)
+        let fast = TtsService::synthesize_blocking(&synth, "你好,这是语音朗读测试。".into(), 2.0)
+            .expect("快速合成应成功");
+        let fast_seconds = (fast.len() - 44) as f64 / (sr as f64 * 2.0);
+        println!("2.0x 约 {:.1}s", fast_seconds);
+        assert!(
+            (fast_seconds - seconds / 2.0).abs() < seconds * 0.3,
+            "2.0x 时长应约为 1.0x 的一半: {:.2}s vs {:.2}s",
+            fast_seconds,
+            seconds
+        );
     }
 }

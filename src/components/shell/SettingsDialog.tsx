@@ -28,7 +28,7 @@ import { useUIPreferences } from '../../stores/uiPreferencesStore';
 import { formatTokenCount } from '../../lib/tokens';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { confirmDialog } from '../../lib/confirm';
-import { listDirGrants, revokeDirGrant, getTranscribeStatus, setTranscribeModel, getSpeechStatus, setSpeechEnabled, setSpeechModel, prepareSpeech } from '../../lib/api';
+import { listDirGrants, revokeDirGrant, getTranscribeStatus, setTranscribeModel, getSpeechStatus, setSpeechEnabled, setSpeechModel, setSpeechSpeed, prepareSpeech } from '../../lib/api';
 import type { Api } from '../../lib/api/types';
 import { cn } from '../../lib/utils';
 
@@ -1144,6 +1144,8 @@ function TtsSection({ open }: { open: boolean }) {
   });
   const [current, setCurrent] = useState<string>('piper-zh-xiaoya');
   const [error, setError] = useState('');
+  /** 朗读语速倍率(0.5~2.0);滑块拖动本地即时更新,松手提交。 */
+  const [speed, setSpeed] = useState(1);
   const toggleEnabled = useMutation({
     mutationFn: (on: boolean) => setSpeechEnabled(on),
     onSuccess: () => {
@@ -1167,11 +1169,23 @@ function TtsSection({ open }: { open: boolean }) {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['tts-status'] }),
     onError: (e) => setError(e instanceof Error ? e.message : '下载触发失败'),
   });
+  /** 设置朗读语速倍率(POST /v1/speech/speed,写入 `[tts] speed`)。 */
+  const setSpeedMut = useMutation({
+    mutationFn: (v: number) => setSpeechSpeed(v),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['tts-status'] });
+      setError('');
+    },
+    onError: (e) => setError(e instanceof Error ? e.message : '保存失败'),
+  });
 
-  // 后端状态返回后同步当前模型(覆盖本地默认值)
+  // 后端状态返回后同步当前模型与语速(覆盖本地默认值)
   useEffect(() => {
     if (status?.model) setCurrent(status.model);
   }, [status?.model]);
+  useEffect(() => {
+    if (typeof status?.speed === 'number') setSpeed(status.speed);
+  }, [status?.speed]);
 
   const desc = TTS_MODELS.find((m) => m.id === current)?.desc;
   const selectCls =
@@ -1206,6 +1220,32 @@ function TtsSection({ open }: { open: boolean }) {
           </option>
         ))}
       </select>
+      {/* 朗读语速(0.5x~2.0x,滑块拖动实时预览,松手保存) */}
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center justify-between">
+          <label className="text-[13px] font-medium text-foreground">朗读语速</label>
+          <span className="text-[12px] tabular-nums text-foreground-subtle">
+            {speed.toFixed(1)}x
+          </span>
+        </div>
+        <input
+          type="range"
+          min={0.5}
+          max={2}
+          step={0.1}
+          value={speed}
+          onChange={(e) => setSpeed(Number(e.target.value))}
+          onMouseUp={() => setSpeedMut.mutate(speed)}
+          onTouchEnd={() => setSpeedMut.mutate(speed)}
+          onKeyUp={() => setSpeedMut.mutate(speed)}
+          className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-surface-hover accent-brand"
+          aria-label="朗读语速"
+        />
+        <div className="flex justify-between text-[10px] text-foreground-subtle">
+          <span>0.5x 慢</span>
+          <span>2.0x 快</span>
+        </div>
+      </div>
       <div className="text-[12px] text-foreground-subtle">
         {desc}。切换即时生效并跨重启保留;新模型首次使用时自动下载,也可点下方按钮提前下载。
       </div>

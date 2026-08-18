@@ -106,8 +106,15 @@ impl AppState {
         );
         tts.set_enabled(
             app_cfg
+                .as_ref()
                 .map(|c| c.tts.resolve_enabled())
                 .unwrap_or(false),
+        );
+        tts.set_speed(
+            app_cfg
+                .as_ref()
+                .map(|c| c.tts.resolve_speed())
+                .unwrap_or(1.0),
         );
         Ok(Self {
             cfg: Arc::new(Mutex::new(cfg)),
