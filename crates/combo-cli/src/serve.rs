@@ -492,6 +492,9 @@ pub(crate) async fn start_agent_run(
 
         let rig_history = history_to_messages(&history);
         let mut sparts = StreamParts::default();
+        // 流式内容日志缓冲:文本/思考增量拼接后整段落日志(不逐条记录),
+        // 工具调用边界与 run 收尾时 flush(见 request_log::StreamLogBuffer)。
+        let mut stream_log_buf = crate::request_log::StreamLogBuffer::default();
         let mut usage: Option<RunUsage> = None;
         let tx_ev = tx.clone();
         // 服务端持久化(节流):assistant 快照至少间隔 1.5s 落库一次,
@@ -528,24 +531,17 @@ pub(crate) async fn start_agent_run(
             let mut force_persist = false;
             match ev {
                 RunEvent::TextDelta(t) => {
-                    crate::request_log::log_event(
-                        &run_id_for_task,
-                        &session_id,
-                        "text_delta",
-                        json!({ "delta": &t }),
-                    );
+                    // 流式文本不逐条落日志:先在缓冲拼接,段边界/结束时整段写出
+                    stream_log_buf.push_text(&t);
                     sparts.text_delta(&t);
                 }
                 RunEvent::ReasoningDelta(r) => {
-                    crate::request_log::log_event(
-                        &run_id_for_task,
-                        &session_id,
-                        "reasoning_delta",
-                        json!({ "delta": &r }),
-                    );
+                    stream_log_buf.push_reasoning(&r);
                     sparts.reasoning_delta(&r);
                 }
                 RunEvent::ToolCall { id, name, input } => {
+                    // 工具调用是流式段边界:先写出此前拼接的文本/思考,保持时间顺序
+                    stream_log_buf.flush(&run_id_for_task, &session_id);
                     crate::request_log::log_event(
                         &run_id_for_task,
                         &session_id,
@@ -618,6 +614,10 @@ pub(crate) async fn start_agent_run(
             let _ = tx_ev.send(msg_env("updated", upd));
         })
         .await;
+
+        // 流结束(含取消/出错):把已拼接的流式内容整段落日志,
+        // 中断的 run 也能在日志里保留已生成的部分。
+        stream_log_buf.flush(&run_id2, &session_id);
 
         let (reason, error, text) = match &result {
             Ok(Some(t)) => ("end_turn", None, t.clone()),

@@ -4,6 +4,7 @@
 //! 日志目录:`$COMBO_DATA_DIR/logs/` 或 `~/.config/combo/logs/`。
 //! 每天一个文件:`agent-YYYY-MM-DD.log`。
 //! 每行一个 JSON 对象(`request` / `event` / `response`),通过 `run_id` 关联。
+//! 流式文本/思考增量不逐条落日志:经 [`StreamLogBuffer`] 拼接后按段整行写出。
 
 use chrono::Local;
 use serde_json::{Value, json};
@@ -108,7 +109,8 @@ fn log_request_to(
     append_line_to(dir, entry);
 }
 
-/// 记录 agent 流式事件(文本增量 / 工具调用 / 工具结果)。
+/// 记录 agent 离散事件(工具调用 / 工具结果)。
+/// 流式文本/思考增量不在此逐条记录:经 [`StreamLogBuffer`] 拼接后整段写出。
 pub fn log_event(
     run_id: &str,
     session_id: &str,
@@ -143,6 +145,66 @@ fn log_event_to(
         "data": data,
     });
     append_line_to(dir, entry);
+}
+
+/// 流式内容日志缓冲:文本/思考增量先在内存拼接,到段边界
+/// (工具调用、run 结束/取消/出错)时才整段写入日志——替代逐 delta
+/// 落一行,避免一次流式回复产生上百行碎片日志。
+///
+/// 写出的事件名为 `text` / `reasoning`(`data.text` 为拼接后的完整内容),
+/// 与离散事件 `tool_call` / `tool_result` 区分。
+#[derive(Default)]
+pub struct StreamLogBuffer {
+    text: String,
+    reasoning: String,
+}
+
+impl StreamLogBuffer {
+    /// 追加一段流式文本增量。
+    pub fn push_text(&mut self, delta: &str) {
+        self.text.push_str(delta);
+    }
+
+    /// 追加一段流式思考增量。
+    pub fn push_reasoning(&mut self, delta: &str) {
+        self.reasoning.push_str(delta);
+    }
+
+    /// 把拼接后的流式内容作为单条日志写出(先 reasoning 后 text),并清空缓冲;
+    /// 空缓冲为 no-op。工具调用边界与 run 收尾时调用。
+    pub fn flush(&mut self, run_id: &str, session_id: &str) {
+        self.flush_inner(None, run_id, session_id);
+    }
+
+    fn flush_inner(&mut self, dir: Option<&std::path::Path>, run_id: &str, session_id: &str) {
+        // 同一段内 reasoning 在 text 之前到达,按此固定顺序写出
+        for (event, content) in [("reasoning", &self.reasoning), ("text", &self.text)] {
+            if content.is_empty() {
+                continue;
+            }
+            let entry = json!({
+                "ts": Local::now().to_rfc3339(),
+                "type": "event",
+                "run_id": run_id,
+                "session_id": session_id,
+                "event": event,
+                "data": { "text": content },
+            });
+            match dir {
+                Some(d) => append_line_to(d, entry),
+                None => append_line(entry),
+            }
+        }
+        self.reasoning.clear();
+        self.text.clear();
+    }
+}
+
+#[cfg(test)]
+impl StreamLogBuffer {
+    fn flush_to(&mut self, dir: &std::path::Path, run_id: &str, session_id: &str) {
+        self.flush_inner(Some(dir), run_id, session_id);
+    }
 }
 
 /// 记录 agent 运行结束(成功 / 取消 / 错误)。
@@ -458,15 +520,15 @@ mod tests {
     }
 
     #[test]
-    fn log_event_records_streaming_data() {
+    fn log_event_records_discrete_events() {
         let dir = tempfile::tempdir().unwrap();
-        log_event_to(dir.path(), "run-1", "sess-1", "text_delta", json!({ "delta": "hello" }));
+        log_event_to(dir.path(), "run-1", "sess-1", "tool_call", json!({ "name": "grep" }));
         log_event_to(
             dir.path(),
             "run-1",
             "sess-1",
-            "tool_call",
-            json!({ "name": "grep", "input": { "pattern": "foo" } }),
+            "tool_result",
+            json!({ "content_preview": "foo" }),
         );
 
         let date = Local::now().format("%Y-%m-%d").to_string();
@@ -475,7 +537,67 @@ mod tests {
         let lines: Vec<&str> = content.trim().lines().collect();
         assert_eq!(lines.len(), 2);
         let first: Value = serde_json::from_str(lines[0]).unwrap();
-        assert_eq!(first["event"], "text_delta");
-        assert_eq!(first["data"]["delta"], "hello");
+        assert_eq!(first["event"], "tool_call");
+        assert_eq!(first["data"]["name"], "grep");
+    }
+
+    /// 流式增量拼接后整段落日志:多个 delta 合并为一行,flush 后缓冲清空。
+    #[test]
+    fn stream_log_buffer_merges_deltas_into_single_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut buf = StreamLogBuffer::default();
+        buf.push_reasoning("先");
+        buf.push_reasoning("分析");
+        buf.push_text("你");
+        buf.push_text("好");
+
+        buf.flush_to(dir.path(), "run-1", "sess-1");
+        // 空缓冲再 flush 不产生新行
+        buf.flush_to(dir.path(), "run-1", "sess-1");
+
+        let date = Local::now().format("%Y-%m-%d").to_string();
+        let path = dir.path().join("logs").join(format!("agent-{date}.log"));
+        let content = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = content.trim().lines().collect();
+        assert_eq!(lines.len(), 2, "拼接后应只有两行: {content}");
+        let first: Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(first["type"], "event");
+        assert_eq!(first["run_id"], "run-1");
+        assert_eq!(first["event"], "reasoning");
+        assert_eq!(first["data"]["text"], "先分析");
+        let second: Value = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(second["event"], "text");
+        assert_eq!(second["data"]["text"], "你好");
+
+        // flush 后缓冲已清空:后续增量从零拼接(下一段)
+        buf.push_text("新段");
+        buf.flush_to(dir.path(), "run-1", "sess-1");
+        let content = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = content.trim().lines().collect();
+        assert_eq!(lines.len(), 3);
+        let third: Value = serde_json::from_str(lines[2]).unwrap();
+        assert_eq!(third["event"], "text");
+        assert_eq!(third["data"]["text"], "新段");
+    }
+
+    /// 只有文本(无思考)时 flush 只落一行;全空时完全不落。
+    #[test]
+    fn stream_log_buffer_skips_empty_sections() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut buf = StreamLogBuffer::default();
+        buf.flush_to(dir.path(), "run-1", "sess-1"); // 全空 → 无文件
+
+        let date = Local::now().format("%Y-%m-%d").to_string();
+        let path = dir.path().join("logs").join(format!("agent-{date}.log"));
+        assert!(!path.exists(), "空缓冲不应写文件");
+
+        buf.push_text("仅文本");
+        buf.flush_to(dir.path(), "run-1", "sess-1");
+        let content = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = content.trim().lines().collect();
+        assert_eq!(lines.len(), 1);
+        let first: Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(first["event"], "text");
+        assert_eq!(first["data"]["text"], "仅文本");
     }
 }
