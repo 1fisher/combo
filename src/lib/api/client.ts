@@ -206,3 +206,87 @@ export async function apiRequestBinary(
   }
   return res.arrayBuffer();
 }
+
+/**
+ * NDJSON 流式请求(如 TTS 流式合成):响应体为逐行 JSON,每解析出一行就
+ * 回调 onLine(行内 JSON 已解析);onLine 抛错会取消下载并把错误抛出。
+ * P2P 就绪时走 DataChannel(响应一次性到达,无流式 body,退化为全量读取后
+ * 逐行回调,行为一致)。错误响应按 JSON 解析为 ApiError(同 apiRequestBinary)。
+ */
+export async function apiRequestNdjson(
+  path: string,
+  opts: {
+    body?: unknown;
+    signal?: AbortSignal;
+    onLine: (line: unknown) => void;
+  }
+): Promise<void> {
+  const base = getProxyBaseUrl();
+  const q = new URLSearchParams();
+  if (!q.has('client_id')) q.set('client_id', getClientId());
+  const token = getAccessToken();
+  const headers: Record<string, string> = {};
+  if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const url = `${base}${path}?${q.toString()}`;
+  const init = {
+    method: 'POST',
+    headers,
+    body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+    signal: opts.signal,
+  };
+  let res: Response;
+  try {
+    const p2p = getP2pTransport();
+    res = p2p?.isReady() ? await p2p.fetch(url, init) : await fetch(url, init);
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      throw new ApiError(0, '请求已取消');
+    }
+    throw new ApiError(0, 'network error');
+  }
+  if (!res.ok) {
+    let message = res.statusText;
+    let code: string | undefined;
+    try {
+      const j = (await res.json()) as { message?: string; code?: string };
+      if (j.message) message = j.message;
+      code = j.code;
+    } catch {
+      /* keep statusText */
+    }
+    throw new ApiError(res.status, message, code);
+  }
+  const dispatch = (raw: string) => {
+    const line = raw.trim();
+    if (!line) return;
+    opts.onLine(JSON.parse(line));
+  };
+  if (typeof res.body?.getReader === 'function') {
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const raw = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        try {
+          dispatch(raw);
+        } catch (e) {
+          void reader.cancel().catch(() => {});
+          throw e;
+        }
+      }
+    }
+    buf += decoder.decode();
+    dispatch(buf);
+  } else {
+    // P2P / 旧环境无流式 body:全量读取后逐行回调
+    const text = await res.text();
+    for (const raw of text.split('\n')) dispatch(raw);
+  }
+}

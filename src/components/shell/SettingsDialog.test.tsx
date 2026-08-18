@@ -507,7 +507,15 @@ describe('SettingsDialog', () => {
     vi.unstubAllGlobals();
   });
 
-  it('TTS 模型就绪后点击「试听」经 /v1/speech/test 合成并播放', async () => {
+  it('TTS 模型就绪后点击「试听」经 /v1/speech/stream 流式合成并播放', async () => {
+    const ndjson = new TextEncoder().encode(
+      [
+        '{"type":"chunk","seq":1,"hard":true,"sample_rate":22050,"pcm":"' +
+          btoa(String.fromCharCode(0, 0, 0x40, 0xc0)) +
+          '"}',
+        '{"type":"done"}',
+      ].join('\n') + '\n',
+    );
     const speechFetch = vi.fn(async (url: string) => {
       if (url.includes('/v1/speech/status')) {
         return {
@@ -523,30 +531,52 @@ describe('SettingsDialog', () => {
             }),
         };
       }
-      if (url.includes('/v1/speech/test')) {
-        return { ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(44 + 8) };
+      if (url.includes('/v1/speech/stream')) {
+        let sent = false;
+        return {
+          ok: true,
+          status: 200,
+          body: {
+            getReader: () => ({
+              read: async () => {
+                if (sent) return { done: true, value: undefined };
+                sent = true;
+                return { done: false, value: ndjson };
+              },
+              cancel: async () => {},
+            }),
+          },
+        };
       }
       throw new Error(`unexpected url ${url}`);
     });
-    // jsdom 无 AudioContext:桩实现,start() 后异步触发 onended 完成播放
+    // jsdom 无 AudioContext:桩实现,createBuffer 供 PCM 解码,
+    // start() 后异步触发 onended 完成播放
     class FakeAudioContext {
       state = 'running';
       destination = {};
-      async decodeAudioData(): Promise<AudioBuffer> {
-        return { duration: 0, length: 0, numberOfChannels: 1, sampleRate: 22050 } as AudioBuffer;
+      currentTime = 50;
+      createBuffer(_ch: number, length: number, sampleRate: number) {
+        return {
+          duration: length / sampleRate,
+          length,
+          numberOfChannels: 1,
+          sampleRate,
+          getChannelData: () => new Float32Array(length),
+        } as unknown as AudioBuffer;
       }
       createBufferSource() {
         const src: {
           buffer: AudioBuffer | null;
           connect: ReturnType<typeof vi.fn>;
-          start: ReturnType<typeof vi.fn>;
+          start: (at?: number) => void;
           onended: (() => void) | null;
         } = {
           buffer: null,
           connect: vi.fn(),
-          start: vi.fn(() => {
+          start: (_at?: number) => {
             setTimeout(() => src.onended?.(), 0);
-          }),
+          },
           onended: null,
         };
         return src;
@@ -564,7 +594,7 @@ describe('SettingsDialog', () => {
     await userEvent.click(await screen.findByRole('button', { name: '试听模型音色' }));
     await waitFor(() =>
       expect(speechFetch).toHaveBeenCalledWith(
-        expect.stringContaining('/v1/speech/test'),
+        expect.stringContaining('/v1/speech/stream'),
         expect.anything()
       )
     );

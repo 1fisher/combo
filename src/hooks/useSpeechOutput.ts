@@ -1,12 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ApiError, getSpeechStatus, synthesizeSpeech } from '../lib/api';
+import { ApiError, getSpeechStatus, streamSpeech } from '../lib/api';
 import { useAgentStore } from '../stores/agentStore';
 import { splitSentences } from '../lib/ttsSplit';
 import { waitSpeechModelReady } from '../lib/speech';
+import { pcm16ToAudioBuffer } from '../lib/pcm';
 
 /** 待处理缓冲上限(字符):防止超长未成句内容(如大段代码块)无限累积。 */
 const MAX_PENDING_CHARS = 4000;
+/** 待发句子缓冲上限(条):流式请求跟不上播放时丢弃最旧句子,防内存膨胀。 */
+const MAX_QUEUED_SENTENCES = 200;
+
+/** 片段间停顿(秒):硬边界(句末)略长于软边界(逗号)。后端已裁掉模型
+ * 自带的静音尾巴并把逗号切开成独立片段,这里用短间隙无缝衔接 — 消除
+ * 「标点/空格长停顿」与「等下一句合成完」的空档。 */
+const HARD_GAP_SEC = 0.26;
+const SOFT_GAP_SEC = 0.14;
 
 /** 提取一条消息的全部 text part 文本(非 assistant 返回空)。 */
 function textOf(m: { role: string; parts: Array<{ type: string; data?: unknown }> }): string {
@@ -23,10 +32,13 @@ function textOf(m: { role: string; parts: Array<{ type: string; data?: unknown }
  * - 仅后端配置 `[tts] enabled` 打开时工作(经 getSpeechStatus 轮询);
  * - 订阅当前会话 assistant 文本增量(只取 text part),按句末标点/换行断句
  *   (代码块围栏内容跳过,断句器跨增量保持围栏状态);
- * - 完整句子经 `POST /v1/speech` 合成 WAV,AudioContext 解码后 FIFO 顺序播放;
- * - 只朗读「本次 run 的增量」:run 开始时把历史消息全部标记为已消费;
+ * - 完整句子积压成批,经 `POST /v1/speech/stream` 流式合成:服务端把句子
+ *   再切成片段(句末/逗号边界)逐个合成,每个片段到达即按播放时间轴
+ *   无缝排期(`AudioBufferSourceNode.start(at)`)— 后续片段在前一段播放
+ *   期间继续合成与排期,句间不再有「合成延迟」空档;
+ * - 模型未就绪(首次朗读触发下载)时等待就绪并展示进度,随后重试该批;
  * - 打断:新发消息 / 切换会话 / 关闭开关 / run 出错或取消
- *   → 停播 + 清空缓冲与已消费偏移。
+ *   → 中止流请求、停掉全部已排期音频、清空缓冲与已消费偏移。
  */
 export function useSpeechOutput() {
   const enabled = useQuery({
@@ -46,9 +58,15 @@ export function useSpeechOutput() {
 
   const ctxRef = useRef<AudioContext | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-  const activeSrcRef = useRef<AudioBufferSourceNode | null>(null);
-  const queueRef = useRef<Promise<void>>(Promise.resolve());
-  /** 打断代次:每次 stop 自增,已入队句子在轮到播放时发现代次不符则跳过。 */
+  /** 已排期/播放中的音频源(打断时全部停止)。 */
+  const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
+  /** 播放时间轴:下一片段的排期起点(AudioContext 时间,秒)。 */
+  const nextStartRef = useRef(0);
+  /** 待发送的完整句子(批量经一次流式请求合成)。 */
+  const queueRef = useRef<string[]>([]);
+  /** 发送泵守卫:同一时刻至多一个流式请求(保证片段顺序)。 */
+  const pumpingRef = useRef(false);
+  /** 打断代次:每次 stop 自增,进行中的请求/排期发现代次不符即作废。 */
   const epochRef = useRef(0);
   const sessionRef = useRef<string | null>(null);
   /** 每消息已消费的文本长度(messageId → 字符偏移)。 */
@@ -57,70 +75,107 @@ export function useSpeechOutput() {
   /** 已对哪个 run 做过历史基线(防止 run 期间消息变化导致重复基线化吃掉新文本)。 */
   const baselinedRunRef = useRef<string | null>(null);
 
-  /** 打断朗读:取消在途合成、停播当前音频,已入队的句子全部作废。 */
+  /** 打断朗读:中止在途流请求、停掉全部已排期音频,积压句子全部作废。 */
   const stop = useCallback(() => {
     epochRef.current += 1;
     abortRef.current?.abort();
     abortRef.current = null;
-    activeSrcRef.current?.stop();
-    activeSrcRef.current = null;
+    for (const src of sourcesRef.current) {
+      try {
+        src.stop();
+      } catch {
+        /* 已结束的 source 再 stop 会抛错,忽略 */
+      }
+    }
+    sourcesRef.current.clear();
+    nextStartRef.current = 0;
+    queueRef.current = [];
     setModelProgress(null);
   }, []);
 
-  /** 把一句文本合成并播放(入队,顺序播放)。 */
-  const speak = useCallback((sentence: string) => {
-    const text = sentence.trim();
-    if (!text) return;
-    const epoch = epochRef.current;
-    queueRef.current = queueRef.current
-      .then(async () => {
-        if (epoch !== epochRef.current) return;
-        abortRef.current?.abort();
-        abortRef.current = new AbortController();
-        let wav: ArrayBuffer;
-        try {
-          wav = await synthesizeSpeech(text, abortRef.current.signal);
-        } catch (e) {
-          // 模型未就绪(首次朗读触发下载):等待就绪并展示进度,然后重试该句
-          if (e instanceof ApiError && e.code === 'tts_not_ready') {
-            try {
-              await waitSpeechModelReady(setModelProgress);
-            } catch {
-              return; // 准备超时/失败:跳过该句
-            }
+  /** 收到流式片段:立即解码并按播放时间轴无缝排期(不等上一段播完)。 */
+  const scheduleChunk = useCallback(
+    (pcm: ArrayBuffer, sampleRate: number, hard: boolean) => {
+      if (pcm.byteLength === 0 || sampleRate <= 0) return;
+      const ctx = ctxRef.current ?? (ctxRef.current = new AudioContext());
+      if (ctx.state === 'suspended') void ctx.resume().catch(() => {});
+      const buffer = pcm16ToAudioBuffer(ctx, pcm, sampleRate);
+      const src = ctx.createBufferSource();
+      src.buffer = buffer;
+      src.connect(ctx.destination);
+      const startAt = Math.max(ctx.currentTime + 0.03, nextStartRef.current);
+      src.start(startAt);
+      nextStartRef.current = startAt + buffer.duration + (hard ? HARD_GAP_SEC : SOFT_GAP_SEC);
+      sourcesRef.current.add(src);
+      src.onended = () => sourcesRef.current.delete(src);
+    },
+    []
+  );
+
+  /** 发送泵:把积压句子批量发给流式端点,片段边收边排期;一批完成后继续取
+   * 下一批(新句子在播放期间已继续积压,合成与播放重叠)。同一时刻仅一个
+   * 在途请求,片段顺序即到达顺序。 */
+  const pump = useCallback(() => {
+    if (pumpingRef.current) return;
+    pumpingRef.current = true;
+    (async () => {
+      for (;;) {
+        const batch = queueRef.current.splice(0);
+        if (batch.length === 0) return;
+        const epoch = epochRef.current;
+        for (let attempt = 0; ; attempt++) {
+          if (epoch !== epochRef.current) return;
+          abortRef.current?.abort();
+          const ac = new AbortController();
+          abortRef.current = ac;
+          try {
+            await streamSpeech(batch.join('\n'), {
+              signal: ac.signal,
+              onChunk: (pcm, sr, hard) => {
+                if (epoch === epochRef.current) scheduleChunk(pcm, sr, hard);
+              },
+            });
+            break;
+          } catch (e) {
             if (epoch !== epochRef.current) return;
-            try {
-              wav = await synthesizeSpeech(text, abortRef.current.signal);
-            } catch {
-              return; // 仍失败(如已关闭朗读):静默跳过
+            // 模型未就绪(首次朗读触发下载):等待就绪并展示进度,然后重试该批
+            if (e instanceof ApiError && e.code === 'tts_not_ready') {
+              try {
+                await waitSpeechModelReady(setModelProgress);
+              } catch {
+                return; // 准备超时/失败:放弃该批
+              }
+              if (attempt >= 1) return; // 就绪后仍提示未就绪:不再无限重试
+              continue;
             }
-          } else {
-            return; // tts_disabled / 已取消:静默跳过
+            return; // tts_disabled / 已取消 / 网络错:放弃该批
           }
         }
-        if (epoch !== epochRef.current) return;
-        const ctx =
-          ctxRef.current ??
-          (ctxRef.current = new AudioContext());
-        if (ctx.state === 'suspended') await ctx.resume().catch(() => {});
-        const buffer = await ctx.decodeAudioData(wav);
-        if (epoch !== epochRef.current) return;
-        await new Promise<void>((resolve) => {
-          const src = ctx.createBufferSource();
-          src.buffer = buffer;
-          src.connect(ctx.destination);
-          src.onended = () => {
-            if (activeSrcRef.current === src) activeSrcRef.current = null;
-            resolve();
-          };
-          activeSrcRef.current = src;
-          src.start();
-        });
-      })
+      }
+    })()
       .catch(() => {
-        /* 单句失败不阻断后续句子 */
+        /* 单批失败不阻断后续句子 */
+      })
+      .finally(() => {
+        pumpingRef.current = false;
+        // 泵运行期间又有句子积压:立即补一轮
+        if (queueRef.current.length > 0) pump();
       });
-  }, []);
+  }, [scheduleChunk]);
+
+  /** 把一句文本入队朗读(积压成批流式合成,无缝排期播放)。 */
+  const speak = useCallback(
+    (sentence: string) => {
+      const text = sentence.trim();
+      if (!text) return;
+      queueRef.current.push(text);
+      if (queueRef.current.length > MAX_QUEUED_SENTENCES) {
+        queueRef.current.splice(0, queueRef.current.length - MAX_QUEUED_SENTENCES);
+      }
+      pump();
+    },
+    [pump]
+  );
 
   // 开关关闭:停读并清空全部状态
   useEffect(() => {
@@ -173,7 +228,7 @@ export function useSpeechOutput() {
     pendingRef.current = pending;
     const { sentences, rest } = splitSentences(pending);
     pendingRef.current = rest;
-    for (const s of sentences) void speak(s);
+    for (const s of sentences) speak(s);
   }, [messages, sessionId, enabled, run?.status, speak, stop]);
 
   // run 结束:正常结束先补消费最终版文本再冲刷;出错/取消丢弃缓冲
@@ -196,7 +251,7 @@ export function useSpeechOutput() {
     pendingRef.current = '';
     if (!pending) return;
     const { sentences } = splitSentences(pending + '\n');
-    for (const s of sentences) void speak(s);
+    for (const s of sentences) speak(s);
   }, [run, enabled, messages, speak, stop]);
 
   // 卸载:清理

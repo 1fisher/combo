@@ -358,7 +358,21 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   `audio/wav`;关闭时 400 `tts_disabled`,未就绪 503 `tts_not_ready`,
   超 500 字符 400 `tts_text_invalid`)、`POST /v1/speech/test`(试听:
   与正式合成共用 `synthesize_impl`,唯一区别是**不要求朗读开关打开**,
-  供设置区「试听」按钮预览音色)。**模型下载进度前端展示**:
+  供设置区「试听」按钮预览音色)、**`POST /v1/speech/stream`(流式合成,
+  NDJSON chunked)**:请求体 `{"text", "test"}`(`test=true` 不要求开关,
+  供试听/通知播报),服务端把文本切成**片段**(`split_tts_fragments`:句末
+  标点。!?…;换行为硬边界,逗号/顿号/分号/冒号为软边界——模型在这些标点
+  处会生成 0.3~0.8s 静音,是「逗号长停顿」的来源,切开成独立片段后停顿交
+  由播放端短间隙控制;数字间千分位逗号不切;单片段 ≤100 字符),逐个
+  `spawn_blocking` 合成、合成一个就流出一行
+  `{"type":"chunk","seq","hard","sample_rate","pcm":"<base64 PCM16LE>"}`,
+  末行 `{"type":"done"}`/错误行 `{"type":"error"}`(经 `futures::stream::unfold`
+  + `Body::from_stream`,`x-accel-buffering: no` 防代理缓冲);每片段首尾
+  静音已 `trim_silence` 裁剪、`GenerationConfig.silence_scale=0.08` 压模型
+  内部静音;文本经 `normalize_tts_text` 去除 markdown 残留符/折叠空白,
+  非双语模型额外删 ASCII 空格(char 级词库里空格=长停顿)。旧端点
+  `/v1/speech`、`/v1/speech/test` 保留但同样片段化(片段间插入固定短静音
+  后拼 WAV)。**模型下载进度前端展示**:
   首次合成未就绪时后端后台触发下载并立即 503(不阻塞请求,避免下载期间
   挂起 30s 合成超时);前端 `useSpeechOutput` 捕获 `tts_not_ready` 后轮询
   status(镜像 `useDictation::ensureModelReady`;共用
@@ -369,14 +383,23 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   模型不一致时持续轮询,downloading/loading 1s、其余 1.5s,就绪即停;本地
   无模型直接显示下载按钮,下载失败显示错误文案 + 「重新下载」按钮,切换
   模型后 invalidate 状态查询刷新),模型下拉旁有「试听」按钮:未就绪先经
-  `waitSpeechModelReady` 触发下载并等就绪,再经 `synthesizeSpeechTest`
-  (`POST /v1/speech/test`)合成测试句播放,不受朗读开关影响。前端 `useSpeechOutput`
+  `waitSpeechModelReady` 触发下载并等就绪,再经 `streamSpeech`
+  (`POST /v1/speech/stream`,`test=true`)流式合成测试句播放,不受朗读开关
+  影响。前端 `useSpeechOutput`
   (`src/hooks/useSpeechOutput.ts`,挂 `AppShellInner`)订阅 agentStore 当前
   会话 assistant **text part** 文本增量(只读本次 run 的增量:run 开始时把
   已有消息全部标记已消费,避免朗读历史),按句末标点/换行断句(代码块围栏
   内容跳过、围栏状态跨增量保留,`src/lib/ttsSplit.ts` 纯函数,单句 >100 字符
-  强制切),完整句子经 `synthesizeSpeech` 合成后 `AudioContext` FIFO 顺序
-  播放;打断(新发消息/切会话/关开关/run 出错)停播 + 清缓冲。设置界面
+  强制切),完整句子积压成批经 `streamSpeech`(`api/index.ts`,底层
+  `client.ts::apiRequestNdjson` 逐行解析 NDJSON;PCM 经 `src/lib/pcm.ts::
+  pcm16ToAudioBuffer` 直接转 AudioBuffer,不经 decodeAudioData)流式合成:
+  片段到达即按**播放时间轴无缝排期**(`AudioBufferSourceNode.start(at)`,
+  `nextStartRef` 累加,硬/软边界间隙 0.26s/0.14s)——后续片段在前一段播放
+  期间继续合成与排期,句间无「等合成」空档;`pump` 发送泵保证同一时刻仅一个
+  在途流请求(片段顺序即到达顺序),批次失败丢弃不重试(除 `tts_not_ready`
+  等就绪后重试一次)。通知语音播报 `notifyVoice.ts` 与试听同走该流式通道。
+  打断(新发消息/切会话/关开关/run 出错)中止流请求 + 停掉全部已排期音频 +
+  清缓冲。设置界面
   `TtsSection`(开关 + 模型下拉,开关写 `[tts] enabled` 并联动朗读 hook)。
 - **Frontend layout:** `src/components/{ui,shell,agent}` — `ui/` is generated
   shadcn primitives, `shell/` is app chrome, `agent/` is the chat/tool/modal UI.

@@ -7,6 +7,31 @@ import type { ReactNode } from 'react';
 // 注意:实现必须走 vi.fn(impl) 构造器传入。测试基建(test-setup.ts 的
 // beforeEach 里 vi.restoreAllMocks())会清掉后续 mockImplementation() 设置
 // 的实现,而构造器传入的实现不会被清除。
+
+/** 构造一段 NDJSON 流式响应(单 chunk + done),模拟 /v1/speech/stream。 */
+function makeNdjsonResponse(lines: string[]): {
+  ok: boolean;
+  status: number;
+  body: { getReader: () => unknown };
+} {
+  const payload = new TextEncoder().encode(lines.join('\n') + '\n');
+  let sent = false;
+  return {
+    ok: true,
+    status: 200,
+    body: {
+      getReader: () => ({
+        read: async () => {
+          if (sent) return { done: true, value: undefined };
+          sent = true;
+          return { done: false, value: payload };
+        },
+        cancel: async () => {},
+      }),
+    },
+  };
+}
+
 const fetchMock = vi.fn(async (url: string) => {
   if (url.includes('/v1/speech/status')) {
     return {
@@ -16,12 +41,14 @@ const fetchMock = vi.fn(async (url: string) => {
         JSON.stringify({ enabled: true, ready: false, phase: 'not_ready', model: 'piper-zh-xiaoya' }),
     };
   }
-  if (url.includes('/v1/speech?')) {
-    return {
-      ok: true,
-      status: 200,
-      arrayBuffer: async () => new ArrayBuffer(44 + 8),
-    };
+  if (url.includes('/v1/speech/stream')) {
+    // 单 chunk:4 字节 PCM16(base64),22050Hz,句末边界
+    return makeNdjsonResponse([
+      '{"type":"chunk","seq":1,"hard":true,"sample_rate":22050,"pcm":"' +
+        btoa(String.fromCharCode(0, 0, 0x40, 0xc0)) +
+        '"}',
+      '{"type":"done"}',
+    ]);
   }
   throw new Error(`unexpected url ${url}`);
 });
@@ -30,23 +57,30 @@ vi.stubGlobal('fetch', fetchMock);
 class FakeAudioContext {
   state = 'running';
   destination = {};
-  async decodeAudioData(_buf: ArrayBuffer): Promise<AudioBuffer> {
-    return { duration: 0, length: 0, numberOfChannels: 1, sampleRate: 22050 } as AudioBuffer;
+  currentTime = 100;
+  createBuffer(_ch: number, length: number, sampleRate: number) {
+    return {
+      duration: length / sampleRate,
+      length,
+      numberOfChannels: 1,
+      sampleRate,
+      getChannelData: () => new Float32Array(length),
+    } as unknown as AudioBuffer;
   }
   createBufferSource() {
-    // start() 后异步触发 onended,模拟真实播放结束(否则朗读队列永远卡在第一句)
+    // start() 后异步触发 onended,模拟真实播放结束(否则已排期音频永不结束)
     const src: {
       buffer: AudioBuffer | null;
       connect: ReturnType<typeof vi.fn>;
-      start: ReturnType<typeof vi.fn>;
+      start: (at?: number) => void;
       stop: ReturnType<typeof vi.fn>;
       onended: (() => void) | null;
     } = {
       buffer: null,
       connect: vi.fn(),
-      start: vi.fn(() => {
+      start: (_at?: number) => {
         setTimeout(() => src.onended?.(), 0);
-      }),
+      },
       stop: vi.fn(),
       onended: null,
     };
@@ -103,7 +137,7 @@ describe('useSpeechOutput', () => {
       });
     await waitFor(() => {
       const calls = fetchMock.mock.calls.filter((c) =>
-        String(c[0]).includes('/v1/speech?')
+        String(c[0]).includes('/v1/speech/stream')
       ) as unknown as [string, { body: string }][];
       expect(calls.length).toBe(1);
       expect(JSON.parse(calls[0][1].body).text).toBe('你好。');
@@ -123,7 +157,7 @@ describe('useSpeechOutput', () => {
       });
     await waitFor(() => {
       const calls = fetchMock.mock.calls.filter((c) =>
-        String(c[0]).includes('/v1/speech?')
+        String(c[0]).includes('/v1/speech/stream')
       ) as unknown as [string, { body: string }][];
       expect(calls.length).toBe(2);
       expect(JSON.parse(calls[1][1].body).text).toBe('世界真大。');
@@ -157,7 +191,7 @@ describe('useSpeechOutput', () => {
         prepared = true;
         return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true }) };
       }
-      if (url.includes('/v1/speech?')) {
+      if (url.includes('/v1/speech/stream')) {
         speechCalls += 1;
         if (speechCalls === 1) {
           return {
@@ -167,7 +201,12 @@ describe('useSpeechOutput', () => {
             text: async () => JSON.stringify({ message: '模型下载中', code: 'tts_not_ready' }),
           };
         }
-        return { ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(44 + 8) };
+        return makeNdjsonResponse([
+          '{"type":"chunk","seq":1,"hard":true,"sample_rate":22050,"pcm":"' +
+            btoa(String.fromCharCode(0, 0, 0x40, 0xc0)) +
+            '"}',
+          '{"type":"done"}',
+        ]);
       }
       throw new Error(`unexpected url ${url}`);
     });

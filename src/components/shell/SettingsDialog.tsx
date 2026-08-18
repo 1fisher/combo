@@ -30,8 +30,9 @@ import { useUIPreferences } from '../../stores/uiPreferencesStore';
 import { formatTokenCount } from '../../lib/tokens';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { confirmDialog } from '../../lib/confirm';
-import { listDirGrants, revokeDirGrant, getTranscribeStatus, setTranscribeModel, getSpeechStatus, setSpeechEnabled, setSpeechModel, setSpeechSpeed, prepareSpeech, synthesizeSpeechTest } from '../../lib/api';
+import { listDirGrants, revokeDirGrant, getTranscribeStatus, setTranscribeModel, getSpeechStatus, setSpeechEnabled, setSpeechModel, setSpeechSpeed, prepareSpeech, streamSpeech } from '../../lib/api';
 import { waitSpeechModelReady } from '../../lib/speech';
+import { pcm16ToAudioBuffer } from '../../lib/pcm';
 import type { Api } from '../../lib/api/types';
 import { cn } from '../../lib/utils';
 
@@ -1353,7 +1354,8 @@ function TtsSection({ open }: { open: boolean }) {
   });
   /**
    * 试听当前模型音色:未就绪先触发下载/加载并轮询就绪(进度由下方状态区展示),
-   * 就绪后经 POST /v1/speech/test 合成测试句并播放(该端点不要求朗读开关打开)。
+   * 就绪后经流式合成(POST /v1/speech/stream,test 模式,不要求朗读开关打开)
+   * 播放测试句 — 片段无缝排期,标点处不会出现长停顿。
    */
   const playTest = useCallback(async () => {
     setTesting(true);
@@ -1361,18 +1363,32 @@ function TtsSection({ open }: { open: boolean }) {
     try {
       await waitSpeechModelReady();
       void qc.invalidateQueries({ queryKey: ['tts-status'] });
-      const wav = await synthesizeSpeechTest(
-        '你好,我是 Combo 的语音助手,正在为你试听语音效果。'
-      );
       const ctx = new AudioContext();
       if (ctx.state === 'suspended') await ctx.resume().catch(() => {});
-      const buffer = await ctx.decodeAudioData(wav);
+      let nextAt = 0;
+      const sources = new Set<AudioBufferSourceNode>();
+      await streamSpeech(
+        '你好,我是 Combo 的语音助手,正在为你试听语音效果。',
+        {
+          test: true,
+          onChunk: (pcm, sampleRate, hard) => {
+            if (pcm.byteLength === 0 || sampleRate <= 0) return;
+            const buffer = pcm16ToAudioBuffer(ctx, pcm, sampleRate);
+            const src = ctx.createBufferSource();
+            src.buffer = buffer;
+            src.connect(ctx.destination);
+            const startAt = Math.max(ctx.currentTime + 0.03, nextAt);
+            src.start(startAt);
+            nextAt = startAt + buffer.duration + (hard ? 0.26 : 0.14);
+            sources.add(src);
+            src.onended = () => sources.delete(src);
+          },
+        }
+      );
+      // 等全部片段播完再关闭 AudioContext
       await new Promise<void>((resolve) => {
-        const src = ctx.createBufferSource();
-        src.buffer = buffer;
-        src.connect(ctx.destination);
-        src.onended = () => resolve();
-        src.start();
+        const check = () => (sources.size === 0 ? resolve() : setTimeout(check, 80));
+        check();
       });
       void ctx.close().catch(() => {});
     } catch (e) {

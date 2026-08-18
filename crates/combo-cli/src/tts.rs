@@ -7,7 +7,10 @@
 //! - 模型文件经 GitHub release 下载(`COMBO_TTS_MODEL_URL` 可覆盖下载地址),
 //!   缓存于 `<数据目录>/models/<id>/`,与 ASR 共用同一模型根目录;
 //! - `POST /v1/speech` 按句合成,`enabled=false` 时返回 400 `tts_disabled`
-//!   (开关以后端配置 `[tts] enabled` 为准)。
+//!   (开关以后端配置 `[tts] enabled` 为准);
+//! - `POST /v1/speech/stream` **流式合成**(NDJSON):服务端把文本切成片段
+//!   (句末/逗号边界),逐个合成逐个下发,客户端边收边播 — 消除句间
+//!   「等下一句合成完」的空档与标点/空格造成的长停顿(见 synthesize_stream)。
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -25,6 +28,7 @@ use serde_json::json;
 
 use crate::asr::err_response;
 use crate::serve::AppState;
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 
 /// 可选的 TTS 模型。新增模型时同步更新:parse/下载地址/文件查找/加载。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,9 +175,19 @@ fn find_tts_files(root: &Path, recursive: bool) -> Option<TtsFiles> {
     Some(TtsFiles { model, tokens, lexicon, rule_fsts })
 }
 
-/// 把 f32 采样封装为 16-bit PCM WAV 字节(44 字节标准头,单声道)。
-fn f32_to_wav(samples: &[f32], sample_rate: u32) -> Vec<u8> {
-    let data_len = samples.len() * 2;
+/// f32 采样 → PCM16 LE 字节。
+fn f32_to_pcm16(samples: &[f32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(samples.len() * 2);
+    for &s in samples {
+        let v = (s.clamp(-1.0, 1.0) * 32767.0).round() as i16;
+        out.extend_from_slice(&v.to_le_bytes());
+    }
+    out
+}
+
+/// 把 PCM16 LE 字节封装为 WAV(44 字节标准头,单声道)。
+fn pcm16_to_wav(pcm: &[u8], sample_rate: u32) -> Vec<u8> {
+    let data_len = pcm.len();
     let mut out = Vec::with_capacity(44 + data_len);
     out.extend_from_slice(b"RIFF");
     out.extend_from_slice(&((36 + data_len) as u32).to_le_bytes());
@@ -188,11 +202,24 @@ fn f32_to_wav(samples: &[f32], sample_rate: u32) -> Vec<u8> {
     out.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
     out.extend_from_slice(b"data");
     out.extend_from_slice(&(data_len as u32).to_le_bytes());
-    for &s in samples {
-        let v = (s.clamp(-1.0, 1.0) * 32767.0).round() as i16;
-        out.extend_from_slice(&v.to_le_bytes());
-    }
+    out.extend_from_slice(pcm);
     out
+}
+
+/// 裁掉首尾低于阈值的采样(模型自带的静音 padding)。片段间停顿全部交由
+/// 播放端控制,避免「模型静音尾巴 + 播放间隙」叠加造成句间长停顿;
+/// 全静音则清空(调用方按空音频跳过)。
+fn trim_silence(samples: &mut Vec<f32>) {
+    const THR: f32 = 0.0015;
+    let Some(start) = samples.iter().position(|&s| s.abs() > THR) else {
+        samples.clear();
+        return;
+    };
+    let end = samples.iter().rposition(|&s| s.abs() > THR).expect("首采样已非静音") + 1;
+    if start > 0 {
+        samples.drain(..start);
+    }
+    samples.truncate(end - start);
 }
 
 /// 统一的离线合成器:屏蔽模型差异,`synthesize` 阻塞(调用方须在
@@ -222,15 +249,25 @@ impl Synthesizer {
         Ok(Self { inner, sid: model.default_sid(), supports_english: model.supports_english() })
     }
 
-    /// 合成文本,返回 WAV 字节(阻塞)。`speed` 为语速倍率(0.5~2.0,1.0 正常);
-    /// piper 直接用,HF vits 由 sherpa-onnx 内部映射为 length_scale=1/speed。
-    fn synthesize(&self, text: &str, speed: f32) -> Option<Vec<u8>> {
-        let gen = GenerationConfig { sid: self.sid, speed, ..Default::default() };
+    /// 合成文本,返回 PCM16 LE 字节与采样率(阻塞)。首尾静音已裁剪,
+    /// 片段间停顿由播放端控制;`silence_scale` 压低模型内部插入的静音时长
+    /// (sherpa 默认 0.2,这里取更小值配合流式短停顿)。`speed` 为语速倍率
+    /// (0.5~2.0,1.0 正常);piper 直接用,HF vits 由 sherpa-onnx 内部映射为
+    /// length_scale=1/speed。
+    fn synthesize_pcm(&self, text: &str, speed: f32) -> Option<(Vec<u8>, u32)> {
+        let gen = GenerationConfig {
+            sid: self.sid,
+            speed,
+            silence_scale: 0.08,
+            ..Default::default()
+        };
         let audio = self
             .inner
             .generate_with_config(text, &gen, None::<fn(&[f32], f32) -> bool>)?;
         let sr = self.inner.sample_rate().max(1) as u32;
-        Some(f32_to_wav(audio.samples(), sr))
+        let mut samples = audio.samples().to_vec();
+        trim_silence(&mut samples);
+        Some((f32_to_pcm16(&samples), sr))
     }
 }
 
@@ -417,16 +454,143 @@ impl TtsService {
         Ok(())
     }
 
-    /// 合成文本 → WAV 字节(阻塞,须在 spawn_blocking 中执行)。
-    fn synthesize_blocking(synth: &Synthesizer, text: String, speed: f32) -> anyhow::Result<Vec<u8>> {
+    /// 合成单个片段,返回 PCM16 LE 字节与采样率(阻塞,须在 spawn_blocking 中
+    /// 执行)。文本先做拉丁转写与规范化;规范化后无可读内容的片段返回空音频
+    /// (调用方跳过)。
+    fn synthesize_fragment_pcm(
+        synth: &Synthesizer,
+        text: String,
+        speed: f32,
+    ) -> anyhow::Result<(Vec<u8>, u32)> {
         // 中文单语模型(char 级词库)没有英文字母 token,英文词会被当作 OOV 静默
         // 丢弃,需逐字母转中文读音;双语模型(MeloTTS)自带中英词典,原样传入即可
         // 按单词发音,跳过转写以免破坏英文读音。
         let text = if synth.supports_english { text } else { localize_latin_text(&text) };
+        let text = normalize_tts_text(&text, synth.supports_english);
+        if !speakable(&text) {
+            return Ok((Vec::new(), 0));
+        }
         synth
-            .synthesize(&text, speed)
+            .synthesize_pcm(&text, speed)
             .ok_or_else(|| anyhow::anyhow!("语音合成失败"))
     }
+
+    /// 合成整段文本为单个 WAV(旧的整体返回端点使用;阻塞,须在 spawn_blocking
+    /// 中执行)。同样按片段切分合成,片段间插入固定短静音(替代模型在标点处
+    /// 生成的长停顿),再拼接封装 WAV。
+    fn synthesize_blocking(synth: &Synthesizer, text: String, speed: f32) -> anyhow::Result<Vec<u8>> {
+        let frags = split_tts_fragments(&text, MAX_FRAGMENT_CHARS);
+        let mut parts: Vec<(Vec<u8>, bool)> = Vec::new();
+        let mut sr = 0u32;
+        for (frag, hard) in frags {
+            let (pcm, s) = Self::synthesize_fragment_pcm(synth, frag, speed)?;
+            if pcm.is_empty() {
+                continue;
+            }
+            sr = s;
+            parts.push((pcm, hard));
+        }
+        if parts.is_empty() {
+            return Err(anyhow::anyhow!("语音合成失败"));
+        }
+        let mut pcm: Vec<u8> = Vec::new();
+        for (i, (p, hard)) in parts.iter().enumerate() {
+            if i > 0 {
+                let gap_secs = if *hard { 0.26 } else { 0.14 };
+                pcm.extend_from_slice(&vec![0u8; (sr as f32 * gap_secs) as usize * 2]);
+            }
+            pcm.extend_from_slice(p);
+        }
+        Ok(pcm16_to_wav(&pcm, sr))
+    }
+}
+
+/// 单个合成片段的字符上限(与前端 MAX_SENTENCE_CHARS 对齐,防长句无停顿)。
+const MAX_FRAGMENT_CHARS: usize = 100;
+/// 流式合成请求的文本上限(整段回复一次提交,服务端再切片段)。
+const MAX_STREAM_TEXT_CHARS: usize = 4000;
+
+/// 句末标点(硬边界:自然停顿点;半角/全角叹号问号、全角分号都算)。
+/// 注:全角变体(U+FF01 等)用 `\u{}` 转义书写,避免编辑器自动归一化。
+fn is_hard_boundary(ch: char) -> bool {
+    matches!(
+        ch,
+        '。' | '\u{FF01}' | '!' | '\u{FF1F}' | '?' | '…' | '\n' | '\u{FF1B}'
+    )
+}
+
+/// 句中标点(软边界:模型在这些标点处会插入较长静音,切开成独立片段后由
+/// 播放端用短停顿衔接)。注:全角分号(U+FF1B)已按句末(硬边界)处理。
+fn is_soft_boundary(ch: char) -> bool {
+    matches!(ch, ',' | '\u{FF0C}' | '、' | ';' | ':' | '\u{FF1A}')
+}
+
+/// 片段是否含有可朗读内容(至少一个字母/数字/汉字等文字字符)。
+fn speakable(s: &str) -> bool {
+    s.chars().any(char::is_alphanumeric)
+}
+
+/// 把文本切成 TTS 合成片段:`Vec<(片段, 是否句末边界)>`。
+///
+/// 句末标点(。!?…;换行)为硬边界;逗号/顿号/分号/冒号为软边界 — 模型在
+/// 这些标点处会生成 0.3~0.8s 的静音,是「逗号长停顿」的直接来源,切开成
+/// 独立片段后停顿时长交由播放端的短间隙控制。数字间的 ASCII 逗号(千分位,
+/// 如 `1,000`)不是边界;单片段超过 `max_chars` 字符强制切分。
+fn split_tts_fragments(text: &str, max_chars: usize) -> Vec<(String, bool)> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out: Vec<(String, bool)> = Vec::new();
+    let mut cur = String::new();
+    fn emit(cur: &mut String, hard: bool, out: &mut Vec<(String, bool)>) {
+        let t = cur.trim();
+        if speakable(t) {
+            out.push((t.to_string(), hard));
+        }
+        cur.clear();
+    }
+    for (i, &ch) in chars.iter().enumerate() {
+        cur.push(ch);
+        let thousands_sep = ch == ','
+            && i > 0
+            && chars[i - 1].is_ascii_digit()
+            && chars.get(i + 1).is_some_and(|c| c.is_ascii_digit());
+        if thousands_sep {
+            // 千分位逗号:保留在片段内
+        } else if is_hard_boundary(ch) {
+            emit(&mut cur, true, &mut out);
+        } else if is_soft_boundary(ch) {
+            emit(&mut cur, false, &mut out);
+        } else if cur.chars().count() >= max_chars {
+            emit(&mut cur, false, &mut out);
+        }
+    }
+    emit(&mut cur, false, &mut out);
+    out
+}
+
+/// TTS 文本规范化:去除 markdown 强调符(前端断句器只剥离代码块围栏,行内
+/// `**粗体**`/反引号会残留);折叠连续空白。char 级中文词库(非双语)模型
+/// 额外删除 ASCII 空格 — 空格在词库里没有对应 token,合成表现为长停顿
+/// (逐字母拼写间的空格尤其明显);双语模型(MeloTTS)必须保留单词间空格,
+/// 仅折叠连续空白为单个。
+fn normalize_tts_text(text: &str, supports_english: bool) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut last_ws = false;
+    for ch in text.chars() {
+        match ch {
+            '\r' | '*' | '`' | '#' | '~' | '|' => {}
+            ' ' | '\t' | '\n' => {
+                if supports_english && !last_ws {
+                    out.push(' ');
+                    last_ws = true;
+                }
+            }
+            _ => {
+                out.push(ch);
+                last_ws = false;
+            }
+        }
+    }
+    out.trim().to_string()
 }
 
 /// 单句合成文本上限(字符):句子级朗读,超长拒绝。
@@ -689,6 +853,143 @@ async fn synthesize_impl(state: AppState, raw_text: String, require_enabled: boo
     (StatusCode::OK, [("Content-Type", "audio/wav")], axum::body::Body::from(wav)).into_response()
 }
 
+/// POST /v1/speech/stream — 流式合成(NDJSON,chunked 传输)。
+///
+/// 请求体 `{"text": "...", "test": false}`;`test=true` 不要求朗读开关打开
+/// (供设置区试听与通知语音播报使用,同 `/v1/speech/test`)。
+///
+/// 服务端把文本切成片段(句末/逗号边界,见 `split_tts_fragments`),逐个
+/// 合成、合成一个就流出一行 JSON:
+/// - `{"type":"chunk","seq":1,"hard":false,"sample_rate":22050,"pcm":"<base64 PCM16LE>"}`
+/// - `{"type":"done"}`(全部片段完成)/ `{"type":"error","message":"..."}`
+///
+/// 客户端收到 chunk 即可解码排期播放,后续片段在前一段播放期间继续合成 —
+/// 句间不再有「等下一句合成完」的空档;片段首尾静音已裁剪、逗号被切开,
+/// 停顿时长由播放端的短间隙(硬/软边界区分)控制。
+#[derive(Deserialize)]
+struct StreamReq {
+    text: String,
+    #[serde(default)]
+    test: bool,
+}
+
+async fn synthesize_stream(State(state): State<AppState>, Json(body): Json<StreamReq>) -> Response {
+    if !body.test && !state.tts.enabled() {
+        return err_response(
+            StatusCode::BAD_REQUEST,
+            "语音朗读未开启,请先在设置中打开",
+            Some("tts_disabled"),
+        );
+    }
+    let text = body.text.trim().to_string();
+    if text.is_empty() || text.chars().count() > MAX_STREAM_TEXT_CHARS {
+        return err_response(
+            StatusCode::BAD_REQUEST,
+            &format!("文本为空或超过 {MAX_STREAM_TEXT_CHARS} 字符上限"),
+            Some("tts_text_invalid"),
+        );
+    }
+    // 首次合成前确保模型就绪:未就绪则后台触发下载/加载并立即返回 503(不阻塞
+    // 请求),前端轮询 /v1/speech/status 展示下载进度,就绪后重试。
+    if state.tts.synthesizer().is_none() {
+        let tts = state.tts.clone();
+        if !matches!(&*tts.phase.lock().unwrap(), crate::asr::Phase::Downloading { .. }) {
+            tokio::spawn(async move {
+                if let Err(e) = tts.ensure_ready().await {
+                    tracing::warn!("语音合成模型准备失败: {e:#}");
+                }
+            });
+        }
+        return err_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "语音合成模型正在下载/加载,请稍后重试",
+            Some("tts_not_ready"),
+        );
+    }
+    let Some(synth) = state.tts.synthesizer() else {
+        return err_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "语音合成模型尚未就绪,请稍后重试",
+            Some("tts_not_ready"),
+        );
+    };
+    let speed = state.tts.speed();
+    let frags = split_tts_fragments(&text, MAX_FRAGMENT_CHARS);
+
+    /// unfold 的流状态:当前片段下标 + 是否已发送 done 行 + 是否已失败。
+    struct StreamState {
+        synth: Arc<Synthesizer>,
+        frags: Vec<(String, bool)>,
+        idx: usize,
+        speed: f32,
+        done_sent: bool,
+        failed: bool,
+    }
+    let init = StreamState { synth, frags, idx: 0, speed, done_sent: false, failed: false };
+    let stream = futures::stream::unfold(init, |mut st| async move {
+        if st.failed {
+            return None;
+        }
+        if st.idx < st.frags.len() {
+            let (frag, hard) = st.frags[st.idx].clone();
+            let seq = st.idx + 1;
+            st.idx += 1;
+            let synth = st.synth.clone();
+            let speed = st.speed;
+            let res = tokio::task::spawn_blocking(move || {
+                TtsService::synthesize_fragment_pcm(&synth, frag, speed)
+            })
+            .await;
+            let line = match res {
+                Ok(Ok((pcm, sr))) if !pcm.is_empty() => json!({
+                    "type": "chunk",
+                    "seq": seq,
+                    "hard": hard,
+                    "sample_rate": sr,
+                    "pcm": STANDARD.encode(&pcm),
+                }),
+                Ok(Ok(_)) => {
+                    // 规范化后无可读内容的片段:跳过(空帧,不产出行)
+                    return Some((Ok::<axum::body::Bytes, std::convert::Infallible>(
+                        axum::body::Bytes::new(),
+                    ), st));
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!("流式语音合成失败: {e:#}");
+                    st.failed = true;
+                    json!({ "type": "error", "message": "语音合成失败,请稍后重试" })
+                }
+                Err(e) => {
+                    tracing::warn!("合成线程失败: {e}");
+                    st.failed = true;
+                    json!({ "type": "error", "message": "语音合成失败,请稍后重试" })
+                }
+            };
+            let mut s = line.to_string();
+            s.push('\n');
+            Some((Ok(axum::body::Bytes::from(s)), st))
+        } else if !st.done_sent {
+            st.done_sent = true;
+            Some((Ok::<axum::body::Bytes, std::convert::Infallible>(
+                axum::body::Bytes::from_static(b"{\"type\":\"done\"}\n"),
+            ), st))
+        } else {
+            None
+        }
+    });
+    (
+        StatusCode::OK,
+        [
+            ("content-type", "application/x-ndjson; charset=utf-8"),
+            ("cache-control", "no-store"),
+            // 经 nginx 等反向代理时不缓冲,保证片段即产即达
+            ("x-accel-buffering", "no"),
+        ],
+        axum::body::Body::from_stream(stream),
+    )
+        .into_response()
+}
+
 /// 挂载 TTS 路由。
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -698,6 +999,7 @@ pub fn router() -> Router<AppState> {
         .route("/v1/speech/speed", post(set_speed))
         .route("/v1/speech/model", post(set_model))
         .route("/v1/speech/test", post(synthesize_test))
+        .route("/v1/speech/stream", post(synthesize_stream))
         .route("/v1/speech", post(synthesize))
 }
 
@@ -750,9 +1052,10 @@ mod tests {
     }
 
     #[test]
-    fn f32_to_wav_header_is_standard() {
+    fn pcm16_to_wav_header_is_standard() {
         let samples = vec![0.0f32, 0.5, -0.5, 1.0, -1.0];
-        let wav = f32_to_wav(&samples, 22050);
+        let pcm = f32_to_pcm16(&samples);
+        let wav = pcm16_to_wav(&pcm, 22050);
         // 44 字节头 + 5 采样 * 2 字节
         assert_eq!(wav.len(), 44 + 10);
         assert_eq!(&wav[0..4], b"RIFF");
@@ -772,6 +1075,65 @@ mod tests {
         assert_eq!(s1, 16384);
         let s2 = i16::from_le_bytes([wav[48], wav[49]]);
         assert_eq!(s2, -16384);
+    }
+
+    #[test]
+    fn trim_silence_trims_edges_only() {
+        let mut v = vec![0.0, 0.0001, 0.5, -0.4, 0.0, 0.0];
+        trim_silence(&mut v);
+        assert_eq!(v, vec![0.5, -0.4]);
+        let mut all = vec![0.0f32; 8];
+        trim_silence(&mut all);
+        assert!(all.is_empty());
+        // 首采样即非静音:不裁头
+        let mut head = vec![0.6, 0.0];
+        trim_silence(&mut head);
+        assert_eq!(head, vec![0.6]);
+    }
+
+    #[test]
+    fn split_tts_fragments_splits_hard_and_soft() {
+        let frags = split_tts_fragments("你好,世界。今天天气怎么样?好的", 100);
+        assert_eq!(frags[0], ("你好,".into(), false));
+        assert_eq!(frags[1], ("世界。".into(), true));
+        assert_eq!(frags[2], ("今天天气怎么样?".into(), true));
+        assert_eq!(frags[3], ("好的".into(), false));
+        // 全角变体(U+FF0C 逗号 / U+FF1F 问号)同样切分
+        let full = "你好\u{FF0C}世界\u{FF1F}好的";
+        let frags = split_tts_fragments(full, 100);
+        assert_eq!(frags[0], ("你好\u{FF0C}".into(), false));
+        assert_eq!(frags[1], ("世界\u{FF1F}".into(), true));
+        assert_eq!(frags[2], ("好的".into(), false));
+    }
+
+    #[test]
+    fn split_tts_fragments_keeps_thousands_separator() {
+        let frags = split_tts_fragments("价格是 1,000 元。", 100);
+        assert_eq!(frags.len(), 1);
+        assert!(frags[0].0.contains("1,000"));
+    }
+
+    #[test]
+    fn split_tts_fragments_enforces_max_chars() {
+        let text = "一".repeat(250);
+        let frags = split_tts_fragments(&text, 100);
+        assert!(frags.iter().all(|(s, _)| s.chars().count() <= 100));
+        assert_eq!(frags.len(), 3);
+    }
+
+    #[test]
+    fn split_tts_fragments_drops_symbol_only_and_empty() {
+        assert!(split_tts_fragments("...,,。", 100).is_empty());
+        assert!(split_tts_fragments("", 100).is_empty());
+    }
+
+    #[test]
+    fn normalize_tts_text_strips_markdown_and_spaces() {
+        // 中文单语模型:markdown 符号删除、ASCII 空格删除(空格 → 长停顿)
+        assert_eq!(normalize_tts_text("**重点** `code` # 标题", false), "重点code标题");
+        assert_eq!(normalize_tts_text("你好 世界", false), "你好世界");
+        // 双语模型:折叠连续空白为单空格(英文单词间隔必须保留)
+        assert_eq!(normalize_tts_text("hello   world\n\ntest", true), "hello world test");
     }
 
     #[test]
@@ -852,6 +1214,35 @@ mod tests {
         let body = status(State(state)).await;
         assert_eq!(body.0["speed"], serde_json::json!(1.5));
     }
+
+    #[tokio::test]
+    async fn speech_stream_endpoint_validation() {
+        let state = AppState::test_state(Arc::new(crate::meta::MetaStore::new()), None);
+        // 朗读关闭且非试听 → 400 tts_disabled
+        let resp = synthesize_stream(
+            State(state.clone()),
+            Json(StreamReq { text: "你好".into(), test: false }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        // 试听不要求开关:模型未就绪(下载中)→ 503 tts_not_ready
+        state.tts.set_phase(crate::asr::Phase::Downloading { progress: 0.5 });
+        let resp = synthesize_stream(
+            State(state.clone()),
+            Json(StreamReq { text: "你好".into(), test: true }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        // 文本超长 → 400(在就绪检查之前拦截)
+        state.tts.set_phase(crate::asr::Phase::NotReady);
+        let long = "字".repeat(MAX_STREAM_TEXT_CHARS + 1);
+        let resp = synthesize_stream(
+            State(state),
+            Json(StreamReq { text: long, test: true }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
 }
 
 #[cfg(test)]
@@ -888,5 +1279,54 @@ mod smoke {
             fast_seconds,
             seconds
         );
+    }
+
+    /// 手动冒烟(需真实模型在 /tmp/combo-tts-smoke):
+    /// `cargo test -p combo-cli --lib tts::smoke::tts_stream_smoke -- --ignored --nocapture`
+    ///
+    /// 验证流式端点:片段逐个下发(NDJSON 行),逗号/句号切开、首尾静音
+    /// 已裁剪的 PCM chunk,末行 done。
+    #[tokio::test]
+    #[ignore]
+    async fn tts_stream_smoke() {
+        let svc = Arc::new(TtsService::new(
+            std::path::PathBuf::from("/tmp/combo-tts-smoke"),
+            TtsModel::PiperZhXiaoya,
+        ));
+        svc.ensure_ready().await.expect("模型应就绪");
+        let mut state = AppState::test_state(Arc::new(crate::meta::MetaStore::new()), None);
+        state.tts = svc;
+        let resp = synthesize_stream(
+            State(state),
+            Json(StreamReq { text: "你好,这是流式语音测试。第二句来了。".into(), test: true }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let mut stream = resp.into_body().into_data_stream();
+        let mut raw = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            raw.extend_from_slice(&chunk.expect("流不应出错"));
+        }
+        let text = String::from_utf8(raw).expect("NDJSON 应为 UTF-8");
+        let mut chunks = 0usize;
+        let mut done = false;
+        for line in text.lines() {
+            if line.is_empty() {
+                continue;
+            }
+            let v: serde_json::Value = serde_json::from_str(line).expect("每行应为合法 JSON");
+            match v["type"].as_str() {
+                Some("chunk") => {
+                    chunks += 1;
+                    assert!(v["pcm"].as_str().is_some_and(|p| !p.is_empty()), "chunk 应携带 PCM");
+                    assert!(v["sample_rate"].as_i64().unwrap_or(0) > 0);
+                }
+                Some("done") => done = true,
+                other => panic!("意外的行类型: {other:?} — {line}"),
+            }
+        }
+        // 「你好,」/「这是流式语音测试。」/「第二句来了。」→ 3 个片段
+        assert_eq!(chunks, 3, "应切成 3 个片段: {text}");
+        assert!(done, "流应以 done 行结束");
     }
 }

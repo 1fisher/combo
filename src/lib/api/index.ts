@@ -1,5 +1,6 @@
 import type { Api } from './types';
-import { apiRequest, apiRequestRaw, apiRequestBinary, ApiError } from './client';
+import { apiRequest, apiRequestRaw, apiRequestBinary, apiRequestNdjson, ApiError } from './client';
+import { decodeBase64 } from '../pcm';
 import { getClientId } from '../clientId';
 
 export * from './client';
@@ -1068,5 +1069,59 @@ export function synthesizeSpeechTest(text: string, signal?: AbortSignal): Promis
     signal,
     timeoutMs: 30_000,
   });
+}
+
+/** 流式合成的一行(chunk 携带 base64 编码的 PCM16LE 单声道音频)。 */
+export interface SpeechStreamChunkLine {
+  type: 'chunk';
+  seq: number;
+  /** 是否句末边界(硬边界停顿略长于逗号等软边界,由调用方排期控制)。 */
+  hard: boolean;
+  sample_rate: number;
+  pcm: string;
+}
+export type SpeechStreamLine =
+  | SpeechStreamChunkLine
+  | { type: 'done' }
+  | { type: 'error'; message: string };
+
+/**
+ * 流式合成语音(POST /v1/speech/stream,NDJSON):服务端把文本切成片段
+ * (句末/逗号边界)逐个合成,每个片段合成完立即回调 onChunk(pcm 为
+ * PCM16LE 单声道字节,经 `pcm16ToAudioBuffer` 解码即可排期播放)——
+ * 后续片段在前一段播放期间继续合成,句间无「等合成」空档;片段首尾静音
+ * 已由服务端裁剪,停顿时长由调用方的短间隙控制。
+ *
+ * `test=true` 不要求朗读开关打开(设置区试听/通知语音播报使用)。
+ * 模型未就绪抛 code 为 `tts_not_ready` 的 ApiError(503),调用方等待就绪后
+ * 重试(见 `waitSpeechModelReady`);流中失败以 ApiError(500) 抛出。
+ * 返回收到的 chunk 数(0 表示文本无可读内容)。
+ */
+export async function streamSpeech(
+  text: string,
+  opts: {
+    test?: boolean;
+    signal?: AbortSignal;
+    onChunk: (pcm: ArrayBuffer, sampleRate: number, hard: boolean) => void;
+  }
+): Promise<number> {
+  let chunks = 0;
+  await apiRequestNdjson('/v1/speech/stream', {
+    body: { text, test: opts.test ?? false },
+    signal: opts.signal,
+    onLine: (line) => {
+      const l = line as SpeechStreamLine;
+      if (l?.type === 'chunk' && typeof l.pcm === 'string') {
+        const bytes = decodeBase64(l.pcm);
+        if (bytes.byteLength > 0) {
+          chunks += 1;
+          opts.onChunk(bytes.buffer as ArrayBuffer, l.sample_rate, Boolean(l.hard));
+        }
+      } else if (l?.type === 'error') {
+        throw new ApiError(500, l.message || '语音合成失败');
+      }
+    },
+  });
+  return chunks;
 }
 
