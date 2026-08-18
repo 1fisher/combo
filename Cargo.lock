@@ -1454,7 +1454,7 @@ dependencies = [
 
 [[package]]
 name = "combo"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "anyhow",
  "combo-cli",
@@ -1473,7 +1473,7 @@ dependencies = [
 
 [[package]]
 name = "combo-cli"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "anyhow",
  "async-trait",

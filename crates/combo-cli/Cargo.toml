@@ -1,6 +1,6 @@
 [package]
 name = "combo-cli"
-version = "0.2.12"
+version = "0.2.13"
 edition = "2021"
 license = "MIT"
 description = "combo 自有 agent CLI:基于 rig 的多 provider 智能体命令行工具"
