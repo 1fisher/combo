@@ -336,14 +336,21 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   `length_scale=1/speed`)、
   `POST /v1/speech/model`(切模型并持久化)、`POST /v1/speech`(单句文本 →
   `audio/wav`;关闭时 400 `tts_disabled`,未就绪 503 `tts_not_ready`,
-  超 500 字符 400 `tts_text_invalid`)。**模型下载进度前端展示**:
+  超 500 字符 400 `tts_text_invalid`)、`POST /v1/speech/test`(试听:
+  与正式合成共用 `synthesize_impl`,唯一区别是**不要求朗读开关打开**,
+  供设置区「试听」按钮预览音色)。**模型下载进度前端展示**:
   首次合成未就绪时后端后台触发下载并立即 503(不阻塞请求,避免下载期间
   挂起 30s 合成超时);前端 `useSpeechOutput` 捕获 `tts_not_ready` 后轮询
-  status(镜像 `useDictation::ensureModelReady`:not_ready/failed 触发
-  prepare,downloading 更新进度),把 `modelProgress`(0~1)返回
+  status(镜像 `useDictation::ensureModelReady`;共用
+  `src/lib/speech.ts::waitSpeechModelReady`:not_ready/failed 触发
+  prepare,downloading 更新进度,onProgress 回调进度),把 `modelProgress`(0~1)返回
   `AppShellInner` 在顶栏显示「朗读模型 NN%」,就绪后重试该句;设置
-  `TtsSection` 提供「立即下载」按钮 + 进度条(downloading/loading 阶段
-  `refetchInterval` 1s 轮询),失败显示错误文案。前端 `useSpeechOutput`
+  `TtsSection` 提供「立即下载」按钮 + 进度条(模型未就绪或缓存状态与所选
+  模型不一致时持续轮询,downloading/loading 1s、其余 1.5s,就绪即停;本地
+  无模型直接显示下载按钮,下载失败显示错误文案 + 「重新下载」按钮,切换
+  模型后 invalidate 状态查询刷新),模型下拉旁有「试听」按钮:未就绪先经
+  `waitSpeechModelReady` 触发下载并等就绪,再经 `synthesizeSpeechTest`
+  (`POST /v1/speech/test`)合成测试句播放,不受朗读开关影响。前端 `useSpeechOutput`
   (`src/hooks/useSpeechOutput.ts`,挂 `AppShellInner`)订阅 agentStore 当前
   会话 assistant **text part** 文本增量(只读本次 run 的增量:run 开始时把
   已有消息全部标记已消费,避免朗读历史),按句末标点/换行断句(代码块围栏

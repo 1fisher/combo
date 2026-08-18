@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { Check, CheckCircle2, ChevronDown, Loader2, Pencil, Plus, Trash2, Zap } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Switch } from '../ui/switch';
@@ -28,7 +28,8 @@ import { useUIPreferences } from '../../stores/uiPreferencesStore';
 import { formatTokenCount } from '../../lib/tokens';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { confirmDialog } from '../../lib/confirm';
-import { listDirGrants, revokeDirGrant, getTranscribeStatus, setTranscribeModel, getSpeechStatus, setSpeechEnabled, setSpeechModel, setSpeechSpeed, prepareSpeech } from '../../lib/api';
+import { listDirGrants, revokeDirGrant, getTranscribeStatus, setTranscribeModel, getSpeechStatus, setSpeechEnabled, setSpeechModel, setSpeechSpeed, prepareSpeech, synthesizeSpeechTest } from '../../lib/api';
+import { waitSpeechModelReady } from '../../lib/speech';
 import type { Api } from '../../lib/api/types';
 import { cn } from '../../lib/utils';
 
@@ -1130,22 +1131,28 @@ const TTS_MODELS = [
  */
 function TtsSection({ open }: { open: boolean }) {
   const qc = useQueryClient();
+  const [current, setCurrent] = useState<string>('piper-zh-xiaoya');
+  const [error, setError] = useState('');
+  /** 试听进行中(合成测试句 + 播放)。 */
+  const [testing, setTesting] = useState(false);
+  /** 朗读语速倍率(0.5~2.0);滑块拖动本地即时更新,松手提交。 */
+  const [speed, setSpeed] = useState(1);
   const { data: status } = useQuery({
     queryKey: ['tts-status'],
     queryFn: getSpeechStatus,
     enabled: open,
-    // 下载/加载进行中持续轮询,展示实时进度;就绪后停止
+    // 模型未就绪或缓存状态与所选模型不一致(刚切换/外部变更)时持续轮询,
+    // downloading/loading 用更短间隔展示实时进度;就绪即停止
     refetchInterval: open
       ? (q) => {
           const st = q.state.data as Api.SpeechStatus | undefined;
-          return st && (st.phase === 'downloading' || st.phase === 'loading') ? 1000 : false;
+          if (!st) return false;
+          const stale = st.model !== current;
+          if (!stale && st.ready) return false;
+          return st.phase === 'downloading' || st.phase === 'loading' ? 1000 : 1500;
         }
       : false,
   });
-  const [current, setCurrent] = useState<string>('piper-zh-xiaoya');
-  const [error, setError] = useState('');
-  /** 朗读语速倍率(0.5~2.0);滑块拖动本地即时更新,松手提交。 */
-  const [speed, setSpeed] = useState(1);
   const toggleEnabled = useMutation({
     mutationFn: (on: boolean) => setSpeechEnabled(on),
     onSuccess: () => {
@@ -1159,6 +1166,8 @@ function TtsSection({ open }: { open: boolean }) {
     mutationFn: (model: string) => setSpeechModel(model),
     onSuccess: (_d, model) => {
       setCurrent(model);
+      // 新模型可能尚未下载:刷新状态,让「立即下载」按钮与下载进度正确出现
+      void qc.invalidateQueries({ queryKey: ['tts-status'] });
       setError('');
     },
     onError: (e) => setError(e instanceof Error ? e.message : '切换失败'),
@@ -1169,6 +1178,36 @@ function TtsSection({ open }: { open: boolean }) {
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['tts-status'] }),
     onError: (e) => setError(e instanceof Error ? e.message : '下载触发失败'),
   });
+  /**
+   * 试听当前模型音色:未就绪先触发下载/加载并轮询就绪(进度由下方状态区展示),
+   * 就绪后经 POST /v1/speech/test 合成测试句并播放(该端点不要求朗读开关打开)。
+   */
+  const playTest = useCallback(async () => {
+    setTesting(true);
+    setError('');
+    try {
+      await waitSpeechModelReady();
+      void qc.invalidateQueries({ queryKey: ['tts-status'] });
+      const wav = await synthesizeSpeechTest(
+        '你好,我是 Combo 的语音助手,正在为你试听语音效果。'
+      );
+      const ctx = new AudioContext();
+      if (ctx.state === 'suspended') await ctx.resume().catch(() => {});
+      const buffer = await ctx.decodeAudioData(wav);
+      await new Promise<void>((resolve) => {
+        const src = ctx.createBufferSource();
+        src.buffer = buffer;
+        src.connect(ctx.destination);
+        src.onended = () => resolve();
+        src.start();
+      });
+      void ctx.close().catch(() => {});
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '试听失败');
+    } finally {
+      setTesting(false);
+    }
+  }, [qc]);
   /** 设置朗读语速倍率(POST /v1/speech/speed,写入 `[tts] speed`)。 */
   const setSpeedMut = useMutation({
     mutationFn: (v: number) => setSpeechSpeed(v),
@@ -1189,7 +1228,7 @@ function TtsSection({ open }: { open: boolean }) {
 
   const desc = TTS_MODELS.find((m) => m.id === current)?.desc;
   const selectCls =
-    'h-9 w-full rounded-lg border border-input-border bg-background px-2.5 text-[13px] text-foreground outline-none [color-scheme:dark] focus-visible:border-input-border-focused disabled:opacity-50';
+    'h-9 min-w-0 flex-1 rounded-lg border border-input-border bg-background px-2.5 text-[13px] text-foreground outline-none [color-scheme:dark] focus-visible:border-input-border-focused disabled:opacity-50';
 
   return (
     <div className="flex flex-col gap-2">
@@ -1207,19 +1246,31 @@ function TtsSection({ open }: { open: boolean }) {
           aria-label="语音朗读"
         />
       </div>
-      <select
-        value={current}
-        disabled={switchModel.isPending}
-        onChange={(e) => switchModel.mutate(e.target.value)}
-        className={selectCls}
-        aria-label="选择语音朗读模型"
-      >
-        {TTS_MODELS.map((m) => (
-          <option key={m.id} value={m.id}>
-            {m.label}
-          </option>
-        ))}
-      </select>
+      <div className="flex items-center gap-2">
+        <select
+          value={current}
+          disabled={switchModel.isPending}
+          onChange={(e) => switchModel.mutate(e.target.value)}
+          className={selectCls}
+          aria-label="选择语音朗读模型"
+        >
+          {TTS_MODELS.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label}
+            </option>
+          ))}
+        </select>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-9 shrink-0 px-3 text-[12px]"
+          onClick={() => void playTest()}
+          disabled={testing}
+          aria-label="试听模型音色"
+        >
+          {testing ? '试听中…' : '试听'}
+        </Button>
+      </div>
       {/* 朗读语速(0.5x~2.0x,滑块拖动实时预览,松手保存) */}
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center justify-between">
@@ -1247,9 +1298,10 @@ function TtsSection({ open }: { open: boolean }) {
         </div>
       </div>
       <div className="text-[12px] text-foreground-subtle">
-        {desc}。切换即时生效并跨重启保留;新模型首次使用时自动下载,也可点下方按钮提前下载。
+        {desc}。切换即时生效并跨重启保留;新模型首次使用时自动下载,也可点下方按钮提前下载,
+        下载完成后可点「试听」预览音色。
       </div>
-      {status && !status.ready && (
+      {status && (!status.ready || status.model !== current) && (
         <div className="flex items-center gap-2">
           {status.phase === 'downloading' && typeof status.progress === 'number' ? (
             <>
@@ -1264,9 +1316,20 @@ function TtsSection({ open }: { open: boolean }) {
               </span>
             </>
           ) : status.phase === 'failed' ? (
-            <span className="shrink-0 text-[11px] text-destructive">
-              模型下载失败:{status.error ?? '请重试'}
-            </span>
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="min-w-0 flex-1 truncate text-[11px] text-destructive">
+                模型下载失败:{status.error ?? '请重试'}
+              </span>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 shrink-0 text-[12px]"
+                onClick={() => prepare.mutate()}
+                disabled={prepare.isPending}
+              >
+                {prepare.isPending ? '准备中…' : '重新下载'}
+              </Button>
+            </div>
           ) : (
             <Button
               size="sm"

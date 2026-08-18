@@ -1031,3 +1031,16 @@ export function synthesizeSpeech(text: string, signal?: AbortSignal): Promise<Ar
   });
 }
 
+/**
+ * 试听模型音色:合成单句文本为 WAV(ArrayBuffer 响应),不要求朗读开关打开。
+ * 模型未就绪抛 code 为 `tts_not_ready` 的 ApiError(503)。
+ */
+export function synthesizeSpeechTest(text: string, signal?: AbortSignal): Promise<ArrayBuffer> {
+  return apiRequestBinary('/v1/speech/test', {
+    method: 'POST',
+    body: { text },
+    signal,
+    timeoutMs: 30_000,
+  });
+}
+

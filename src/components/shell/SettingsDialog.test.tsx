@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SettingsDialog } from './SettingsDialog';
@@ -377,5 +377,180 @@ describe('SettingsDialog', () => {
     expect(soundSwitch.disabled).toBe(false);
     expect(screen.queryByText(/免打扰模式开启期间不生效/)).toBeNull();
     useUIPreferences.setState({ dndEnabled: false });
+  });
+
+  // --- 语音朗读(TTS)设置区 ---
+  // 注意:与 useSpeechOutput.test.tsx 相同,实现必须走 vi.fn(impl) 构造器传入,
+  // 测试基建的 vi.restoreAllMocks() 不会清掉构造器传入的实现。
+
+  it('TTS 无本地模型时直接显示「立即下载」按钮,点击触发模型准备', async () => {
+    const speechFetch = vi.fn(async (url: string) => {
+      if (url.includes('/v1/speech/status')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              enabled: true,
+              ready: false,
+              phase: 'not_ready',
+              model: 'piper-zh-xiaoya',
+              speed: 1,
+            }),
+        };
+      }
+      if (url.includes('/v1/speech/prepare')) {
+        return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true }) };
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    vi.stubGlobal('fetch', speechFetch);
+    renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
+    const btn = (await screen.findByRole('button', { name: '立即下载' })) as HTMLButtonElement;
+    await userEvent.click(btn);
+    expect(speechFetch).toHaveBeenCalledWith(
+      expect.stringContaining('/v1/speech/prepare'),
+      expect.anything()
+    );
+    vi.unstubAllGlobals();
+  });
+
+  it('TTS 模型下载失败时显示错误与「重新下载」按钮,点击可重试', async () => {
+    const speechFetch = vi.fn(async (url: string) => {
+      if (url.includes('/v1/speech/status')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              enabled: true,
+              ready: false,
+              phase: 'failed',
+              error: '网络超时',
+              model: 'piper-zh-xiaoya',
+              speed: 1,
+            }),
+        };
+      }
+      if (url.includes('/v1/speech/prepare')) {
+        return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true }) };
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    vi.stubGlobal('fetch', speechFetch);
+    renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
+    expect(await screen.findByText(/模型下载失败:网络超时/)).toBeTruthy();
+    const btn = screen.getByRole('button', { name: '重新下载' }) as HTMLButtonElement;
+    await userEvent.click(btn);
+    expect(speechFetch).toHaveBeenCalledWith(
+      expect.stringContaining('/v1/speech/prepare'),
+      expect.anything()
+    );
+    vi.unstubAllGlobals();
+  });
+
+  it('TTS 模型就绪后点击「试听」经 /v1/speech/test 合成并播放', async () => {
+    const speechFetch = vi.fn(async (url: string) => {
+      if (url.includes('/v1/speech/status')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              enabled: true,
+              ready: true,
+              phase: 'ready',
+              model: 'piper-zh-xiaoya',
+              speed: 1,
+            }),
+        };
+      }
+      if (url.includes('/v1/speech/test')) {
+        return { ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(44 + 8) };
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    // jsdom 无 AudioContext:桩实现,start() 后异步触发 onended 完成播放
+    class FakeAudioContext {
+      state = 'running';
+      destination = {};
+      async decodeAudioData(): Promise<AudioBuffer> {
+        return { duration: 0, length: 0, numberOfChannels: 1, sampleRate: 22050 } as AudioBuffer;
+      }
+      createBufferSource() {
+        const src: {
+          buffer: AudioBuffer | null;
+          connect: ReturnType<typeof vi.fn>;
+          start: ReturnType<typeof vi.fn>;
+          onended: (() => void) | null;
+        } = {
+          buffer: null,
+          connect: vi.fn(),
+          start: vi.fn(() => {
+            setTimeout(() => src.onended?.(), 0);
+          }),
+          onended: null,
+        };
+        return src;
+      }
+      resume() {
+        return Promise.resolve();
+      }
+      close() {
+        return Promise.resolve();
+      }
+    }
+    vi.stubGlobal('fetch', speechFetch);
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+    renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
+    await userEvent.click(await screen.findByRole('button', { name: '试听模型音色' }));
+    await waitFor(() =>
+      expect(speechFetch).toHaveBeenCalledWith(
+        expect.stringContaining('/v1/speech/test'),
+        expect.anything()
+      )
+    );
+    vi.unstubAllGlobals();
+  });
+
+  it('TTS 切换到未下载模型时刷新状态,「立即下载」按钮出现', async () => {
+    let statusCalls = 0;
+    const speechFetch = vi.fn(async (url: string) => {
+      if (url.includes('/v1/speech/status')) {
+        statusCalls += 1;
+        // 首次查询为旧模型就绪;切换模型后返回新模型未就绪
+        const ready = statusCalls <= 1;
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              enabled: true,
+              ready,
+              phase: ready ? 'ready' : 'not_ready',
+              model: ready ? 'piper-zh-xiaoya' : 'piper-zh-chaowen',
+              speed: 1,
+            }),
+        };
+      }
+      if (url.includes('/v1/speech/model')) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () =>
+            JSON.stringify({ ok: true, model: 'piper-zh-chaowen', phase: 'not_ready' }),
+        };
+      }
+      throw new Error(`unexpected url ${url}`);
+    });
+    vi.stubGlobal('fetch', speechFetch);
+    renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
+    await screen.findByLabelText('选择语音朗读模型');
+    // 旧模型已就绪 → 不显示下载按钮
+    expect(screen.queryByRole('button', { name: '立即下载' })).toBeNull();
+    // 切换到未下载的新模型 → 状态刷新后出现下载按钮
+    await userEvent.selectOptions(screen.getByLabelText('选择语音朗读模型'), 'piper-zh-chaowen');
+    expect(await screen.findByRole('button', { name: '立即下载' })).toBeTruthy();
+    vi.unstubAllGlobals();
   });
 });

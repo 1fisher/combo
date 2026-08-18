@@ -97,17 +97,11 @@ impl TtsModel {
     }
 
     /// 在模型根目录下查找该模型的文件;未下载返回 None。
-    /// 优先模型专属子目录(新布局);找不到再全目录搜索(兼容散落布局)。
+    /// 优先模型专属子目录(递归,压缩包解压后可能多一层目录);找不到再在根目录
+    /// 直属层搜索(兼容旧版散落布局)——不递归,避免误匹配其他模型(如 ASR 模型)
+    /// 子目录里的 onnx/tokens,造成「张冠李戴」的加载失败。
     fn find_files(&self, root: &Path) -> Option<TtsFiles> {
-        let files = self.find_in(&self.subdir(root));
-        if files.is_some() {
-            return files;
-        }
-        self.find_in(root)
-    }
-
-    fn find_in(&self, root: &Path) -> Option<TtsFiles> {
-        find_tts_files(root)
+        find_tts_files(&self.subdir(root), true).or_else(|| find_tts_files(root, false))
     }
 }
 
@@ -123,16 +117,19 @@ pub struct TtsFiles {
 
 /// 查找 TTS 模型文件:任意 `*.onnx`(排除 `.onnx.json` 旁车文件)+ `tokens.txt` +
 /// `lexicon.txt`(可选);模型根目录存在 `phone.fst` 时拼接 rule_fsts。
-fn find_tts_files(root: &Path) -> Option<TtsFiles> {
+/// `recursive=true` 递归搜索(模型专属子目录);`false` 只扫直属层(根目录兜底,
+/// 防止跨目录误匹配其他模型的文件)。
+fn find_tts_files(root: &Path, recursive: bool) -> Option<TtsFiles> {
     let mut model: Option<std::path::PathBuf> = None;
     let mut tokens: Option<std::path::PathBuf> = None;
     let mut lexicon: Option<std::path::PathBuf> = None;
     let mut has_fst = false;
-    for entry in walkdir::WalkDir::new(root)
-        .follow_links(false)
-        .into_iter()
-        .flatten()
-    {
+    let walker = if recursive {
+        walkdir::WalkDir::new(root).follow_links(false)
+    } else {
+        walkdir::WalkDir::new(root).follow_links(false).max_depth(1)
+    };
+    for entry in walker.into_iter().flatten() {
         if !entry.metadata().map(|m| m.is_file()).unwrap_or(false) {
             continue;
         }
@@ -320,9 +317,22 @@ impl TtsService {
         }
         self.set_phase(crate::asr::Phase::Loading);
         let this = self.clone();
-        let synth = tokio::task::spawn_blocking(move || this.load_synthesizer())
-            .await
-            .map_err(|e| anyhow::anyhow!("加载线程失败: {e}"))??;
+        let synth = match tokio::task::spawn_blocking(move || this.load_synthesizer()).await {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
+                // 加载失败不能停在 Loading(前端会一直显示「模型加载中」),
+                // 置为 Failed 让 status 端点带出错误、前端展示「重新下载」按钮
+                self.set_phase(crate::asr::Phase::Failed(format!(
+                    "初始化 {} 合成器失败: {e}",
+                    model.label()
+                )));
+                return Err(anyhow::anyhow!("初始化 {} 合成器失败: {e}", model.label()));
+            }
+            Err(e) => {
+                self.set_phase(crate::asr::Phase::Failed("加载线程失败".into()));
+                return Err(anyhow::anyhow!("加载线程失败: {e}"));
+            }
+        };
         *self.synth.lock().unwrap() = Some(Arc::new(synth));
         self.set_phase(crate::asr::Phase::Ready);
         Ok(())
@@ -532,14 +542,27 @@ async fn synthesize(
     State(state): State<AppState>,
     Json(body): Json<SynthesizeReq>,
 ) -> Response {
-    if !state.tts.enabled() {
+    synthesize_impl(state, body.text, true).await
+}
+
+/// POST /v1/speech/test — 试听模型音色:合成单句文本为 WAV。
+/// 与正式合成唯一区别:不要求朗读开关打开(试听只验证音色,不触发朗读)。
+async fn synthesize_test(
+    State(state): State<AppState>,
+    Json(body): Json<SynthesizeReq>,
+) -> Response {
+    synthesize_impl(state, body.text, false).await
+}
+
+async fn synthesize_impl(state: AppState, raw_text: String, require_enabled: bool) -> Response {
+    if require_enabled && !state.tts.enabled() {
         return err_response(
             StatusCode::BAD_REQUEST,
             "语音朗读未开启,请先在设置中打开",
             Some("tts_disabled"),
         );
     }
-    let text = body.text.trim().to_string();
+    let text = raw_text.trim().to_string();
     if text.is_empty() || text.chars().count() > MAX_TEXT_CHARS {
         return err_response(
             StatusCode::BAD_REQUEST,
@@ -604,6 +627,7 @@ pub fn router() -> Router<AppState> {
         .route("/v1/speech/config", post(set_enabled))
         .route("/v1/speech/speed", post(set_speed))
         .route("/v1/speech/model", post(set_model))
+        .route("/v1/speech/test", post(synthesize_test))
         .route("/v1/speech", post(synthesize))
 }
 
@@ -676,12 +700,46 @@ mod tests {
         assert!(TtsModel::PiperZhXiaoya.find_files(&root).is_none());
     }
 
+    #[test]
+    fn find_files_does_not_leak_into_other_model_subdirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // 无关模型子目录(如 ASR sense-voice,内含 onnx + tokens + fst)
+        let other = root.join("sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("model.int8.onnx"), "onnx").unwrap();
+        std::fs::write(other.join("tokens.txt"), "t").unwrap();
+        std::fs::write(other.join("phone.fst"), "p").unwrap();
+        // 目标模型未下载(无专属子目录)→ 不得从其他模型目录误匹配
+        assert!(TtsModel::PiperZhChaowen.find_files(root).is_none());
+        assert!(TtsModel::PiperZhXiaoya.find_files(root).is_none());
+        assert!(TtsModel::VitsZhFanchenC.find_files(root).is_none());
+        // 专属子目录内套一层(压缩包解压出的目录):递归仍能找到
+        let sub = root.join("piper-zh-chaowen/chaowen-medium-int8");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("zh_CN-chaowen-medium.onnx"), "onnx").unwrap();
+        std::fs::write(sub.join("tokens.txt"), "t").unwrap();
+        std::fs::write(sub.join("lexicon.txt"), "l").unwrap();
+        std::fs::write(sub.join("phone.fst"), "p").unwrap();
+        std::fs::write(sub.join("date.fst"), "d").unwrap();
+        std::fs::write(sub.join("number.fst"), "n").unwrap();
+        let files = TtsModel::PiperZhChaowen.find_files(root).expect("专属子目录应能找到模型");
+        assert!(files.model.display().to_string().contains("piper-zh-chaowen"));
+        assert!(files.rule_fsts.unwrap().contains("chaowen-medium-int8"));
+    }
+
     #[tokio::test]
     async fn speech_endpoint_validation() {
         let state = AppState::test_state(Arc::new(crate::meta::MetaStore::new()), None);
         // 默认配置朗读关闭 → synthesize 返回 400 tts_disabled
         let resp = synthesize(State(state.clone()), Json(SynthesizeReq { text: "你好".into() })).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        // 试听端点不要求朗读开关打开:关闭时仍走模型流程
+        // (模拟下载中 → 503 tts_not_ready,而非 400 tts_disabled)
+        state.tts.set_phase(crate::asr::Phase::Downloading { progress: 0.5 });
+        let resp = synthesize_test(State(state.clone()), Json(SynthesizeReq { text: "你好".into() })).await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+        state.tts.set_phase(crate::asr::Phase::NotReady);
         // status 端点返回 enabled=false 与默认模型、默认语速
         let body = status(State(state.clone())).await;
         assert_eq!(body.0["enabled"], serde_json::Value::Bool(false));
