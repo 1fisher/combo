@@ -40,7 +40,7 @@ interface SettingsDialogProps {
  * 设置对话框:
  * 1. 模型 Provider 配置 — 为各 provider 填入 API Key 并拉取可用模型。
  * 2. 特效与音效 — Liquid 流体特效 / Combo 连击气泡音。
- * 3. Git 提交署名 — 提交时自动追加 Generated with Combo(服务端全局配置)。
+ * 3. Git 提交署名 — 所有 git 提交自动追加 Generated with Combo(服务端全局 hook,命令行/其他工具同样生效)。
  * 4. 系统通知 — 免打扰 / 任务结束 / 需要交互时发送系统通知(可选同时播放提示音)。
  * 5. 目录访问授权 — 管理已记住的敏感目录授权(允许一次后不再询问)。
  * 6. 外部访问域名 — 域名部署时填写公开访问地址。
@@ -161,7 +161,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
             <div className="flex flex-col gap-0.5">
               <label className="text-[13px] font-medium text-foreground">Git 提交署名</label>
               <span className="text-[12px] text-foreground-subtle">
-                在 git 视图提交时自动于信息末尾追加 Generated with Combo 署名
+                git 提交自动追加 Generated with Combo 署名,覆盖命令行与其他工具
               </span>
             </div>
             <Switch

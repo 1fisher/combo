@@ -17,6 +17,119 @@ use crate::serve::AppState;
 /// 提交时自动追加的署名。
 pub const COMMIT_ATTRIBUTION: &str = "Generated with Combo";
 
+/// 全局 commit-msg hook 脚本:combo 开启「git 提交署名」时安装到
+/// `core.hooksPath` 指向的目录,让 bash / IDE / 其他工具的一切提交
+/// 都自动追加署名(已含署名时跳过)。关闭开关后 hook 被移除。
+const ATTRIBUTION_HOOK_SCRIPT: &str = r#"#!/bin/sh
+# 由 combo 生成:git 提交自动追加 "Generated with Combo" 署名。
+# 在 combo 设置中关闭「git 提交署名」后,本 hook 会被移除。
+MSG_FILE="$1"
+[ -f "$MSG_FILE" ] || exit 0
+if grep -q 'Generated with Combo' "$MSG_FILE"; then
+  exit 0
+fi
+if [ "$(tail -c 1 "$MSG_FILE" | wc -l)" -eq 0 ]; then
+  printf '\n' >> "$MSG_FILE"
+fi
+printf '\nGenerated with Combo\n' >> "$MSG_FILE"
+exit 0
+"#;
+
+/// 全局 hook 安装目录(数据目录下,`COMBO_DATA_DIR` 可覆盖)。
+fn attribution_hook_dir() -> std::path::PathBuf {
+    crate::paths::default_data_dir().join("git-hooks")
+}
+
+/// 记录「接管 core.hooksPath 之前的值」的文件,关闭开关时据此恢复。
+const PREV_HOOKS_PATH_FILE: &str = ".combo-prev-hooks-path";
+
+/// 执行 `git config --global`;`git_cfg` 非空时用 `GIT_CONFIG_GLOBAL`
+/// 指向该文件(测试隔离用,生产传 None 走真实全局配置)。
+fn git_config_global(args: &[&str], git_cfg: Option<&FsPath>) -> Result<String, String> {
+    let mut cmd = Command::new("git");
+    cmd.args(["config", "--global"]).args(args);
+    if let Some(cfg) = git_cfg {
+        cmd.env("GIT_CONFIG_GLOBAL", cfg);
+    }
+    let output = cmd
+        .output()
+        .map_err(|e| format!("无法执行 git config: {e}"))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr = stderr.trim();
+        Err(if stderr.is_empty() {
+            format!("git config 失败 (exit {:?})", output.status.code())
+        } else {
+            stderr.to_string()
+        })
+    }
+}
+
+fn set_hooks_path(hooks_dir: &FsPath, git_cfg: Option<&FsPath>) -> Result<(), String> {
+    let dir = hooks_dir.to_string_lossy();
+    git_config_global(&["core.hooksPath", &dir], git_cfg).map(|_| ())
+}
+
+fn unset_hooks_path(git_cfg: Option<&FsPath>) -> Result<(), String> {
+    // 未设置过时 unset 返回非零,忽略即可。
+    git_config_global(&["--unset", "core.hooksPath"], git_cfg).map(|_| ())
+}
+
+/// 按「git 提交署名」开关同步全局 commit-msg hook:
+/// 开启时安装 hook 并把 `core.hooksPath` 指向 combo 管理的目录(接管前
+/// 有旧值则记录,关闭时恢复);关闭时移除 hook、还原/卸载 hooksPath。
+pub fn sync_attribution_hook(enabled: bool) -> Result<(), String> {
+    let hooks_dir = attribution_hook_dir();
+    sync_attribution_hook_to(&hooks_dir, enabled, None)
+}
+
+/// `sync_attribution_hook` 的实现;`git_cfg` 仅测试注入,生产为 None。
+fn sync_attribution_hook_to(
+    hooks_dir: &FsPath,
+    enabled: bool,
+    git_cfg: Option<&FsPath>,
+) -> Result<(), String> {
+    let hook_file = hooks_dir.join("commit-msg");
+    let prev_file = hooks_dir.join(PREV_HOOKS_PATH_FILE);
+    if enabled {
+        std::fs::create_dir_all(hooks_dir)
+            .map_err(|e| format!("创建 git hooks 目录失败: {e}"))?;
+        // 记录接管前的 hooksPath;未设置或已是本目录时不记录。
+        match git_config_global(&["core.hooksPath"], git_cfg) {
+            Ok(prev) if !prev.is_empty() && FsPath::new(&prev) != hooks_dir => {
+                std::fs::write(&prev_file, &prev)
+                    .map_err(|e| format!("记录原 hooksPath 失败: {e}"))?;
+            }
+            _ => {
+                let _ = std::fs::remove_file(&prev_file);
+            }
+        }
+        std::fs::write(&hook_file, ATTRIBUTION_HOOK_SCRIPT)
+            .map_err(|e| format!("写入 commit-msg hook 失败: {e}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&hook_file, std::fs::Permissions::from_mode(0o755))
+                .map_err(|e| format!("设置 hook 可执行权限失败: {e}"))?;
+        }
+        set_hooks_path(hooks_dir, git_cfg)?;
+    } else {
+        // 还原接管前的 hooksPath(有记录则恢复,否则卸载),再删除 hook。
+        let restore = std::fs::read_to_string(&prev_file).ok().map(|s| s.trim().to_string());
+        match restore {
+            Some(prev) if !prev.is_empty() => {
+                set_hooks_path(FsPath::new(&prev), git_cfg)?;
+            }
+            _ => unset_hooks_path(git_cfg)?,
+        }
+        let _ = std::fs::remove_file(&prev_file);
+        let _ = std::fs::remove_file(&hook_file);
+    }
+    Ok(())
+}
+
 #[derive(Deserialize)]
 pub struct PathQuery {
     pub path: Option<String>,
@@ -534,7 +647,13 @@ pub async fn attribution_set(
 ) -> Response {
     match crate::config::set_commit_attribution(&crate::config::default_config_path(), body.enabled)
     {
-        Ok(()) => ok_json(json!({ "enabled": body.enabled })),
+        Ok(()) => {
+            // 同步全局 commit-msg hook:开启时 bash/其他工具提交也自动署名。
+            if let Err(e) = sync_attribution_hook(body.enabled) {
+                tracing::warn!("同步 git 提交署名 hook 失败: {e}");
+            }
+            ok_json(json!({ "enabled": body.enabled }))
+        }
         Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, &format!("保存署名开关失败: {e}")),
     }
 }
@@ -1239,5 +1358,117 @@ mod tests {
             Some(v) => std::env::set_var("COMBO_CONFIG_DIR", v),
             None => std::env::remove_var("COMBO_CONFIG_DIR"),
         }
+    }
+
+    /// 开启署名时安装全局 commit-msg hook 并接管 core.hooksPath,
+    /// 关闭时移除 hook、卸载 hooksPath(用 GIT_CONFIG_GLOBAL 隔离,不动真实全局配置)。
+    #[test]
+    fn global_hook_install_and_remove() {
+        let _env = crate::paths::ENV_LOCK.lock().unwrap();
+        let base = tempfile::tempdir().unwrap();
+        let hooks_dir = base.path().join("git-hooks");
+        let cfg_file = base.path().join("gitconfig");
+
+        sync_attribution_hook_to(&hooks_dir, true, Some(&cfg_file)).unwrap();
+        let hook_file = hooks_dir.join("commit-msg");
+        assert!(hook_file.is_file(), "hook 文件未创建");
+        let script = std::fs::read_to_string(&hook_file).unwrap();
+        assert!(script.contains(COMMIT_ATTRIBUTION), "hook 脚本缺少署名文本");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&hook_file).unwrap().permissions().mode();
+            assert_ne!(mode & 0o111, 0, "hook 缺少可执行权限");
+        }
+        let cur = git_config_global(&["core.hooksPath"], Some(&cfg_file)).unwrap();
+        assert_eq!(FsPath::new(&cur), hooks_dir, "core.hooksPath 未指向 hook 目录");
+
+        // 关闭:hook 移除、配置卸载
+        sync_attribution_hook_to(&hooks_dir, false, Some(&cfg_file)).unwrap();
+        assert!(!hook_file.exists(), "关闭后 hook 未移除");
+        assert!(
+            git_config_global(&["core.hooksPath"], Some(&cfg_file)).is_err(),
+            "关闭后 hooksPath 未卸载"
+        );
+    }
+
+    /// 接管前已存在自定义 core.hooksPath 时,关闭后恢复原值。
+    #[test]
+    fn global_hook_restores_previous_path() {
+        let _env = crate::paths::ENV_LOCK.lock().unwrap();
+        let base = tempfile::tempdir().unwrap();
+        let hooks_dir = base.path().join("git-hooks");
+        let cfg_file = base.path().join("gitconfig");
+        let prev = "/custom/hooks";
+        set_hooks_path(FsPath::new(prev), Some(&cfg_file)).unwrap();
+
+        sync_attribution_hook_to(&hooks_dir, true, Some(&cfg_file)).unwrap();
+        let cur = git_config_global(&["core.hooksPath"], Some(&cfg_file)).unwrap();
+        assert_eq!(FsPath::new(&cur), hooks_dir);
+
+        sync_attribution_hook_to(&hooks_dir, false, Some(&cfg_file)).unwrap();
+        let cur = git_config_global(&["core.hooksPath"], Some(&cfg_file)).unwrap();
+        assert_eq!(cur, prev, "关闭后未恢复原 hooksPath");
+    }
+
+    /// 端到端:普通 `git commit`(不经 combo 接口)也会被 hook 追加署名,已含署名不重复。
+    #[test]
+    fn global_hook_appends_attribution_on_plain_commit() {
+        let _env = crate::paths::ENV_LOCK.lock().unwrap();
+        let base = tempfile::tempdir().unwrap();
+        let hooks_dir = base.path().join("git-hooks");
+        let cfg_file = base.path().join("gitconfig");
+        let repo = base.path().join("repo");
+
+        sync_attribution_hook_to(&hooks_dir, true, Some(&cfg_file)).unwrap();
+        // 仓库级身份 + 全局配置(GIT_CONFIG_GLOBAL 指向隔离文件)
+        std::fs::create_dir_all(&repo).unwrap();
+        git_output(&repo, ["init", "-q"]).unwrap();
+        git_output(&repo, ["config", "user.email", "test@combo.local"]).unwrap();
+        git_output(&repo, ["config", "user.name", "combo-test"]).unwrap();
+        std::fs::write(repo.join("a.txt"), "v1\n").unwrap();
+        git_output(&repo, ["add", "."]).unwrap();
+
+        let output = Command::new("git")
+            .current_dir(&repo)
+            .env("GIT_CONFIG_GLOBAL", &cfg_file)
+            .args(["commit", "-m", "纯命令行提交"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "commit 失败: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let body = git_output(&repo, ["log", "-1", "--pretty=%B"]).unwrap();
+        assert!(body.contains("纯命令行提交"));
+        assert!(body.contains(COMMIT_ATTRIBUTION), "命令行提交缺少署名: {body}");
+
+        // 已含署名时不重复追加
+        std::fs::write(repo.join("a.txt"), "v2\n").unwrap();
+        git_output(&repo, ["add", "."]).unwrap();
+        let output = Command::new("git")
+            .current_dir(&repo)
+            .env("GIT_CONFIG_GLOBAL", &cfg_file)
+            .args(["commit", "-m", format!("再次提交\n\n{COMMIT_ATTRIBUTION}").as_str()])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let body = git_output(&repo, ["log", "-1", "--pretty=%B"]).unwrap();
+        assert_eq!(body.matches(COMMIT_ATTRIBUTION).count(), 1, "署名重复: {body}");
+
+        // 关闭开关后命令行提交不再署名
+        sync_attribution_hook_to(&hooks_dir, false, Some(&cfg_file)).unwrap();
+        std::fs::write(repo.join("a.txt"), "v3\n").unwrap();
+        git_output(&repo, ["add", "."]).unwrap();
+        let output = Command::new("git")
+            .current_dir(&repo)
+            .env("GIT_CONFIG_GLOBAL", &cfg_file)
+            .args(["commit", "-m", "关闭后提交"])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let body = git_output(&repo, ["log", "-1", "--pretty=%B"]).unwrap();
+        assert!(!body.contains(COMMIT_ATTRIBUTION), "关闭后仍署名: {body}");
     }
 }

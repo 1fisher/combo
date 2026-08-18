@@ -705,6 +705,13 @@ pub async fn serve_listener(
 ) -> Result<()> {
     // 启动自动化调度器(定时任务后台扫描;服务退出时随进程结束)。
     state.automations.start(state.clone());
+    // 同步 git 提交署名 hook(全局 core.hooksPath):开关开启时所有 git
+    // 提交(含命令行/其他工具)自动追加 "Generated with Combo",关闭时移除。
+    if let Err(e) = crate::git::sync_attribution_hook(crate::config::commit_attribution_enabled(
+        &crate::config::default_config_path(),
+    )) {
+        tracing::warn!("同步 git 提交署名 hook 失败: {e}");
+    }
     // 记录监听/静态资源状态,供 /v1/lan-info 判断局域网直连可用性。
     let bind_ip = listener.local_addr().map(|a| a.ip()).unwrap_or(std::net::IpAddr::from([127, 0, 0, 1]));
     state.bind_lan = bind_ip.is_unspecified() || !bind_ip.is_loopback();
