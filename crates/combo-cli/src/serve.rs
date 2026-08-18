@@ -15,6 +15,7 @@
 
 use crate::agent::{self, AskConfig, RunEvent, RunUsage};
 use crate::asr;
+use crate::tts;
 use crate::auth;
 use crate::automation::{self, AutomationScheduler};
 use crate::compact;
@@ -84,6 +85,8 @@ pub struct AppState {
     pub automations: Arc<AutomationScheduler>,
     /// 本地语音识别(Moonshine base 英文 int8,输入框语音输入)。
     pub asr: Arc<asr::AsrService>,
+    /// 本地语音合成(piper 中文 / HF 高质量,朗读 agent 回复)。
+    pub tts: Arc<tts::TtsService>,
 }
 
 impl AppState {
@@ -113,6 +116,13 @@ impl AppState {
                 AppConfig::load_or_create(&crate::config::default_config_path())
                     .map(|c| c.asr.resolve_model())
                     .unwrap_or(asr::AsrModel::SenseVoice),
+            )),
+            // TTS 模型取自配置 [tts] model(未设置/非法回落 piper-zh-xiaoya)
+            tts: Arc::new(tts::TtsService::new(
+                crate::paths::default_data_dir().join("models"),
+                AppConfig::load_or_create(&crate::config::default_config_path())
+                    .map(|c| c.tts.resolve_model())
+                    .unwrap_or(tts::TtsModel::PiperZhXiaoya),
             )),
         })
     }
@@ -164,6 +174,11 @@ impl AppState {
             asr: Arc::new(asr::AsrService::new(
                 std::env::temp_dir().join("combo-asr-test-models"),
                 asr::AsrModel::SenseVoice,
+            )),
+            // 指向临时目录下的空路径:测试中模型永远未就绪(speech 返回 503)
+            tts: Arc::new(tts::TtsService::new(
+                std::env::temp_dir().join("combo-tts-test-models"),
+                tts::TtsModel::PiperZhXiaoya,
             )),
         }
     }
@@ -846,6 +861,8 @@ fn build_router(
         .route("/v1/skills", get(skills_api::list))
         // ---- 本地语音识别(ASR) ----
         .merge(asr::router())
+        // ---- 本地语音合成(TTS) ----
+        .merge(tts::router())
         .route("/v1/mcp", get(list_mcp).post(upsert_mcp))
         .route("/v1/mcp/remove", post(remove_mcp))
         .route("/v1/mcp/test", post(test_mcp))

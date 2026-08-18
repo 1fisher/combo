@@ -14,6 +14,16 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex as AsyncMutex;
 use futures::StreamExt;
 use sherpa_onnx::{GenerationConfig, OfflineTts, OfflineTtsConfig, OfflineTtsVitsModelConfig};
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use serde::Deserialize;
+use serde_json::json;
+
+use crate::asr::err_response;
+use crate::serve::AppState;
 
 /// 可选的 TTS 模型。新增模型时同步更新:parse/下载地址/文件查找/加载。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -361,6 +371,153 @@ impl TtsService {
     }
 }
 
+/// 单句合成文本上限(字符):句子级朗读,超长拒绝。
+const MAX_TEXT_CHARS: usize = 500;
+
+/// GET /v1/speech/status — TTS 状态(开关 + 模型 + 下载/加载进度)。
+async fn status(State(state): State<AppState>) -> Json<serde_json::Value> {
+    let tts = state.tts.clone();
+    let enabled = crate::config::AppConfig::load_or_create(&crate::config::default_config_path())
+        .map(|c| c.tts.resolve_enabled())
+        .unwrap_or(false);
+    let phase = tts.phase_snapshot();
+    let (progress, error) = match &phase {
+        crate::asr::Phase::Downloading { progress } => (Some(*progress), None),
+        crate::asr::Phase::Failed(e) => (None, Some(e.clone())),
+        _ => (None, None),
+    };
+    Json(json!({
+        "enabled": enabled,
+        "ready": matches!(phase, crate::asr::Phase::Ready),
+        "phase": phase.name(),
+        "progress": progress,
+        "error": error,
+        "model": tts.current_model().id(),
+        "model_dir": tts.model_dir().display().to_string(),
+    }))
+}
+
+/// POST /v1/speech/config — 打开/关闭朗读,写入配置 `[tts] enabled`。
+#[derive(Deserialize)]
+struct SetEnabledReq {
+    enabled: bool,
+}
+
+async fn set_enabled(
+    State(_state): State<AppState>,
+    Json(body): Json<SetEnabledReq>,
+) -> Response {
+    if let Err(e) = crate::config::set_tts_enabled(&crate::config::default_config_path(), body.enabled) {
+        return err_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("保存配置失败: {e}"),
+            None,
+        );
+    }
+    tracing::info!("语音朗读已{}", if body.enabled { "开启" } else { "关闭" });
+    Json(json!({ "ok": true, "enabled": body.enabled })).into_response()
+}
+
+/// POST /v1/speech/model — 切换 TTS 模型并持久化到配置 `[tts] model`。
+#[derive(Deserialize)]
+struct SetModelReq {
+    model: String,
+}
+
+async fn set_model(
+    State(state): State<AppState>,
+    Json(body): Json<SetModelReq>,
+) -> Response {
+    let Some(model) = TtsModel::parse(&body.model) else {
+        return err_response(
+            StatusCode::BAD_REQUEST,
+            "未知语音朗读模型,可选:piper-zh-xiaoya(中文女声)/ piper-zh-chaowen(中文男声)/ vits-zh-fanchen-c(高质量女声)",
+            None,
+        );
+    };
+    // 先持久化配置,再切换运行时(失败早退,不留半切换状态)
+    if let Err(e) = crate::config::set_tts_model(&crate::config::default_config_path(), model.id()) {
+        return err_response(StatusCode::INTERNAL_SERVER_ERROR, &format!("保存配置失败: {e}"), None);
+    }
+    state.tts.set_model(model).await;
+    tracing::info!("语音朗读模型已切换为 {}({})", model.label(), model.id());
+    let phase = state.tts.phase_snapshot();
+    Json(json!({
+        "ok": true,
+        "model": model.id(),
+        "phase": phase.name(),
+    }))
+    .into_response()
+}
+
+/// POST /v1/speech — 合成单句文本为 WAV(响应体为 audio/wav 字节)。
+#[derive(Deserialize)]
+struct SynthesizeReq {
+    text: String,
+}
+
+async fn synthesize(
+    State(state): State<AppState>,
+    Json(body): Json<SynthesizeReq>,
+) -> Response {
+    let enabled = crate::config::AppConfig::load_or_create(&crate::config::default_config_path())
+        .map(|c| c.tts.resolve_enabled())
+        .unwrap_or(false);
+    if !enabled {
+        return err_response(
+            StatusCode::BAD_REQUEST,
+            "语音朗读未开启,请先在设置中打开",
+            Some("tts_disabled"),
+        );
+    }
+    let text = body.text.trim().to_string();
+    if text.is_empty() || text.chars().count() > MAX_TEXT_CHARS {
+        return err_response(
+            StatusCode::BAD_REQUEST,
+            "文本为空或超过 500 字符上限",
+            Some("tts_text_invalid"),
+        );
+    }
+    let Some(synth) = state.tts.synthesizer() else {
+        return err_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "语音合成模型尚未就绪,请稍后重试",
+            Some("tts_not_ready"),
+        );
+    };
+    let wav = match tokio::task::spawn_blocking(move || TtsService::synthesize_blocking(&synth, text))
+        .await
+    {
+        Ok(Ok(wav)) => wav,
+        Ok(Err(e)) => {
+            tracing::warn!("语音合成失败: {e:#}");
+            return err_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "语音合成失败,请稍后重试",
+                None,
+            );
+        }
+        Err(e) => {
+            tracing::warn!("合成线程失败: {e}");
+            return err_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "语音合成失败,请稍后重试",
+                None,
+            );
+        }
+    };
+    (StatusCode::OK, [("Content-Type", "audio/wav")], axum::body::Body::from(wav)).into_response()
+}
+
+/// 挂载 TTS 路由。
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/v1/speech/status", get(status))
+        .route("/v1/speech/config", post(set_enabled))
+        .route("/v1/speech/model", post(set_model))
+        .route("/v1/speech", post(synthesize))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,5 +585,17 @@ mod tests {
         // 缺 tokens 视为未就绪
         std::fs::remove_file(root.join("tokens.txt")).unwrap();
         assert!(TtsModel::PiperZhXiaoya.find_files(&root).is_none());
+    }
+
+    #[tokio::test]
+    async fn speech_endpoint_validation() {
+        let state = AppState::test_state(Arc::new(crate::meta::MetaStore::new()), None);
+        // 默认配置朗读关闭 → synthesize 返回 400 tts_disabled
+        let resp = synthesize(State(state.clone()), Json(SynthesizeReq { text: "你好".into() })).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        // status 端点返回 enabled=false 与默认模型
+        let body = status(State(state)).await;
+        assert_eq!(body.0["enabled"], serde_json::Value::Bool(false));
+        assert_eq!(body.0["model"], serde_json::json!("piper-zh-xiaoya"));
     }
 }

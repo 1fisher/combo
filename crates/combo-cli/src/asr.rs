@@ -214,7 +214,7 @@ pub enum Phase {
 }
 
 impl Phase {
-    fn name(&self) -> &'static str {
+    pub(crate) fn name(&self) -> &'static str {
         match self {
             Self::NotReady => "not_ready",
             Self::Downloading { .. } => "downloading",
@@ -822,7 +822,7 @@ fn is_finish_message(txt: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn err_response(code: StatusCode, message: &str, err_code: Option<&str>) -> Response {
+pub(crate) fn err_response(code: StatusCode, message: &str, err_code: Option<&str>) -> Response {
     let mut body = json!({ "message": message });
     if let Some(c) = err_code {
         body["code"] = json!(c);

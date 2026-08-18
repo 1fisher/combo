@@ -73,6 +73,10 @@ fn make_state() -> AppState {
             std::env::temp_dir().join("combo-asr-test-models"),
             combo_cli::asr::AsrModel::SenseVoice,
         )),
+        tts: Arc::new(combo_cli::tts::TtsService::new(
+            std::env::temp_dir().join("combo-tts-test-models"),
+            combo_cli::tts::TtsModel::PiperZhXiaoya,
+        )),
     }
 }
 
@@ -340,6 +344,10 @@ async fn git_repos_discovers_root_and_subdir_repos() {
         asr: Arc::new(combo_cli::asr::AsrService::new(
             std::env::temp_dir().join("combo-asr-test-models"),
             combo_cli::asr::AsrModel::SenseVoice,
+        )),
+        tts: Arc::new(combo_cli::tts::TtsService::new(
+            std::env::temp_dir().join("combo-tts-test-models"),
+            combo_cli::tts::TtsModel::PiperZhXiaoya,
         )),
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
