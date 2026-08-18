@@ -2349,4 +2349,32 @@ export namespace Api {
     text: string;
     lang?: string;
   };
+
+  // ---------- 本地语音合成(TTS,piper 中文 / HF 高质量) ----------
+
+  /** TTS 开关+模型状态:GET /v1/speech/status 响应。 */
+  export type SpeechStatus = {
+    enabled: boolean;
+    ready: boolean;
+    phase: TranscribePhase;
+    /** downloading 阶段 0~1。 */
+    progress?: number | null;
+    error?: string | null;
+    /** 当前 TTS 模型 id:piper-zh-xiaoya / piper-zh-chaowen / vits-zh-fanchen-c。 */
+    model?: string;
+    model_dir?: string;
+  };
+
+  /** POST /v1/speech/config 响应。 */
+  export type SpeechConfigResult = {
+    ok: boolean;
+    enabled: boolean;
+  };
+
+  /** POST /v1/speech/model 响应。 */
+  export type SpeechModelResult = {
+    ok: boolean;
+    model: string;
+    phase: TranscribePhase;
+  };
 }

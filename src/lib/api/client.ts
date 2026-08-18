@@ -145,3 +145,64 @@ export async function apiRequestRaw<T>(
   if (!text) return undefined as T;
   return JSON.parse(text) as T;
 }
+
+/**
+ * 二进制响应版请求(如 TTS 合成返回 WAV):响应按 ArrayBuffer 读取,
+ * 错误响应仍按 JSON 解析为 ApiError;支持外部 AbortSignal(打断朗读)。
+ */
+export async function apiRequestBinary(
+  path: string,
+  opts: {
+    method?: string;
+    query?: Record<string, string>;
+    body?: unknown;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  } = {}
+): Promise<ArrayBuffer> {
+  const base = getProxyBaseUrl();
+  const q = new URLSearchParams(opts.query ?? {});
+  if (!q.has('client_id')) q.set('client_id', getClientId());
+  const token = getAccessToken();
+  const headers: Record<string, string> = {};
+  if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const ac = new AbortController();
+  const timer = opts.timeoutMs ? setTimeout(() => ac.abort(), opts.timeoutMs) : undefined;
+  if (opts.signal) {
+    opts.signal.addEventListener('abort', () => ac.abort(), { once: true });
+  }
+  const signal = opts.signal ?? ac.signal;
+  let res: Response;
+  try {
+    const url = `${base}${path}?${q.toString()}`;
+    const p2p = getP2pTransport();
+    const init = {
+      method: opts.method ?? 'POST',
+      headers,
+      body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined,
+      signal,
+    };
+    res = p2p?.isReady() ? await p2p.fetch(url, init) : await fetch(url, init);
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      throw new ApiError(0, '请求已取消');
+    }
+    throw new ApiError(0, 'network error');
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+  if (!res.ok) {
+    let message = res.statusText;
+    let code: string | undefined;
+    try {
+      const j = (await res.json()) as { message?: string; code?: string };
+      if (j.message) message = j.message;
+      code = j.code;
+    } catch {
+      /* keep statusText */
+    }
+    throw new ApiError(res.status, message, code);
+  }
+  return res.arrayBuffer();
+}

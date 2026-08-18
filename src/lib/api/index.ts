@@ -1,5 +1,5 @@
 import type { Api } from './types';
-import { apiRequest, apiRequestRaw, ApiError } from './client';
+import { apiRequest, apiRequestRaw, apiRequestBinary, ApiError } from './client';
 import { getClientId } from '../clientId';
 
 export * from './client';
@@ -981,6 +981,41 @@ export function transcribeAudio(pcm: ArrayBuffer): Promise<Api.TranscribeResult>
     body: pcm,
     contentType: 'application/octet-stream',
     timeoutMs: 120_000,
+  });
+}
+
+// ---------- 本地语音合成(TTS,piper 中文 / HF 高质量) ----------
+
+/** 查询语音朗读状态(开关 + 模型 + 下载/加载进度)。 */
+export function getSpeechStatus(): Promise<Api.SpeechStatus> {
+  return apiRequest('/v1/speech/status');
+}
+
+/** 打开/关闭语音朗读并持久化到配置(`[tts] enabled`)。 */
+export function setSpeechEnabled(enabled: boolean): Promise<Api.SpeechConfigResult> {
+  return apiRequest('/v1/speech/config', { method: 'POST', body: { enabled } });
+}
+
+/**
+ * 切换语音朗读模型并持久化到配置(`[tts] model`)。
+ * `model` 取值:`piper-zh-xiaoya`(中文女声)/ `piper-zh-chaowen`(中文男声)/ `vits-zh-fanchen-c`(高质量);
+ * 切换后回到未就绪状态,首次合成自动下载。
+ */
+export function setSpeechModel(model: string): Promise<Api.SpeechModelResult> {
+  return apiRequest('/v1/speech/model', { method: 'POST', body: { model } });
+}
+
+/**
+ * 合成单句文本为 WAV(ArrayBuffer 响应)。
+ * 关闭时抛 code 为 `tts_disabled` 的 ApiError(400);模型未就绪抛 `tts_not_ready`(503)。
+ * 传 AbortSignal 可取消(打断朗读)。
+ */
+export function synthesizeSpeech(text: string, signal?: AbortSignal): Promise<ArrayBuffer> {
+  return apiRequestBinary('/v1/speech', {
+    method: 'POST',
+    body: { text },
+    signal,
+    timeoutMs: 30_000,
   });
 }
 
