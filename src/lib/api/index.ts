@@ -1010,7 +1010,7 @@ export function setSpeechEnabled(enabled: boolean): Promise<Api.SpeechConfigResu
 
 /**
  * 切换语音朗读模型并持久化到配置(`[tts] model`)。
- * `model` 取值:`piper-zh-xiaoya`(中文女声)/ `piper-zh-chaowen`(中文男声)/ `vits-zh-fanchen-c`(高质量);
+ * `model` 取值:`piper-zh-xiaoya`(中文女声)/ `piper-zh-chaowen`(中文男声)/ `vits-zh-fanchen-c`(高质量)/ `vits-zh-en-melo`(中英双语);
  * 切换后回到未就绪状态,首次合成自动下载。
  */
 export function setSpeechModel(model: string): Promise<Api.SpeechModelResult> {

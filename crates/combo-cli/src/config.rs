@@ -324,7 +324,7 @@ impl AsrConfig {
 pub struct TtsConfig {
     /// 朗读开关,默认关闭。
     pub enabled: Option<bool>,
-    /// TTS 模型 id:piper-zh-xiaoya(默认)/ piper-zh-chaowen / vits-zh-fanchen-c。
+    /// TTS 模型 id:piper-zh-xiaoya(默认)/ piper-zh-chaowen / vits-zh-fanchen-c / vits-zh-en-melo(中英双语)。
     pub model: Option<String>,
     /// 朗读语速倍率(0.5~2.0,1.0 为正常语速)。
     pub speed: Option<f32>,

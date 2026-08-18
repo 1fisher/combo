@@ -1108,6 +1108,11 @@ function AsrModelSection({ open }: { open: boolean }) {
 /** 可选的本地语音合成模型(与后端 TtsModel 一致)。 */
 const TTS_MODELS = [
   {
+    id: 'vits-zh-en-melo',
+    label: 'MeloTTS · 中英双语女声',
+    desc: 'MeloTTS 中英混合模型,约 163MB,英文按单词发音,推荐中英混读场景',
+  },
+  {
     id: 'piper-zh-xiaoya',
     label: 'Piper 小雅 · 中文女声',
     desc: 'piper 中文女声(int8),约 14MB,清晰自然',

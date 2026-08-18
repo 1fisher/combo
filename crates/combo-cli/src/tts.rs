@@ -1,5 +1,6 @@
-//! 本地语音合成(TTS):多模型可选(piper 中文女/男声 int8、HF 高质量中文),
-//! 文本 → WAV 字节(16-bit PCM + 44 字节头),供前端朗读 agent 回复。
+//! 本地语音合成(TTS):多模型可选(piper 中文女/男声 int8、HF 高质量中文、
+//! MeloTTS 中英双语),文本 → WAV 字节(16-bit PCM + 44 字节头),供前端朗读
+//! agent 回复。
 //!
 //! - 模型(`TtsModel`,配置 `[tts] model` 选择,`POST /v1/speech/model` 切换,
 //!   未设置/非法回落 `piper-zh-xiaoya`),首次合成自动下载;
@@ -34,6 +35,9 @@ pub enum TtsModel {
     PiperZhChaowen,
     /// HF vits 高质量中文女声(~113MB,多说话人,官方示例 sid=100)。
     VitsZhFanchenC,
+    /// MeloTTS 中英双语女声(fp32,~163MB,44.1kHz,lexicon 自带中英词典,
+    /// 英文按单词发音,原生支持中英混读)。
+    VitsZhEnMelo,
 }
 
 impl TtsModel {
@@ -43,6 +47,7 @@ impl TtsModel {
             Self::PiperZhXiaoya => "piper-zh-xiaoya",
             Self::PiperZhChaowen => "piper-zh-chaowen",
             Self::VitsZhFanchenC => "vits-zh-fanchen-c",
+            Self::VitsZhEnMelo => "vits-zh-en-melo",
         }
     }
 
@@ -52,6 +57,7 @@ impl TtsModel {
             Self::PiperZhXiaoya => "Piper 小雅(中文女声)",
             Self::PiperZhChaowen => "Piper 超闻(中文男声)",
             Self::VitsZhFanchenC => "VITS 凡尘-C(高质量女声)",
+            Self::VitsZhEnMelo => "MeloTTS 中英双语(女声)",
         }
     }
 
@@ -61,6 +67,7 @@ impl TtsModel {
             Self::PiperZhXiaoya => "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-zh_CN-xiao_ya-medium-int8.tar.bz2",
             Self::PiperZhChaowen => "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-zh_CN-chaowen-medium-int8.tar.bz2",
             Self::VitsZhFanchenC => "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-zh-hf-fanchen-C.tar.bz2",
+            Self::VitsZhEnMelo => "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-melo-tts-zh_en.tar.bz2",
         }
     }
 
@@ -70,6 +77,7 @@ impl TtsModel {
             Self::PiperZhXiaoya => "piper-zh-xiaoya-int8.tar.bz2.part",
             Self::PiperZhChaowen => "piper-zh-chaowen-int8.tar.bz2.part",
             Self::VitsZhFanchenC => "vits-zh-fanchen-c.tar.bz2.part",
+            Self::VitsZhEnMelo => "vits-melo-tts-zh_en.tar.bz2.part",
         }
     }
 
@@ -79,6 +87,7 @@ impl TtsModel {
             "piper-zh-xiaoya" | "xiao-ya" => Some(Self::PiperZhXiaoya),
             "piper-zh-chaowen" | "chaowen" => Some(Self::PiperZhChaowen),
             "vits-zh-fanchen-c" | "fanchen-c" | "fanchen" => Some(Self::VitsZhFanchenC),
+            "vits-zh-en-melo" | "melo-tts" | "melo" => Some(Self::VitsZhEnMelo),
             _ => None,
         }
     }
@@ -88,12 +97,18 @@ impl TtsModel {
         root.join(self.id())
     }
 
-    /// 多说话人模型的说话人 id(piper 单说话人用 0)。
+    /// 多说话人模型的说话人 id(piper/MeloTTS 单说话人用 0)。
     fn default_sid(&self) -> i32 {
         match self {
             Self::VitsZhFanchenC => 100,
             _ => 0,
         }
+    }
+
+    /// 模型是否原生支持英文单词(双语模型自带中英词典,英文按单词发音)。
+    /// 仅无英文 token 的中文单语模型需要把拉丁文本改写成中文逐字母读音。
+    fn supports_english(&self) -> bool {
+        matches!(self, Self::VitsZhEnMelo)
     }
 
     /// 在模型根目录下查找该模型的文件;未下载返回 None。
@@ -185,6 +200,8 @@ fn f32_to_wav(samples: &[f32], sample_rate: u32) -> Vec<u8> {
 pub struct Synthesizer {
     inner: OfflineTts,
     sid: i32,
+    /// 模型是否原生支持英文单词(MeloTTS 双语模型跳过拉丁转写)。
+    supports_english: bool,
 }
 
 impl Synthesizer {
@@ -202,7 +219,7 @@ impl Synthesizer {
         cfg.max_num_sentences = 1;
         let inner = OfflineTts::create(&cfg)
             .ok_or_else(|| anyhow::anyhow!("初始化 {} 合成器失败", model.label()))?;
-        Ok(Self { inner, sid: model.default_sid() })
+        Ok(Self { inner, sid: model.default_sid(), supports_english: model.supports_english() })
     }
 
     /// 合成文本,返回 WAV 字节(阻塞)。`speed` 为语速倍率(0.5~2.0,1.0 正常);
@@ -402,7 +419,10 @@ impl TtsService {
 
     /// 合成文本 → WAV 字节(阻塞,须在 spawn_blocking 中执行)。
     fn synthesize_blocking(synth: &Synthesizer, text: String, speed: f32) -> anyhow::Result<Vec<u8>> {
-        let text = localize_latin_text(&text);
+        // 中文单语模型(char 级词库)没有英文字母 token,英文词会被当作 OOV 静默
+        // 丢弃,需逐字母转中文读音;双语模型(MeloTTS)自带中英词典,原样传入即可
+        // 按单词发音,跳过转写以免破坏英文读音。
+        let text = if synth.supports_english { text } else { localize_latin_text(&text) };
         synth
             .synthesize(&text, speed)
             .ok_or_else(|| anyhow::anyhow!("语音合成失败"))
@@ -427,6 +447,7 @@ const LETTER_NAMES: &[(&str, &str); 26] = &[
 /// 中文 TTS 模型(char 级词库,如 vits-zh-fanchen-c / piper-zh-*)没有英文字母
 /// token,直接合成会被当作 OOV 静默丢弃(sherpa-onnx 日志 `Ignore OOV 'Combo'`),
 /// 导致英文词从音频里消失。逐字母转成中文读音后,英文词/标识符可完整念出。
+/// 双语模型(vits-zh-en-melo)自带中英词典,英文按单词发音,不需要此转换。
 fn localize_latin_text(text: &str) -> String {
     fn spell(buf: &mut Vec<char>, out: &mut String) {
         if buf.is_empty() {
@@ -690,15 +711,24 @@ mod tests {
         assert_eq!(TtsModel::parse("piper-zh-xiaoya"), Some(TtsModel::PiperZhXiaoya));
         assert_eq!(TtsModel::parse(" chaowen "), Some(TtsModel::PiperZhChaowen));
         assert_eq!(TtsModel::parse("fanchen-c"), Some(TtsModel::VitsZhFanchenC));
+        assert_eq!(TtsModel::parse("melo"), Some(TtsModel::VitsZhEnMelo));
+        assert_eq!(TtsModel::parse("vits-zh-en-melo"), Some(TtsModel::VitsZhEnMelo));
         assert_eq!(TtsModel::parse("unknown"), None);
         assert_eq!(TtsModel::PiperZhXiaoya.id(), "piper-zh-xiaoya");
         assert_eq!(TtsModel::PiperZhChaowen.id(), "piper-zh-chaowen");
         assert_eq!(TtsModel::VitsZhFanchenC.id(), "vits-zh-fanchen-c");
+        assert_eq!(TtsModel::VitsZhEnMelo.id(), "vits-zh-en-melo");
         assert!(TtsModel::PiperZhXiaoya.download_url().contains("xiao_ya"));
         assert!(TtsModel::PiperZhChaowen.download_url().contains("chaowen"));
         assert!(TtsModel::VitsZhFanchenC.download_url().contains("fanchen-C"));
+        assert!(TtsModel::VitsZhEnMelo.download_url().contains("melo-tts-zh_en"));
         assert_eq!(TtsModel::VitsZhFanchenC.default_sid(), 100);
         assert_eq!(TtsModel::PiperZhXiaoya.default_sid(), 0);
+        assert_eq!(TtsModel::VitsZhEnMelo.default_sid(), 0);
+        // 只有双语模型跳过拉丁转写
+        assert!(!TtsModel::PiperZhXiaoya.supports_english());
+        assert!(!TtsModel::VitsZhFanchenC.supports_english());
+        assert!(TtsModel::VitsZhEnMelo.supports_english());
     }
 
     #[test]

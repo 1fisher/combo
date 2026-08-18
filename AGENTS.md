@@ -319,7 +319,9 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   重签 Combo.app,身份稳定,TCC 列表可正常显示;每次重新构建后重跑一次)。
 - **本地语音合成(TTS,`tts.rs`,朗读 agent 回复)**:与 ASR 对称的语音输出。
   配置 `[tts] enabled`(开关,默认关)+ `[tts] model`(默认 `piper-zh-xiaoya`;
-  可选 `piper-zh-chaowen`/`vits-zh-fanchen-c`)。模型为 k2-fsa/sherpa-onnx
+  可选 `piper-zh-chaowen`/`vits-zh-fanchen-c`/**`vits-zh-en-melo`(MeloTTS
+  中英双语,~163MB,lexicon 自带中英词典,英文按单词发音)**)。模型为
+  k2-fsa/sherpa-onnx
   `tts-models` release 资产(piper 中文 int8 各 ~14MB、HF 高质量 ~113MB),
   与 ASR 共用 `<数据目录>/models/<id>/` 下载/解压/懒加载流程
   (`COMBO_TTS_MODEL_URL` 可换镜像);加载配置统一为
@@ -329,7 +331,9 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   中文 TTS 模型是 char 级词库,英文字母/英文词直接合成会被当作 OOV 静默丢弃
   (sherpa-onnx 日志 `Ignore OOV 'Combo'`),合成前 `localize_latin_text` 把
   拉丁字母串逐字母转成中文读音(如 `Combo`→`西 欧 艾姆 比 欧`),保证英文
-  词/标识符可完整念出(数字与符号保留,由 rule_fsts 处理)。端点:
+  词/标识符可完整念出(数字与符号保留,由 rule_fsts 处理);**MeloTTS 双语
+  模型跳过该转写**(`TtsModel::supports_english`),英文原样按单词发音,适合
+  中英混读场景。端点:
   `GET /v1/speech/status`(开关 + 模型 + 下载/加载阶段 + 进度 + 语速)、
   `POST /v1/speech/prepare`(幂等触发下载/加载,后台执行,镜像
   `/v1/transcribe/prepare`)、
