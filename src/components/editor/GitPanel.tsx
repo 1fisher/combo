@@ -10,11 +10,13 @@ import {
   Folder,
   GitBranch,
   GitCommitHorizontal,
+  Loader2,
   MinusCircle,
   PencilLine,
   Plus,
   RefreshCw,
   RotateCcw,
+  Sparkles,
   Trash2,
 } from 'lucide-react';
 import {
@@ -29,6 +31,7 @@ import {
   gitUnstage,
   gitDiscard,
   gitCommit,
+  generateCommitMessage,
   gitPush,
   gitPull,
   gitFetch,
@@ -135,6 +138,9 @@ export function GitPanel({ workspaceId, repo = '', onRepoChange, selectedDiffPat
   const [prefixDropUp, setPrefixDropUp] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [commitError, setCommitError] = useState<string | null>(null);
+  /** AI 生成提交信息进行中 / 失败信息 */
+  const [generating, setGenerating] = useState(false);
+  const [genError, setGenError] = useState<string | null>(null);
   const [branchInfo, setBranchInfo] = useState<Api.GitBranchInfo | null>(null);
   const [branchList, setBranchList] = useState<Api.GitBranch[]>([]);
   const [branchMenuOpen, setBranchMenuOpen] = useState(false);
@@ -260,6 +266,31 @@ export function GitPanel({ workspaceId, repo = '', onRepoChange, selectedDiffPat
       setCommitError(e instanceof Error ? e.message : String(e));
     } finally {
       setCommitting(false);
+    }
+  }
+
+  /** AI 生成提交信息:基于已暂存 diff,填充到提交框供编辑后再提交。 */
+  async function handleGenerate() {
+    if (generating) return;
+    setGenerating(true);
+    setGenError(null);
+    try {
+      const res = await generateCommitMessage(workspaceId, repo || undefined);
+      const msg = res.message.trim();
+      if (!msg) {
+        setGenError('模型未返回有效的提交信息');
+        return;
+      }
+      // 生成的信息自带 conventional 前缀(feat / fix(ui) / ...)时清除已选前缀,
+      // 避免提交时拼出双前缀;无前缀时保留用户已选前缀
+      if (/^(feat|fix|docs|style|refactor|perf|test|chore|ci|build|revert)(\([^)]*\))?:\s+/.test(msg)) {
+        setCommitPrefix('');
+      }
+      setCommitMsg(msg);
+    } catch (e) {
+      setGenError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGenerating(false);
     }
   }
 
@@ -661,13 +692,28 @@ export function GitPanel({ workspaceId, repo = '', onRepoChange, selectedDiffPat
                 </div>
               )}
             </div>
-            <button
-              onClick={() => void handleStageAll()}
-              disabled={staging}
-              className="text-[10px] text-primary/70 transition-colors hover:text-primary disabled:opacity-50"
-            >
-              全部暂存
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => void handleStageAll()}
+                disabled={staging}
+                className="text-[10px] text-primary/70 transition-colors hover:text-primary disabled:opacity-50"
+              >
+                全部暂存
+              </button>
+              <button
+                onClick={() => void handleGenerate()}
+                disabled={generating}
+                className="flex items-center gap-1 text-[10px] text-primary/70 transition-colors hover:text-primary disabled:opacity-50"
+                title="基于已暂存变更生成提交信息(模型可在设置中配置)"
+              >
+                {generating ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Sparkles className="h-3 w-3" />
+                )}
+                {generating ? '生成中...' : 'AI 生成'}
+              </button>
+            </div>
           </div>
           <textarea
             value={commitMsg}
@@ -684,6 +730,9 @@ export function GitPanel({ workspaceId, repo = '', onRepoChange, selectedDiffPat
           />
           {commitError && (
             <div className="mt-1 text-[10px] text-destructive">{commitError}</div>
+          )}
+          {genError && (
+            <div className="mt-1 text-[10px] text-destructive">{genError}</div>
           )}
           <button
             onClick={() => void handleCommit()}

@@ -292,12 +292,27 @@ pub struct AppConfig {
     pub disabled_skills: Vec<String>,
     /// git 提交时是否自动追加 "Generated with Combo" 署名(默认 true)。
     pub commit_attribution: Option<bool>,
+    /// Git 提交设置(`[git]` 段)。
+    #[serde(default)]
+    pub git: GitConfig,
     /// 语音识别(ASR)设置。
     #[serde(default)]
     pub asr: AsrConfig,
     /// 语音合成(TTS)设置。
     #[serde(default)]
     pub tts: TtsConfig,
+}
+
+/// Git 提交设置(`[git]` 段)。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GitConfig {
+    /// AI 生成提交信息时是否使用全局指定的模型(关闭或未配置时用会话模型)。
+    pub commit_model_enabled: Option<bool>,
+    /// 全局提交模型 provider id。
+    pub commit_model_provider: Option<String>,
+    /// 全局提交模型名(留空时用 provider 的默认大模型)。
+    pub commit_model: Option<String>,
 }
 
 /// 语音识别(ASR)配置(`[asr]` 段)。
@@ -855,6 +870,63 @@ pub fn set_commit_attribution(path: &PathBuf, enabled: bool) -> Result<()> {
     write_config(path, &cfg)
 }
 
+/// 读取「git 提交全局模型」配置:(开关, provider, model);未配置时均为空。
+pub fn get_commit_model(path: &PathBuf) -> (bool, Option<String>, Option<String>) {
+    match AppConfig::load_or_create(path) {
+        Ok(c) => (
+            c.git.commit_model_enabled.unwrap_or(false),
+            c.git.commit_model_provider.clone(),
+            c.git.commit_model.clone(),
+        ),
+        Err(_) => (false, None, None),
+    }
+}
+
+/// 写入「git 提交全局模型」配置;provider/model 传 None 或空串表示清除。
+pub fn set_commit_model(
+    path: &PathBuf,
+    enabled: bool,
+    provider: Option<&str>,
+    model: Option<&str>,
+) -> Result<()> {
+    let mut cfg = load_config(path)?;
+    cfg.git.commit_model_enabled = Some(enabled);
+    cfg.git.commit_model_provider = provider
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    cfg.git.commit_model = model
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    write_config(path, &cfg)
+}
+
+/// 解析生效的全局提交模型:开关开启且 provider 非空时返回 `(provider, model)`,
+/// model 留空表示用 provider 默认大模型(由调用方解析);未启用返回 None
+/// (生成提交信息时回退会话模型)。
+pub fn commit_model_override(path: &PathBuf) -> Option<(String, Option<String>)> {
+    let cfg = AppConfig::load_or_create(path).ok()?;
+    if !cfg.git.commit_model_enabled.unwrap_or(false) {
+        return None;
+    }
+    let provider = cfg
+        .git
+        .commit_model_provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?
+        .to_string();
+    let model = cfg
+        .git
+        .commit_model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    Some((provider, model))
+}
+
 /// 写入默认配置文件模板。`overwrite=false` 时若文件已存在则不写。
 pub fn write_default(path: &PathBuf, overwrite: bool) -> Result<()> {
     if path.exists() && !overwrite {
@@ -878,6 +950,14 @@ pub fn write_default(path: &PathBuf, overwrite: bool) -> Result<()> {
 
 # git 提交时是否自动追加 "Generated with Combo" 署名,默认 true
 # commit_attribution = true
+
+# ========== Git 提交 ==========
+# AI 生成提交信息时使用的模型:关闭时用当前会话的模型,
+# 开启后所有项目的提交信息统一用下方指定的模型生成。
+# [git]
+# commit_model_enabled = false
+# commit_model_provider = "deepseek"
+# commit_model = "deepseek-chat"
 
 # ========== 语音识别(ASR)==========
 # 输入框语音输入的本地模型:
@@ -1150,6 +1230,51 @@ speed = 1.4"#).unwrap();
     }
 
     #[test]
+    fn commit_model_config_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("combo-cli.toml");
+        // 未设置时:开关关闭、无覆盖
+        assert_eq!(get_commit_model(&path), (false, None, None));
+        assert!(commit_model_override(&path).is_none());
+
+        // 开启 + 指定模型 → 覆盖生效
+        set_commit_model(&path, true, Some("deepseek"), Some("deepseek-chat")).unwrap();
+        assert_eq!(
+            get_commit_model(&path),
+            (
+                true,
+                Some("deepseek".to_string()),
+                Some("deepseek-chat".to_string())
+            )
+        );
+        assert_eq!(
+            commit_model_override(&path),
+            Some(("deepseek".to_string(), Some("deepseek-chat".to_string())))
+        );
+
+        // model 留空 → 只覆盖 provider,模型由调用方回退默认大模型
+        set_commit_model(&path, true, Some("deepseek"), None).unwrap();
+        assert_eq!(
+            commit_model_override(&path),
+            Some(("deepseek".to_string(), None))
+        );
+
+        // 空串等价于清除
+        set_commit_model(&path, true, Some("  "), Some("")).unwrap();
+        assert_eq!(
+            get_commit_model(&path),
+            (true, None, None),
+            "空串应被清除,provider 为空时覆盖整体失效"
+        );
+        assert!(commit_model_override(&path).is_none());
+
+        // 关闭开关 → 即使配置了模型也不用
+        set_commit_model(&path, true, Some("deepseek"), Some("deepseek-chat")).unwrap();
+        set_commit_model(&path, false, Some("deepseek"), Some("deepseek-chat")).unwrap();
+        assert!(commit_model_override(&path).is_none());
+    }
+
+    #[test]
     fn resolve_prefers_cli_over_file() {
         let cfg = AppConfig {
             provider: Some("ollama".into()),
@@ -1167,6 +1292,7 @@ speed = 1.4"#).unwrap();
             skills_paths: vec![],
             disabled_skills: vec![],
             commit_attribution: None,
+            git: GitConfig::default(),
             asr: AsrConfig::default(),
             tts: TtsConfig::default(),
         };

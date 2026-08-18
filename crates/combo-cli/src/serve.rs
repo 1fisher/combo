@@ -911,6 +911,10 @@ fn build_router(
             "/v1/settings/commit-attribution",
             get(git::attribution_get).post(git::attribution_set),
         )
+        .route(
+            "/v1/settings/commit-model",
+            get(git::commit_model_get).post(git::commit_model_set),
+        )
         .route("/v1/stats/usage", get(usage_stats))
         .route("/v1/terminal", get(terminal::terminal_default))
         .route("/v1/workspaces/:id/terminal", get(terminal::terminal))
@@ -975,6 +979,10 @@ fn build_router(
         .route("/v1/workspaces/:id/git/unstage", post(git::unstage))
         .route("/v1/workspaces/:id/git/discard", post(git::discard))
         .route("/v1/workspaces/:id/git/commit", post(git::commit))
+        .route(
+            "/v1/workspaces/:id/git/commit-message",
+            post(git::commit_message),
+        )
         .route("/v1/workspaces/:id/git/push", post(git::push))
         .route("/v1/workspaces/:id/git/pull", post(git::pull))
         .route("/v1/workspaces/:id/git/fetch", post(git::fetch))
@@ -2429,7 +2437,7 @@ async fn delete_provider(
 /// 解析 workspace 的生效配置:全局默认配置叠加该 workspace 自己记忆的模型
 /// 选择(provider/model/推理强度)。每个项目独立使用自己的模型,互不联动;
 /// 未单独设置过模型的项目回落全局默认(state.cfg)。
-fn workspace_effective_cfg(state: &AppState, ws_id: &str) -> AskConfig {
+pub(crate) fn workspace_effective_cfg(state: &AppState, ws_id: &str) -> AskConfig {
     let mut cfg = state.cfg.lock().unwrap().clone();
     match state.meta.db().get_workspace_model(ws_id) {
         Ok(Some(sel)) => {

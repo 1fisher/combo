@@ -141,6 +141,18 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   `path` must be relative; serve resolves the workspace root from sqlite
   `MetaStore`. Frontend: `src/lib/api` wrappers +
   `stores/editorStore.ts` + `FileExplorer`/`EditorPane`.
+- **Git 提交设置与 AI 生成提交信息**(`git.rs` + 设置「Git 提交」分组):设置里
+  两个全局开关均持久化在 combo-cli.toml——①「提交携带署名」
+  (`commit_attribution`,`GET/POST /v1/settings/commit-attribution`,开启时
+  serve 安装全局 commit-msg hook 给 `core.hooksPath`,命令行/其他工具的提交
+  也自动追加 `Generated with Combo`);②「生成提交信息使用全局模型」
+  (`[git]` 段 `commit_model_enabled/_provider/_model`,
+  `GET/POST /v1/settings/commit-model`)。前端 GitPanel 提交框「AI 生成」按钮
+  调 `POST .../git/commit-message`:后端取 staged diff(截断 16k)+ 最近 10
+  条提交风格,经 `agent::ask_answer` 单轮无工具生成一行 conventional commit;
+  模型 = 全局提交模型(开启时)优先,否则回退 `workspace_effective_cfg` 的
+  会话模型;返回经 `sanitize_commit_message` 清理(去围栏/引号/前缀),前端
+  填充提交框并识别自带 type 前缀避免双前缀。
 - **Sqlite 持久化** (`crates/combo-cli/src/store.rs`): combo 自有元数据落盘在
   sqlite(默认 `~/.config/combo/combo.db`,与配置同目录,`COMBO_DATA_DIR` 可覆盖;
   首次启动自动从旧 `~/.local/share/combo` 迁移,见 `paths.rs`)。

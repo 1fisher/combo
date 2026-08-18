@@ -22,6 +22,7 @@ import {
 } from '../../lib/connection';
 import { useUpdater } from '../../hooks/useUpdater';
 import { useCommitAttribution } from '../../hooks/useCommitAttribution';
+import { useCommitModel } from '../../hooks/useCommitModel';
 import { requestNotifyPermission } from '../../lib/notify';
 import { useFetchModels, useProviderCrud, useProviderKeys, useProviders, useSaveProviderKey, useSetModelContextWindow } from '../../hooks/useAgentModel';
 import { useUIPreferences } from '../../stores/uiPreferencesStore';
@@ -42,7 +43,7 @@ interface SettingsDialogProps {
  * 设置对话框:
  * 1. 模型 Provider 配置 — 为各 provider 填入 API Key 并拉取可用模型。
  * 2. 特效与音效 — Liquid 流体特效 / Combo 连击气泡音。
- * 3. Git 提交署名 — 所有 git 提交自动追加 Generated with Combo(服务端全局 hook,命令行/其他工具同样生效)。
+ * 3. Git 提交 — 提交署名(Generated with Combo 全局 hook)与 AI 生成提交信息的全局模型配置。
  * 4. 系统通知 — 免打扰 / 任务结束 / 需要交互时发送系统通知(可选同时播放提示音)。
  * 5. 目录访问授权 — 管理已记住的敏感目录授权(允许一次后不再询问)。
  * 6. 外部访问域名 — 域名部署时填写公开访问地址。
@@ -71,7 +72,6 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const setNotifySoundEnabled = useUIPreferences((s) => s.setNotifySoundEnabled);
   // 通知权限被拒时的提示(开启开关时请求权限,失败则提示去系统设置开启)
   const [notifyBlocked, setNotifyBlocked] = useState(false);
-  const attribution = useCommitAttribution();
 
   async function toggleNotify(next: boolean, apply: (v: boolean) => void) {
     apply(next);
@@ -158,21 +158,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
             />
           </div>
 
-          {/* Git 提交署名 */}
-          <div className="flex items-center justify-between">
-            <div className="flex flex-col gap-0.5">
-              <label className="text-[13px] font-medium text-foreground">Git 提交署名</label>
-              <span className="text-[12px] text-foreground-subtle">
-                git 提交自动追加 Generated with Combo 署名,覆盖命令行与其他工具
-              </span>
-            </div>
-            <Switch
-              checked={attribution.enabled}
-              onCheckedChange={attribution.toggle}
-              disabled={attribution.isPending}
-              aria-label="Git 提交署名"
-            />
-          </div>
+          {/* Git 提交(署名 + AI 生成提交信息的全局模型) */}
+          <GitSection open={open} />
 
           {/* 系统通知 */}
           <div className="flex flex-col gap-2">
@@ -428,6 +415,148 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
 }
 
 // ---------- Provider 配置区 ----------
+
+// ---------- Git 提交区(署名 + AI 生成提交信息的全局模型) ----------
+
+function GitSection({ open }: { open: boolean }) {
+  const attribution = useCommitAttribution();
+  const commitModel = useCommitModel();
+  const { data: providers } = useProviders(null);
+  // 本地编辑态:开启时经 POST 保存;关闭状态下切换仅改本地,便于下次开启沿用
+  const [providerId, setProviderId] = useState('');
+  const [modelId, setModelId] = useState('');
+  // 避免后端配置回填覆盖用户的本地选择(仅首次加载与外部变更时同步)
+  const syncedRef = useRef(false);
+  useEffect(() => {
+    if (!open || syncedRef.current) return;
+    if (commitModel.isLoading) return;
+    setProviderId(commitModel.config.provider ?? '');
+    setModelId(commitModel.config.model ?? '');
+    syncedRef.current = true;
+  }, [open, commitModel.config, commitModel.isLoading]);
+
+  const provider = providers?.find((p) => p.id === providerId);
+  const models = provider?.models ?? [];
+  // 保存的模型可能不在 provider 模型列表里(自定义/已下线),补一个选项避免显示丢失
+  const modelOptions =
+    modelId && !models.some((m) => m.id === modelId)
+      ? [{ id: modelId, name: modelId }, ...models]
+      : models;
+
+  /** 切换 provider:模型重置为该 provider 的默认大模型(无默认取第一个)。 */
+  function switchProvider(nextId: string) {
+    setProviderId(nextId);
+    const p = providers?.find((x) => x.id === nextId);
+    const fallback =
+      p?.default_large_model_id ?? p?.models?.find((m) => m.id)?.id ?? '';
+    setModelId(fallback);
+    if (commitModel.config.enabled) {
+      commitModel.save({ enabled: true, provider: nextId, model: fallback });
+    }
+  }
+
+  function switchModel(next: string) {
+    setModelId(next);
+    if (commitModel.config.enabled) {
+      commitModel.save({ enabled: true, provider: providerId, model: next });
+    }
+  }
+
+  /** 开关:开启时若未选过 provider,自动选用第一个(及其默认大模型)。 */
+  function toggleGlobalModel(on: boolean) {
+    if (on && !providerId) {
+      const p = providers?.find((x) => (x.models?.length ?? 0) > 0) ?? providers?.[0];
+      if (!p) return;
+      const model = p.default_large_model_id ?? p.models?.[0]?.id ?? '';
+      setProviderId(p.id);
+      setModelId(model);
+      commitModel.save({ enabled: true, provider: p.id, model });
+      return;
+    }
+    commitModel.save({
+      enabled: on,
+      provider: providerId || null,
+      model: modelId || null,
+    });
+  }
+
+  const selectCls =
+    'h-9 min-w-0 flex-1 rounded-lg border border-input-border bg-background px-2.5 text-[13px] text-foreground outline-none [color-scheme:dark] focus-visible:border-input-border-focused disabled:opacity-50';
+
+  return (
+    <div className="flex flex-col gap-2">
+      <label className="text-[13px] font-medium text-foreground">Git 提交</label>
+      <div className="text-[12px] text-foreground-subtle">
+        提交署名与 AI 生成提交信息(基于已暂存变更,在 Git 面板的提交框点「AI 生成」)。
+      </div>
+      <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-0.5">
+          <label className="text-[13px] font-medium text-foreground">提交携带署名</label>
+          <span className="text-[12px] text-foreground-subtle">
+            git 提交自动追加 Generated with Combo 署名,覆盖命令行与其他工具
+          </span>
+        </div>
+        <Switch
+          checked={attribution.enabled}
+          onCheckedChange={attribution.toggle}
+          disabled={attribution.isPending}
+          aria-label="Git 提交署名"
+        />
+      </div>
+      <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-0.5">
+          <label className="text-[13px] font-medium text-foreground">
+            生成提交信息使用全局模型
+          </label>
+          <span className="text-[12px] text-foreground-subtle">
+            开启后所有项目统一用下方模型生成提交信息;关闭时用当前会话的模型
+          </span>
+        </div>
+        <Switch
+          checked={commitModel.config.enabled}
+          onCheckedChange={toggleGlobalModel}
+          disabled={commitModel.isPending}
+          aria-label="生成提交信息使用全局模型"
+        />
+      </div>
+      {commitModel.config.enabled && (
+        <div className="flex items-center gap-2">
+          <select
+            value={providerId}
+            onChange={(e) => switchProvider(e.target.value)}
+            disabled={commitModel.isPending || !providers?.length}
+            className={selectCls}
+            aria-label="提交信息全局模型 Provider"
+          >
+            {!providers?.length && <option value="">暂无可用 Provider</option>}
+            {(providers ?? []).map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name || p.id}
+              </option>
+            ))}
+          </select>
+          <select
+            value={modelId}
+            onChange={(e) => switchModel(e.target.value)}
+            disabled={commitModel.isPending || !modelOptions.length}
+            className={selectCls}
+            aria-label="提交信息全局模型"
+          >
+            {!modelOptions.length && <option value="">该 Provider 暂无模型</option>}
+            {modelOptions.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name || m.id}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      {commitModel.error && (
+        <div className="text-[12px] text-red-500">{commitModel.error}</div>
+      )}
+    </div>
+  );
+}
 
 // ---------- 目录访问授权区(敏感目录允许一次后持久记住) ----------
 

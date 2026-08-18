@@ -658,6 +658,184 @@ pub async fn attribution_set(
     }
 }
 
+#[derive(Deserialize)]
+pub struct CommitModelBody {
+    pub enabled: bool,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+}
+
+/// GET /v1/settings/commit-model — 读取「git 提交全局模型」配置
+/// (AI 生成提交信息时优先使用的模型;未开启时用会话模型)。
+pub async fn commit_model_get() -> Response {
+    let (enabled, provider, model) =
+        crate::config::get_commit_model(&crate::config::default_config_path());
+    ok_json(json!({ "enabled": enabled, "provider": provider, "model": model }))
+}
+
+/// POST /v1/settings/commit-model — 写入「git 提交全局模型」配置。
+/// 开启时 provider 必填;model 可留空(用 provider 的默认大模型)。
+pub async fn commit_model_set(
+    axum::extract::Json(body): axum::extract::Json<CommitModelBody>,
+) -> Response {
+    let provider = body
+        .provider
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let model = body
+        .model
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    if body.enabled && provider.is_none() {
+        return error(StatusCode::BAD_REQUEST, "开启全局提交模型需要选择 Provider");
+    }
+    match crate::config::set_commit_model(
+        &crate::config::default_config_path(),
+        body.enabled,
+        provider,
+        model,
+    ) {
+        Ok(()) => ok_json(json!({
+            "enabled": body.enabled,
+            "provider": provider,
+            "model": model,
+        })),
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, &format!("保存提交模型配置失败: {e}")),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct CommitMessageBody {
+    pub repo: Option<String>,
+}
+
+/// 生成提交信息的系统提示词:约束模型只输出一行 conventional commit。
+const COMMIT_MESSAGE_PREAMBLE: &str = "你是 git 提交信息生成器。根据用户提供的已暂存 diff 与最近提交风格,输出一条简洁的提交信息。\n规则:\n- 使用 conventional commits 格式:type: 描述(可带作用域 type(scope): 描述)。\n- type 从 feat/fix/docs/style/refactor/perf/test/chore/ci/build 中选择。\n- 描述用中文概括本次变更的目的,不超过 50 个字符。\n- 只输出提交信息这一行文本,不要解释、不要引号、不要代码块。";
+
+/// 送入模型的 diff 上限(超出截断,提交信息只需看变更概貌)。
+const COMMIT_DIFF_LIMIT: usize = 16_000;
+
+/// 截断过长的 diff(按字符边界安全截断)。
+fn truncate_diff(diff: &str) -> String {
+    if diff.len() <= COMMIT_DIFF_LIMIT {
+        return diff.to_string();
+    }
+    let mut end = COMMIT_DIFF_LIMIT;
+    while !diff.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}\n... (diff 过长,已截断)", &diff[..end])
+}
+
+/// 清理模型返回的提交信息:去代码围栏/成对引号/「提交信息:」前缀与多余空行,
+/// 多行时只保留首行(subject)——提示词已要求单行输出。
+fn sanitize_commit_message(raw: &str) -> String {
+    let mut s = raw.trim();
+    if let Some(rest) = s.strip_prefix("```") {
+        let rest = rest.trim_start_matches(|c: char| c.is_ascii_alphanumeric());
+        s = match rest.rfind("```") {
+            Some(end) => rest[..end].trim(),
+            None => rest.trim(),
+        };
+    }
+    let mut lines = s.lines().map(str::trim).filter(|l| !l.is_empty());
+    let mut first = lines.next().unwrap_or("").to_string();
+    for prefix in ["提交信息:", "提交信息：", "commit message:", "Commit message:", "message:"] {
+        if let Some(rest) = first.strip_prefix(prefix) {
+            first = rest.trim().to_string();
+            break;
+        }
+    }
+    let unquoted = first.trim_matches(|c| c == '"' || c == '\'' || c == '`').to_string();
+    unquoted
+}
+
+/// POST /v1/workspaces/{id}/git/commit-message — AI 生成提交信息。
+/// 基于已暂存的 diff 与最近提交风格生成,不执行任何 git 写操作;
+/// 模型优先用设置中开启的「全局提交模型」,未开启(或解析失败)时回退
+/// 该 workspace 会话当前生效的模型。
+pub async fn commit_message(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    axum::extract::Json(body): axum::extract::Json<CommitMessageBody>,
+) -> Response {
+    let root = match resolve_git_dir(&state, &id, body.repo.as_deref()) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+    let diff = match git_output(&root, ["diff", "--cached"]) {
+        Ok(d) => d,
+        Err(msg) => return error(StatusCode::INTERNAL_SERVER_ERROR, &msg),
+    };
+    if diff.trim().is_empty() {
+        return error(StatusCode::BAD_REQUEST, "没有已暂存的变更,请先暂存要提交的文件");
+    }
+    // 最近提交信息供模型对齐风格;空仓库/无历史时忽略
+    let recent = git_output(&root, ["log", "-n", "10", "--pretty=format:%s"]).unwrap_or_default();
+
+    // 模型解析:全局提交模型(设置中开启)优先,否则用会话(workspace)模型
+    let mut cfg = crate::serve::workspace_effective_cfg(&state, &id);
+    let using_global =
+        match crate::config::commit_model_override(&crate::config::default_config_path()) {
+            Some((pid, model)) => {
+                let config_path = crate::config::AppConfig::load_or_create(
+                    &crate::config::default_config_path(),
+                )
+                .unwrap_or_default();
+                match crate::providers::find_provider(&pid, &config_path.providers) {
+                    Ok(p) => {
+                        cfg.provider = p;
+                        cfg.model = model.unwrap_or_else(|| cfg.provider.default_model());
+                        true
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "全局提交模型 provider `{pid}` 解析失败,回退会话模型: {e}"
+                        );
+                        false
+                    }
+                }
+            }
+            None => false,
+        };
+
+    let mut prompt = String::new();
+    if !recent.trim().is_empty() {
+        prompt.push_str("最近的提交信息(供风格参考):\n");
+        prompt.push_str(&recent);
+        prompt.push_str("\n\n");
+    }
+    prompt.push_str("已暂存的变更(diff):\n");
+    prompt.push_str(&truncate_diff(&diff));
+
+    // 单轮无工具调用:复用 agent 的 provider 分派,关掉工具与 MCP
+    let mut ask = cfg.clone();
+    ask.tools = false;
+    ask.mcp_command = None;
+    ask.mcp_url = None;
+    ask.mcp_servers = Vec::new();
+    ask.reasoning_effort = None;
+    ask.preamble = COMMIT_MESSAGE_PREAMBLE.to_string();
+
+    match crate::agent::ask_answer(&ask, &prompt, None).await {
+        Ok(raw) => {
+            let message = sanitize_commit_message(&raw);
+            if message.is_empty() {
+                return error(StatusCode::INTERNAL_SERVER_ERROR, "模型未返回有效的提交信息");
+            }
+            ok_json(json!({
+                "message": message,
+                "provider": ask.provider.id,
+                "model": ask.model,
+                "global_model": using_global,
+            }))
+        }
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, &format!("生成提交信息失败: {e}")),
+    }
+}
+
 /// GET /v1/workspaces/{id}/git/log?limit=<可选>
 /// 返回提交历史(含父提交哈希和分支标签,用于 git graph 可视化)。
 pub async fn git_log(
@@ -1086,6 +1264,46 @@ pub async fn commit_diff(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sanitize_commit_message_strips_wrappers() {
+        // 纯文本直通
+        assert_eq!(sanitize_commit_message("feat: 支持语音输入"), "feat: 支持语音输入");
+        // 代码围栏(带语言标注)
+        assert_eq!(
+            sanitize_commit_message("```text\nfix: 修复登录失败\n```"),
+            "fix: 修复登录失败"
+        );
+        // 成对引号
+        assert_eq!(sanitize_commit_message("\"docs: 更新说明\""), "docs: 更新说明");
+        // 「提交信息:」前缀
+        assert_eq!(
+            sanitize_commit_message("提交信息:chore: 清理依赖"),
+            "chore: 清理依赖"
+        );
+        // 多行只保留首行 subject,首尾空行剔除
+        assert_eq!(
+            sanitize_commit_message("\n  feat: 新增图表  \n\n详细说明第二行\n"),
+            "feat: 新增图表"
+        );
+        // 前缀在围栏+引号叠加时也能剥掉
+        assert_eq!(
+            sanitize_commit_message("```\ncommit message: \"refactor: 拆分模块\"\n```"),
+            "refactor: 拆分模块"
+        );
+    }
+
+    #[test]
+    fn truncate_diff_respects_limit_and_char_boundary() {
+        let short = "diff --git a/x b/x\n+1";
+        assert_eq!(truncate_diff(short), short);
+        let long = "汉".repeat(COMMIT_DIFF_LIMIT); // 多字节字符,截断点须落在字符边界
+        let out = truncate_diff(&long);
+        assert!(out.len() > COMMIT_DIFF_LIMIT);
+        assert!(out.ends_with("... (diff 过长,已截断)"));
+        // 截断后仍是合法 UTF-8(能按字符统计即未断在字节中间)
+        assert_eq!(out.chars().filter(|c| *c == '汉').count(), COMMIT_DIFF_LIMIT / 3);
+    }
 
     #[test]
     fn parse_untracked() {

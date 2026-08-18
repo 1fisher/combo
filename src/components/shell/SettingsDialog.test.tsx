@@ -20,6 +20,7 @@ const removeKeyMutate = vi.fn();
 const createProviderMutate = vi.fn();
 const removeProviderMutate = vi.fn();
 const attributionToggle = vi.fn();
+const commitModelSave = vi.fn();
 const contextWindowMutate = vi.fn();
 
 // mock 内用真实 useState,保证开关点击后重渲染与真实 hook 行为一致
@@ -36,6 +37,30 @@ vi.mock('../../hooks/useCommitAttribution', async () => {
           attributionToggle(v);
         },
         isPending: false,
+      };
+    },
+  };
+});
+
+// 同样用真实 useState:开启后重渲染出 provider/模型下拉,便于断言选择内容
+vi.mock('../../hooks/useCommitModel', async () => {
+  const React = await import('react');
+  return {
+    useCommitModel: () => {
+      const [cfg, setCfg] = React.useState<{ enabled: boolean; provider: string | null; model: string | null }>({
+        enabled: false,
+        provider: null,
+        model: null,
+      });
+      return {
+        config: cfg,
+        isLoading: false,
+        save: (next: { enabled: boolean; provider: string | null; model: string | null }) => {
+          setCfg(next);
+          commitModelSave(next);
+        },
+        isPending: false,
+        error: null,
       };
     },
   };
@@ -123,6 +148,7 @@ describe('SettingsDialog', () => {
     removeProviderMutate.mockReset();
     removeProviderMutate.mockResolvedValue({ ok: true });
     attributionToggle.mockReset();
+    commitModelSave.mockReset();
     // confirmDialog 在浏览器模式走 window.confirm
     vi.spyOn(window, 'confirm').mockReturnValue(true);
   });
@@ -166,6 +192,26 @@ describe('SettingsDialog', () => {
     await userEvent.click(sw);
     expect(attributionToggle).toHaveBeenCalledWith(true);
     expect(sw.getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('enables global commit model and defaults to first provider model', async () => {
+    renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
+    const sw = screen.getByRole('switch', { name: '生成提交信息使用全局模型' });
+    expect(sw.getAttribute('aria-checked')).toBe('false');
+    await userEvent.click(sw);
+    // 开启时未选过 provider:自动选用第一个有模型的 provider 及其第一个模型
+    expect(commitModelSave).toHaveBeenCalledWith({
+      enabled: true,
+      provider: 'opencode',
+      model: 'deepseek-v4-flash-free',
+    });
+    // 开启后渲染 provider/模型下拉并带回所选值
+    expect((screen.getByLabelText('提交信息全局模型 Provider') as HTMLSelectElement).value).toBe(
+      'opencode',
+    );
+    expect((screen.getByLabelText('提交信息全局模型') as HTMLSelectElement).value).toBe(
+      'deepseek-v4-flash-free',
+    );
   });
 
   it('shows masked api key when provider has one configured', async () => {

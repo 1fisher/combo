@@ -325,6 +325,30 @@ export function setCommitAttribution(enabled: boolean): Promise<{ enabled: boole
   });
 }
 
+/** 读取「git 提交全局模型」配置(AI 生成提交信息时优先使用的模型)。 */
+export function getCommitModel(): Promise<Api.CommitModelConfig> {
+  return apiRequest('/v1/settings/commit-model');
+}
+
+/** 写入「git 提交全局模型」配置;provider/model 传空表示清除。 */
+export function setCommitModel(cfg: Api.CommitModelConfig): Promise<Api.CommitModelConfig> {
+  return apiRequest('/v1/settings/commit-model', {
+    method: 'POST',
+    body: cfg,
+  });
+}
+
+/** AI 生成提交信息:基于已暂存 diff 与最近提交风格,不执行 git 写操作。 */
+export function generateCommitMessage(
+  workspaceId: string,
+  repo?: string
+): Promise<Api.CommitMessageResult> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/git/commit-message`, {
+    method: 'POST',
+    body: repo ? { repo } : {},
+  });
+}
+
 export function gitPush(workspaceId: string, repo?: string): Promise<{ ok: boolean; output: string }> {
   return apiRequest(`/v1/workspaces/${workspaceId}/git/push`, {
     method: 'POST',

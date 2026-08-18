@@ -2111,6 +2111,23 @@ export namespace Api {
     status: string;
   };
 
+  /** GET/POST /v1/settings/commit-model — AI 生成提交信息的全局模型配置。 */
+  export type CommitModelConfig = {
+    enabled: boolean;
+    provider?: string | null;
+    model?: string | null;
+  };
+
+  /** POST /v1/workspaces/{id}/git/commit-message 返回(AI 生成的提交信息)。 */
+  export type CommitMessageResult = {
+    message: string;
+    /** 实际使用的 provider id 与模型名。 */
+    provider: string;
+    model: string;
+    /** 是否使用了设置中开启的全局提交模型(false = 会话模型)。 */
+    global_model: boolean;
+  };
+
   // 技能(combo-cli serve 本地端点,扫描技能目录)
   export type Skill = {
     name: string;
