@@ -30,6 +30,7 @@ import { useAgentInfo, useProviders, useSetModel, useWorkspaceConfig } from '../
 import type { Api } from '../../lib/api/types';
 import { cn, usageColor } from '../../lib/utils';
 import { useIsMobile } from '../../hooks/useIsMobile';
+import { useUIPreferences } from '../../stores/uiPreferencesStore';
 import { useDictation } from '../../hooks/useDictation';
 import { appendTranscript } from '../../lib/audio';
 import { openMicSettings } from '../../lib/openMicSettings';
@@ -216,10 +217,12 @@ export function Composer({
   // 需用输入框实际高度显式撑开;每帧渲染前同步测量,避免挂载时机导致高度缺失
   const boxRef = useRef<HTMLDivElement>(null);
   const [boxH, setBoxH] = useState<number | undefined>(undefined);
+  // 火焰特效开关(设置 → 通用「输入框火焰特效」,默认开启)
+  const flameEnabled = useUIPreferences((s) => s.flameEnabled);
   useLayoutEffect(() => {
     // 火焰未挂载时跳过测量:输入框打字会触发频繁重渲染,
     // 每次都读 offsetHeight 会强制同步布局(reflow),是中文输入卡顿的来源之一
-    if (!flameAlive) return;
+    if (!flameEnabled || !flameAlive) return;
     const el = boxRef.current;
     if (el) {
       const h = el.offsetHeight;
@@ -247,7 +250,7 @@ export function Composer({
     if (!running && flameAlive && flameHeat === 0) setFlameAlive(false);
   }, [running, flameAlive, flameHeat]);
   useEffect(() => {
-    if (!running) return;
+    if (!running || !flameEnabled) return;
     let lastLen = -1;
     let lastTime = performance.now();
     let ema = 0;
@@ -276,7 +279,7 @@ export function Composer({
     tick();
     const id = window.setInterval(tick, 400);
     return () => window.clearInterval(id);
-  }, [running]);
+  }, [running, flameEnabled]);
   // 当前模型:优先使用用户手动选中的(持久化),其次从 agent info 获取,否则从 config 加载默认
   const storedModel = useAgentStore((s) =>
     workspaceId ? s.modelSelections[workspaceId] : undefined
@@ -619,7 +622,7 @@ export function Composer({
               submit();
             }}
           >
-            <FlameComposerBox alive={flameAlive} running={running} boxH={boxH} heat={flameHeat}>
+            <FlameComposerBox alive={flameEnabled && flameAlive} running={running} boxH={boxH} heat={flameHeat}>
             <div
               ref={boxRef}
               className="relative flex flex-col gap-3 bg-input focus-within:bg-input-focused p-3 border border-input-border hover:border-input-border-hover focus-within:!border-input-border-focused rounded-2xl transition-colors"

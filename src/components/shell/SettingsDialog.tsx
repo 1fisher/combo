@@ -90,6 +90,8 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
   const ctxSectionRef = useRef<{ commit: () => void }>(null);
   const liquidEnabled = useUIPreferences((s) => s.liquidEnabled);
   const setLiquidEnabled = useUIPreferences((s) => s.setLiquidEnabled);
+  const flameEnabled = useUIPreferences((s) => s.flameEnabled);
+  const setFlameEnabled = useUIPreferences((s) => s.setFlameEnabled);
   const comboSoundEnabled = useUIPreferences((s) => s.comboSoundEnabled);
   const setComboSoundEnabled = useUIPreferences((s) => s.setComboSoundEnabled);
   const dndEnabled = useUIPreferences((s) => s.dndEnabled);
@@ -388,6 +390,16 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                     </span>
                   </div>
                   <Switch checked={liquidEnabled} onCheckedChange={setLiquidEnabled} aria-label="Liquid 流体特效" />
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <div className="flex flex-col gap-0.5">
+                    <label className="text-[13px] font-medium text-foreground">输入框火焰特效</label>
+                    <span className="text-[12px] text-foreground-subtle">
+                      推理进行时输入框外边框的火焰动效,输出越快火焰越旺
+                    </span>
+                  </div>
+                  <Switch checked={flameEnabled} onCheckedChange={setFlameEnabled} aria-label="输入框火焰特效" />
                 </div>
 
                 <div className="flex items-center justify-between">

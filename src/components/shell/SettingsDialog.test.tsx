@@ -396,6 +396,14 @@ describe('SettingsDialog', () => {
     useUIPreferences.setState({ comboSoundEnabled: true, notifySoundEnabled: true });
   });
 
+  it('关闭输入框火焰特效开关', async () => {
+    useUIPreferences.setState({ flameEnabled: true });
+    renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
+    await userEvent.click(screen.getByRole('switch', { name: '输入框火焰特效' }));
+    expect(useUIPreferences.getState().flameEnabled).toBe(false);
+    useUIPreferences.setState({ flameEnabled: true });
+  });
+
   it('开启免打扰模式开关', async () => {
     useUIPreferences.setState({ dndEnabled: false });
     renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);

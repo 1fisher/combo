@@ -5,6 +5,9 @@ interface UIPreferencesState {
   /** Liquid 流体特效开关(默认开启) */
   liquidEnabled: boolean;
   setLiquidEnabled: (enabled: boolean) => void;
+  /** 输入框火焰特效开关(默认开启):推理进行中 Composer 外边框的火焰动效 */
+  flameEnabled: boolean;
+  setFlameEnabled: (enabled: boolean) => void;
   /** Combo 连击特效音效(默认开启):连击弹出/增长时播放气泡音 */
   comboSoundEnabled: boolean;
   setComboSoundEnabled: (enabled: boolean) => void;
@@ -30,6 +33,8 @@ export const useUIPreferences = create<UIPreferencesState>()(
     (set) => ({
       liquidEnabled: true,
       setLiquidEnabled: (enabled) => set({ liquidEnabled: enabled }),
+      flameEnabled: true,
+      setFlameEnabled: (enabled) => set({ flameEnabled: enabled }),
       comboSoundEnabled: true,
       setComboSoundEnabled: (enabled) => set({ comboSoundEnabled: enabled }),
       dndEnabled: false,
