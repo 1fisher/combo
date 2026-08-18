@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { appendTranscript, float32ToPcm16 } from './audio';
+import { describe, expect, it, vi } from 'vitest';
+import { appendTranscript, float32ToPcm16, mergeDictationTail, playDictationChime } from './audio';
 
 describe('float32ToPcm16', () => {
   it('正常范围内映射并 clamp 削波', () => {
@@ -30,5 +30,125 @@ describe('appendTranscript', () => {
   });
   it('空白转写不影响原输入', () => {
     expect(appendTranscript('hello', '  ')).toBe('hello');
+  });
+});
+
+describe('mergeDictationTail', () => {
+  it('旧后端无 finalized:整串作为推断显示', () => {
+    expect(mergeDictationTail('', '你好', null)).toEqual({ confirmed: '', partial: '你好' });
+    expect(mergeDictationTail('你', '你好', null)).toEqual({ confirmed: '', partial: '你好' });
+  });
+
+  it('推断增长:确认前缀稳定,新增内容进推断尾巴', () => {
+    // 第一段:全部是推断
+    let r = mergeDictationTail('', '今天天气很好', '');
+    expect(r).toEqual({ confirmed: '', partial: '今天天气很好' });
+    // 同一段继续出字:确认前缀仍为空(尚未分段固化),推断整体增长
+    r = mergeDictationTail(r.confirmed + r.partial, '今天天气很好我们', '');
+    expect(r).toEqual({ confirmed: '', partial: '今天天气很好我们' });
+  });
+
+  it('分段固化:推断移入确认前缀,已识别文字不消失', () => {
+    // 说话中模型先推断出带幻觉尾巴的文本(推断阶段,未确认)
+    let r = mergeDictationTail('', '今天天气很好吧', '');
+    // 分段收尾:后端把幻觉尾巴「吧」裁剪掉,本次 text 与 finalized 一致
+    r = mergeDictationTail(r.confirmed + r.partial, '今天天气很好', '今天天气很好');
+    // 旧推断「吧」保留为旧推断,不整段消失
+    expect(r).toEqual({ confirmed: '今天天气很好', partial: '吧' });
+    // 下一段新推断到达:在分歧点就地替换「吧」
+    r = mergeDictationTail(r.confirmed + r.partial, '今天天气很好我们', '今天天气很好');
+    expect(r).toEqual({ confirmed: '今天天气很好', partial: '我们' });
+  });
+
+  it('收尾回缩无多余尾巴时,确认前缀直接接管', () => {
+    const r = mergeDictationTail('今天天气很好', '今天天气很好', '今天天气很好');
+    expect(r).toEqual({ confirmed: '今天天气很好', partial: '' });
+  });
+
+  it('确认前缀在分段间单调增长,旧推断按偏移裁剪', () => {
+    // 段1 已确认「我们」
+    let r = mergeDictationTail('', '我们', '我们');
+    expect(r).toEqual({ confirmed: '我们', partial: '' });
+    // 段2 推断「去公园」,随后段2 也固化
+    r = mergeDictationTail(r.confirmed + r.partial, '我们去公园', '我们');
+    expect(r).toEqual({ confirmed: '我们', partial: '去公园' });
+    r = mergeDictationTail(r.confirmed + r.partial, '我们去公园', '我们去公园');
+    expect(r).toEqual({ confirmed: '我们去公园', partial: '' });
+  });
+});
+
+/** 最小 AudioContext 替身:记录振荡器频率与音量包络调用。 */
+class FakeAudioContext {
+  static instances: FakeAudioContext[] = [];
+  state = 'suspended';
+  currentTime = 0;
+  destination = {};
+  oscillators: Array<{
+    type: string;
+    frequency: { setValueAtTime: ReturnType<typeof vi.fn> };
+    start: ReturnType<typeof vi.fn>;
+    stop: ReturnType<typeof vi.fn>;
+  }> = [];
+  gains: Array<{ gain: { setValueAtTime: ReturnType<typeof vi.fn>; exponentialRampToValueAtTime: ReturnType<typeof vi.fn> } }> = [];
+  resume = vi.fn();
+
+  constructor() {
+    FakeAudioContext.instances.push(this);
+  }
+
+  createOscillator() {
+    const osc = {
+      type: '',
+      frequency: { setValueAtTime: vi.fn() },
+      connect: vi.fn(),
+      start: vi.fn(),
+      stop: vi.fn(),
+    };
+    this.oscillators.push(osc);
+    return osc;
+  }
+
+  createGain() {
+    const gain = {
+      gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
+      connect: vi.fn(),
+    };
+    this.gains.push(gain);
+    return gain;
+  }
+}
+
+describe('playDictationChime', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    FakeAudioContext.instances = [];
+  });
+
+  it('无 AudioContext 环境静默降级不抛错', () => {
+    expect(() => playDictationChime('start')).not.toThrow();
+    expect(() => playDictationChime('stop')).not.toThrow();
+  });
+
+  it('开启播上扬双音(440→660),关闭播下抑双音(660→440)', () => {
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+    playDictationChime('start');
+    playDictationChime('stop');
+    const ctx = FakeAudioContext.instances[0];
+    // 首建 resume 解锁 autoplay 策略
+    expect(ctx.resume).toHaveBeenCalled();
+    // 4 个音:start 两个 + stop 两个
+    expect(ctx.oscillators).toHaveLength(4);
+    expect(ctx.oscillators[0].frequency.setValueAtTime.mock.calls[0][0]).toBe(440);
+    expect(ctx.oscillators[1].frequency.setValueAtTime.mock.calls[0][0]).toBe(660);
+    expect(ctx.oscillators[2].frequency.setValueAtTime.mock.calls[0][0]).toBe(660);
+    expect(ctx.oscillators[3].frequency.setValueAtTime.mock.calls[0][0]).toBe(440);
+    // 音量包络:0.15 起指数衰减,防爆音
+    expect(ctx.gains[0].gain.setValueAtTime.mock.calls[0][0]).toBe(0.15);
+    expect(ctx.gains[0].gain.exponentialRampToValueAtTime).toHaveBeenCalled();
+    // 每个音都调度了 start/stop
+    for (const osc of ctx.oscillators) {
+      expect(osc.start).toHaveBeenCalled();
+      expect(osc.stop).toHaveBeenCalled();
+    }
   });
 });

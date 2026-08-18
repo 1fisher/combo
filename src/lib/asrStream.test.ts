@@ -45,7 +45,9 @@ class FakeWebSocket {
   }
 }
 
-async function openStream(onPartial: (t: string) => void): Promise<{ stream: AsrStream; ws: FakeWebSocket }> {
+async function openStream(
+  onPartial: (text: string, finalized: string | null) => void
+): Promise<{ stream: AsrStream; ws: FakeWebSocket }> {
   const pending = AsrStream.open(16000, { onPartial });
   // open 在 new WebSocket 前有一次 await(base URL 解析),等宏任务确保已构造
   await new Promise((r) => setTimeout(r, 0));
@@ -66,13 +68,19 @@ describe('AsrStream', () => {
   });
 
   it('连接携带 sample_rate 参数,partial 增量回调', async () => {
-    const partials: string[] = [];
-    const { stream, ws } = await openStream((t) => partials.push(t));
+    const partials: Array<[string, string | null]> = [];
+    const { stream, ws } = await openStream((t, f) => partials.push([t, f]));
     expect(ws.url).toContain('/v1/transcribe/stream?sample_rate=16000');
 
+    // 旧后端无 finalized 字段 → null;新后端带 finalized(已确认前缀)
     ws.message('{"type":"partial","text":"你"}');
     ws.message('{"type":"partial","text":"你好"}');
-    expect(partials).toEqual(['你', '你好']);
+    ws.message('{"type":"partial","text":"你好世界","finalized":"你好"}');
+    expect(partials).toEqual([
+      ['你', null],
+      ['你好', null],
+      ['你好世界', '你好'],
+    ]);
 
     stream.close();
   });

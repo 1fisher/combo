@@ -15,7 +15,9 @@
 //! - `POST /v1/transcribe`:请求体为 16kHz 单声道 PCM16 小端原始音频,
 //!   响应 `{ text, lang }`(内部按静音分段解码后拼接,支持长音频);
 //! - `GET /v1/transcribe/stream`(WebSocket):客户端持续推送 PCM16 二进制帧,
-//!   服务端回发 `{"type":"partial","text":..}` 增量结果;发送
+//!   服务端回发 `{"type":"partial","text":..,"finalized":..}` 增量结果,
+//!   `text` 为累计文本(已固化分段 + 当前段推断),`finalized` 为已固化前缀
+//!   (单调增长,前端据此稳定保留确认文字、只修正推断尾巴);发送
 //!   `{"type":"finish"}` 文本帧后回发 `{"type":"final","text":..}` 并关闭。
 //!
 //! 各模型均为离线(非流式)识别器:边说边出字由服务端「能量 VAD 分段 +
@@ -403,28 +405,30 @@ impl StreamSession {
         }
     }
 
-    /// 送入一段采样,返回累计文本(已固化分段 + 当前段 partial)。
-    fn feed(&mut self, sample_rate: u32, samples: &[f32]) -> String {
+    /// 送入一段采样,返回(已固化文本, 当前段推断文本)。
+    /// 二者分开返回:已固化文本单调增长(前端稳定保留),推断文本可随重解码
+    /// 修正,前端据此只更新推断尾巴、不让已确认文字消失。
+    fn feed(&mut self, sample_rate: u32, samples: &[f32]) -> (String, String) {
         self.segmenter.push(samples);
         self.since_decode += samples.len();
         while let Some(segment) = self.segmenter.take_ready() {
             self.decode_append(&segment);
             self.since_decode = 0;
         }
-        let mut text = self.finalized.clone();
+        let mut partial = String::new();
         if self.since_decode >= PARTIAL_DECODE_SAMPLES {
             self.since_decode = 0;
             let decode_len = self.segmenter.decode_len();
             if decode_len >= VAD_MIN_SPEECH_SAMPLES {
-                let partial = self
+                let text = self
                     .recognizer
                     .lock()
                     .unwrap()
                     .transcribe(sample_rate, &self.segmenter.buffer[..decode_len]);
-                text.push_str(partial.trim());
+                partial = text.trim().to_string();
             }
         }
-        text
+        (self.finalized.clone(), partial)
     }
 
     /// 结束会话:解码剩余缓冲并返回最终文本。
@@ -714,7 +718,8 @@ async fn transcribe(
 }
 
 /// GET /v1/transcribe/stream — 流式听写 WebSocket。
-/// 客户端持续发送 PCM16 二进制帧,服务端回发 partial 增量;
+/// 客户端持续发送 PCM16 二进制帧,服务端回发 partial 增量
+/// (`text` 累计文本 + `finalized` 已固化前缀);
 /// 发送 `{"type":"finish"}`(或纯文本 `finish`)后回发 final 并关闭。
 async fn stream_ws(
     State(state): State<AppState>,
@@ -744,6 +749,7 @@ async fn run_stream(mut socket: WebSocket, asr: Arc<AsrService>, sample_rate: u3
     };
     let session = Arc::new(Mutex::new(StreamSession::new(recognizer)));
     let mut last_sent = String::new();
+    let mut last_finalized = String::new();
     while let Some(msg) = socket.recv().await {
         match msg {
             Ok(Message::Binary(bytes)) => {
@@ -752,15 +758,31 @@ async fn run_stream(mut socket: WebSocket, asr: Arc<AsrService>, sample_rate: u3
                 }
                 let samples = pcm16_to_f32(&bytes);
                 let session = session.clone();
-                let text = tokio::task::spawn_blocking(move || {
-                    session.lock().unwrap().feed(sample_rate, &samples)
+                let (text, finalized) = tokio::task::spawn_blocking(move || {
+                    let (finalized, partial) = session.lock().unwrap().feed(sample_rate, &samples);
+                    // 累计文本 = 已确认 + 当前段推断(与旧协议一致,向后兼容)
+                    let mut text = finalized.clone();
+                    if !partial.is_empty() {
+                        text.push_str(&partial);
+                    }
+                    (text, finalized)
                 })
                 .await
                 .unwrap_or_default();
-                if text != last_sent {
+                // 已确认前缀变化也要下发(分段收尾时 text 可能不变,但前端需要
+                // 知道边界,才能把推断尾巴固化、避免下一轮回缩时误判)
+                if text != last_sent || finalized != last_finalized {
                     last_sent = text.clone();
+                    last_finalized = finalized.clone();
                     if socket
-                        .send(Message::Text(json!({"type": "partial", "text": text}).to_string()))
+                        .send(Message::Text(
+                            json!({
+                                "type": "partial",
+                                "text": text,
+                                "finalized": finalized
+                            })
+                            .to_string(),
+                        ))
                         .await
                         .is_err()
                     {

@@ -180,6 +180,8 @@ export function Composer({
 }) {
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const composingRef = useRef(false);
+  /** 听写预输入镜像层(确认文本实色、推断文本半透明,textarea 文字透明对齐光标) */
+  const dictationMirrorRef = useRef<HTMLDivElement>(null);
   const agentMode = useAgentStore((s) => s.agentMode);
   const setAgentMode = useAgentStore((s) => s.setAgentMode);
   const mode = MODES.find((m) => m.id === agentMode) ?? MODES[0];
@@ -593,8 +595,10 @@ export function Composer({
     onChange(appendTranscript(value, text));
     requestAnimationFrame(() => areaRef.current?.focus());
   });
-  // 录音中显示在输入框末尾的预输入文本(停止后清空,由 onText 追加 final)
-  const asrPending = dictation.state !== 'idle' ? dictation.partialText : '';
+  // 录音中显示在输入框末尾的预输入文本:已确认(分段固化)部分稳定保留,
+  // 推断部分实时修正(说话中不会整段消失);停止后清空,由 onText 追加 final
+  const asrPending =
+    dictation.state !== 'idle' ? dictation.confirmedText + dictation.partialText : '';
 
   // 预输入文本变化时同步输入框高度(与用户输入共用同一高度策略)
   useEffect(() => {
@@ -682,18 +686,47 @@ export function Composer({
               )}
               {/* 输入区 */}
               <div className="relative flex-1">
+                {/* 听写镜像层:确认文本实色、推断文本半透明斜体;textarea 文字透明仅留光标 */}
+                {asrPending && (
+                  <div
+                    ref={dictationMirrorRef}
+                    aria-hidden
+                    className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words text-sm leading-5 text-foreground"
+                  >
+                    {value}
+                    {dictation.confirmedText}
+                    <span className="italic opacity-60">{dictation.partialText}</span>
+                  </div>
+                )}
                 <textarea
                   ref={areaRef}
                   rows={1}
                   value={value + asrPending}
+                  style={
+                    asrPending
+                      ? { color: 'transparent', caretColor: 'var(--color-foreground)' }
+                      : undefined
+                  }
+                  onScroll={
+                    asrPending
+                      ? () => {
+                          const el = dictationMirrorRef.current;
+                          if (el) el.scrollTop = areaRef.current?.scrollTop ?? 0;
+                        }
+                      : undefined
+                  }
                   onChange={(e) => {
                     // 听写进行中手动编辑:放弃当前识别;受控值里拼着预输入尾巴,
-                    // 需要剥离后再写入,避免 pending 文本污染用户输入
+                    // 剥离后再写入,避免 pending 文本污染用户输入
                     if (dictation.state !== 'idle') dictation.cancel();
                     const v = e.target.value;
-                    onChange(
-                      asrPending && v.endsWith(asrPending) ? v.slice(0, -asrPending.length) : v
-                    );
+                    if (asrPending) {
+                      // 预输入尾巴一定在末尾,移除最后一次出现的位置
+                      const idx = v.lastIndexOf(asrPending);
+                      onChange(idx >= 0 ? v.slice(0, idx) + v.slice(idx + asrPending.length) : v);
+                    } else {
+                      onChange(v);
+                    }
                     autosize();
                   }}
                   onCompositionStart={() => {
@@ -724,7 +757,9 @@ export function Composer({
                       : '向 combo 提问,@ 提及文件或文件夹,/ 使用命令或子智能体,$ 使用技能,# 关联对话'
                   }
                   disabled={disabled}
-                  className="bg-transparent disabled:opacity-50 shadow-none p-0 border-0 outline-none w-full min-h-10 max-h-40 text-foreground placeholder:text-foreground-subtlest text-sm leading-5 resize-none disabled:cursor-not-allowed"
+                  className={`bg-transparent disabled:opacity-50 shadow-none p-0 border-0 outline-none w-full min-h-10 max-h-40 text-foreground placeholder:text-foreground-subtlest text-sm leading-5 resize-none disabled:cursor-not-allowed${
+                    asrPending ? ' [scrollbar-width:none] [&::-webkit-scrollbar]:hidden' : ''
+                  }`}
                   aria-label="输入消息"
                 />
               </div>

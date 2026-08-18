@@ -4,7 +4,8 @@
  * 连接 `GET /v1/transcribe/stream?sample_rate=16000`(`?token=` 传远程访问令牌,
  * 浏览器 WebSocket 不能设 header),持续推送 PCM16 二进制帧,
  * 服务端经 Paraformer 流式模型回发:
- * - `{"type":"partial","text":..}` 增量文本(边说边出字);
+ * - `{"type":"partial","text":..,"finalized":..}` 增量文本(`text` 累计文本,
+ *   `finalized` 为已确认前缀,分段固化后单调增长,旧后端无此字段);
  * - `{"type":"final","text":..}` 发送 `{"type":"finish"}` 后的最终文本;
  * - `{"type":"error","code":"asr_not_ready",..}` 模型未就绪。
  */
@@ -13,8 +14,8 @@ import { ensureProxyBaseUrl } from './connection';
 import { getAccessToken } from './authToken';
 
 export type AsrStreamHandlers = {
-  /** 每次增量文本更新(累计文本,非增量片段)。 */
-  onPartial: (text: string) => void;
+  /** 每次增量文本更新(累计文本 + 已确认前缀,旧后端无 finalized 时为 null)。 */
+  onPartial: (text: string, finalized: string | null) => void;
   /** 服务端主动报错(如模型未就绪)或连接异常断开。 */
   onError?: (message: string) => void;
 };
@@ -61,14 +62,15 @@ export class AsrStream {
 
   private handleMessage(data: unknown): void {
     if (typeof data !== 'string') return;
-    let msg: { type?: string; text?: string; message?: string };
+    let msg: { type?: string; text?: string; finalized?: string; message?: string };
     try {
       msg = JSON.parse(data);
     } catch {
       return;
     }
     if (msg.type === 'partial') {
-      this.handlers.onPartial(msg.text ?? '');
+      const finalized = typeof msg.finalized === 'string' ? msg.finalized : null;
+      this.handlers.onPartial(msg.text ?? '', finalized);
     } else if (msg.type === 'final') {
       this.clearFinishTimer();
       this.settleFinal?.(msg.text ?? '');

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getTranscribeStatus, prepareTranscribe, ApiError } from '../lib/api';
-import { float32ToPcm16 } from '../lib/audio';
+import { float32ToPcm16, mergeDictationTail, playDictationChime } from '../lib/audio';
 import { AsrStream } from '../lib/asrStream';
 
 /** 单次录音上限(秒):离线模型按静音分段,放宽到 10 分钟兜底。 */
@@ -47,6 +47,8 @@ export type DictationState = 'idle' | 'recording' | 'transcribing';
  * - 后端本地离线识别模型(设置中可选 SenseVoice 中文 / Moonshine 中英),
  *   WebSocket 边说边出字(`partial` 实时刷新,停止后 `final` 一次性追加),
  *   不上传音频到第三方;
+ * - 识别文本分「已确认(分段固化)」与「推断(当前段)」两部分:确认部分
+ *   单调稳定、不会在说话中消失,推断部分实时修正(类似输入法组合动画);
  * - 16kHz 单声道经 AudioWorklet 直接采集,无需 MediaRecorder 离线解码;
  * - 开始录音时即触发模型准备(首次使用需下载约 272MB,期间音频在客户端
  *   缓冲,模型就绪后自动建立连接并补发,录音与下载并行)。
@@ -54,8 +56,8 @@ export type DictationState = 'idle' | 'recording' | 'transcribing';
 export function useDictation(onText: (text: string) => void) {
   const [state, setState] = useState<DictationState>('idle');
   const [seconds, setSeconds] = useState(0);
-  /** 实时识别文本(边说边出字);录音结束后清空。 */
-  const [partialText, setPartialText] = useState('');
+  /** 听写中的预输入文本:已确认(分段固化)部分 + 当前段推断部分。 */
+  const [pending, setPending] = useState({ confirmed: '', partial: '' });
   /** 模型下载进度(0~1);null 表示无需展示。 */
   const [modelProgress, setModelProgress] = useState<number | null>(null);
   const [error, setError] = useState('');
@@ -149,8 +151,12 @@ export function useDictation(onText: (text: string) => void) {
     if (cancelledRef.current) return;
     try {
       const stream = await AsrStream.open(16000, {
-        onPartial: (text) => {
-          if (!cancelledRef.current) setPartialText(text);
+        onPartial: (text, finalized) => {
+          if (cancelledRef.current) return;
+          // 保持已确认前缀稳定,只更新推断尾巴(收尾回缩时保留旧推断待替换)
+          setPending((prev) =>
+            mergeDictationTail(prev.confirmed + prev.partial, text, finalized)
+          );
         },
       });
       // 等待期间录音可能已被取消(过短或组件卸载)
@@ -192,6 +198,8 @@ export function useDictation(onText: (text: string) => void) {
   }, []);
 
   const finishRecording = useCallback(async () => {
+    // 关闭提示音:用户点停止或达到时长上限自动收尾时播放
+    playDictationChime('stop');
     const duration = (Date.now() - startedAtRef.current) / 1000;
     cleanupCapture();
     if (duration < 0.3) {
@@ -220,14 +228,14 @@ export function useDictation(onText: (text: string) => void) {
       setError(e instanceof Error ? e.message : '语音识别失败');
     } finally {
       setModelProgress(null);
-      setPartialText('');
+      setPending({ confirmed: '', partial: '' });
       setState('idle');
     }
   }, [cleanupCapture, teardownSession]);
 
   const startRecording = useCallback(async () => {
     setError('');
-    setPartialText('');
+    setPending({ confirmed: '', partial: '' });
     cancelledRef.current = false;
     teardownSession();
     if (!navigator.mediaDevices?.getUserMedia || typeof AudioContext === 'undefined') {
@@ -308,7 +316,12 @@ export function useDictation(onText: (text: string) => void) {
       void finishRecording();
       return;
     }
-    if (state === 'idle') void startRecording();
+    if (state === 'idle') {
+      // 开启提示音:必须在用户点击手势内同步播放,AudioContext 才能被
+      // autoplay 策略放行(await getUserMedia 之后手势已失效)
+      playDictationChime('start');
+      void startRecording();
+    }
   }, [state, startRecording, finishRecording]);
 
   /** 放弃当前识别:停止录音、丢弃未提交的识别文本(不追加到输入框)。 */
@@ -317,10 +330,21 @@ export function useDictation(onText: (text: string) => void) {
     cleanupCapture();
     teardownSession();
     setModelProgress(null);
-    setPartialText('');
+    setPending({ confirmed: '', partial: '' });
     setError('');
     setState('idle');
   }, [cleanupCapture, teardownSession]);
 
-  return { state, seconds, partialText, modelProgress, error, toggle, cancel };
+  return {
+    state,
+    seconds,
+    /** 已确认(分段固化)的识别文本,录音期间稳定保留、不会被回退擦除。 */
+    confirmedText: pending.confirmed,
+    /** 当前段的推断文本,随重解码实时修正。 */
+    partialText: pending.partial,
+    modelProgress,
+    error,
+    toggle,
+    cancel,
+  };
 }

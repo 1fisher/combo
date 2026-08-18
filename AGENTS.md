@@ -279,8 +279,11 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   16kHz 单声道 PCM16 小端原始字节,内部按静音分段解码后拼接,响应
   `{text,lang}`;模型未就绪 503 code=asr_not_ready;body limit 32MB)、
   `GET /v1/transcribe/stream`(**WebSocket 流式听写**:客户端持续推 PCM16
-  二进制帧,服务端回发 `{"type":"partial"}` 增量;发 `{"type":"finish"}` 后回
-  `{"type":"final"}` 并关闭;`?token=` 传远程令牌,同终端 WS)。模型文件缺失
+  二进制帧,服务端回发 `{"type":"partial","text":..,"finalized":..}` 增量
+  (`text` 为累计文本 = 已固化分段 + 当前段推断,`finalized` 为已固化前缀,
+  单调增长;分段收尾重解码裁剪推断尾巴时也会下发,前端据此稳定保留确认
+  文字、只修正推断尾巴);发 `{"type":"finish"}` 后回 `{"type":"final"}`
+  并关闭;`?token=` 传远程令牌,同终端 WS)。模型文件缺失
   时自动从 sherpa-onnx release 下载(`COMBO_ASR_MODEL_URL` 可换镜像),解压到
   模型子目录,懒加载一次常驻(`AppState.asr`,解码在 spawn_blocking 中执行)。
   **音频采集与 PCM 转换在前端**:`useDictation`(`src/hooks/useDictation.ts`)
@@ -288,9 +291,15 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   降混、聚帧(~100ms)成 PCM16,经 `src/lib/asrStream.ts` 的 `AsrStream`
   WebSocket 直发;首录模型未就绪时音频在客户端缓冲(≤5min),就绪后自动建连
   并补发,下载与录音并行。状态机 idle/recording/transcribing(10min 上限),
-  识别文本以「预输入」方式实时拼进输入框末尾(`partialText`,类似输入法
-  组合,不写入受控 value,停止后 final 经 `appendTranscript` 正式追加;
-  录音中手动编辑输入框会经 `cancel` 放弃识别)。Composer 右下话筒按钮接入,
+  识别文本以「预输入」方式实时拼进输入框末尾(`useDictation` 的 `confirmedText`/
+  `partialText` 分开维护,不写入受控 value;停止后 final 经 `appendTranscript`
+  正式追加;录音中手动编辑输入框会经 `cancel` 放弃识别)。**已确认(分段固化)
+  文本单调稳定、说话中不会消失,推断部分随重解码就地修正,分段收尾回缩时
+  保留旧推断待下一段替换**(`mergeDictationTail` 合并,类似输入法组合动画);
+  Composer 听写时渲染镜像层区分确认(实色)/推断(半透明斜体)文本。
+  开启/关闭录音有 Web Audio 合成的提示音(上扬/下抑双音,`audio.ts` 的
+  `playDictationChime`;开启音在点击手势内同步播放以解锁 autoplay 策略,
+  关闭音在收尾时播放,自动取消不播)。
   最终文本经 `appendTranscript` 追加进输入框(中英边界智能补空格)。macOS
   麦克风权限声明在 `src-tauri/Info.plist`(`NSMicrophoneUsageDescription`)。
 - **Frontend layout:** `src/components/{ui,shell,agent}` — `ui/` is generated
