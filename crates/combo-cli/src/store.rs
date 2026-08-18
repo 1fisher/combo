@@ -116,6 +116,10 @@ pub struct StoredAutomation {
     pub prompt: String,
     /// 调度配置(JSON 字符串:`{ "type": "once|interval|daily|weekly", ... }`)。
     pub schedule: String,
+    /// 该任务单独使用的模型(JSON 字符串,结构同 `WorkspaceModel`:
+    /// `{ "provider", "model", "reasoning_effort"? }`);空串表示跟随
+    /// 目标项目的默认模型(不单独设置)。
+    pub model: String,
     pub enabled: bool,
     /// 下次触发时间(unix 秒);None 表示不再调度(一次性任务已执行)。
     pub next_run_at: Option<i64>,
@@ -238,6 +242,7 @@ impl ComboDb {
                 name          TEXT NOT NULL,
                 prompt        TEXT NOT NULL,
                 schedule      TEXT NOT NULL,
+                model         TEXT NOT NULL DEFAULT '',
                 enabled       INTEGER NOT NULL DEFAULT 1,
                 next_run_at   INTEGER,
                 last_run_at   INTEGER,
@@ -273,6 +278,7 @@ impl ComboDb {
             "ALTER TABLE conversations ADD COLUMN context_tokens INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE conversations ADD COLUMN context_window INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE workspace_config ADD COLUMN model TEXT NOT NULL DEFAULT ''",
+            "ALTER TABLE automations ADD COLUMN model TEXT NOT NULL DEFAULT ''",
         ];
         for sql in &mig {
             let _ = conn.execute(sql, []);
@@ -821,15 +827,16 @@ impl ComboDb {
     /// 写入(插入或按 id 覆盖)一条自动化任务。
     pub fn upsert_automation(&self, a: &StoredAutomation) -> anyhow::Result<()> {
         self.conn.lock().unwrap().execute(
-            "INSERT INTO automations (id, workspace_id, name, prompt, schedule, enabled,
+            "INSERT INTO automations (id, workspace_id, name, prompt, schedule, model, enabled,
                                       next_run_at, last_run_at, last_status, last_error,
                                       created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
              ON CONFLICT(id) DO UPDATE SET
                  workspace_id=excluded.workspace_id,
                  name=excluded.name,
                  prompt=excluded.prompt,
                  schedule=excluded.schedule,
+                 model=excluded.model,
                  enabled=excluded.enabled,
                  next_run_at=excluded.next_run_at,
                  last_run_at=excluded.last_run_at,
@@ -842,6 +849,7 @@ impl ComboDb {
                 a.name,
                 a.prompt,
                 a.schedule,
+                a.model,
                 a.enabled as i64,
                 a.next_run_at,
                 a.last_run_at,
@@ -857,7 +865,7 @@ impl ComboDb {
     pub fn get_automation(&self, id: &str) -> anyhow::Result<Option<StoredAutomation>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, workspace_id, name, prompt, schedule, enabled, next_run_at,
+            "SELECT id, workspace_id, name, prompt, schedule, model, enabled, next_run_at,
                     last_run_at, last_status, last_error, created_at, updated_at
              FROM automations WHERE id=?1",
         )?;
@@ -873,7 +881,7 @@ impl ComboDb {
     pub fn list_automations(&self) -> anyhow::Result<Vec<StoredAutomation>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, workspace_id, name, prompt, schedule, enabled, next_run_at,
+            "SELECT id, workspace_id, name, prompt, schedule, model, enabled, next_run_at,
                     last_run_at, last_status, last_error, created_at, updated_at
              FROM automations ORDER BY created_at DESC",
         )?;
@@ -892,7 +900,7 @@ impl ComboDb {
     ) -> anyhow::Result<Vec<StoredAutomation>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, workspace_id, name, prompt, schedule, enabled, next_run_at,
+            "SELECT id, workspace_id, name, prompt, schedule, model, enabled, next_run_at,
                     last_run_at, last_status, last_error, created_at, updated_at
              FROM automations WHERE workspace_id=?1 ORDER BY created_at DESC",
         )?;
@@ -908,7 +916,7 @@ impl ComboDb {
     pub fn list_due_automations(&self, now: i64) -> anyhow::Result<Vec<StoredAutomation>> {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, workspace_id, name, prompt, schedule, enabled, next_run_at,
+            "SELECT id, workspace_id, name, prompt, schedule, model, enabled, next_run_at,
                     last_run_at, last_status, last_error, created_at, updated_at
              FROM automations WHERE enabled=1 AND next_run_at IS NOT NULL AND next_run_at <= ?1
              ORDER BY next_run_at ASC",
@@ -1030,13 +1038,14 @@ fn row_to_automation(r: &rusqlite::Row<'_>) -> rusqlite::Result<StoredAutomation
         name: r.get(2)?,
         prompt: r.get(3)?,
         schedule: r.get(4)?,
-        enabled: r.get::<_, i64>(5)? != 0,
-        next_run_at: r.get(6)?,
-        last_run_at: r.get(7)?,
-        last_status: r.get(8)?,
-        last_error: r.get(9)?,
-        created_at: r.get(10)?,
-        updated_at: r.get(11)?,
+        model: r.get(5)?,
+        enabled: r.get::<_, i64>(6)? != 0,
+        next_run_at: r.get(7)?,
+        last_run_at: r.get(8)?,
+        last_status: r.get(9)?,
+        last_error: r.get(10)?,
+        created_at: r.get(11)?,
+        updated_at: r.get(12)?,
     })
 }
 
@@ -1370,6 +1379,7 @@ mod tests {
             name: format!("任务 {id}"),
             prompt: "帮我整理周报".into(),
             schedule: r#"{"type":"daily","time":"09:00"}"#.into(),
+            model: String::new(),
             enabled: true,
             next_run_at: next,
             last_run_at: None,

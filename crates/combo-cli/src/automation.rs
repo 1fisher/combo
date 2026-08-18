@@ -17,7 +17,9 @@
 //! `automation_runs` 表并更新任务的最近运行状态。
 
 use crate::serve::{self, AppState, AgentRunRequest};
-use crate::store::{AutomationRun, ConversationMeta, StoredAutomation};
+use crate::store::{AutomationRun, ConversationMeta, StoredAutomation, WorkspaceModel};
+use crate::config::AppConfig;
+use crate::providers;
 use axum::body::Body;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -522,6 +524,7 @@ pub(crate) async fn trigger(
         prompt: a.prompt.clone(),
         history: None,
         workspace_dir: None,
+        model: model_from_stored(&a.model),
     };
     let state2 = state.clone();
     let auto_id = a.id.clone();
@@ -593,6 +596,51 @@ fn mark_skipped(state: &AppState, a: &StoredAutomation, reason: &str) {
 
 // ---------- HTTP handlers ----------
 
+/// 解析请求体里的 `model` 字段(可选)。
+/// - 缺省(字段不存在)→ Ok(None):沿用已有值;
+/// - `null` → Ok(Some(None)):显式清除,跟随项目默认;
+/// - `{ provider, model, reasoning_effort? }` → Ok(Some(Some(m))):单独指定,
+///   provider 必须存在(与 `config_model` 口径一致,避免保存后运行静默回退)。
+fn parse_model_field(v: &Value) -> Result<Option<Option<WorkspaceModel>>, String> {
+    let Some(raw) = v.get("model") else {
+        return Ok(None);
+    };
+    if raw.is_null() {
+        return Ok(Some(None));
+    }
+    let m: WorkspaceModel = serde_json::from_value(raw.clone())
+        .map_err(|e| format!("model 格式无效(需要 provider/model 字段): {e}"))?;
+    if m.provider.is_empty() || m.model.is_empty() {
+        return Err("model 需要 provider 与 model 字段".into());
+    }
+    let config_path =
+        AppConfig::load_or_create(&crate::config::default_config_path()).unwrap_or_default();
+    if let Err(e) = providers::find_provider(&m.provider, &config_path.providers) {
+        return Err(format!("未知 provider `{}`: {e}", m.provider));
+    }
+    Ok(Some(Some(m)))
+}
+
+/// 把任务落库用的 model 字段转成 JSON(空串 = 未单独设置)。
+fn model_to_json(raw: &str) -> Value {
+    if raw.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_str::<WorkspaceModel>(raw)
+            .map(|m| serde_json::to_value(&m).unwrap_or(Value::Null))
+            .unwrap_or(Value::Null)
+    }
+}
+
+/// 把任务落库用的 model 字段解析为运行时的模型选择(空串 = None)。
+fn model_from_stored(raw: &str) -> Option<WorkspaceModel> {
+    if raw.is_empty() {
+        None
+    } else {
+        serde_json::from_str(raw).ok()
+    }
+}
+
 /// GET /v1/automations?workspace_id=xxx — 列出自动化任务(可选按项目过滤)。
 pub async fn list(
     State(state): State<AppState>,
@@ -660,6 +708,12 @@ pub async fn create(State(state): State<AppState>, Json(body): Json<Value>) -> R
         return json_err(StatusCode::BAD_REQUEST, "一次性任务的 run_at 必须晚于当前时间");
     }
     let enabled = body.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+    // 单独指定的模型(缺省 = 跟随项目默认)
+    let model = match parse_model_field(&body) {
+        Ok(Some(Some(m))) => serde_json::to_string(&m).unwrap_or_default(),
+        Ok(_) => String::new(),
+        Err(e) => return json_err(StatusCode::BAD_REQUEST, &e),
+    };
     let now = unix_secs();
     let next = schedule.next_after(Local::now()).map(|t| t.timestamp());
     let a = StoredAutomation {
@@ -668,6 +722,7 @@ pub async fn create(State(state): State<AppState>, Json(body): Json<Value>) -> R
         name,
         prompt,
         schedule: schedule.to_json().to_string(),
+        model,
         enabled,
         next_run_at: next,
         last_run_at: None,
@@ -714,6 +769,13 @@ pub async fn update(
     }
     if let Some(v) = body.get("enabled").and_then(Value::as_bool) {
         a.enabled = v;
+    }
+    // 单独指定的模型:缺省沿用;null 清除(跟随项目默认);对象则校验后保存
+    match parse_model_field(&body) {
+        Ok(Some(Some(m))) => a.model = serde_json::to_string(&m).unwrap_or_default(),
+        Ok(Some(None)) => a.model = String::new(),
+        Ok(None) => {}
+        Err(e) => return json_err(StatusCode::BAD_REQUEST, &e),
     }
     let mut schedule_changed = false;
     if let Some(v) = body.get("schedule") {
@@ -820,6 +882,7 @@ fn automation_json(a: &StoredAutomation, state: &AppState) -> Value {
         "name": a.name,
         "prompt": a.prompt,
         "schedule": schedule,
+        "model": model_to_json(&a.model),
         "enabled": a.enabled,
         "next_run_at": a.next_run_at,
         "last_run_at": a.last_run_at,
@@ -1019,6 +1082,35 @@ mod tests {
     }
 
     #[test]
+    fn model_field_parsing_roundtrip() {
+        // 合法对象(provider 取内置定义,find_provider 可解析)
+        let v = json!({
+            "model": { "provider": "deepseek", "model": "deepseek-chat", "reasoning_effort": "high" }
+        });
+        let parsed = parse_model_field(&v).unwrap().unwrap().unwrap();
+        assert_eq!(parsed.provider, "deepseek");
+        assert_eq!(parsed.model, "deepseek-chat");
+        assert_eq!(parsed.reasoning_effort.as_deref(), Some("high"));
+
+        // 落库字符串 → JSON 输出 → 运行时解析 的完整往返
+        let stored = serde_json::to_string(&parsed).unwrap();
+        assert_eq!(model_to_json(&stored)["model"], "deepseek-chat");
+        let back = model_from_stored(&stored).unwrap();
+        assert_eq!(back.provider, parsed.provider);
+        assert_eq!(back.model, parsed.model);
+
+        // 未设置 / 空串 / null 均为 None
+        assert!(parse_model_field(&json!({})).unwrap().is_none());
+        assert!(parse_model_field(&json!({ "model": null })).unwrap().is_some());
+        assert!(model_from_stored("").is_none());
+        assert_eq!(model_to_json(""), Value::Null);
+
+        // 缺字段 / 未知 provider 报错
+        assert!(parse_model_field(&json!({ "model": { "model": "x" } })).is_err());
+        assert!(parse_model_field(&json!({ "model": { "provider": "nope", "model": "x" } })).is_err());
+    }
+
+    #[test]
     fn trigger_creates_session_and_run_record_but_skips_missing_workspace() {
         // 用测试态:workspace 缺失 → mark_skipped
         let state = AppState::test_state(std::sync::Arc::new(crate::meta::MetaStore::new()), None);
@@ -1028,6 +1120,7 @@ mod tests {
             name: "测试".into(),
             prompt: "你好".into(),
             schedule: r#"{"type":"daily","time":"09:00"}"#.into(),
+            model: String::new(),
             enabled: true,
             next_run_at: Some(1),
             last_run_at: None,

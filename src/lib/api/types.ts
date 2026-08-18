@@ -2244,6 +2244,13 @@ export namespace Api {
     [key: string]: unknown;
   };
 
+  /** 自动化任务单独使用的模型(与 WorkspaceModel 同构;null = 跟随项目默认)。 */
+  export type AutomationModel = {
+    provider: string;
+    model: string;
+    reasoning_effort?: string | null;
+  };
+
   /** 一条自动化(定时)任务。 */
   export type Automation = {
     id: string;
@@ -2252,6 +2259,8 @@ export namespace Api {
     name: string;
     prompt: string;
     schedule: AutomationSchedule;
+    /** 单独指定的模型;null = 未设置,跟随目标项目默认。 */
+    model?: AutomationModel | null;
     enabled: boolean;
     next_run_at: number | null;
     last_run_at: number | null;

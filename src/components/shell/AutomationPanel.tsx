@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   AlarmClock,
   Calendar,
@@ -7,6 +7,7 @@ import {
   CalendarRange,
   ChevronLeft,
   Clock,
+  Cpu,
   History,
   Loader2,
   Pencil,
@@ -27,6 +28,7 @@ import {
   useUpdateAutomation,
 } from '../../hooks/useAutomations';
 import { useWorkspaces } from '../../hooks/useWorkspaces';
+import { useProviders } from '../../hooks/useAgentModel';
 import { confirmDialog } from '../../lib/confirm';
 import { cn } from '../../lib/utils';
 import { HeroCard, HeroEmpty, INPUT_CLS, LABEL_CLS, PAGE, ViewScroll } from './PageShell';
@@ -114,6 +116,13 @@ function StatusBadge({ status }: { status: string | null | undefined }) {
   );
 }
 
+/** 思考强度选项(与 Composer 一致)。 */
+const THOUGHT_LEVELS = [
+  { id: 'nothink', label: '无思考' },
+  { id: 'high', label: '高' },
+  { id: 'max', label: '最高' },
+] as const;
+
 type ScheduleType = Api.AutomationScheduleType;
 
 type Draft = {
@@ -133,6 +142,11 @@ type Draft = {
   day: string;
   /** quarterly:季度内第几个月(1..3);yearly:几月(1..12) */
   month: string;
+  /** 单独使用的模型:providerId+modelId 同时非空才生效,否则跟随项目默认 */
+  providerId: string;
+  modelId: string;
+  /** 思考强度(nothink / high / max) */
+  reasoningEffort: string;
 };
 
 function toDatetimeLocal(ts: number): string {
@@ -157,6 +171,9 @@ function emptyDraft(): Draft {
     weekday: '1',
     day: '1',
     month: '1',
+    providerId: '',
+    modelId: '',
+    reasoningEffort: 'high',
   };
 }
 
@@ -172,6 +189,9 @@ function draftFromAutomation(a: Api.Automation): Draft {
     weekday: String(a.schedule.weekday ?? 1),
     day: String(a.schedule.day ?? 1),
     month: String(a.schedule.month ?? 1),
+    providerId: a.model?.provider ?? '',
+    modelId: a.model?.model ?? '',
+    reasoningEffort: a.model?.reasoning_effort ?? 'high',
   };
 }
 
@@ -247,6 +267,27 @@ export function AutomationPanel() {
   const [err, setErr] = useState('');
   const [runningId, setRunningId] = useState<string | null>(null);
 
+  // 表单中的模型选择:provider 列表按目标项目解析(编辑态取任务绑定的项目)
+  const formWsId =
+    view.kind === 'form' ? draft.workspaceId || view.editing?.workspace_id || null : null;
+  const { data: providers } = useProviders(formWsId);
+
+  // 扁平化 provider → 模型,作为「单独指定模型」下拉的可选项
+  const modelOptions = useMemo(() => {
+    if (!providers) return [];
+    const out: { value: string; label: string }[] = [];
+    for (const p of providers) {
+      const pName = p.name ?? p.id;
+      const models = Array.isArray(p.models) ? p.models : [];
+      for (const m of models) {
+        const mid = m.id;
+        if (!mid) continue;
+        out.push({ value: `${p.id}::${mid}`, label: `${m.name ?? mid} · ${pName}` });
+      }
+    }
+    return out;
+  }, [providers]);
+
   // 进入表单视图时初始化草稿:编辑对象优先,其次模板预设,最后空草稿
   useEffect(() => {
     if (view.kind === 'form') {
@@ -311,6 +352,15 @@ export function AutomationPanel() {
     if (!draft.workspaceId) return setErr('请选择目标项目');
     const schedule = buildSchedule(draft);
     if (!schedule) return setErr('请检查调度设置(一次性任务需选择未来时间)');
+    // 单独指定模型:providerId 与 modelId 都选上才生效,否则跟随项目默认(null 清除)
+    const model =
+      draft.providerId && draft.modelId
+        ? {
+            provider: draft.providerId,
+            model: draft.modelId,
+            reasoning_effort: draft.reasoningEffort || undefined,
+          }
+        : null;
     setErr('');
     try {
       if (view.kind === 'form' && view.editing) {
@@ -322,6 +372,7 @@ export function AutomationPanel() {
             prompt,
             schedule,
             enabled: view.editing.enabled,
+            model,
           },
         });
       } else {
@@ -330,6 +381,7 @@ export function AutomationPanel() {
           workspace_id: draft.workspaceId,
           prompt,
           schedule,
+          model,
         });
       }
       setView({ kind: 'list' });
@@ -454,6 +506,12 @@ export function AutomationPanel() {
                     <p className="mt-0.5 truncate text-[13px] text-foreground-subtlest">
                       {scheduleDesc(a.schedule)}
                     </p>
+                    {a.model && (
+                      <p className="mt-0.5 truncate text-[13px] text-foreground-subtlest">
+                        模型: {a.model.model}
+                        {a.model.reasoning_effort ? ` · ${a.model.reasoning_effort}` : ''}
+                      </p>
+                    )}
                   </div>
 
                   {/* 运行状态:标签 + 时间分两行,时间超长换行而非截断 */}
@@ -866,6 +924,82 @@ export function AutomationPanel() {
                 {err && (
                   <div className="rounded-lg bg-red-500/10 px-3 py-2.5 text-[13px] text-red-600 dark:text-red-400">
                     {err}
+                  </div>
+                )}
+              </section>
+
+              {/* 右栏:模型设置(单独指定,缺省跟随项目默认) */}
+              <section className="flex flex-col gap-4 rounded-xl border border-border bg-surface-hover/30 p-6">
+                <h3 className="flex items-center gap-1.5 text-[13px] font-medium text-foreground-subtle">
+                  <Cpu className="size-3.5" /> 模型设置
+                </h3>
+                <div>
+                  <label className={LABEL_CLS}>
+                    运行模型
+                  </label>
+                  {(() => {
+                    const modelSel =
+                      draft.providerId && draft.modelId
+                        ? `${draft.providerId}::${draft.modelId}`
+                        : '';
+                    // 编辑任务保存的模型可能不在当前列表(如 provider 已删除):仍展示以便保留
+                    const known = modelOptions.some((o) => o.value === modelSel);
+                    const keep =
+                      modelSel && !known
+                        ? [{ value: modelSel, label: `${draft.modelId} · ${draft.providerId}` }]
+                        : [];
+                    return (
+                      <select
+                        className={SELECT_CLS}
+                        value={modelSel}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (!v) {
+                            setDraft({ ...draft, providerId: '', modelId: '' });
+                          } else {
+                            const idx = v.indexOf('::');
+                            setDraft({
+                              ...draft,
+                              providerId: v.slice(0, idx),
+                              modelId: v.slice(idx + 2),
+                            });
+                          }
+                        }}
+                      >
+                        <option value="">跟随项目默认</option>
+                        {keep.map((o) => (
+                          <option key={o.value} value={o.value}>
+                            {o.label}
+                          </option>
+                        ))}
+                        {modelOptions.map((o) => (
+                          <option key={o.value} value={o.value}>
+                            {o.label}
+                          </option>
+                        ))}
+                      </select>
+                    );
+                  })()}
+                  <p className="mt-1.5 text-xs text-foreground-subtlest">
+                    默认跟随目标项目当前使用的模型;单独指定后,该任务每次运行都使用所选模型。
+                  </p>
+                </div>
+                {draft.providerId && draft.modelId && (
+                  <div>
+                    <label className={LABEL_CLS}>
+                      思考强度
+                    </label>
+                    <select
+                      className={SELECT_CLS}
+                      value={draft.reasoningEffort}
+                      onChange={(e) => setDraft({ ...draft, reasoningEffort: e.target.value })}
+                    >
+                      {THOUGHT_LEVELS.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.label}
+                        </option>
+                      ))}
+                    </select>
                   </div>
                 )}
               </section>

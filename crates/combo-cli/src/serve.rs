@@ -341,6 +341,8 @@ pub(crate) struct AgentRunRequest {
     pub history: Option<Vec<Value>>,
     /// workspace 根目录兜底(可选;优先从 sqlite 元数据解析)。
     pub workspace_dir: Option<String>,
+    /// 本次运行单独使用的模型(可选;自动化任务可覆盖目标项目的默认模型)。
+    pub model: Option<WorkspaceModel>,
 }
 
 /// run 结束时的回调(reason, error)。
@@ -389,6 +391,29 @@ pub(crate) async fn start_agent_run(
         .or_else(|| req.workspace_dir.as_deref().map(std::path::PathBuf::from));
     let cfg = {
         let base = workspace_effective_cfg(state, ws_id);
+        // 自动化任务单独设置的模型覆盖项目默认(优先级:任务级 > 项目级 > 全局)
+        let base = if let Some(m) = &req.model {
+            let mut c = base;
+            if m.provider != c.provider.id {
+                let config_path =
+                    AppConfig::load_or_create(&crate::config::default_config_path())
+                        .unwrap_or_default();
+                match providers::find_provider(&m.provider, &config_path.providers) {
+                    Ok(p) => c.provider = p,
+                    Err(e) => tracing::warn!(
+                        "自动化任务配置的 provider `{}` 解析失败,沿用项目默认: {e}",
+                        m.provider
+                    ),
+                }
+            }
+            if !m.model.is_empty() {
+                c.model = m.model.clone();
+            }
+            c.reasoning_effort = m.reasoning_effort.clone();
+            c
+        } else {
+            base
+        };
         let ws_disabled = state.meta.db().get_disabled_skills(ws_id).unwrap_or_default();
         base.with_workspace(workspace_dir.clone(), &ws_disabled)
     };
@@ -696,6 +721,7 @@ async fn run_agent_ws(
         prompt: body.prompt,
         history: body.history,
         workspace_dir: body.workspace_dir,
+        model: None,
     };
     start_agent_run(&state, &ws_id, req, None).await?;
     Ok(Json(json!({ "ok": true, "run_id": run_id })))

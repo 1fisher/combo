@@ -897,6 +897,8 @@ export type AutomationInput = {
   prompt: string;
   schedule: Api.AutomationSchedule;
   enabled?: boolean;
+  /** 单独使用的模型;null = 跟随目标项目默认(清除已保存的)。 */
+  model?: Api.AutomationModel | null;
 };
 
 /** 列出全部自动化任务(可选按项目过滤)。 */
