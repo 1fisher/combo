@@ -28,7 +28,7 @@ import { useUIPreferences } from '../../stores/uiPreferencesStore';
 import { formatTokenCount } from '../../lib/tokens';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { confirmDialog } from '../../lib/confirm';
-import { listDirGrants, revokeDirGrant, getTranscribeStatus, setTranscribeModel } from '../../lib/api';
+import { listDirGrants, revokeDirGrant, getTranscribeStatus, setTranscribeModel, getSpeechStatus, setSpeechEnabled, setSpeechModel } from '../../lib/api';
 import { cn } from '../../lib/utils';
 
 interface SettingsDialogProps {
@@ -274,6 +274,9 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
 
           {/* 语音识别(ASR)模型 */}
           <AsrModelSection open={open} />
+
+          {/* 语音合成(TTS)朗读 */}
+          <TtsSection open={open} />
 
           {/* 目录访问授权(敏感目录允许一次后持久记住) */}
           <DirGrantsSection open={open} />
@@ -1092,6 +1095,105 @@ function AsrModelSection({ open }: { open: boolean }) {
       </select>
       <div className="text-[12px] text-foreground-subtle">
         {desc}。切换即时生效并跨重启保留;新模型首次使用时自动下载,输入框语音输入即触发。
+      </div>
+      {error && <div className="text-[12px] text-destructive">{error}</div>}
+    </div>
+  );
+}
+
+/** ---------- 语音合成(TTS)设置区 ---------- */
+
+/** 可选的本地语音合成模型(与后端 TtsModel 一致)。 */
+const TTS_MODELS = [
+  {
+    id: 'piper-zh-xiaoya',
+    label: 'Piper 小雅 · 中文女声',
+    desc: 'piper 中文女声(int8),约 14MB,清晰自然',
+  },
+  {
+    id: 'piper-zh-chaowen',
+    label: 'Piper 超闻 · 中文男声',
+    desc: 'piper 中文男声(int8),约 14MB',
+  },
+  {
+    id: 'vits-zh-fanchen-c',
+    label: 'VITS 凡尘-C · 高质量女声',
+    desc: 'HF 高质量中文女声,约 113MB,音色更细腻',
+  },
+] as const;
+
+/**
+ * 语音朗读设置:开关 + 模型选择。开关经 POST /v1/speech/config 写入配置
+ * `[tts] enabled`,模型经 POST /v1/speech/model 即时切换并写入 `[tts] model`,
+ * 均跨重启保留;新模型首次使用时自动下载。
+ */
+function TtsSection({ open }: { open: boolean }) {
+  const qc = useQueryClient();
+  const { data: status } = useQuery({
+    queryKey: ['tts-status'],
+    queryFn: getSpeechStatus,
+    enabled: open,
+  });
+  const [current, setCurrent] = useState<string>('piper-zh-xiaoya');
+  const [error, setError] = useState('');
+  const toggleEnabled = useMutation({
+    mutationFn: (on: boolean) => setSpeechEnabled(on),
+    onSuccess: () => {
+      // 朗读 hook 监听同一查询,关闭后立即停读
+      void qc.invalidateQueries({ queryKey: ['tts-status'] });
+      setError('');
+    },
+    onError: (e) => setError(e instanceof Error ? e.message : '保存失败'),
+  });
+  const switchModel = useMutation({
+    mutationFn: (model: string) => setSpeechModel(model),
+    onSuccess: (_d, model) => {
+      setCurrent(model);
+      setError('');
+    },
+    onError: (e) => setError(e instanceof Error ? e.message : '切换失败'),
+  });
+
+  // 后端状态返回后同步当前模型(覆盖本地默认值)
+  useEffect(() => {
+    if (status?.model) setCurrent(status.model);
+  }, [status?.model]);
+
+  const desc = TTS_MODELS.find((m) => m.id === current)?.desc;
+  const selectCls =
+    'h-9 w-full rounded-lg border border-input-border bg-background px-2.5 text-[13px] text-foreground outline-none [color-scheme:dark] focus-visible:border-input-border-focused disabled:opacity-50';
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-0.5">
+          <label className="text-[13px] font-medium text-foreground">语音朗读</label>
+          <span className="text-[12px] text-foreground-subtle">
+            打开后自动朗读 agent 的回复(流式按句朗读;发送新消息或切换会话即停)
+          </span>
+        </div>
+        <Switch
+          checked={status?.enabled ?? false}
+          onCheckedChange={(on) => toggleEnabled.mutate(on)}
+          disabled={toggleEnabled.isPending}
+          aria-label="语音朗读"
+        />
+      </div>
+      <select
+        value={current}
+        disabled={switchModel.isPending}
+        onChange={(e) => switchModel.mutate(e.target.value)}
+        className={selectCls}
+        aria-label="选择语音朗读模型"
+      >
+        {TTS_MODELS.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.label}
+          </option>
+        ))}
+      </select>
+      <div className="text-[12px] text-foreground-subtle">
+        {desc}。切换即时生效并跨重启保留;新模型首次使用时自动下载,朗读时触发。
       </div>
       {error && <div className="text-[12px] text-destructive">{error}</div>}
     </div>
