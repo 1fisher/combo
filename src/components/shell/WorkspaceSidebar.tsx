@@ -32,7 +32,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../ui/dialog';
-import { cn, usageColor } from '../../lib/utils';
+import { cn } from '../../lib/utils';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useWorkspaces } from '../../hooks/useWorkspaces';
 import { useDirPermission } from '../../hooks/useDirPermission';
@@ -828,27 +828,18 @@ export function WorkspaceSidebar({
           )}
         </div>
       </div>
-      {/* 用量统计 */}
+      {/* 花费统计(右侧;token 用量不再在此显示,任务行/项目徽章/Composer 用量环仍保留) */}
       {(() => {
         const totals = sumSessionUsage(activeSessions);
-        if (totals.tokens === 0) return null;
-        const fmtTokens = formatTokens(totals.tokens);
+        if (totals.cost <= 0) return null;
         const fmtCost = totals.cost < 0.01
           ? `$${totals.cost.toFixed(4)}`
           : `$${totals.cost.toFixed(2)}`;
         return (
-          <div className="flex items-center justify-between px-4 pb-1 text-[10px] tabular-nums text-foreground-subtlest">
-            <span
-              title={`输入+输出 token 总计`}
-              style={{ color: usageColor(totals.tokens / 100_000_000) }}
-            >
-              共 {fmtTokens} tokens
+          <div className="flex items-center justify-end px-4 pb-1 text-[10px] tabular-nums text-foreground-subtlest">
+            <span title="累计花费(USD)">
+              {fmtCost}
             </span>
-            {totals.cost > 0 && (
-              <span title="累计花费(USD)">
-                {fmtCost}
-              </span>
-            )}
           </div>
         );
       })()}
