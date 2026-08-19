@@ -301,6 +301,32 @@ pub struct AppConfig {
     /// 语音合成(TTS)设置。
     #[serde(default)]
     pub tts: TtsConfig,
+    /// multi-agent 子 agent 角色定义(`[agents.<name>]` 段)。
+    /// 与内置角色同名时覆盖字段,新名追加自定义角色,`disabled = true` 移除。
+    #[serde(default)]
+    pub agents: BTreeMap<String, AgentRoleConfig>,
+}
+
+/// multi-agent 子 agent 角色配置(`[agents.<name>]` 段)。
+/// 与内置角色(researcher/coder/reviewer)同名时覆盖已设置的字段;
+/// 全新名称追加为自定义角色;`disabled = true` 可移除内置角色。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AgentRoleConfig {
+    /// 角色说明(展示给主 agent,帮助其选择合适的角色)。
+    pub description: Option<String>,
+    /// 系统提示词(角色的完整 preamble)。
+    pub preamble: Option<String>,
+    /// 覆盖 provider id(缺省继承主对话的 provider)。
+    pub provider: Option<String>,
+    /// 覆盖模型名(缺省继承主对话模型;换了 provider 时回落其默认大模型)。
+    pub model: Option<String>,
+    /// 推理强度覆盖(nothink / high / max)。
+    pub reasoning_effort: Option<String>,
+    /// 只读角色(true 时该子 agent 无写文件/执行命令权限)。
+    pub readonly: Option<bool>,
+    /// 禁用该角色(用于移除内置角色)。
+    pub disabled: Option<bool>,
 }
 
 /// Git 提交设置(`[git]` 段)。
@@ -1295,6 +1321,7 @@ speed = 1.4"#).unwrap();
             git: GitConfig::default(),
             asr: AsrConfig::default(),
             tts: TtsConfig::default(),
+            agents: BTreeMap::new(),
         };
         let r = cfg.resolve(Some("openai"), None, None, None, None, Some("http://mcp:1"));
         assert_eq!(r.provider, "openai", "CLI 参数优先");

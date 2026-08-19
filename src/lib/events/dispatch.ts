@@ -72,6 +72,8 @@ export function applyEvent(s: Store, env: EventEnvelope): void {
       const wasRunning = cur?.status === 'running';
       const summary = wasRunning ? runCompleteSummary(p.session_id) : '';
       s.markRun(p.session_id, p.run_id || p.session_id, 'done', p.error);
+      // 子 agent 进度面板随 run 收尾清空(最终结果已落 tool_result 消息)
+      s.clearSubAgents(p.session_id);
       if (wasRunning) notifyRunComplete(p.session_id, p.error, summary);
       break;
     }
@@ -121,6 +123,23 @@ export function applyEvent(s: Store, env: EventEnvelope): void {
       } else if (inner.type === 'deleted') {
         const p = inner.payload as { session_id: string };
         s.clearTodos(p.session_id);
+      }
+      break;
+    }
+    case 'subagent_update': {
+      // 多 agent 子任务进度(agent 工具派发,全量快照替换)
+      const inner = env.payload as { type: string; payload: unknown };
+      if (inner.type === 'updated') {
+        const p = inner.payload as { session_id: string; tasks: Api.SubAgentTask[] };
+        console.debug(
+          `[${ts()}][dispatch] subagent_update session="${p.session_id}" tasks=${p.tasks
+            .map((t) => `${t.agent}:${t.status}`)
+            .join(',')}`
+        );
+        s.setSubAgents(p.session_id, p.tasks);
+      } else if (inner.type === 'deleted') {
+        const p = inner.payload as { session_id: string };
+        s.clearSubAgents(p.session_id);
       }
       break;
     }

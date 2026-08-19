@@ -19,6 +19,7 @@ import { ComboOverlay, nextCombo, settleCombo } from './ComboOverlay';
 import { ChatEmptyState } from './ChatEmptyState';
 import { FileChangesPanel, type ChangeStatus } from './FileChangesPanel';
 import { TodoList } from './TodoList';
+import { SubAgentPanel } from './SubAgentPanel';
 import { QuestionCard } from './QuestionCard';
 import { extractFileToolCalls } from '../../lib/fileChanges';
 import { autoTitleFor, titleFromPrompt } from './autoTitle';
@@ -32,6 +33,7 @@ function basename(p: string): string {
 }
 
 const EMPTY_TODOS: Api.TodoItem[] = [];
+const EMPTY_SUBAGENTS: Api.SubAgentTask[] = [];
 
 export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
   useWorkspaceEvents(workspaceId);
@@ -44,6 +46,9 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
 
   const rt = useAgentStore((s) => (sessionId ? s.bySession[sessionId] : undefined));
   const todos = useAgentStore((s) => (sessionId ? s.todos[sessionId] : undefined) ?? EMPTY_TODOS);
+  const subagents = useAgentStore(
+    (s) => (sessionId ? s.subagents[sessionId] : undefined) ?? EMPTY_SUBAGENTS
+  );
   const questionQueue = useAgentStore((s) => s.questionQueue);
   const dismissQuestionBatch = useAgentStore((s) => s.dismissQuestionBatch);
   const hydrateMessages = useAgentStore((s) => s.hydrateMessages);
@@ -337,6 +342,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
         const st = useAgentStore.getState();
         st.clearSessionRuntime(sessionId);
         st.resetApiCalls(sessionId);
+        st.clearSubAgents(sessionId);
         qc.invalidateQueries({ queryKey: ['sessions', workspaceId] });
         qc.invalidateQueries({ queryKey: ['history', workspaceId, sessionId] });
       } catch (e) {
@@ -445,6 +451,8 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
         )}
         {/* 任务列表 */}
         {sessionId && todos.length > 0 && <TodoList todos={todos} />}
+        {/* 子 agent 进度(multi-agent:agent 工具派发的子任务) */}
+        {sessionId && subagents.length > 0 && <SubAgentPanel tasks={subagents} />}
         {/* 变更栏 */}
         {pendingCount > 0 && !showChanges && (
           <button

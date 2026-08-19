@@ -70,6 +70,8 @@ interface AgentState {
   questionQueue: Api.QuestionRequest[];
   /** 每个 session 的任务列表(todo_write 工具推送,实时更新) */
   todos: Record<string, Api.TodoItem[]>;
+  /** 每个 session 的子 agent 任务进度(agent 工具派发,subagent_update 推送) */
+  subagents: Record<string, Api.SubAgentTask[]>;
   /** 每个 session 的累计 API 调用次数(rig turns 计数:usage SSE 事件实时
    * 推送、会话列表 api_calls 播种;内存态,切项目时回收) */
   apiCallsBySession: Record<string, number>;
@@ -91,6 +93,10 @@ interface AgentState {
   dismissQuestionBatch: (batchId: string) => void;
   setTodos: (sessionId: string, todos: Api.TodoItem[]) => void;
   clearTodos: (sessionId: string) => void;
+  /** 设置会话的子 agent 任务进度(全量快照替换,后端按节流间隔推送) */
+  setSubAgents: (sessionId: string, tasks: Api.SubAgentTask[]) => void;
+  /** 清空会话的子 agent 进度(run 收尾 / 清空会话) */
+  clearSubAgents: (sessionId: string) => void;
   /**
    * 设置会话的累计 API 调用次数(取单调较大值:实时事件与会话列表播种
    * 可能乱序到达,旧值不应覆盖新值;计数只增不减)。
@@ -122,6 +128,7 @@ export const useAgentStore = create<AgentState>()(
         activeSessionId: null,
         bySession: {},
         todos: {},
+        subagents: {},
         apiCallsBySession: {},
       };
     }),
@@ -171,6 +178,7 @@ export const useAgentStore = create<AgentState>()(
   permissionQueue: [],
   questionQueue: [],
   todos: {},
+  subagents: {},
   apiCallsBySession: {},
 
   upsertMessage: (sessionId, m) =>
@@ -339,6 +347,13 @@ export const useAgentStore = create<AgentState>()(
     set((st) => {
       const { [sessionId]: _drop, ...rest } = st.todos;
       return { todos: rest };
+    }),
+  setSubAgents: (sessionId, tasks) =>
+    set((st) => ({ subagents: { ...st.subagents, [sessionId]: tasks } })),
+  clearSubAgents: (sessionId) =>
+    set((st) => {
+      const { [sessionId]: _drop, ...rest } = st.subagents;
+      return { subagents: rest };
     }),
   insertTodoCard: (sessionId, runId, todos) =>
     set((st) => {

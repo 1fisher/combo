@@ -149,6 +149,7 @@ fn fallback_cfg() -> combo_cli::agent::AskConfig {
         skills_paths: Vec::new(),
         disabled_skills: Vec::new(),
         tools: true,
+        readonly_tools: false,
         mcp_command: None,
         mcp_url: None,
         explicit_api_key: None,

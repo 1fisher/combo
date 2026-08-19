@@ -43,6 +43,31 @@ pub fn builtin_tools(
     tools
 }
 
+/// 返回只读内置工具集(multi-agent 只读角色用):read / search / grep /
+/// web_search / current_time + LSP 工具,不含 write / replace / bash——
+/// 调研/审查类子 agent 不应产生任何写副作用。
+pub fn builtin_tools_readonly(
+    workspace_dir: Option<PathBuf>,
+    lsp: BTreeMap<String, LspServerConfig>,
+) -> Vec<DynamicTool> {
+    let ws = workspace_dir.unwrap_or_else(|| PathBuf::from("."));
+    let mut tools: Vec<DynamicTool> = vec![
+        read_tool(ws.clone()),
+        search_tool(ws.clone()),
+        grep_tool(ws.clone()),
+        web_search_tool(),
+        current_datetime_tool(),
+    ];
+    let manager = Arc::new(LspManager::new(ws.clone(), lsp));
+    if manager.has_servers() {
+        tools.push(lsp_diagnostics_tool(ws.clone(), manager.clone()));
+        tools.push(lsp_definition_tool(ws.clone(), manager.clone()));
+        tools.push(lsp_references_tool(ws.clone(), manager.clone()));
+        tools.push(lsp_hover_tool(ws.clone(), manager));
+    }
+    tools
+}
+
 // ============================= read =============================
 
 /// `read`:分页读取文件内容(带行号)。

@@ -37,6 +37,7 @@ export function useWorkspaceEvents(workspaceId: string | null) {
             // 并刷新历史缓存(该会话消息已全部删除)
             st.clearSessionRuntime(sess.id);
             st.resetApiCalls(sess.id);
+            st.clearSubAgents(sess.id);
             void qc.invalidateQueries({ queryKey: ['history', workspaceId, sess.id] });
             return;
           }

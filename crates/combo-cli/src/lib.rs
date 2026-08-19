@@ -20,6 +20,7 @@ pub mod lan;
 pub mod lsp;
 pub mod mcp;
 pub mod meta;
+pub mod multiagent;
 pub mod p2p;
 pub mod paths;
 pub mod providers;

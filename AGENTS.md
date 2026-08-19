@@ -207,6 +207,29 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   各端 `useWorkspaceEvents` 据此清内存消息并 invalidate 历史缓存(多端联动)。
   前端同时 `clearSessionRuntime` + `agentStore.resetApiCalls`(`setApiCalls`
   单调取大,清零需专用方法)。
+- **多 agent 协作(agent-as-tool,`multiagent.rs`)**:主 agent 通过 `agent` 工具
+  把子任务派发给独立子 agent(rig `Agent` 实例,基于 rig 0.41 的 DynamicTool 原语,
+  supervisor/worker 模式)。单任务传 `{agent, task}`,互不依赖的子任务传 `tasks`
+  数组(≤5,`join_all` 并行)。内置角色:researcher(只读调研)/ coder(全量工具)/
+  reviewer(只读审查),`combo-cli.toml` 的 `[agents.<name>]` 段
+  (description/preamble/provider/model/reasoning_effort/readonly/disabled)可覆盖
+  字段、新增自定义角色或禁用内置角色(`collect_defs` 合并;全部禁用时 serve 不注入
+  该工具)。子 agent 配置由主 run 的 `AskConfig` 派生(`resolve_sub_cfg`):继承
+  provider/key/MCP/skills,替换 preamble 为角色提示词(再经 `with_workspace` 拼
+  AGENTS.md + skills),可换 provider/model(换 provider 未指定模型时回落其默认大
+  模型);`readonly: true` 的角色经 `AskConfig.readonly_tools` 使用
+  `tools::builtin_tools_readonly`(无 write/replace/bash,杜绝写副作用)。子 run
+  三条硬约束:**空历史**(上下文隔离,task 需自包含)、**无交互工具**(不注入
+  question/todo/compact/agent,子 agent 不能再派生孙 agent 防递归)、**共享主 run
+  的 cancel watch**(用户停止主任务时全部子任务中止)。实时进度:子任务状态经
+  `subagent_update` SSE(双层信封,与 `todo_update` 同构;400ms 节流,TextDelta
+  只保留尾部 240 字符预览,ToolCall 强制广播)推给前端,`agentStore.subagents` +
+  `SubAgentPanel`(输入坞上方,与 TodoList 同区域:角色 badge + 任务 + 动作预览 +
+  工具调用数)实时展示,`run_complete` 时清空(最终报告在消息流 tool_result 卡
+  片)。用量归账:子 run 的 rig usage/API 调用次数直接 `add_usage`/
+  `add_api_calls` 累加进所属会话并广播 `usage` 事件(前端 setApiCalls 单调取大);
+  工具结果为 Markdown 报告(每子任务一节:agent 名 + 任务 + 最终文本 + 用量摘要)
+  返回主 agent 汇总。
 - **敏感目录访问授权(只询问一次)** (`dirperm.rs` + `store.rs` 表 `dir_grants`):
   创建项目 / 更换绑定目录时,若目录位于敏感位置(macOS TCC 保护域:
   `~/Desktop`/`~/Documents`/`~/Downloads`、`~/Library/Mobile Documents`(iCloud)、
@@ -269,7 +292,7 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
 ## Code organization & conventions
 
 - **Rust:** module-per-concern under `crates/combo-cli/src/` (`serve`, `agent`,
-  `automation`, `store`, `meta`, `workspace`, `session`, `auth`, `fs`, `git`,
+  `automation`, `multiagent`, `store`, `meta`, `workspace`, `session`, `auth`, `fs`, `git`,
   `host`, `terminal`, `relay`, `tunnel`, `skills`, `skills_api`, `graph`), `pub` API
   re-exported from `lib.rs`(`AppState` / `run` / `serve_listener`)。Workspace root
   `Cargo.toml` has members `crates/combo-cli`, `crates/combo-relay` and `src-tauri`.
@@ -560,6 +583,9 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
    (type=stdio|http,command/args/url,**可多个**,`mcp.rs::connect_many`
    经 rig ToolServer 注册,单个失败按 `skip_missing` 跳过)、
    `[lsp.<lang>]`(command/args/env,`lsp list` 检测可执行状态)、
+   `[agents.<name>]`(multi-agent 子 agent 角色:description/preamble/provider/
+   model/reasoning_effort/readonly/disabled,覆盖内置 researcher/coder/reviewer
+   或新增自定义角色,见 `multiagent.rs`)、
    `skills_paths`/`disabled_skills`(每 skill 一目录
    含 `SKILL.md`,frontmatter 的 description 解析后注入 preamble,
    `skills.rs::discover`,默认扫 项目 `.combo/skills` → 项目

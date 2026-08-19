@@ -164,6 +164,60 @@ describe('applyEvent', () => {
     expect(todos?.[1].status).toBe('pending');
   });
 
+  it('sets and clears subagent tasks via subagent_update events', () => {
+    const s = useAgentStore.getState();
+    applyEvent(s, {
+      type: 'subagent_update',
+      payload: {
+        type: 'updated',
+        payload: {
+          session_id: 's1',
+          tasks: [
+            {
+              task_id: 't1',
+              agent: 'researcher',
+              task: '调研依赖树',
+              status: 'running',
+              preview: '[grep] use crate::',
+              tool_calls: 3,
+              turns: 5,
+            },
+            {
+              task_id: 't2',
+              agent: 'coder',
+              task: '实现模块',
+              status: 'done',
+            },
+          ],
+        },
+      },
+    });
+    const after = useAgentStore.getState();
+    expect(after.subagents['s1']).toHaveLength(2);
+    expect(after.subagents['s1'][0].agent).toBe('researcher');
+    expect(after.subagents['s1'][0].tool_calls).toBe(3);
+    expect(after.subagents['s1'][1].status).toBe('done');
+
+    applyEvent(s, {
+      type: 'subagent_update',
+      payload: { type: 'deleted', payload: { session_id: 's1' } },
+    });
+    expect(useAgentStore.getState().subagents['s1']).toBeUndefined();
+  });
+
+  it('clears subagent tasks on run_complete', () => {
+    const s = useAgentStore.getState();
+    s.setSubAgents('s3', [
+      { task_id: 't1', agent: 'coder', task: '做某事', status: 'running' },
+    ]);
+    expect(useAgentStore.getState().subagents['s3']).toHaveLength(1);
+    applyEvent(s, {
+      type: 'run_complete',
+      payload: { type: 'updated', payload: { session_id: 's3', run_id: 'r1' } },
+    });
+    expect(useAgentStore.getState().subagents['s3']).toBeUndefined();
+  });
+
   it('removes optimistic local- messages when real user text message arrives', () => {
     const s = useAgentStore.getState();
     // 模拟 doSend 乐观插入

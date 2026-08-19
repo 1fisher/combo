@@ -126,6 +126,9 @@ pub struct AskConfig {
     pub reasoning_effort: Option<String>,
     /// LSP server 配置(语言标识 → server 配置),供工具按语言路由。
     pub lsp: BTreeMap<String, crate::config::LspServerConfig>,
+    /// 只读工具集(multi-agent 只读角色用):tools=true 时改用
+    /// `builtin_tools_readonly`,不含 write/replace/bash,杜绝写副作用。
+    pub readonly_tools: bool,
 }
 
 impl AskConfig {
@@ -166,6 +169,7 @@ impl AskConfig {
             mcp_servers,
             reasoning_effort: r.reasoning_effort.clone(),
             lsp: r.lsp.clone(),
+            readonly_tools: false,
         }
     }
 
@@ -460,7 +464,11 @@ where
 {
     log_llm_request(cfg);
     let mut builtin = if cfg.tools {
-        crate::tools::builtin_tools(workspace_dir, cfg.lsp.clone())
+        if cfg.readonly_tools {
+            crate::tools::builtin_tools_readonly(workspace_dir, cfg.lsp.clone())
+        } else {
+            crate::tools::builtin_tools(workspace_dir, cfg.lsp.clone())
+        }
     } else {
         Vec::new()
     };

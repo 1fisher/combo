@@ -171,6 +171,7 @@ impl AppState {
             mcp_servers: Vec::new(),
             reasoning_effort: None,
             lsp: std::collections::BTreeMap::new(),
+            readonly_tools: false,
         };
         Self {
             cfg: Arc::new(Mutex::new(cfg)),
@@ -395,6 +396,7 @@ pub(crate) async fn start_agent_run(
         .get(ws_id)
         .map(|m| m.path)
         .or_else(|| req.workspace_dir.as_deref().map(std::path::PathBuf::from));
+    let ws_disabled = state.meta.db().get_disabled_skills(ws_id).unwrap_or_default();
     let cfg = {
         let base = workspace_effective_cfg(state, ws_id);
         // 自动化任务单独设置的模型覆盖项目默认(优先级:任务级 > 项目级 > 全局)
@@ -420,7 +422,6 @@ pub(crate) async fn start_agent_run(
         } else {
             base
         };
-        let ws_disabled = state.meta.db().get_disabled_skills(ws_id).unwrap_or_default();
         base.with_workspace(workspace_dir.clone(), &ws_disabled)
     };
     let user_msg = user_message_json(&req.session_id, &req.prompt, &cfg);
@@ -522,7 +523,13 @@ pub(crate) async fn start_agent_run(
         // 收集工具调用摘要供响应日志使用
         let mut tool_call_summaries: Vec<crate::request_log::ToolCallSummary> = Vec::new();
         // question 工具:需要 broadcast tx、registry 和 cancel 信号
-        let extra_tools = vec![
+        // multi-agent 角色定义:配置文件 [agents.<name>] 覆盖/追加内置角色
+        let agent_defs = {
+            let app =
+                AppConfig::load_or_create(&crate::config::default_config_path()).unwrap_or_default();
+            crate::multiagent::collect_defs(&app)
+        };
+        let mut extra_tools = vec![
             crate::question::question_tool(
                 session_id.clone(),
                 tx.clone(),
@@ -542,6 +549,19 @@ pub(crate) async fn start_agent_run(
                 tx.clone(),
             ),
         ];
+        // 角色全部被禁用时不注入 agent 工具(空 enum schema 无意义)
+        if !agent_defs.is_empty() {
+            extra_tools.push(crate::multiagent::agent_tool(
+                session_id.clone(),
+                agent_defs,
+                cfg.clone(),
+                workspace_dir.clone(),
+                ws_disabled.clone(),
+                state2.meta.clone(),
+                tx.clone(),
+                cancel_rx.clone(),
+            ));
+        }
         let result =
             crate::agent::stream_run(&cfg, &prompt, &rig_history, workspace_dir, cancel_rx, extra_tools, |ev| {
             // 本次事件是否需要立即落库(工具调用是消息结构边界,必须落)

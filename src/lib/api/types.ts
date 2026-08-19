@@ -2028,6 +2028,22 @@ export namespace Api {
     active_form?: string;
   };
 
+  // 多 agent 协作(agent 工具派发的子任务,经 subagent_update SSE 事件推送)
+  export type SubAgentStatus = 'running' | 'done' | 'error' | 'cancelled';
+  export type SubAgentTask = {
+    task_id: string;
+    agent: string;
+    task: string;
+    status: SubAgentStatus;
+    /** 最新输出预览(尾部截断) */
+    preview?: string;
+    tool_calls?: number;
+    turns?: number;
+    model?: string;
+    provider?: string;
+    error?: string;
+  };
+
   // 文件服务(combo-cli serve 本地端点,swagger 无此定义)
   export type FileEntryType = 'dir' | 'file';
   export type FileEntry = {

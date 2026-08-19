@@ -681,6 +681,7 @@ mod tests {
             mcp_servers: Vec::new(),
             reasoning_effort: None,
             lsp: BTreeMap::new(),
+            readonly_tools: false,
         }
     }
 }

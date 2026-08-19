@@ -45,6 +45,7 @@ fn cfg_no_key() -> AskConfig {
         mcp_servers: Vec::new(),
         reasoning_effort: None,
         lsp: std::collections::BTreeMap::new(),
+        readonly_tools: false,
     }
 }
 
