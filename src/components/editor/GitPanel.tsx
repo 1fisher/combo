@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowDown,
   ArrowUp,
+  ArrowUpDown,
   Check,
   ChevronDown,
   CircleDot,
@@ -155,7 +156,7 @@ export function GitPanel({ workspaceId, repo = '', onRepoChange, selectedDiffPat
   const [branchDeleteForce, setBranchDeleteForce] = useState(false);
   const [branchDeleting, setBranchDeleting] = useState(false);
   const [branchDeleteError, setBranchDeleteError] = useState<string | null>(null);
-  const [remoteBusy, setRemoteBusy] = useState<null | 'push' | 'pull' | 'fetch'>(null);
+  const [remoteBusy, setRemoteBusy] = useState<null | 'push' | 'pull' | 'fetch' | 'sync'>(null);
   const [remoteError, setRemoteError] = useState<string | null>(null);
   const [discardTarget, setDiscardTarget] = useState<string | null>(null);
 
@@ -294,14 +295,26 @@ export function GitPanel({ workspaceId, repo = '', onRepoChange, selectedDiffPat
     }
   }
 
-  async function handleRemote(op: 'push' | 'pull' | 'fetch') {
+  async function handleRemote(op: 'push' | 'pull' | 'fetch' | 'sync') {
     if (remoteBusy) return;
     setRemoteBusy(op);
     setRemoteError(null);
     try {
       if (op === 'push') await gitPush(workspaceId, repo || undefined);
       else if (op === 'pull') await gitPull(workspaceId, repo || undefined);
-      else await gitFetch(workspaceId, repo || undefined);
+      else if (op === 'sync') {
+        // 同步:先拉取合并远程变更,成功后再推送本地提交;任一步失败即中止并标注失败环节
+        try {
+          await gitPull(workspaceId, repo || undefined);
+        } catch (e) {
+          throw new Error(`同步拉取失败:${e instanceof Error ? e.message : String(e)}`);
+        }
+        try {
+          await gitPush(workspaceId, repo || undefined);
+        } catch (e) {
+          throw new Error(`同步推送失败:${e instanceof Error ? e.message : String(e)}`);
+        }
+      } else await gitFetch(workspaceId, repo || undefined);
       await refresh();
     } catch (e) {
       setRemoteError(e instanceof Error ? e.message : String(e));
@@ -368,7 +381,7 @@ export function GitPanel({ workspaceId, repo = '', onRepoChange, selectedDiffPat
 
   return (
     <div className="flex h-full flex-col">
-      {/* 头部:仓库选择(多仓库时) + 分支 + ahead/behind + 拉取/推送 + 刷新 */}
+      {/* 头部:仓库选择(多仓库时) + 分支 + ahead/behind + 同步 + 刷新 */}
       <div className="flex shrink-0 flex-col gap-1.5 border-b px-3 py-2">
         {/* 多仓库切换:工作区根目录 + 一级子目录中的独立 git 仓库;
             仅一个子仓库时也显示,便于确认当前查看的仓库 */}
@@ -510,7 +523,7 @@ export function GitPanel({ workspaceId, repo = '', onRepoChange, selectedDiffPat
             <RefreshCw className={cn('h-3 w-3', loading && 'animate-spin')} />
           </button>
         </div>
-        {/* ahead/behind 标记 + remote 操作按钮 */}
+        {/* ahead/behind 标记 + 同步按钮(拉取 + 推送) */}
         {branchInfo?.hasRemote && (
           <div className="flex items-center gap-1">
             {branchInfo.upstream && (branchInfo.ahead > 0 || branchInfo.behind > 0) && (
@@ -531,22 +544,13 @@ export function GitPanel({ workspaceId, repo = '', onRepoChange, selectedDiffPat
             )}
             <div className="ml-auto flex items-center gap-0.5">
               <button
-                onClick={() => void handleRemote('pull')}
+                onClick={() => void handleRemote('sync')}
                 disabled={!!remoteBusy}
                 className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
-                title="拉取并合并"
+                title="同步:拉取远程变更并推送本地提交"
               >
-                <ArrowDown className={cn('h-3 w-3', remoteBusy === 'pull' && 'animate-bounce')} />
-                拉取
-              </button>
-              <button
-                onClick={() => void handleRemote('push')}
-                disabled={!!remoteBusy}
-                className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
-                title="推送到远程"
-              >
-                <ArrowUp className={cn('h-3 w-3', remoteBusy === 'push' && 'animate-bounce')} />
-                推送
+                <ArrowUpDown className={cn('h-3 w-3', remoteBusy === 'sync' && 'animate-bounce')} />
+                同步
               </button>
             </div>
           </div>
