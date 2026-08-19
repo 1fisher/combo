@@ -105,6 +105,23 @@ pub fn find_executable(cmd: &str) -> Option<PathBuf> {
     find_in_dirs(cmd, dirs)
 }
 
+/// 把待 spawn 的裸命令解析为绝对路径(与 `find_executable` 同一口径:
+/// 进程 PATH 优先 + `~/.cargo/bin`/`/opt/homebrew/bin` 等常见安装目录兜底)。
+///
+/// 背景:GUI(Finder/Dock)启动的进程 PATH 往往只有系统目录,Homebrew 等
+/// 方式安装的包管理器只在兜底目录里——检测侧(`resolve_install_command`)
+/// 判定「可安装」,spawn 侧若直接 `Command::new("npm")` 只查进程 PATH,
+/// 会报 `No such file or directory (os error 2)`。与 `LspClient::start`
+/// 保持同一解析口径。已是路径或查不到时原样返回(后者交由 spawn 报错)。
+pub fn resolve_spawn_program(program: &str) -> String {
+    if program.contains('/') || program.contains('\\') {
+        return program.to_string();
+    }
+    find_executable(program)
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| program.to_string())
+}
+
 // =========================== 一键安装方案 ===========================
 
 /// 某语言 LSP server 的一键安装方案(`POST /v1/lsp/install` 使用)。
@@ -930,6 +947,55 @@ mod tests {
         assert_eq!(ext_to_lang("ts"), Some("typescript"));
         assert_eq!(ext_to_lang("tsx"), Some("typescript"));
         assert_eq!(ext_to_lang("unknown"), None);
+    }
+
+    /// spawn 前的裸命令解析:路径原样、查不到的裸命令原样返回。
+    #[test]
+    fn resolve_spawn_program_passthrough_variants() {
+        // 已是路径:原样返回(存在性交由 spawn 报错)
+        assert_eq!(resolve_spawn_program("/opt/x/npm"), "/opt/x/npm");
+        // 查不到的裸命令:原样返回
+        let missing = "combo-definitely-missing-xyz";
+        assert_eq!(resolve_spawn_program(missing), missing);
+    }
+
+    /// PATH 内的裸命令应解析为绝对路径(unix 上 sh 必在系统 PATH)。
+    #[cfg(unix)]
+    #[test]
+    fn resolve_spawn_program_resolves_bare_command_on_path() {
+        let p = resolve_spawn_program("sh");
+        assert!(p.starts_with('/'), "应解析为绝对路径: {p}");
+    }
+
+    /// PATH 之外的兜底目录(~/.cargo/bin 等)也应命中:GUI 启动的进程
+    /// PATH 只有系统目录,Homebrew/rustup 等方式安装的包管理器只在兜底
+    /// 目录里——检测与 spawn 共用该口径,否则出现「显示可安装、启动报
+    /// os error 2」(回归:typescript 一键安装 npm 启动失败)。
+    #[cfg(unix)]
+    #[test]
+    fn resolve_spawn_program_falls_back_to_user_bin_dirs() {
+        let dir = tempfile::tempdir().unwrap();
+        let cargo_bin = dir.path().join(".cargo").join("bin");
+        std::fs::create_dir_all(&cargo_bin).unwrap();
+        // 名字刻意取 PATH 中不可能存在的,保证只能由兜底目录命中
+        let exe = cargo_bin.join("combo-test-fake-npm");
+        std::fs::write(&exe, b"#!/bin/sh\nexit 0\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let old_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", dir.path());
+        let resolved = resolve_spawn_program("combo-test-fake-npm");
+        // 恢复 HOME,缩小对并行测试的可见窗口
+        if let Some(h) = old_home {
+            std::env::set_var("HOME", h);
+        }
+        assert_eq!(
+            std::path::PathBuf::from(&resolved),
+            exe,
+            "兜底目录中的命令应解析为绝对路径"
+        );
     }
 
     /// 语言统计:按扩展名聚合、跳过忽略目录/隐藏文件、按文件数降序。

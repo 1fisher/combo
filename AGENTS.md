@@ -521,7 +521,12 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   在 `/v1/lsp` 里显示「未找到」、且 `LspClient::start` 直接
   `Command::new` 会 spawn 失败,所以**检测与 spawn 共用 `find_executable`
   的解析口径**(裸命令先解析为绝对路径再启动),否则会出现「检测已安装、
-  实际拉起失败」的不一致。**登录 shell PATH 补全**(`paths.rs::
+  实际拉起失败」的不一致。**一键安装的 spawn 同口径**:
+  `lsp.rs::resolve_spawn_program` 把安装命令 argv[0](如 `npm`)先解析为
+  绝对路径再启动(`serve.rs::run_lsp_install`,Windows 经 `cmd /C` 包装的
+  同样传解析结果)——否则受限 PATH 下检测说「可安装」、启动却报
+  `No such file or directory (os error 2)`;启动失败 message 带解析后的
+  命令路径便于排查。**登录 shell PATH 补全**(`paths.rs::
   ensure_gui_path`,main 与 Tauri `run()` 启动最早期调用):GUI/launchd
   启动的进程不读 `.zshrc`,PATH 缺 `$HOME` 下目录时从 `$SHELL -ilc`
   解析用户完整 PATH 合并(shell 顺序在前,进程独有目录追加;VS Code

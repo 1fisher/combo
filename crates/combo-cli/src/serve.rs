@@ -2272,13 +2272,17 @@ async fn run_lsp_install(
         }
     };
 
-    // Windows 的 npm/pnpm 等是 .cmd 脚本,CreateProcess 找不到,经 cmd /C 包一层
+    // Windows 的 npm/pnpm 等是 .cmd 脚本,CreateProcess 找不到,经 cmd /C 包一层。
+    // argv[0] 先解析为绝对路径:检测侧(find_executable)含 PATH 之外的兜底目录
+    // (Homebrew `/opt/homebrew/bin` 等),GUI 启动的进程 PATH 只有系统目录时,
+    // 直接 spawn 裸命令会 os error 2——与检测同口径,先解析再启动。
+    let program = crate::lsp::resolve_spawn_program(&argv[0]);
     let mut command = if cfg!(windows) {
         let mut c = tokio::process::Command::new("cmd");
-        c.arg("/C").args(&argv);
+        c.arg("/C").arg(&program).args(&argv[1..]);
         c
     } else {
-        let mut c = tokio::process::Command::new(&argv[0]);
+        let mut c = tokio::process::Command::new(&program);
         c.args(&argv[1..]);
         c
     };
@@ -2290,7 +2294,9 @@ async fn run_lsp_install(
     let mut child = match child {
         Ok(c) => c,
         Err(e) => {
-            finish(LspInstallStatus::Failed, format!("启动安装命令失败:{e}"));
+            finish(LspInstallStatus::Failed, format!(
+                "启动安装命令失败:{e}(尝试执行 `{program}`;可检查该包管理器是否完整安装)"
+            ));
             return;
         }
     };
