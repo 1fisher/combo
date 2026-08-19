@@ -416,9 +416,14 @@ fn build_search_regex(
 
 /// 使用 `rg --json` 做内容搜索,返回结构化结果。
 /// rg 不可用时返回 Err。
+///
+/// rg 以 `search_dir` 为 cwd,输出的路径相对该目录;这里统一拼上
+/// `rel_prefix`(search_dir 相对 workspace 根的路径),保证返回的 path
+/// 始终相对 workspace 根,可直接用于 `files/content` 读取。
 async fn run_rg_content_search(
     pattern: &str,
     search_dir: &FsPath,
+    rel_prefix: &str,
     case_insensitive: bool,
     literal: bool,
     max_results: usize,
@@ -478,8 +483,13 @@ async fn run_rg_content_search(
             .and_then(|p| p.get("text"))
             .and_then(|t| t.as_str())
             .unwrap_or("");
+        // Windows 下 rg 输出 `\` 分隔,统一为 `/`,与前端及其他端点一致
+        let path = path.replace(std::path::MAIN_SEPARATOR, "/");
         // 跳过隐藏文件
-        let basename = path.rsplit_once('/').map(|(_, n)| n).unwrap_or(path);
+        let basename = path
+            .rsplit_once('/')
+            .map(|(_, n)| n.to_string())
+            .unwrap_or_else(|| path.clone());
         if basename.starts_with('.') {
             continue;
         }
@@ -498,8 +508,13 @@ async fn run_rg_content_search(
             .trim_end_matches('\n')
             .to_string();
 
+        let full_path = if rel_prefix.is_empty() {
+            path
+        } else {
+            format!("{rel_prefix}/{path}")
+        };
         results.push(json!({
-            "path": path,
+            "path": full_path,
             "name": basename,
             "line": line_number,
             "content": content,
@@ -552,9 +567,12 @@ fn walkdir_content_search(
             .strip_prefix(search_dir)
             .unwrap_or(entry.path());
         let full_path = if rel_prefix.is_empty() {
-            rel.to_string_lossy().to_string()
+            rel.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/")
         } else {
-            format!("{rel_prefix}/{}", rel.to_string_lossy())
+            format!(
+                "{rel_prefix}/{}",
+                rel.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/")
+            )
         };
 
         let content = match std::fs::read_to_string(entry.path()) {
@@ -609,12 +627,23 @@ pub async fn search(
         return error(StatusCode::BAD_REQUEST, "搜索路径不是目录");
     }
 
+    // search_dir 相对 workspace 根的路径(canonical 后剥离,兼容用户输入
+    // 绝对路径/./x 等写法),作为结果 path 的前缀——rg 以 search_dir 为
+    // cwd 输出的路径是相对它的,必须拼回根相对路径,否则前端点击结果
+    // 打开文件时会 404「文件不存在」。
+    let rel_prefix = std::fs::canonicalize(&root)
+        .ok()
+        .and_then(|canon_root| search_dir.strip_prefix(&canon_root).ok())
+        .map(|p| p.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/"))
+        .unwrap_or_default();
+
     let literal = !use_regex;
 
     // 先尝试 ripgrep
     let results = match run_rg_content_search(
         &query,
         &search_dir,
+        &rel_prefix,
         !case_sensitive,
         literal,
         MAX_SEARCH_RESULTS,
@@ -629,9 +658,133 @@ pub async fn search(
                 Ok(None) => return ok_json(json!([])),
                 Err(_) => return error(StatusCode::BAD_REQUEST, "无效的正则表达式"),
             };
-            walkdir_content_search(&search_dir, &rel_path, &re, MAX_SEARCH_RESULTS)
+            walkdir_content_search(&search_dir, &rel_prefix, &re, MAX_SEARCH_RESULTS)
         }
     };
 
     ok_json(json!(results))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::extract::State;
+
+    /// 构造带临时目录 workspace 的测试 AppState。
+    fn fs_test_state(tag: &str) -> (AppState, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("combo-fs-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src/nested")).unwrap();
+        std::fs::write(dir.join("src/nested/deep.rs"), "needle here\nother line\n").unwrap();
+        std::fs::write(dir.join("src/top.ts"), "no match\nneedle top\n").unwrap();
+        std::fs::write(dir.join("root.md"), "needle root\n").unwrap();
+        let meta = std::sync::Arc::new(crate::meta::MetaStore::new());
+        meta.insert(crate::meta::WorkspaceMeta {
+            id: "ws".into(),
+            path: dir.clone(),
+            name: "test".into(),
+            backend_type: crate::store::BackendType::ComboCli,
+        });
+        (AppState::test_state(meta, None), dir)
+    }
+
+    async fn parse_body(resp: Response) -> Vec<Value> {
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    /// 任何搜索结果的 path 都必须能被 `read` 解析(相对 workspace 根)。
+    /// 回归:限定子目录搜索时 rg 以该目录为 cwd,输出路径缺少根前缀,
+    /// 前端点击结果打开文件会 404「文件不存在」。
+    #[tokio::test]
+    async fn search_paths_are_workspace_relative() {
+        let (state, dir) = fs_test_state("search");
+
+        // 全局搜索:结果路径相对根
+        let resp = search(
+            State(state.clone()),
+            Path("ws".into()),
+            Query(SearchQuery {
+                q: Some("needle".into()),
+                path: None,
+                regex: None,
+                case_sensitive: None,
+                whole_word: None,
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let results = parse_body(resp).await;
+        let paths: Vec<&str> = results.iter().filter_map(|r| r["path"].as_str()).collect();
+        assert!(paths.contains(&"root.md"), "全局搜索应包含 root.md: {paths:?}");
+        assert!(paths.contains(&"src/top.ts"), "全局搜索应包含 src/top.ts: {paths:?}");
+        assert!(paths.contains(&"src/nested/deep.rs"), "全局搜索应包含 src/nested/deep.rs: {paths:?}");
+
+        // 限定子目录搜索:结果路径必须带 `src/` 前缀(修复前是相对 src 的裸路径)
+        let resp = search(
+            State(state.clone()),
+            Path("ws".into()),
+            Query(SearchQuery {
+                q: Some("needle".into()),
+                path: Some("src".into()),
+                regex: None,
+                case_sensitive: None,
+                whole_word: None,
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let results = parse_body(resp).await;
+        let paths: Vec<&str> = results.iter().filter_map(|r| r["path"].as_str()).collect();
+        assert!(!paths.is_empty(), "子目录搜索应有结果");
+        assert!(
+            paths.iter().all(|p| p.starts_with("src/")),
+            "子目录搜索结果应带 src/ 前缀: {paths:?}"
+        );
+        assert!(paths.contains(&"src/nested/deep.rs"), "应包含 src/nested/deep.rs: {paths:?}");
+        assert!(!paths.contains(&"root.md"), "不应包含范围外文件: {paths:?}");
+
+        // 结果路径能被 read 成功读取(端到端验证前端点击可用)
+        let resp = read(
+            State(state.clone()),
+            Path("ws".into()),
+            Query(PathQuery {
+                path: Some("src/nested/deep.rs".into()),
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK, "搜索结果路径应可读取");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// walkdir 回退路径(rg 不可用)同样保持根相对前缀。
+    #[tokio::test]
+    async fn walkdir_search_paths_are_workspace_relative() {
+        let (_state, dir) = fs_test_state("walkdir");
+
+        // 直接调用 walkdir 回退实现,不依赖环境是否有 rg
+        let root = std::fs::canonicalize(&dir).unwrap();
+        let search_dir = root.join("src");
+        let re = build_search_regex("needle", false, false, false)
+            .unwrap()
+            .unwrap();
+        let rel_prefix = search_dir
+            .strip_prefix(&root)
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let results = walkdir_content_search(&search_dir, &rel_prefix, &re, 100);
+        let paths: Vec<&str> = results.iter().filter_map(|r| r["path"].as_str()).collect();
+        assert!(!paths.is_empty());
+        assert!(
+            paths.iter().all(|p| p.starts_with("src/")),
+            "walkdir 回退结果应带 src/ 前缀: {paths:?}"
+        );
+        assert!(paths.contains(&"src/nested/deep.rs"), "应包含 src/nested/deep.rs: {paths:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
