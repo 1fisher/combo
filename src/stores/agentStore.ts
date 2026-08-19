@@ -30,20 +30,6 @@ export interface SessionRuntime {
   queued: boolean;
 }
 
-/** Agent 模式:与后端的 permission mode 对齐 */
-export type AgentMode = 'yolo' | 'build' | 'edit' | 'plan';
-
-/** yolo 模式自动放行全部权限;edit 模式自动放行写操作(build/edit 工具) */
-export const WRITE_TOOL_NAMES = new Set([
-  'write',
-  'edit',
-  'multiedit',
-  'replace',
-  'lsp_replace_symbol',
-  'lsp_rename',
-  'bash',
-]);
-
 /** 用户选中的模型(workspaceId → { model, provider }),持久化到 localStorage */
 export interface ModelSelection {
   model: string;
@@ -69,8 +55,6 @@ interface AgentState {
   setLastWorkspacePath: (path: string | null) => void;
   activeSessionId: string | null;
   setActiveSessionId: (id: string | null) => void;
-  agentMode: AgentMode;
-  setAgentMode: (mode: AgentMode) => void;
   /** 每个 workspace 用户手动选中的模型,跨重启保留 */
   modelSelections: Record<string, ModelSelection>;
   setModelSelection: (workspaceId: string, sel: ModelSelection) => void;
@@ -142,8 +126,6 @@ export const useAgentStore = create<AgentState>()(
       };
     }),
   setLastWorkspacePath: (path) => set({ lastWorkspacePath: path }),
-  agentMode: 'yolo' as AgentMode,
-  setAgentMode: (mode) => set({ agentMode: mode }),
   modelSelections: {},
   setModelSelection: (workspaceId, sel) =>
     set((st) => ({
@@ -390,7 +372,6 @@ export const useAgentStore = create<AgentState>()(
         activeWorkspaceId: s.activeWorkspaceId,
         lastWorkspacePath: s.lastWorkspacePath,
         activeSessionId: s.activeSessionId,
-        agentMode: s.agentMode,
         modelSelections: s.modelSelections,
         recentModels: s.recentModels,
       }),

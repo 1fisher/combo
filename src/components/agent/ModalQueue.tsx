@@ -1,23 +1,7 @@
 import { useEffect, useRef } from 'react';
-import {
-  useAgentStore,
-  WRITE_TOOL_NAMES,
-  type AgentMode,
-} from '../../stores/agentStore';
+import { useAgentStore } from '../../stores/agentStore';
 import { grantPermission } from '../../lib/api';
 import { PermissionDialog } from './PermissionDialog';
-
-/**
- * 根据 agentMode 判断该权限请求是否应自动放行(不弹窗)。
- * - yolo:全部自动放行
- * - edit:写操作类工具自动放行
- * - build / plan:不自动放行(build 弹窗确认,plan 不应出现写请求)
- */
-function shouldAutoApprove(mode: AgentMode, toolName: string): boolean {
-  if (mode === 'yolo') return true;
-  if (mode === 'edit') return WRITE_TOOL_NAMES.has(toolName);
-  return false;
-}
 
 /**
  * 权限请求队列(question 工具已改为非模态卡片,在输入坞上方由
@@ -25,7 +9,6 @@ function shouldAutoApprove(mode: AgentMode, toolName: string): boolean {
  */
 export function ModalQueue({ workspaceId }: { workspaceId: string }) {
   const permissionQueue = useAgentStore((s) => s.permissionQueue);
-  const agentMode = useAgentStore((s) => s.agentMode);
   const resolvePermission = useAgentStore((s) => s.resolvePermission);
 
   // 记录已处理的 tool_call_id,避免重复 auto-approve
@@ -33,20 +16,18 @@ export function ModalQueue({ workspaceId }: { workspaceId: string }) {
 
   const activePermission = permissionQueue[0];
 
-  // 自动放行:yolo / edit 模式下,权限请求到达后立即 grant 而不弹窗
+  // 自动放行:仅保留「完全访问」模式,权限请求到达后立即 grant 而不弹窗
   useEffect(() => {
     if (!workspaceId || permissionQueue.length === 0) return;
     const st = useAgentStore.getState();
     for (const p of st.permissionQueue) {
       if (processed.current.has(p.tool_call_id)) continue;
-      if (shouldAutoApprove(agentMode, p.tool_name)) {
-        processed.current.add(p.tool_call_id);
-        void grantPermission(workspaceId, p, 'allow')
-          .then(() => st.resolvePermission(p.tool_call_id))
-          .catch(() => processed.current.delete(p.tool_call_id));
-      }
+      processed.current.add(p.tool_call_id);
+      void grantPermission(workspaceId, p, 'allow')
+        .then(() => st.resolvePermission(p.tool_call_id))
+        .catch(() => processed.current.delete(p.tool_call_id));
     }
-  }, [workspaceId, permissionQueue, agentMode]);
+  }, [workspaceId, permissionQueue]);
 
   // 清理已不在队列中的 processed 记录,防止 Set 无限增长
   useEffect(() => {
