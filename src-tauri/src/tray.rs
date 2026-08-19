@@ -10,11 +10,17 @@ use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 /// 托盘「新建任务」事件:后端先唤起主窗口再 emit,前端收到后新建会话
 pub const EVENT_TRAY_NEW_TASK: &str = "tray-new-task";
 
+/// 托盘「打开视图」事件:payload 为视图名(automation/search/skills/mcp/stats/graph),
+/// 前端收到后切换到对应全页视图
+pub const EVENT_TRAY_OPEN_VIEW: &str = "tray-open-view";
+
 /// macOS:用自建菜单替换 Tauri 默认应用菜单。
 /// 默认菜单「文件 > 关闭窗口 (⌘W)」会在原生层截获 ⌘W(触发窗口关闭→隐藏到托盘),
 /// 前端「⌘W 关闭当前文件」就永远收不到按键;自建菜单保留 App/编辑/显示/窗口
 /// 标准项(⌘C/⌘V/⌘Q/全屏等不受影响),仅去掉「关闭窗口」——主窗口关闭本就被
 /// 拦截为隐藏到托盘,真正退出走托盘菜单,行为不受影响。
+/// 注意「编辑」菜单不放 select_all:预定义「全选」自带 ⌘A 会同样截获按键,
+/// 而 ⌘A 已分配给「自动化」视图(输入框/CodeMirror 内的全选由 web 层自己处理)。
 #[cfg(target_os = "macos")]
 pub fn init_app_menu(app: &AppHandle) {
     use tauri::menu::{MenuBuilder, SubmenuBuilder};
@@ -38,7 +44,6 @@ pub fn init_app_menu(app: &AppHandle) {
             .cut()
             .copy()
             .paste()
-            .select_all()
             .build()?;
         let view_menu = SubmenuBuilder::new(app, "显示").fullscreen().build()?;
         let window_menu = SubmenuBuilder::new(app, "窗口").minimize().maximize().build()?;
@@ -71,11 +76,34 @@ pub fn show_main_window(app: &AppHandle) {
 }
 
 /// 初始化系统托盘,并把主窗口的「关闭」改为隐藏到托盘。
+/// 菜单项的 accelerator(快捷键)与前端 WorkspaceSidebar::SHORTCUT_TO_VIEW
+/// 保持一致——托盘菜单只负责显示与点击触发,快捷键本身由前端 webview 处理。
 pub fn init(app: &AppHandle) -> tauri::Result<()> {
-    let new_task = MenuItem::with_id(app, "new-task", "新建任务", true, None::<&str>)?;
+    let new_task = MenuItem::with_id(app, "new-task", "新建任务", true, Some("CmdOrCtrl+N"))?;
+    let sep_head = PredefinedMenuItem::separator(app)?;
+    let view_auto = MenuItem::with_id(app, "view-automation", "自动化", true, Some("CmdOrCtrl+A"))?;
+    let view_search = MenuItem::with_id(app, "view-search", "搜索", true, Some("CmdOrCtrl+K"))?;
+    let view_skills = MenuItem::with_id(app, "view-skills", "技能", true, Some("CmdOrCtrl+Shift+S"))?;
+    let view_mcp = MenuItem::with_id(app, "view-mcp", "MCP 工具", true, Some("CmdOrCtrl+Shift+M"))?;
+    let view_stats = MenuItem::with_id(app, "view-stats", "统计", true, Some("CmdOrCtrl+Shift+D"))?;
+    let view_graph = MenuItem::with_id(app, "view-graph", "图谱", true, Some("CmdOrCtrl+Shift+G"))?;
+    let sep_tail = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
-    let separator = PredefinedMenuItem::separator(app)?;
-    let menu = Menu::with_items(app, &[&new_task, &separator, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[
+            &new_task,
+            &sep_head,
+            &view_auto,
+            &view_search,
+            &view_skills,
+            &view_mcp,
+            &view_stats,
+            &view_graph,
+            &sep_tail,
+            &quit,
+        ],
+    )?;
 
     let mut builder = TrayIconBuilder::with_id("main")
         .tooltip("Combo")
@@ -88,7 +116,13 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
                 let _ = app.emit(EVENT_TRAY_NEW_TASK, ());
             }
             "quit" => app.exit(0),
-            _ => {}
+            id => {
+                // view-<name>:打开对应全页视图(唤起窗口 + 通知前端切换)
+                if let Some(view) = id.strip_prefix("view-") {
+                    show_main_window(app);
+                    let _ = app.emit(EVENT_TRAY_OPEN_VIEW, view);
+                }
+            }
         })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {

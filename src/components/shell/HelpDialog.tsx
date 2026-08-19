@@ -13,6 +13,11 @@ interface HelpDialogProps {
 const SHORTCUTS: { keys: string[]; label: string }[] = [
   { keys: ['⌘', 'N'], label: '新建任务' },
   { keys: ['⌘', 'K'], label: '搜索项目或任务' },
+  { keys: ['⌘', 'A'], label: '自动化' },
+  { keys: ['⌘', '⇧', 'S'], label: '技能' },
+  { keys: ['⌘', '⇧', 'M'], label: 'MCP 工具' },
+  { keys: ['⌘', '⇧', 'D'], label: '统计' },
+  { keys: ['⌘', '⇧', 'G'], label: '知识图谱' },
   { keys: ['Enter'], label: '发送消息' },
   { keys: ['Shift', 'Enter'], label: '消息内换行' },
   { keys: ['⌘', 'F'], label: '文件内搜索(编辑器视图)' },

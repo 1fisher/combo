@@ -58,6 +58,43 @@ function basename(p: string): string {
   return idx >= 0 ? clean.slice(idx + 1) : clean;
 }
 
+/** 侧边栏全页视图导航项(渲染与快捷键、托盘事件共用同一份配置) */
+const SIDE_NAV_ITEMS = [
+  { view: 'search', label: '搜索', icon: Search, kbd: '⌘ K', title: '搜索 (⌘/Ctrl+K)' },
+  { view: 'automation', label: '自动化', icon: CalendarClock, kbd: '⌘ A', title: '自动化 (⌘/Ctrl+A)' },
+  { view: 'skills', label: '技能', icon: WandSparkles, kbd: '⌘ ⇧ S', title: '技能 (⌘/Ctrl+Shift+S)' },
+  { view: 'mcp', label: 'MCP', icon: Boxes, kbd: '⌘ ⇧ M', title: 'MCP 工具 (⌘/Ctrl+Shift+M)' },
+  { view: 'stats', label: '统计', icon: BarChart3, kbd: '⌘ ⇧ D', title: '用量统计 (⌘/Ctrl+Shift+D)' },
+  { view: 'graph', label: '图谱', icon: Waypoints, kbd: '⌘ ⇧ G', title: '知识图谱 (⌘/Ctrl+Shift+G)' },
+] as const;
+
+/** 合法的侧边栏视图名(托盘事件 payload 校验用) */
+const SIDE_VIEWS: readonly string[] = SIDE_NAV_ITEMS.map((i) => i.view);
+
+/** 输入框内无原生行为冲突、无需让位的快捷键(⌘/Ctrl+K 命令面板惯例) */
+const EDITABLE_EXEMPT = new Set(['k']);
+
+/**
+ * 视图快捷键 → 视图。「⇧」前缀表示需 Shift;⌘/Ctrl+K 无文本编辑冲突直接切换,
+ * 其余(⌘A 全选等)焦点在可编辑区域时让位给原生行为。
+ */
+const SHORTCUT_TO_VIEW: Record<string, SideView> = {
+  k: 'search',
+  a: 'automation',
+  '⇧s': 'skills',
+  '⇧m': 'mcp',
+  '⇧d': 'stats',
+  '⇧g': 'graph',
+};
+
+/** 事件目标是否为可编辑元素(输入框/文本域/CodeMirror 等富文本编辑区) */
+function isEditableTarget(t: EventTarget | null): boolean {
+  if (!(t instanceof HTMLElement)) return false;
+  if (t.isContentEditable) return true;
+  const tag = t.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+}
+
 /** 项目名:优先后端返回的 name,回退到目录 basename。 */
 function projectName(w: { name?: string; path: string }): string {
   return w.name && w.name.trim() ? w.name : basename(w.path);
@@ -255,39 +292,59 @@ export function WorkspaceSidebar({
   const onOpenViewRef = useRef(onOpenView);
   onOpenViewRef.current = onOpenView;
 
-  // ⌘/Ctrl+N 新建任务, ⌘/Ctrl+K 搜索
+  // ⌘/Ctrl+N 新建任务, ⌘/Ctrl+K 搜索;视图快捷键见 SHORTCUT_TO_VIEW
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+      if (e.key.toLowerCase() === 'n' && !e.shiftKey) {
         e.preventDefault();
         onNewTaskRef.current();
+        return;
       }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        e.preventDefault();
-        onOpenViewRef.current?.('search');
-      }
+      const combo = (e.shiftKey ? '⇧' : '') + e.key.toLowerCase();
+      const view = SHORTCUT_TO_VIEW[combo];
+      if (!view) return;
+      // CodeMirror 等组件已处理(defaultPrevented)的按键跳过;
+      // ⌘/Ctrl+A 等与文本全选等原生行为重叠的组合,焦点在可编辑区域时让位
+      // (⌘K 等无冲突键豁免,输入框内也可触发)
+      if (e.defaultPrevented) return;
+      if (isEditableTarget(e.target) && !EDITABLE_EXEMPT.has(combo)) return;
+      e.preventDefault();
+      onOpenViewRef.current?.(view);
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // 托盘菜单「新建任务」(仅 Tauri 桌面端;后端已先唤起主窗口)
+  // 托盘菜单事件(仅 Tauri 桌面端;后端已先唤起主窗口):
+  // 「新建任务」新建会话;「打开视图」切换到对应全页视图
   useEffect(() => {
     if (!isTauri()) return;
-    let unlisten: (() => void) | undefined;
+    const unlistens: (() => void)[] = [];
     let disposed = false;
     void import('@tauri-apps/api/event')
-      .then(({ listen }) =>
-        listen('tray-new-task', () => onNewTaskRef.current()).then((fn) => {
-          if (disposed) fn();
-          else unlisten = fn;
-        })
-      )
+      .then(({ listen }) => {
+        const subs = [
+          listen('tray-new-task', () => onNewTaskRef.current()),
+          listen('tray-open-view', (ev) => {
+            const v = ev.payload;
+            if (typeof v === 'string' && SIDE_VIEWS.includes(v)) {
+              onOpenViewRef.current?.(v as SideView);
+            }
+          }),
+        ].map((p) =>
+          p.then((fn) => {
+            if (disposed) fn();
+            else unlistens.push(fn);
+          }),
+        );
+        return Promise.all(subs);
+      })
       // Tauri 内部 API 不可用(测试环境/旧版本)时静默跳过
       .catch(() => {});
     return () => {
       disposed = true;
-      unlisten?.();
+      unlistens.forEach((fn) => fn());
     };
   }, []);
 
@@ -477,17 +534,8 @@ export function WorkspaceSidebar({
             <span className="min-w-0 flex-1 truncate text-[13px]">新建任务</span>
             <span className="shrink-0 text-xs font-normal text-foreground-subtlest">⌘ N</span>
           </button>
-          {/* 主内容区全页视图导航:自动化/搜索/技能/MCP/统计/图谱 */}
-          {(
-            [
-              { view: 'search', label: '搜索', icon: Search, kbd: '⌘ K', title: '搜索 (⌘ K)' },
-              { view: 'automation', label: '自动化', icon: CalendarClock, title: '自动化' },
-              { view: 'skills', label: '技能', icon: WandSparkles, title: '技能' },
-              { view: 'mcp', label: 'MCP', icon: Boxes, title: 'MCP 工具' },
-              { view: 'stats', label: '统计', icon: BarChart3, title: '用量统计' },
-              { view: 'graph', label: '图谱', icon: Waypoints, title: '知识图谱' },
-            ] as const
-          ).map((item) => (
+          {/* 主内容区全页视图导航:自动化/搜索/技能/MCP/统计/图谱(快捷键见 SHORTCUT_TO_VIEW) */}
+          {SIDE_NAV_ITEMS.map((item) => (
             <button
               key={item.view}
               type="button"
@@ -500,11 +548,9 @@ export function WorkspaceSidebar({
             >
               <item.icon className="size-4 shrink-0" />
               <span className="min-w-0 flex-1 truncate text-[13px]">{item.label}</span>
-              {'kbd' in item && (
-                <span className="shrink-0 text-xs font-normal text-foreground-subtlest">
-                  {item.kbd}
-                </span>
-              )}
+              <span className="shrink-0 text-xs font-normal text-foreground-subtlest">
+                {item.kbd}
+              </span>
             </button>
           ))}
         </div>
