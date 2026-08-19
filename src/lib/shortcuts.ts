@@ -14,6 +14,7 @@ export type ShortcutAction =
   | 'view:automation'
   | 'view:skills'
   | 'view:mcp'
+  | 'view:lsp'
   | 'view:stats'
   | 'view:graph'
   | 'dictation';
@@ -70,6 +71,13 @@ export const SHORTCUT_ACTIONS: readonly ShortcutActionMeta[] = [
     label: 'MCP 工具',
     desc: '打开 MCP 视图',
     defaultCombo: '⇧m',
+    editableExempt: false,
+  },
+  {
+    id: 'view:lsp',
+    label: 'LSP 服务',
+    desc: '打开 LSP 服务视图',
+    defaultCombo: '⇧l',
     editableExempt: false,
   },
   {

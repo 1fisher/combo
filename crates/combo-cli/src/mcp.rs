@@ -104,7 +104,7 @@ pub async fn connect_many(
 }
 
 /// 简易 shell 分词:按空白拆分,支持单双引号。
-fn shell_words(s: &str) -> anyhow::Result<Vec<String>> {
+pub(crate) fn shell_words(s: &str) -> anyhow::Result<Vec<String>> {
     let mut words = Vec::new();
     let mut cur = String::new();
     let mut quote: Option<char> = None;

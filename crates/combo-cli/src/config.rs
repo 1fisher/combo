@@ -882,6 +882,63 @@ pub fn remove_mcp_server(path: &PathBuf, name: &str) -> Result<()> {
     write_config(path, &cfg)
 }
 
+/// 新增或更新一个 LSP server 配置(写入 `[lsp.<lang>]` 段)。
+///
+/// `lang` 为语言标识(如 rust/typescript/python),需与扩展名映射
+/// (`lsp::ext_to_lang`)对齐才能被工具按文件自动路由;仅允许字母/数字/`-`/`_`。
+/// `command` 为可执行文件(不含参数);`args` 为可选参数串(经 `shell_words`
+/// 拆分,支持引号包空白);`env` 为可选环境变量表。
+pub fn upsert_lsp_server(
+    path: &PathBuf,
+    lang: &str,
+    command: &str,
+    args: Option<&str>,
+    env: Option<&BTreeMap<String, String>>,
+) -> Result<()> {
+    let lang = lang.trim();
+    if lang.is_empty() {
+        return Err(anyhow::anyhow!("语言标识不能为空"));
+    }
+    if !lang.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+        return Err(anyhow::anyhow!(
+            "语言标识仅支持字母、数字、`-`、`_`(如 rust、typescript)"
+        ));
+    }
+    let command = command.trim();
+    if command.is_empty() {
+        return Err(anyhow::anyhow!("启动命令不能为空"));
+    }
+    if command.contains(char::is_whitespace) {
+        return Err(anyhow::anyhow!(
+            "启动命令只能是可执行文件本身,参数请写在「参数」一栏"
+        ));
+    }
+    let args = args
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(crate::mcp::shell_words)
+        .transpose()?;
+    let mut cfg = load_config(path)?;
+    cfg.lsp.insert(
+        lang.to_string(),
+        LspServerConfig {
+            command: command.to_string(),
+            args,
+            env: env.cloned(),
+        },
+    );
+    write_config(path, &cfg)
+}
+
+/// 删除配置文件中的 LSP server。
+pub fn remove_lsp_server(path: &PathBuf, lang: &str) -> Result<()> {
+    let mut cfg = load_config(path)?;
+    if cfg.lsp.remove(lang.trim()).is_none() {
+        return Err(anyhow::anyhow!("LSP server `{}` 未在配置文件中定义", lang));
+    }
+    write_config(path, &cfg)
+}
+
 /// 读取「git 提交署名」开关(配置文件缺省时默认开启)。
 pub fn commit_attribution_enabled(path: &PathBuf) -> bool {
     AppConfig::load_or_create(path)
@@ -1669,5 +1726,61 @@ speed = 1.4"#).unwrap();
         assert!(!cfg.mcp.contains_key("filesystem"));
         assert!(remove_mcp_server(&path, "filesystem").is_err());
         assert!(remove_mcp_server(&path, "never-exists").is_err());
+    }
+
+    #[test]
+    fn lsp_server_upsert_and_remove() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("combo-cli.toml");
+
+        // 基本写入:command + args 拆分(支持引号)+ env
+        let mut env = BTreeMap::new();
+        env.insert("RUST_BACKTRACE".to_string(), "1".to_string());
+        upsert_lsp_server(
+            &path,
+            " rust ",
+            " rust-analyzer ",
+            Some("  --preview  "),
+            Some(&env),
+        )
+        .unwrap();
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        let srv = cfg.lsp.get("rust").unwrap();
+        assert_eq!(srv.command, "rust-analyzer", "command 前后空白应被 trim");
+        assert_eq!(srv.args, Some(vec!["--preview".to_string()]));
+        assert_eq!(
+            srv.env.as_ref().unwrap().get("RUST_BACKTRACE").map(String::as_str),
+            Some("1")
+        );
+
+        // 覆盖更新:清掉 args/env
+        upsert_lsp_server(&path, "rust", "rust-analyzer", Some(""), None).unwrap();
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        let srv = cfg.lsp.get("rust").unwrap();
+        assert!(srv.args.is_none(), "空参数串应存为 None");
+        assert!(srv.env.is_none());
+
+        // 引号参数拆分
+        upsert_lsp_server(&path, "typescript", "typescript-language-server", Some("--stdio"), None)
+            .unwrap();
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        assert_eq!(
+            cfg.lsp.get("typescript").unwrap().args,
+            Some(vec!["--stdio".to_string()])
+        );
+
+        // 校验失败:空语言 / 非法语言标识 / 空 command / command 带参数 / 引号不闭合
+        assert!(upsert_lsp_server(&path, "  ", "x", None, None).is_err());
+        assert!(upsert_lsp_server(&path, "bad lang!", "x", None, None).is_err());
+        assert!(upsert_lsp_server(&path, "rust", " ", None, None).is_err());
+        assert!(upsert_lsp_server(&path, "rust", "rust-analyzer --x", None, None).is_err());
+        assert!(upsert_lsp_server(&path, "rust", "rust-analyzer", Some("--o 'unclosed"), None).is_err());
+
+        // 删除
+        remove_lsp_server(&path, "rust").unwrap();
+        let cfg = AppConfig::load_or_create(&path).unwrap();
+        assert!(!cfg.lsp.contains_key("rust"));
+        assert!(remove_lsp_server(&path, "rust").is_err());
+        assert!(remove_lsp_server(&path, "never-exists").is_err());
     }
 }

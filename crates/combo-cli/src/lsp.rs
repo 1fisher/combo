@@ -44,14 +44,15 @@ pub fn list(cfg: &ResolvedConfig) -> Result<()> {
     Ok(())
 }
 
-/// 按 PATH 查找可执行文件。
-fn find_executable(cmd: &str) -> Option<PathBuf> {
-    if cmd.contains('/') {
+/// 按 PATH 查找可执行文件(serve 的 `/v1/lsp` 状态检测复用)。
+pub fn find_executable(cmd: &str) -> Option<PathBuf> {
+    if cmd.contains('/') || cmd.contains('\\') {
         let p = PathBuf::from(cmd);
         return p.is_file().then_some(p);
     }
     let path = std::env::var("PATH").unwrap_or_default();
-    for dir in path.split(':') {
+    // 同时接受 ':'(unix)与 ';'(Windows)分隔,跨平台都能命中
+    for dir in path.split([':', ';']) {
         let p = PathBuf::from(dir).join(cmd);
         if p.is_file() {
             return Some(p);

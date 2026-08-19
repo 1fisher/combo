@@ -480,7 +480,8 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
 - **Frontend layout:** `src/components/{ui,shell,agent}` — `ui/` is generated
   shadcn primitives, `shell/` is app chrome, `agent/` is the chat/tool/modal UI.
   The shell is a 1:1 仿写 ZCode 的 agent 布局:左侧 `WorkspaceSidebar`(默认 372px,
-  可拖拽调宽/收起,含 新建任务/搜索/自动化/技能 按钮、「任务/项目」视图切换:
+  可拖拽调宽/收起,含 新建任务/搜索/自动化/技能/MCP/LSP/统计/图谱 导航按钮、
+  「任务/项目」视图切换:
   「项目」视图只列项目(可折叠分区),「任务」视图以当前项目名为分区标题、只列出
   当前项目的任务(`ConversationList`,不再展示所有项目的分组任务)、
   底部用户与连接状态) + 可拖拽分隔条 + 主内容区
@@ -496,6 +497,19 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   `src/lib/api/` is the typed client (`types.ts` generated, `index.ts` hand-written
   endpoint wrappers); `src/lib/events/` is SSE + dispatch; `src/lib/connection.ts`
   is proxy address discovery + health polling; `src/stores/` is Zustand.
+- **LSP 服务管理**(`LspView.tsx`,侧边栏「LSP」按钮,AppView=`'lsp'`,快捷键
+  ⌘/Ctrl+⇧L):对 combo-cli.toml 的 `[lsp.<lang>]` 段做可视化管理,与 MCP 视图
+  同构(列表/hero 模板/双栏表单)。REST(`serve.rs`):`GET /v1/lsp`(列表 +
+  `lsp::find_executable` 实时检测可执行状态与路径)、`POST /v1/lsp`
+  (`{name,command,args?,env?}`,`config.rs::upsert_lsp_server` 落盘——lang 仅
+  字母/数字/`-`/`_`,command 必须是纯可执行文件名、参数走 args 串经
+  `mcp::shell_words` 拆分,env 为 KEY=VALUE 表)、`POST /v1/lsp/remove`、
+  `POST /v1/lsp/check`(表单保存前检测命令是否在 PATH)。增删后
+  `reload_lsp_into_runtime` 把配置同步进 `state.cfg.lsp`,下一次 run 的
+  `builtin_tools` 立即注册/注销 diagnostics/definition/references/hover 工具。
+  前端 `useLsp.ts` + `api/index.ts` 的 `listLspServers/upsertLspServer/
+  removeLspServer/checkLspCommand`;表单语言标识带 datalist 建议(与
+  `ext_to_lang` 扩展名映射一致),环境变量按行解析(注释行忽略)。
 - **Generated types are NOT purely generated.** `npm run gen:api` runs
   `openapi-typescript` over `swagger/swagger.json` (vendored from the rune repo at
   commit `28ed89ff`, see `swagger/README.md`) then **appends a hand-maintained

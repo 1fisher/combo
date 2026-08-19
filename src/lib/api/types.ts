@@ -2171,6 +2171,26 @@ export namespace Api {
     tools?: string[];
   };
 
+  // LSP server(combo-cli serve 本地端点,读写配置文件 [lsp.<lang>])
+  export type LspServer = {
+    /** 语言标识(配置段名 [lsp.<lang>],如 rust/typescript/python)。 */
+    name: string;
+    /** 可执行文件(不含参数)。 */
+    command: string;
+    args?: string[] | null;
+    env?: Record<string, string> | null;
+    /** 命令是否能在 PATH / 绝对路径中找到(GET 时实时检测)。 */
+    executable?: boolean;
+    /** 找到的可执行文件完整路径。 */
+    path?: string | null;
+  };
+
+  // LSP 命令检测结果。
+  export type LspCheckResult = {
+    found: boolean;
+    path?: string | null;
+  };
+
   // 配置(rune 透传)
   export type ConfigScope = 0 | 1; // 0=global, 1=workspace
   export type ConfigSetRequest = {

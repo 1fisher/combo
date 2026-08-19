@@ -498,6 +498,31 @@ export function testMcpServer(
   });
 }
 
+// LSP server:combo-cli serve 本地端点,读写配置文件 [lsp.<lang>]
+export function listLspServers(): Promise<Api.LspServer[]> {
+  return apiRequest('/v1/lsp');
+}
+
+export function upsertLspServer(req: {
+  name: string;
+  command: string;
+  args?: string;
+  env?: Record<string, string>;
+}): Promise<{ ok: boolean; name: string }> {
+  return apiRequest('/v1/lsp', {
+    method: 'POST',
+    body: { name: req.name, command: req.command, args: req.args, env: req.env },
+  });
+}
+
+export function removeLspServer(name: string): Promise<{ ok: boolean; name: string }> {
+  return apiRequest('/v1/lsp/remove', { method: 'POST', body: { name } });
+}
+
+export function checkLspCommand(command: string): Promise<Api.LspCheckResult> {
+  return apiRequest('/v1/lsp/check', { method: 'POST', body: { command } });
+}
+
 // 服务器目录浏览:combo-cli serve 本地端点,供浏览器/移动端在远端打开服务器上的项目目录
 export interface HostDirEntry {
   name: string;

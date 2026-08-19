@@ -51,7 +51,7 @@ use rig::completion::{AssistantContent, Message};
 use rig::OneOrMany;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::Infallible;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -957,6 +957,10 @@ fn build_router(
         .route("/v1/mcp", get(list_mcp).post(upsert_mcp))
         .route("/v1/mcp/remove", post(remove_mcp))
         .route("/v1/mcp/test", post(test_mcp))
+        // ---- LSP server 管理(读写配置文件 [lsp.<lang>]) ----
+        .route("/v1/lsp", get(list_lsp).post(upsert_lsp))
+        .route("/v1/lsp/remove", post(remove_lsp))
+        .route("/v1/lsp/check", post(check_lsp))
         .route(
             "/v1/settings/commit-attribution",
             get(git::attribution_get).post(git::attribution_set),
@@ -2009,6 +2013,97 @@ async fn test_mcp(Json(body): Json<McpTestReq>) -> Result<Json<Value>, (StatusCo
     let tool_count = names.len();
     drop(conn);
     Ok(Json(json!({ "ok": true, "tool_count": tool_count, "tools": names })))
+}
+
+// ---------- LSP server 管理 ----------
+
+/// 将配置文件中的 LSP 配置重新同步到运行时 `state.cfg.lsp`,使增删立即对
+/// 下一次 agent run 生效(`builtin_tools` 在 run 启动时按该 map 注册
+/// diagnostics/definition/references/hover 工具)。
+fn reload_lsp_into_runtime(state: &AppState) {
+    let config_path = AppConfig::load_or_create(&crate::config::default_config_path())
+        .unwrap_or_default();
+    state.cfg.lock().unwrap().lsp = config_path.lsp;
+}
+
+/// GET /v1/lsp — 返回配置文件中的 LSP server 列表,并实时检测可执行状态。
+async fn list_lsp() -> Json<Value> {
+    let config_path = AppConfig::load_or_create(&crate::config::default_config_path())
+        .unwrap_or_default();
+    let arr: Vec<Value> = config_path
+        .lsp
+        .iter()
+        .map(|(name, srv)| {
+            let exe = crate::lsp::find_executable(&srv.command);
+            json!({
+                "name": name,
+                "command": srv.command,
+                "args": srv.args,
+                "env": srv.env,
+                "executable": exe.is_some(),
+                "path": exe.map(|p| p.display().to_string()),
+            })
+        })
+        .collect();
+    Json(Value::Array(arr))
+}
+
+/// POST /v1/lsp — 新增或更新 LSP server。
+/// 请求体:`{ name(语言标识), command, args?(参数串,支持引号), env? }`。
+#[derive(Deserialize)]
+struct LspUpsertReq {
+    name: String,
+    command: String,
+    args: Option<String>,
+    env: Option<BTreeMap<String, String>>,
+}
+
+async fn upsert_lsp(
+    State(state): State<AppState>,
+    Json(body): Json<LspUpsertReq>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    crate::config::upsert_lsp_server(
+        &crate::config::default_config_path(),
+        &body.name,
+        &body.command,
+        body.args.as_deref(),
+        body.env.as_ref(),
+    )
+    .map_err(|e| (StatusCode::BAD_REQUEST, format!("保存 LSP 配置失败: {e}")))?;
+    reload_lsp_into_runtime(&state);
+    tracing::info!("已保存 LSP server `{}`", body.name);
+    Ok(Json(json!({ "ok": true, "name": body.name })))
+}
+
+/// POST /v1/lsp/remove — 删除 LSP server。请求体:`{ name }`。
+#[derive(Deserialize)]
+struct LspRemoveReq {
+    name: String,
+}
+
+async fn remove_lsp(
+    State(state): State<AppState>,
+    Json(body): Json<LspRemoveReq>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    crate::config::remove_lsp_server(&crate::config::default_config_path(), &body.name)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("删除 LSP 配置失败: {e}")))?;
+    reload_lsp_into_runtime(&state);
+    tracing::info!("已删除 LSP server `{}`", body.name);
+    Ok(Json(json!({ "ok": true, "name": body.name })))
+}
+
+/// POST /v1/lsp/check — 检测命令是否可执行(表单保存前即时校验)。
+#[derive(Deserialize)]
+struct LspCheckReq {
+    command: String,
+}
+
+async fn check_lsp(Json(body): Json<LspCheckReq>) -> Json<Value> {
+    let path = crate::lsp::find_executable(body.command.trim());
+    Json(json!({
+        "found": path.is_some(),
+        "path": path.map(|p| p.display().to_string()),
+    }))
 }
 
 // ---------- providers / model 切换 ----------

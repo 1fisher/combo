@@ -19,6 +19,7 @@ import { AutomationPanel } from './AutomationPanel';
 import { SearchView } from './SearchView';
 import { SkillsView } from './SkillsView';
 import { McpView } from './McpView';
+import { LspView } from './LspView';
 import { ShortcutsView } from './ShortcutsView';
 import { AgentPanel } from '../agent/AgentPanel';
 // xterm / CodeMirror / recharts 体量大,按需加载并各自独立成 chunk
@@ -51,7 +52,7 @@ function PanelLoading() {
 const SIDEBAR_MIN = 264;
 const SIDEBAR_DEFAULT = 372;
 
-/** 主内容区视图;automation/search/skills/mcp/stats/graph/shortcuts 为全页独立视图(侧边栏可导航) */
+/** 主内容区视图;automation/search/skills/mcp/lsp/stats/graph/shortcuts 为全页独立视图(侧边栏可导航) */
 export type AppView =
   | 'agent'
   | 'terminal'
@@ -60,6 +61,7 @@ export type AppView =
   | 'search'
   | 'skills'
   | 'mcp'
+  | 'lsp'
   | 'stats'
   | 'graph'
   | 'shortcuts';
@@ -67,7 +69,7 @@ export type AppView =
 /** 侧边栏导航按钮对应的全页视图 */
 export type SideView = Extract<
   AppView,
-  'automation' | 'search' | 'skills' | 'mcp' | 'stats' | 'graph' | 'shortcuts'
+  'automation' | 'search' | 'skills' | 'mcp' | 'lsp' | 'stats' | 'graph' | 'shortcuts'
 >;
 
 export function AppShell() {
@@ -108,6 +110,7 @@ function AppShellInner() {
     search: false,
     skills: false,
     mcp: false,
+    lsp: false,
     stats: false,
     graph: false,
     shortcuts: false,
@@ -302,6 +305,9 @@ function AppShellInner() {
               </div>
               <div className={cn('flex min-h-0 w-full flex-1', view !== 'mcp' && 'hidden')}>
                 {paneMounted.mcp && <McpView />}
+              </div>
+              <div className={cn('flex min-h-0 w-full flex-1', view !== 'lsp' && 'hidden')}>
+                {paneMounted.lsp && <LspView />}
               </div>
               <div className={cn('flex min-h-0 w-full flex-1', view !== 'stats' && 'hidden')}>
                 {paneMounted.stats && (

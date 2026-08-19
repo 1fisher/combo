@@ -6,6 +6,7 @@ import {
   CalendarClock,
   ChevronDown,
   ChevronRight,
+  FileCode2,
   Folder,
   FolderInput,
   GripVertical,
@@ -73,6 +74,7 @@ const SIDE_NAV_ITEMS = [
   { view: 'automation', label: '自动化', icon: CalendarClock, title: '自动化' },
   { view: 'skills', label: '技能', icon: WandSparkles, title: '技能' },
   { view: 'mcp', label: 'MCP', icon: Boxes, title: 'MCP 工具' },
+  { view: 'lsp', label: 'LSP', icon: FileCode2, title: 'LSP 服务' },
   { view: 'stats', label: '统计', icon: BarChart3, title: '用量统计' },
   { view: 'graph', label: '图谱', icon: Waypoints, title: '知识图谱' },
 ] as const;
@@ -87,6 +89,7 @@ const SIDEBAR_ACTION_IDS = [
   'view:automation',
   'view:skills',
   'view:mcp',
+  'view:lsp',
   'view:stats',
   'view:graph',
 ] as const satisfies readonly ShortcutAction[];
