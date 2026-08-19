@@ -78,6 +78,9 @@ fn make_state() -> AppState {
             std::env::temp_dir().join("combo-tts-test-models"),
             combo_cli::tts::TtsModel::PiperZhXiaoya,
         )),
+        lsp_install: Arc::new(Mutex::new(
+            combo_cli::serve::LspInstallState::default(),
+        )),
     }
 }
 
@@ -349,6 +352,9 @@ async fn git_repos_discovers_root_and_subdir_repos() {
         tts: Arc::new(combo_cli::tts::TtsService::new(
             std::env::temp_dir().join("combo-tts-test-models"),
             combo_cli::tts::TtsModel::PiperZhXiaoya,
+        )),
+        lsp_install: Arc::new(Mutex::new(
+            combo_cli::serve::LspInstallState::default(),
         )),
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

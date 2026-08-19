@@ -87,6 +87,8 @@ pub struct AppState {
     pub asr: Arc<asr::AsrService>,
     /// 本地语音合成(piper 中文 / HF 高质量,朗读 agent 回复)。
     pub tts: Arc<tts::TtsService>,
+    /// LSP server 一键安装任务(同一时刻至多一个,前端轮询状态)。
+    pub lsp_install: Arc<Mutex<LspInstallState>>,
 }
 
 impl AppState {
@@ -139,6 +141,7 @@ impl AppState {
                     .unwrap_or(asr::AsrModel::SenseVoice),
             )),
             tts: Arc::new(tts),
+            lsp_install: Arc::new(Mutex::new(LspInstallState::default())),
         })
     }
 
@@ -196,6 +199,7 @@ impl AppState {
                 std::env::temp_dir().join("combo-tts-test-models"),
                 tts::TtsModel::PiperZhXiaoya,
             )),
+            lsp_install: Arc::new(Mutex::new(LspInstallState::default())),
         }
     }
 }
@@ -961,6 +965,11 @@ fn build_router(
         .route("/v1/lsp", get(list_lsp).post(upsert_lsp))
         .route("/v1/lsp/remove", post(remove_lsp))
         .route("/v1/lsp/check", post(check_lsp))
+        // ---- LSP 一键安装(后台执行安装命令,成功后自动写配置) ----
+        .route("/v1/lsp/plans", get(list_lsp_plans))
+        .route("/v1/lsp/install", post(install_lsp))
+        .route("/v1/lsp/install/status", get(lsp_install_status))
+        .route("/v1/lsp/install/cancel", post(cancel_lsp_install))
         .route(
             "/v1/settings/commit-attribution",
             get(git::attribution_get).post(git::attribution_set),
@@ -2104,6 +2113,295 @@ async fn check_lsp(Json(body): Json<LspCheckReq>) -> Json<Value> {
         "found": path.is_some(),
         "path": path.map(|p| p.display().to_string()),
     }))
+}
+
+// ---------- LSP server 一键安装(自动配置 + 安装服务) ----------
+
+/// 安装任务状态机(running → success / failed / cancelled)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LspInstallStatus {
+    Running,
+    Success,
+    Failed,
+    Cancelled,
+}
+
+impl LspInstallStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            LspInstallStatus::Running => "running",
+            LspInstallStatus::Success => "success",
+            LspInstallStatus::Failed => "failed",
+            LspInstallStatus::Cancelled => "cancelled",
+        }
+    }
+}
+
+/// 一次 LSP server 安装任务(同一时刻至多一个,存于 AppState.lsp_install)。
+pub struct LspInstallJob {
+    /// 语言标识(安装成功后写入 `[lsp.<lang>]` 配置)。
+    pub lang: String,
+    /// 展示用完整安装命令行。
+    pub command: String,
+    pub status: LspInstallStatus,
+    /// 附带说明:成功时为可执行路径(或 PATH 提示),失败时为原因。
+    pub message: String,
+    /// 安装命令输出(截尾保留;状态端点只回传尾部若干行)。
+    pub log: Vec<String>,
+    /// 取消信号(任务结束后置 None)。
+    pub cancel: Option<watch::Sender<bool>>,
+}
+
+/// LSP 安装任务的共享状态。
+#[derive(Default)]
+pub struct LspInstallState {
+    pub job: Option<LspInstallJob>,
+}
+
+/// 安装日志保留上限(行);状态端点回传尾部行数。
+const LSP_INSTALL_LOG_MAX: usize = 400;
+const LSP_INSTALL_LOG_TAIL: usize = 80;
+
+/// GET /v1/lsp/plans — 内置一键安装方案(install_command 已按本机
+/// 可用的包管理器解析;null 表示缺少包管理器,需手动安装)。
+async fn list_lsp_plans() -> Json<Value> {
+    let arr: Vec<Value> = crate::lsp::LSP_INSTALL_PLANS
+        .iter()
+        .map(|p| {
+            json!({
+                "name": p.lang,
+                "command": p.server_command,
+                "args": p.server_args.map(|a| a.iter().copied().collect::<Vec<&str>>()),
+                "install_command": crate::lsp::resolve_install_command(p.lang)
+                    .map(|(display, _)| display),
+            })
+        })
+        .collect();
+    Json(Value::Array(arr))
+}
+
+/// POST /v1/lsp/install — 一键安装:后台执行该语言的安装命令,成功后
+/// 自动写入 `[lsp.<lang>]` 配置并同步运行时(下一次 run 即注册代码导航
+/// 工具)。同一时刻只允许一个安装任务(409)。
+#[derive(Deserialize)]
+struct LspInstallReq {
+    name: String,
+}
+
+async fn install_lsp(
+    State(state): State<AppState>,
+    Json(body): Json<LspInstallReq>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let lang = body.name.trim().to_string();
+    let Some((cmd_line, argv)) = crate::lsp::resolve_install_command(&lang) else {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("语言 `{lang}` 暂不支持自动安装(或本机缺少对应的包管理器),请手动安装后用表单配置"),
+        ));
+    };
+    {
+        let st = state.lsp_install.lock().unwrap();
+        if let Some(job) = &st.job {
+            if job.status == LspInstallStatus::Running {
+                return Err((
+                    StatusCode::CONFLICT,
+                    format!("已有安装任务进行中({})", job.lang),
+                ));
+            }
+        }
+    }
+    let (cancel_tx, cancel_rx) = watch::channel(false);
+    state.lsp_install.lock().unwrap().job = Some(LspInstallJob {
+        lang: lang.clone(),
+        command: cmd_line.clone(),
+        status: LspInstallStatus::Running,
+        message: String::new(),
+        log: Vec::new(),
+        cancel: Some(cancel_tx),
+    });
+    let install_state = state.lsp_install.clone();
+    let cfg = state.cfg.clone();
+    let (lang_for_log, cmd_for_log) = (lang.clone(), cmd_line.clone());
+    tokio::spawn(async move {
+        run_lsp_install(install_state, cfg, lang_for_log, cmd_for_log, argv, cancel_rx).await;
+    });
+    tracing::info!("LSP 一键安装启动:{} → {}", lang, cmd_line);
+    Ok(Json(json!({ "ok": true, "name": lang, "command": cmd_line })))
+}
+
+/// 把流式输出逐行追加进任务日志(截尾保留)。
+async fn append_stream_lines<R: tokio::io::AsyncRead + Unpin>(
+    stream: R,
+    install_state: Arc<Mutex<LspInstallState>>,
+) {
+    use tokio::io::AsyncBufReadExt;
+    let mut lines = tokio::io::BufReader::new(stream).lines();
+    while let Ok(Some(line)) = lines.next_line().await {
+        let mut st = install_state.lock().unwrap();
+        if let Some(job) = &mut st.job {
+            job.log.push(line);
+            if job.log.len() > LSP_INSTALL_LOG_MAX {
+                let overflow = job.log.len() - LSP_INSTALL_LOG_MAX;
+                job.log.drain(..overflow);
+            }
+        }
+    }
+}
+
+/// 后台执行安装命令:stdout/stderr 逐行进日志;结束后按结果更新状态。
+/// 退出码 0 即视为成功——写入 `[lsp.<lang>]` 配置并同步运行时 lsp 映射;
+/// 若 PATH 中暂未出现 server 可执行文件(进程环境不刷新),仍保存配置,
+/// 仅在 message 提示重启应用后生效。
+async fn run_lsp_install(
+    install_state: Arc<Mutex<LspInstallState>>,
+    cfg: Arc<Mutex<AskConfig>>,
+    lang: String,
+    cmd_line: String,
+    argv: Vec<String>,
+    mut cancel_rx: watch::Receiver<bool>,
+) {
+    let finish = |status: LspInstallStatus, message: String| {
+        let mut st = install_state.lock().unwrap();
+        if let Some(job) = &mut st.job {
+            job.status = status;
+            job.message = message;
+            job.cancel = None;
+        }
+    };
+
+    // Windows 的 npm/pnpm 等是 .cmd 脚本,CreateProcess 找不到,经 cmd /C 包一层
+    let mut command = if cfg!(windows) {
+        let mut c = tokio::process::Command::new("cmd");
+        c.arg("/C").args(&argv);
+        c
+    } else {
+        let mut c = tokio::process::Command::new(&argv[0]);
+        c.args(&argv[1..]);
+        c
+    };
+    let child = command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn();
+    let mut child = match child {
+        Ok(c) => c,
+        Err(e) => {
+            finish(LspInstallStatus::Failed, format!("启动安装命令失败:{e}"));
+            return;
+        }
+    };
+
+    // reader 独立成任务:主流程只负责 wait/cancel,不会被读阻塞
+    let mut readers: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+    if let Some(out) = child.stdout.take() {
+        readers.push(tokio::spawn(append_stream_lines(out, install_state.clone())));
+    }
+    if let Some(err) = child.stderr.take() {
+        readers.push(tokio::spawn(append_stream_lines(err, install_state.clone())));
+    }
+
+    let status = tokio::select! {
+        _ = cancel_rx.changed() => {
+            let _ = child.kill().await;
+            None
+        }
+        st = child.wait() => st.ok(),
+    };
+    // 等 reader 收尾(进程已退出,EOF 很快)
+    for h in readers {
+        let _ = tokio::time::timeout(Duration::from_secs(3), h).await;
+    }
+
+    match status {
+        Some(st) if st.success() => {
+            let plan = crate::lsp::install_plan(&lang);
+            let server_command = plan.map(|p| p.server_command).unwrap_or("");
+            let args = plan.and_then(|p| p.server_args);
+            let save = crate::config::upsert_lsp_server(
+                &crate::config::default_config_path(),
+                &lang,
+                server_command,
+                args.map(|a| a.join(" ")).as_deref(),
+                None,
+            );
+            // 同步运行时 lsp 映射(下一次 run 立即注册代码导航工具)
+            if let Ok(config_path) = AppConfig::load_or_create(&crate::config::default_config_path())
+            {
+                cfg.lock().unwrap().lsp = config_path.lsp;
+            }
+            let exe = crate::lsp::find_executable(server_command);
+            match (save, exe) {
+                (Ok(()), Some(p)) => finish(
+                    LspInstallStatus::Success,
+                    format!("可执行文件:{}", p.display()),
+                ),
+                (Ok(()), None) => finish(
+                    LspInstallStatus::Success,
+                    format!("已保存配置;当前进程 PATH 暂未发现 `{server_command}`,重启应用后生效"),
+                ),
+                (Err(e), _) => finish(
+                    LspInstallStatus::Failed,
+                    format!("安装成功但写入配置失败:{e}"),
+                ),
+            }
+            tracing::info!("LSP 一键安装完成:{}({})", lang, cmd_line);
+        }
+        Some(st) => {
+            let code = st
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "信号中断".into());
+            finish(LspInstallStatus::Failed, format!("安装命令退出码 {code}"));
+            tracing::warn!("LSP 一键安装失败:{}({}){}", lang, cmd_line, code);
+        }
+        None => {
+            finish(LspInstallStatus::Cancelled, "已取消".into());
+            tracing::info!("LSP 一键安装已取消:{}", lang);
+        }
+    }
+}
+
+/// GET /v1/lsp/install/status — 当前/最近一次安装任务的状态(前端轮询)。
+async fn lsp_install_status(State(state): State<AppState>) -> Json<Value> {
+    let st = state.lsp_install.lock().unwrap();
+    let Some(job) = &st.job else {
+        return Json(json!({ "running": false }));
+    };
+    // 日志只回传尾部,避免响应过大
+    let log: Vec<&String> = job
+        .log
+        .iter()
+        .rev()
+        .take(LSP_INSTALL_LOG_TAIL)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    Json(json!({
+        "running": job.status == LspInstallStatus::Running,
+        "name": job.lang,
+        "command": job.command,
+        "status": job.status.as_str(),
+        "message": job.message,
+        "log": log,
+    }))
+}
+
+/// POST /v1/lsp/install/cancel — 取消进行中的安装任务(kill 子进程)。
+async fn cancel_lsp_install(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, (StatusCode, String)> {
+    let st = state.lsp_install.lock().unwrap();
+    match &st.job {
+        Some(job) if job.status == LspInstallStatus::Running => {
+            if let Some(tx) = &job.cancel {
+                let _ = tx.send(true);
+            }
+            Ok(Json(json!({ "ok": true })))
+        }
+        _ => Err((StatusCode::CONFLICT, "没有进行中的安装任务".into())),
+    }
 }
 
 // ---------- providers / model 切换 ----------
@@ -3465,6 +3763,118 @@ mod tests {
             backend_type: crate::store::BackendType::ComboCli,
         });
         AppState::test_state(meta, None)
+    }
+
+    #[tokio::test]
+    async fn lsp_install_rejects_unknown_lang_and_reports_status() {
+        let state = multi_session_test_state();
+        // 未收录语言 → 400
+        let err = install_lsp(
+            State(state.clone()),
+            Json(LspInstallReq { name: "cobol".into() }),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(err.0, StatusCode::BAD_REQUEST);
+
+        // 伪造进行中的任务 → 状态端点可见;取消端点能发出信号
+        let (tx, mut rx) = watch::channel(false);
+        state.lsp_install.lock().unwrap().job = Some(LspInstallJob {
+            lang: "go".into(),
+            command: "go install golang.org/x/tools/gopls@latest".into(),
+            status: LspInstallStatus::Running,
+            message: String::new(),
+            log: vec!["downloading".into()],
+            cancel: Some(tx),
+        });
+        let st = lsp_install_status(State(state.clone())).await;
+        assert_eq!(st["running"], json!(true));
+        assert_eq!(st["name"], json!("go"));
+        assert_eq!(st["log"], json!(["downloading"]));
+
+        // 有任务运行时再发起安装 → 409(语言是否可解析在冲突检查之前,
+        // 但 rust 在本机无 rustup/brew 时会是 400,两种结果都不算错)
+        let res = install_lsp(
+            State(state.clone()),
+            Json(LspInstallReq { name: "rust".into() }),
+        )
+        .await;
+        match res {
+            Err((code, msg)) => {
+                assert!(
+                    code == StatusCode::CONFLICT || code == StatusCode::BAD_REQUEST,
+                    "意外状态码 {code}:{msg}"
+                );
+            }
+            Ok(_) => panic!("冲突/无方案场景不应成功"),
+        }
+
+        // 取消:发送信号 + 无任务时 409
+        cancel_lsp_install(State(state.clone())).await.unwrap();
+        assert!(rx.changed().await.is_ok());
+        state.lsp_install.lock().unwrap().job = None;
+        let err = cancel_lsp_install(State(state)).await.unwrap_err();
+        assert_eq!(err.0, StatusCode::CONFLICT);
+    }
+
+    /// 执行器行为:失败(退出码非 0)与取消两条路径。
+    /// 走失败/取消路径不会触碰真实配置文件(成功路径才会写配置)。
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn lsp_install_runner_failed_and_cancelled() {
+        let state = multi_session_test_state();
+        let install_state = state.lsp_install.clone();
+        let cfg = state.cfg.clone();
+        // 模拟 handler:执行器假定任务已登记,只负责推进状态
+        let seed_job = |lang: &str, command: &str| {
+            install_state.lock().unwrap().job = Some(LspInstallJob {
+                lang: lang.into(),
+                command: command.into(),
+                status: LspInstallStatus::Running,
+                message: String::new(),
+                log: Vec::new(),
+                cancel: None,
+            });
+        };
+
+        // 失败:退出码 3
+        let (_tx, rx) = watch::channel(false);
+        seed_job("rust", "sh -c 'exit 3'");
+        run_lsp_install(
+            install_state.clone(),
+            cfg.clone(),
+            "rust".into(),
+            "sh -c 'exit 3'".into(),
+            vec!["sh".into(), "-c".into(), "exit 3".into()],
+            rx,
+        )
+        .await;
+        {
+            let st = install_state.lock().unwrap();
+            let job = st.job.as_ref().unwrap();
+            assert_eq!(job.status, LspInstallStatus::Failed);
+            assert!(job.message.contains('3'), "message 应含退出码:{}", job.message);
+            assert!(job.cancel.is_none());
+        }
+
+        // 取消:长任务被 kill → Cancelled
+        let (tx, rx) = watch::channel(false);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let _ = tx.send(true);
+        });
+        seed_job("go", "sleep 30");
+        run_lsp_install(
+            install_state.clone(),
+            cfg,
+            "go".into(),
+            "sleep 30".into(),
+            vec!["sleep".into(), "30".into()],
+            rx,
+        )
+        .await;
+        let st = install_state.lock().unwrap();
+        assert_eq!(st.job.as_ref().unwrap().status, LspInstallStatus::Cancelled);
     }
 
     #[tokio::test]

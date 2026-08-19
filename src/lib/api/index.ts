@@ -523,6 +523,25 @@ export function checkLspCommand(command: string): Promise<Api.LspCheckResult> {
   return apiRequest('/v1/lsp/check', { method: 'POST', body: { command } });
 }
 
+// LSP 一键安装:后台执行安装命令,成功后自动写 [lsp.<lang>] 配置
+export function listLspPlans(): Promise<Api.LspInstallPlan[]> {
+  return apiRequest('/v1/lsp/plans');
+}
+
+export function installLspServer(
+  name: string,
+): Promise<{ ok: boolean; name: string; command?: string }> {
+  return apiRequest('/v1/lsp/install', { method: 'POST', body: { name } });
+}
+
+export function getLspInstallStatus(): Promise<Api.LspInstallStatus> {
+  return apiRequest('/v1/lsp/install/status');
+}
+
+export function cancelLspInstall(): Promise<{ ok: boolean }> {
+  return apiRequest('/v1/lsp/install/cancel', { method: 'POST' });
+}
+
 // 服务器目录浏览:combo-cli serve 本地端点,供浏览器/移动端在远端打开服务器上的项目目录
 export interface HostDirEntry {
   name: string;

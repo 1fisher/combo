@@ -71,6 +71,11 @@ fn open_mic_settings_url() -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // GUI(Finder/Dock/launchd)启动的进程不继承 .zshrc 的 PATH,
+    // ~/.cargo/bin、/opt/homebrew/bin 等缺失会导致 LSP 检测「未找到」、
+    // npm/rustup 等命令无法 spawn;从登录 shell 解析补全(终端/dev 模式
+    // PATH 已完整,直接跳过)。须在任何后台线程 spawn 之前执行。
+    combo_cli::paths::ensure_gui_path();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())

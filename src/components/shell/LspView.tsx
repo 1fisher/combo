@@ -1,21 +1,32 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import {
+  Ban,
   Braces,
   CheckCircle2,
   ChevronLeft,
   Cog,
+  Download,
   FileCode2,
   Loader2,
   Pencil,
   Plus,
   Rocket,
+  RotateCcw,
   ScanSearch,
   Terminal,
   Trash2,
+  X,
   XCircle,
 } from 'lucide-react';
 import { Button } from '../ui/button';
-import { useLspActions, useLspServers } from '../../hooks/useLsp';
+import {
+  useLspActions,
+  useLspInstallActions,
+  useLspInstallStatus,
+  useLspPlans,
+  useLspServers,
+} from '../../hooks/useLsp';
 import { checkLspCommand } from '../../lib/api';
 import type { Api } from '../../lib/api/types';
 import { confirmDialog } from '../../lib/confirm';
@@ -24,9 +35,13 @@ import { HeroCard, HeroEmpty, INPUT_CLS, LABEL_CLS, PAGE, PageHeader, ViewScroll
 
 /**
  * LSP 服务视图(主内容区独立视图,按 MCP 视图的设计思路):
- * - 无 server 时 hero 首页:常用语言模板卡片(rust/ts/python/go)直达表单并预填;
- * - 列表:server 卡片(语言标识 + 命令 + 可执行状态实时检测 + 操作);
- * - 表单:语言标识 + 启动命令(可即时检测)+ 参数 + 环境变量。
+ * - 无 server 时 hero 首页:常用语言模板卡片(rust/ts/python/go)支持
+ *   **一键安装**——确认后后台执行安装命令(rustup/npm/pipx/brew…按本机
+ *   自动选择),成功后自动写入 [lsp.<lang>] 配置;无包管理器时回退表单;
+ * - 安装横幅:进度(实时日志尾部)/成功/失败/取消/重试,运行中可取消;
+ * - 列表:server 卡片(语言标识 + 命令 + 可执行状态实时检测 + 操作,
+ *   命令未找到且支持一键安装时提供「安装」按钮);
+ * - 表单:语言标识 + 启动命令(可即时检测,未找到时可一键安装)+ 参数 + 环境变量。
  *
  * 配置保存到 combo-cli.toml 的 [lsp.<lang>] 段,配置任意 server 后 agent
  * 自动获得 diagnostics/definition/references/hover 四个代码导航工具,
@@ -144,13 +159,95 @@ const AGENT_TOOLS = ['diagnostics', 'definition', 'references', 'hover'];
 /** 命令检测结果:found + 可执行文件路径 */
 type CheckState = { checking: boolean; result?: Api.LspCheckResult; error?: string };
 
+/** 安装横幅:进度/成功/失败/取消四态(running 时轮询刷新) */
+function InstallBanner({
+  st,
+  cancelling,
+  onCancel,
+  onRetry,
+  onDismiss,
+}: {
+  st: Api.LspInstallStatus & { name: string };
+  cancelling: boolean;
+  onCancel: () => void;
+  onRetry: () => void;
+  onDismiss: () => void;
+}) {
+  const logTail = (st.log ?? []).slice(-4);
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface-hover/40 px-6 py-4">
+      <div className="flex flex-wrap items-center gap-2.5">
+        {st.status === 'running' ? (
+          <Loader2 className="size-4 shrink-0 animate-spin text-brand" />
+        ) : st.status === 'success' ? (
+          <CheckCircle2 className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+        ) : st.status === 'cancelled' ? (
+          <Ban className="size-4 shrink-0 text-foreground-subtle" />
+        ) : (
+          <XCircle className="size-4 shrink-0 text-destructive" />
+        )}
+        <span className="text-sm font-medium text-foreground">
+          {st.status === 'running' && `正在安装 ${st.name}`}
+          {st.status === 'success' && `安装完成:${st.name}`}
+          {st.status === 'failed' && `安装失败:${st.name}`}
+          {st.status === 'cancelled' && `已取消安装:${st.name}`}
+        </span>
+        <code className="min-w-0 flex-1 truncate font-mono text-xs text-foreground-subtlest" title={st.command}>
+          {st.command}
+        </code>
+        <div className="flex shrink-0 items-center gap-2">
+          {st.status === 'running' && (
+            <Button variant="outline" size="sm" disabled={cancelling} onClick={onCancel}>
+              {cancelling ? <Loader2 className="size-3.5 animate-spin" /> : <Ban className="size-3.5" />}
+              取消
+            </Button>
+          )}
+          {st.status === 'failed' && (
+            <Button variant="outline" size="sm" onClick={onRetry}>
+              <RotateCcw className="size-3.5" /> 重试
+            </Button>
+          )}
+          {st.status !== 'running' && (
+            <Button variant="ghost" size="icon-sm" title="关闭" onClick={onDismiss}>
+              <X />
+            </Button>
+          )}
+        </div>
+      </div>
+      {st.message && (
+        <p
+          className={cn(
+            'text-xs',
+            st.status === 'failed' ? 'text-destructive/90' : 'text-foreground-subtlest',
+          )}
+        >
+          {st.message}
+        </p>
+      )}
+      {logTail.length > 0 && (
+        <pre className="max-h-24 overflow-y-auto rounded-lg bg-background/70 px-3 py-2 font-mono text-xs leading-relaxed text-foreground-subtlest">
+          {logTail.join('\n')}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 export function LspView() {
+  const qc = useQueryClient();
   const { data: servers, isLoading } = useLspServers();
   const { upsert, upserting, remove, removing } = useLspActions();
+  const { data: plans } = useLspPlans();
+  const installStatus = useLspInstallStatus();
+  const { install, installing, cancel: cancelInstall, cancelling } = useLspInstallActions();
 
   const [view, setView] = useState<View>({ kind: 'list' });
   const [draft, setDraft] = useState<Draft>(emptyDraft());
   const [err, setErr] = useState('');
+  /** 一键安装的前置错误(无方案/接口失败),展示在内容区顶部 */
+  const [installErr, setInstallErr] = useState('');
+  /** 用户手动关闭终态横幅 */
+  const [bannerHidden, setBannerHidden] = useState(false);
 
   // 表单内命令即时检测(未保存也能确认命令可用)
   const [formCheck, setFormCheck] = useState<CheckState>({ checking: false });
@@ -159,6 +256,58 @@ export function LspView() {
   const [checkingName, setCheckingName] = useState<string | null>(null);
   const [checkResults, setCheckResults] = useState<Record<string, Api.LspCheckResult>>({});
   const [checkErrors, setCheckErrors] = useState<Record<string, string>>({});
+
+  /** 语言 → 一键安装方案(展示实际安装命令;install_command 为 null 表示本机缺包管理器) */
+  const planByName = useMemo(() => {
+    const m = new Map<string, Api.LspInstallPlan>();
+    for (const p of plans ?? []) m.set(p.name, p);
+    return m;
+  }, [plans]);
+
+  const installJob = installStatus.data;
+  const installBusy = installing || installJob?.running === true;
+  /** 横幅渲染用的窄化引用(有 name 才展示) */
+  const bannerJob: (Api.LspInstallStatus & { name: string }) | null =
+    installJob?.name != null
+      ? (installJob as Api.LspInstallStatus & { name: string })
+      : null;
+
+  // 安装到达终态:刷新列表与方案(成功时后端已写入配置)
+  useEffect(() => {
+    if (!installJob?.status) return;
+    if (installJob.status !== 'running') {
+      void qc.invalidateQueries({ queryKey: ['lsp-servers'] });
+      void qc.invalidateQueries({ queryKey: ['lsp-plans'] });
+    }
+  }, [installJob?.status]);
+
+  // 新一轮安装开始时恢复横幅展示
+  useEffect(() => {
+    if (installJob?.running) setBannerHidden(false);
+  }, [installJob?.running, installJob?.name]);
+
+  /** 一键安装:确认后后台执行安装命令,成功自动写配置 */
+  async function startInstall(lang: string) {
+    if (installBusy) return;
+    const plan = planByName.get(lang);
+    if (!plan?.install_command) {
+      setInstallErr(
+        `语言「${lang}」暂不支持一键安装(或本机缺少对应的包管理器),请用表单手动配置`,
+      );
+      return;
+    }
+    const ok = await confirmDialog(
+      `将执行安装命令:\n${plan.install_command}\n完成后自动保存 [lsp.${lang}] 配置。是否继续?`,
+    );
+    if (!ok) return;
+    setInstallErr('');
+    setBannerHidden(false);
+    try {
+      await install(lang);
+    } catch (e) {
+      setInstallErr(e instanceof Error ? e.message : String(e));
+    }
+  }
 
   // 进入表单视图时初始化草稿:编辑对象优先,其次模板预设
   useEffect(() => {
@@ -262,6 +411,34 @@ export function LspView() {
 
   return (
     <ViewScroll>
+      {/* ---------- 安装横幅 / 错误提示(列表与表单视图共用) ---------- */}
+      {installErr && (
+        <div className={cn(PAGE, 'pb-0')}>
+          <div className="flex items-start justify-between gap-3 rounded-lg bg-red-500/10 px-3.5 py-2.5 text-[13px] text-red-600 dark:text-red-400">
+            <span className="min-w-0 break-all">{installErr}</span>
+            <button
+              type="button"
+              aria-label="关闭错误提示"
+              className="shrink-0 rounded p-0.5 hover:bg-red-500/10"
+              onClick={() => setInstallErr('')}
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+      {bannerJob && !bannerHidden && (
+        <div className={cn(PAGE, installErr ? 'pt-4' : '', 'pb-0')}>
+          <InstallBanner
+            st={bannerJob}
+            cancelling={cancelling}
+            onCancel={() => void cancelInstall().catch(() => {})}
+            onRetry={() => void startInstall(bannerJob.name)}
+            onDismiss={() => setBannerHidden(true)}
+          />
+        </div>
+      )}
+
       {/* ---------- 列表 / hero 首页 ---------- */}
       {view.kind === 'list' &&
         (isLoading ? (
@@ -273,25 +450,56 @@ export function LspView() {
         ) : !servers || servers.length === 0 ? (
           <HeroEmpty
             title="给 agent 装上代码导航"
-            desc="LSP(Language Server Protocol)让 agent 获得诊断、跳转定义、查引用等代码能力。为项目语言配置一个 server,所有任务可用。"
+            desc="LSP(Language Server Protocol)让 agent 获得诊断、跳转定义、查引用等代码能力。选择语言一键安装并配置,所有任务可用。"
           >
             <div className="relative z-10 mt-6 grid w-full max-w-2xl grid-cols-1 gap-4 px-4 sm:grid-cols-3">
-              {TEMPLATES.map((t) => (
-                <HeroCard
-                  key={t.title}
-                  icon={t.icon}
-                  title={t.title}
-                  desc={t.desc}
-                  onClick={() => setView({ kind: 'form', editing: null, preset: t.preset })}
-                />
-              ))}
+              {TEMPLATES.map((t) => {
+                const lang = t.preset.name;
+                const plan = lang ? planByName.get(lang) : undefined;
+                return (
+                  <HeroCard
+                    key={t.title}
+                    icon={t.icon}
+                    title={t.title}
+                    desc={t.desc}
+                    footer={
+                      lang ? (
+                        plan?.install_command ? (
+                          <code
+                            className="block truncate rounded bg-surface-hover px-1.5 py-1 font-mono text-[11px] text-foreground-subtlest"
+                            title={plan.install_command}
+                          >
+                            {plan.install_command}
+                          </code>
+                        ) : (
+                          <span className="block truncate text-[11px] text-foreground-subtlest/80">
+                            未检测到包管理器,需手动安装
+                          </span>
+                        )
+                      ) : undefined
+                    }
+                    onClick={() => {
+                      // 一键安装:确认后执行;无方案(自定义/缺包管理器)回退表单
+                      if (!lang) {
+                        setView({ kind: 'form', editing: null });
+                        return;
+                      }
+                      if (planByName.get(lang)?.install_command) {
+                        void startInstall(lang);
+                      } else {
+                        setView({ kind: 'form', editing: null, preset: t.preset });
+                      }
+                    }}
+                  />
+                );
+              })}
             </div>
           </HeroEmpty>
         ) : (
           <div className={cn(PAGE, 'gap-6')}>
             <PageHeader
               title="LSP 服务"
-              desc="配置保存到 combo-cli.toml 的 [lsp.*] 段,新任务运行时自动加载。命令未安装时对应语言的工具不可用,可「检测命令」排查。"
+              desc="配置保存到 combo-cli.toml 的 [lsp.*] 段,新任务运行时自动加载。命令未找到时可「安装」一键装好并自动写配置,或「检测命令」排查。"
             >
               <Button size="lg" onClick={() => setView({ kind: 'form', editing: null })}>
                 <Plus /> 添加 server
@@ -328,11 +536,7 @@ export function LspView() {
                             ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
                             : 'bg-destructive/10 text-destructive',
                         )}
-                        title={
-                          ok
-                            ? '命令已安装,任务中该语言的代码导航工具可用'
-                            : '命令未找到,请先安装或检查路径'
-                        }
+        title={ok ? '命令已安装,任务中该语言的代码导航工具可用' : '命令未找到,请先安装或检查路径;检测会同时搜索 PATH 与 ~/.cargo/bin 等常见安装目录'}
                       >
                         {ok ? '已安装' : '未找到'}
                       </span>
@@ -349,7 +553,9 @@ export function LspView() {
                         )}
                         title={result?.path ?? server.path ?? ''}
                       >
-                        {ok ? `可执行文件:${result?.path ?? server.path}` : 'PATH 中未找到该命令'}
+                        {ok
+                          ? `可执行文件:${result?.path ?? server.path}`
+                          : '未找到命令(已搜索 PATH 与 ~/.cargo/bin 等常见目录)'}
                       </p>
                     )}
                     {error && (
@@ -361,6 +567,21 @@ export function LspView() {
 
                   {/* 操作 */}
                   <div className="flex shrink-0 items-center justify-end gap-2">
+                    {!ok && planByName.get(server.name)?.install_command && (
+                      <Button
+                        size="sm"
+                        disabled={installBusy}
+                        title={`执行:${planByName.get(server.name)?.install_command}`}
+                        onClick={() => void startInstall(server.name)}
+                      >
+                        {installBusy ? (
+                          <Loader2 className="size-3.5 animate-spin" />
+                        ) : (
+                          <Download className="size-3.5" />
+                        )}
+                        安装
+                      </Button>
+                    )}
                     <Button
                       variant="outline"
                       size="sm"
@@ -480,6 +701,23 @@ export function LspView() {
                     )}
                     检测
                   </Button>
+                  {/* 检测未找到且该语言有一键安装方案 → 直接安装(成功后自动写配置) */}
+                  {planByName.get(draft.name.trim())?.install_command &&
+                    formCheck.result &&
+                    !formCheck.result.found && (
+                      <Button
+                        className="shrink-0"
+                        disabled={installBusy}
+                        onClick={() => void startInstall(draft.name.trim())}
+                      >
+                        {installBusy ? (
+                          <Loader2 className="size-3.5 animate-spin" />
+                        ) : (
+                          <Download className="size-3.5" />
+                        )}
+                        一键安装
+                      </Button>
+                    )}
                 </div>
                 {formCheck.result && (
                   <p
@@ -500,7 +738,7 @@ export function LspView() {
                     ) : (
                       <>
                         <XCircle className="size-3.5 shrink-0" />
-                        PATH 中未找到该命令,保存前请先安装
+                        未找到该命令(已搜索 PATH 与 ~/.cargo/bin 等常见目录),请先安装
                       </>
                     )}
                   </p>

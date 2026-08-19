@@ -143,6 +143,114 @@ fn mtime_of(p: &Path) -> std::time::SystemTime {
         .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
 }
 
+// =========================== GUI 进程 PATH 补全 ===========================
+
+/// PATH 是否包含 `$HOME` 下的目录(终端启动的进程会继承 .zshrc 配置的
+/// `~/.cargo/bin` 等;GUI/launchd 启动的进程只有系统目录)。
+fn path_has_home_entry(path: &str) -> bool {
+    let home = std::env::var("HOME").unwrap_or_default();
+    if home.is_empty() {
+        return true; // 拿不到 HOME 时不做任何猜测,视为完整
+    }
+    path.split([':', ';'])
+        .any(|dir| dir.starts_with(&format!("{home}/")) || dir == home)
+}
+
+/// 合并两份 PATH:`shell` 在前(用户 shell 的排序即优先级,如 homebrew
+/// 优先于系统目录),`current` 中 `shell` 没有的目录追加尾部(不丢进程
+/// 自有目录)。空目录条目跳过。
+fn merge_path_missing(current: &str, shell: &str) -> String {
+    let mut dirs: Vec<&str> = Vec::new();
+    for dir in shell.split([':', ';']).chain(current.split([':', ';'])) {
+        let dir = dir.trim();
+        if dir.is_empty() || dirs.contains(&dir) {
+            continue;
+        }
+        dirs.push(dir);
+    }
+    dirs.join(":")
+}
+
+/// 从登录 shell 输出中解析带标记的 PATH 行。
+/// zsh 交互模式(-i)可能在 stdout 打印提示符/杂音,只认
+/// `__COMBO_PATH__=` 开头的行,并去掉行尾 CR。
+fn parse_shell_path_marker(out: &str) -> Option<String> {
+    out.lines()
+        .map(str::trim_end)
+        .find_map(|l| l.strip_prefix("__COMBO_PATH__="))
+        .filter(|p| !p.is_empty())
+        .map(String::from)
+}
+
+/// GUI(Finder/Dock/launchd)启动的进程 PATH 只有系统目录,不继承用户
+/// shell 的 .zshrc/.zprofile——`~/.cargo/bin`、`/opt/homebrew/bin` 等都
+/// 不在,导致 LSP 检测「未找到」、npm/rustup 等命令无法 spawn。
+///
+/// 这里参考 VS Code(shell-env)的做法:PATH 中没有 `$HOME` 下目录时,
+/// 从登录 shell(`$SHELL -ilc`)解析用户完整 PATH 并合并(shell 顺序
+/// 优先,进程独有目录追加尾部)。终端启动时 PATH 已完整,检测即跳过、
+/// 零开销。**必须在启动早期(单线程阶段)调用**——内部修改进程环境
+/// 变量。解析失败静默放弃,由 `lsp::find_executable` 的目录兜底兜住。
+pub fn ensure_gui_path() -> bool {
+    #[cfg(windows)]
+    {
+        // Windows GUI PATH 问题需经注册表/PowerShell profile 解析,暂不处理
+        return false;
+    }
+    #[cfg(not(windows))]
+    {
+        let current = std::env::var("PATH").unwrap_or_default();
+        if path_has_home_entry(&current) {
+            return false;
+        }
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| {
+            if cfg!(target_os = "macos") {
+                "/bin/zsh".into()
+            } else {
+                "/bin/bash".into()
+            }
+        });
+        // -l 登录 shell(读 .zprofile/.bash_profile),-i 交互(读 .zshrc,
+        // 大多数用户 PATH 配在这里);echo 用单引号包住标记,让 $PATH 由
+        // shell 展开后输出
+        let probe = "echo '__COMBO_PATH__=$PATH'";
+        let run = |interactive: bool| {
+            let mut cmd = std::process::Command::new(&shell);
+            if interactive {
+                cmd.arg("-ilc");
+            } else {
+                cmd.arg("-lc");
+            }
+            cmd.arg(probe).output()
+        };
+        // 先交互式(覆盖 .zshrc);zsh 无 tty 拒绝 -i 等场景回落 -l
+        let out = match run(true) {
+            Ok(o) if o.status.success() => Some(String::from_utf8_lossy(&o.stdout).into_owned()),
+            _ => None,
+        }
+        .or_else(|| match run(false) {
+            Ok(o) if o.status.success() => Some(String::from_utf8_lossy(&o.stdout).into_owned()),
+            _ => None,
+        });
+        let Some(out) = out else {
+            return false;
+        };
+        let Some(shell_path) = parse_shell_path_marker(&out) else {
+            return false;
+        };
+        if !path_has_home_entry(&shell_path) {
+            return false;
+        }
+        let merged = merge_path_missing(&current, &shell_path);
+        if merged == current {
+            return false;
+        }
+        // 仅启动早期(单线程)调用是安全惯例
+        std::env::set_var("PATH", &merged);
+        true
+    }
+}
+
 /// 测试专用:COMBO_DATA_DIR / COMBO_CONFIG_DIR 相关测试的串行锁。
 /// 这些环境变量决定默认路径,并行测试互相改写会产生竞态。
 #[cfg(test)]
@@ -155,6 +263,53 @@ mod tests {
 
     fn touch(p: &Path, content: &str) {
         fs::write(p, content).unwrap();
+    }
+
+    #[test]
+    fn merge_path_missing_keeps_shell_order_and_appends_current_only() {
+        let shell = "/opt/homebrew/bin:/usr/bin:/bin";
+        let current = "/usr/bin:/bin:/usr/sbin";
+        assert_eq!(
+            merge_path_missing(current, shell),
+            "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin",
+            "shell 顺序在前,进程独有目录追加尾部,重复去重"
+        );
+        // 空条目跳过;两侧完全一致时结果不变
+        assert_eq!(
+            merge_path_missing("/a::/b", "/a:/b"),
+            "/a:/b",
+            "空目录条目应被跳过"
+        );
+        assert_eq!(merge_path_missing("/a:/b", "/a:/b"), "/a:/b");
+    }
+
+    #[test]
+    fn parse_shell_path_marker_ignores_zsh_noise() {
+        // zsh -i 在无 tty 时可能打印提示符/欢迎语;只认标记行,且去 CR
+        let noisy = "last login: today\n➜  ~ echo '__COMBO_PATH__=/Users/x/.cargo/bin:/usr/bin\r\n__COMBO_PATH__=/Users/x/.cargo/bin:/usr/bin\r\n";
+        assert_eq!(
+            parse_shell_path_marker(noisy).as_deref(),
+            Some("/Users/x/.cargo/bin:/usr/bin"),
+            "应跳过杂音行命中最后一个标记行"
+        );
+        assert!(parse_shell_path_marker("no marker here").is_none());
+        assert!(parse_shell_path_marker("__COMBO_PATH__=\r\n").is_none(), "空 PATH 不算");
+    }
+
+    #[test]
+    fn path_has_home_entry_detects_gui_path() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        if home.is_empty() {
+            return; // 无 HOME 的环境里该函数恒 true,跳过断言
+        }
+        assert!(
+            path_has_home_entry(&format!("{home}/.cargo/bin:/usr/bin:/bin")),
+            "含 HOME 目录 → 视为已继承 shell 环境"
+        );
+        assert!(
+            !path_has_home_entry("/usr/bin:/bin:/usr/sbin:/sbin"),
+            "纯系统目录(launchd/GUI)→ 需要补全"
+        );
     }
 
     #[test]

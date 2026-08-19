@@ -2191,6 +2191,25 @@ export namespace Api {
     path?: string | null;
   };
 
+  // LSP 一键安装方案(install_command 已按本机可用包管理器解析)。
+  export type LspInstallPlan = {
+    name: string;
+    command: string;
+    args?: string[] | null;
+    /** 实际执行的安装命令;null 表示本机缺少包管理器,需手动安装。 */
+    install_command: string | null;
+  };
+
+  // LSP 安装任务状态(GET /v1/lsp/install/status 轮询)。
+  export type LspInstallStatus = {
+    running: boolean;
+    name?: string;
+    command?: string;
+    status?: 'running' | 'success' | 'failed' | 'cancelled';
+    message?: string;
+    log?: string[];
+  };
+
   // 配置(rune 透传)
   export type ConfigScope = 0 | 1; // 0=global, 1=workspace
   export type ConfigSetRequest = {

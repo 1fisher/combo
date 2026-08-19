@@ -510,6 +510,36 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   前端 `useLsp.ts` + `api/index.ts` 的 `listLspServers/upsertLspServer/
   removeLspServer/checkLspCommand`;表单语言标识带 datalist 建议(与
   `ext_to_lang` 扩展名映射一致),环境变量按行解析(注释行忽略)。
+- **LSP 一键安装(自动配置 + 安装服务)**:`lsp.rs::LSP_INSTALL_PLANS` 内置
+  rust/typescript/javascript/python/go 五语言的安装方案,每个方案按优先级列
+  候选包管理器(rust→rustup/brew、ts/js→npm/pnpm/yarn/bun/brew、python→
+  pipx/uv/brew/pip3、go→go/brew),`resolve_install_command` 按**本机 PATH**
+  取第一个命中的候选。**可执行文件解析含常见目录兜底**:`find_executable`
+  在进程 PATH 之外追加 `~/.cargo/bin`(rustup)、`~/.local/bin`(pipx/uv)、
+  `/opt/homebrew/bin`(Apple Silicon Homebrew)、`/usr/local/bin`——GUI
+  (Finder/Dock)启动的进程 PATH 只有系统目录,rustup 装的 rust-analyzer
+  在 `/v1/lsp` 里显示「未找到」、且 `LspClient::start` 直接
+  `Command::new` 会 spawn 失败,所以**检测与 spawn 共用 `find_executable`
+  的解析口径**(裸命令先解析为绝对路径再启动),否则会出现「检测已安装、
+  实际拉起失败」的不一致。**登录 shell PATH 补全**(`paths.rs::
+  ensure_gui_path`,main 与 Tauri `run()` 启动最早期调用):GUI/launchd
+  启动的进程不读 `.zshrc`,PATH 缺 `$HOME` 下目录时从 `$SHELL -ilc`
+  解析用户完整 PATH 合并(shell 顺序在前,进程独有目录追加;VS Code
+  shell-env 同思路),`~/.cargo/bin`、`/opt/homebrew/bin` 等用户目录由此
+  进入进程 PATH——与 find_executable 兜底互为双保险。REST(`serve.rs`,`AppState.lsp_install` 共享状态,
+  同一时刻至多一个任务):`GET /v1/lsp/plans`(方案列表,`install_command`
+  为解析后的实际命令,null=本机缺包管理器)、`POST /v1/lsp/install`
+  (`{name}` 后台 spawn 执行安装命令,运行中再发起 409;Windows 上 npm 等
+  .cmd 脚本经 `cmd /C` 包装)、`GET /v1/lsp/install/status`(轮询:running/
+  success/failed/cancelled + message + 日志尾部 80 行,日志总量截尾 400 行)、
+  `POST /v1/lsp/install/cancel`(watch channel → kill 子进程)。安装命令
+  退出码 0 即成功:自动 `upsert_lsp_server` 写入 `[lsp.<lang>]` 配置并同步
+  `state.cfg.lsp`;PATH 暂未刷新找不到可执行文件时仍保存配置,message 提示
+  重启生效。前端(`LspView.tsx`):hero 模板卡直接显示安装命令、点击即
+  「确认→安装」(无方案回退表单预填);安装横幅四态(进度含实时日志尾部/
+  成功/失败+重试/取消),`useLspInstallStatus` 运行中每秒轮询、终态自动
+  invalidate 列表与方案;列表行「未找到」且有方案时提供「安装」按钮;表单
+  检测未找到且语言在方案内时提供「一键安装」。
 - **Generated types are NOT purely generated.** `npm run gen:api` runs
   `openapi-typescript` over `swagger/swagger.json` (vendored from the rune repo at
   commit `28ed89ff`, see `swagger/README.md`) then **appends a hand-maintained

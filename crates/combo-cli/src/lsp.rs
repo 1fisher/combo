@@ -44,21 +44,186 @@ pub fn list(cfg: &ResolvedConfig) -> Result<()> {
     Ok(())
 }
 
-/// 按 PATH 查找可执行文件(serve 的 `/v1/lsp` 状态检测复用)。
-pub fn find_executable(cmd: &str) -> Option<PathBuf> {
-    if cmd.contains('/') || cmd.contains('\\') {
-        let p = PathBuf::from(cmd);
-        return p.is_file().then_some(p);
+/// GUI 启动(Finder/Dock)的进程 PATH 往往只有系统目录,缺少用户级安装位置;
+/// 追加常见目录兜底:rustup(`~/.cargo/bin`)、pipx/uv(`~/.local/bin`)、
+/// Homebrew(Apple Silicon `/opt/homebrew/bin`;Intel/手动安装 `/usr/local/bin`)。
+/// PATH 中的目录命中优先,兜底目录仅去重追加。
+fn extra_bin_dirs(home: Option<&Path>) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(h) = home {
+        dirs.push(h.join(".cargo").join("bin"));
+        dirs.push(h.join(".local").join("bin"));
     }
-    let path = std::env::var("PATH").unwrap_or_default();
-    // 同时接受 ':'(unix)与 ';'(Windows)分隔,跨平台都能命中
-    for dir in path.split([':', ';']) {
-        let p = PathBuf::from(dir).join(cmd);
+    if cfg!(target_os = "macos") {
+        dirs.push(PathBuf::from("/opt/homebrew/bin"));
+    }
+    dirs.push(PathBuf::from("/usr/local/bin"));
+    dirs
+}
+
+/// 在给定目录列表中查找可执行文件(测试可注入目录,生产走 `find_executable`)。
+fn find_in_dirs(cmd: &str, dirs: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
+    for dir in dirs {
+        if dir.as_os_str().is_empty() {
+            continue;
+        }
+        let p = dir.join(cmd);
         if p.is_file() {
             return Some(p);
         }
     }
     None
+}
+
+/// 按进程 PATH + 常见用户级安装目录查找可执行文件
+/// (serve 的 `/v1/lsp` 状态检测、LSP server 启动共用同一解析口径)。
+pub fn find_executable(cmd: &str) -> Option<PathBuf> {
+    if cmd.contains('/') || cmd.contains('\\') {
+        let p = PathBuf::from(cmd);
+        return p.is_file().then_some(p);
+    }
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()
+        .map(PathBuf::from);
+    // PATH 命中优先(同时接受 ':' unix 与 ';' Windows 分隔),兜底目录去重后追加
+    let path = std::env::var("PATH").unwrap_or_default();
+    let mut dirs: Vec<PathBuf> = path
+        .split([':', ';'])
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
+        .collect();
+    for d in extra_bin_dirs(home.as_deref()) {
+        if !dirs.contains(&d) {
+            dirs.push(d);
+        }
+    }
+    find_in_dirs(cmd, dirs)
+}
+
+// =========================== 一键安装方案 ===========================
+
+/// 某语言 LSP server 的一键安装方案(`POST /v1/lsp/install` 使用)。
+pub struct LspInstallPlan {
+    /// 语言标识(与 `[lsp.<lang>]` 配置段一致)。
+    pub lang: &'static str,
+    /// 对应 server 可执行文件(安装成功后写入配置的 command)。
+    pub server_command: &'static str,
+    /// server 启动参数(写入配置的 args)。
+    pub server_args: Option<&'static [&'static str]>,
+    /// 安装命令候选(按优先级):(包管理器可执行名, 完整 argv)。
+    /// 运行时取本机 PATH 中第一个命中的候选执行。
+    pub candidates: &'static [(&'static str, &'static [&'static str])],
+}
+
+/// 内置一键安装方案目录(rust/typescript/javascript/python/go)。
+/// 未收录的语言仍可经表单手动配置;前端据 `GET /v1/lsp/plans` 展示
+/// 解析后的实际命令(无可用包管理器时 install_command 为 null)。
+pub const LSP_INSTALL_PLANS: &[LspInstallPlan] = &[
+    LspInstallPlan {
+        lang: "rust",
+        server_command: "rust-analyzer",
+        server_args: None,
+        candidates: &[
+            ("rustup", &["rustup", "component", "add", "rust-analyzer"]),
+            ("brew", &["brew", "install", "rust-analyzer"]),
+        ],
+    },
+    LspInstallPlan {
+        lang: "typescript",
+        server_command: "typescript-language-server",
+        server_args: Some(&["--stdio"]),
+        candidates: &[
+            (
+                "npm",
+                &["npm", "install", "-g", "typescript", "typescript-language-server"],
+            ),
+            (
+                "pnpm",
+                &["pnpm", "add", "-g", "typescript", "typescript-language-server"],
+            ),
+            (
+                "yarn",
+                &["yarn", "global", "add", "typescript", "typescript-language-server"],
+            ),
+            (
+                "bun",
+                &["bun", "install", "-g", "typescript", "typescript-language-server"],
+            ),
+            ("brew", &["brew", "install", "typescript-language-server"]),
+        ],
+    },
+    LspInstallPlan {
+        lang: "javascript",
+        server_command: "typescript-language-server",
+        server_args: Some(&["--stdio"]),
+        candidates: &[
+            (
+                "npm",
+                &["npm", "install", "-g", "typescript", "typescript-language-server"],
+            ),
+            (
+                "pnpm",
+                &["pnpm", "add", "-g", "typescript", "typescript-language-server"],
+            ),
+            (
+                "yarn",
+                &["yarn", "global", "add", "typescript", "typescript-language-server"],
+            ),
+            (
+                "bun",
+                &["bun", "install", "-g", "typescript", "typescript-language-server"],
+            ),
+            ("brew", &["brew", "install", "typescript-language-server"]),
+        ],
+    },
+    LspInstallPlan {
+        lang: "python",
+        server_command: "pyright-langserver",
+        server_args: Some(&["--stdio"]),
+        candidates: &[
+            ("pipx", &["pipx", "install", "pyright"]),
+            ("uv", &["uv", "tool", "install", "pyright"]),
+            ("brew", &["brew", "install", "pyright"]),
+            ("pip3", &["pip3", "install", "pyright"]),
+        ],
+    },
+    LspInstallPlan {
+        lang: "go",
+        server_command: "gopls",
+        server_args: None,
+        candidates: &[
+            ("go", &["go", "install", "golang.org/x/tools/gopls@latest"]),
+            ("brew", &["brew", "install", "gopls"]),
+        ],
+    },
+];
+
+/// 按语言取安装方案。
+pub fn install_plan(lang: &str) -> Option<&'static LspInstallPlan> {
+    LSP_INSTALL_PLANS.iter().find(|p| p.lang == lang)
+}
+
+/// 解析实际执行的安装命令:按候选顺序取第一个本机可用的包管理器。
+/// `lookup` 注入可执行探测函数(测试用),生产传 `find_executable`。
+/// 返回 (展示用完整命令行, argv)。
+pub fn resolve_install_command_with(
+    lang: &str,
+    lookup: impl Fn(&str) -> bool,
+) -> Option<(String, Vec<String>)> {
+    let plan = install_plan(lang)?;
+    for (bin, argv) in plan.candidates {
+        if lookup(bin) {
+            return Some((argv.join(" "), argv.iter().map(|s| s.to_string()).collect()));
+        }
+    }
+    None
+}
+
+/// 按本机 PATH 解析实际执行的安装命令(展示串 + argv)。
+/// 返回 None 表示该语言没有收录方案,或本机缺少全部候选包管理器。
+pub fn resolve_install_command(lang: &str) -> Option<(String, Vec<String>)> {
+    resolve_install_command_with(lang, |bin| find_executable(bin).is_some())
 }
 
 // =========================== 扩展名 → 语言 ===========================
@@ -115,7 +280,17 @@ impl LspClient {
         env: &BTreeMap<String, String>,
         workspace_root: &Path,
     ) -> Result<Self> {
-        let mut cmd = tokio::process::Command::new(command);
+        // GUI 启动的进程 PATH 可能缺少 ~/.cargo/bin 等用户级目录:
+        // 裸命令先经 find_executable(含常见目录兜底)解析为绝对路径再 spawn,
+        // 否则会出现「检测已安装、实际拉起失败」的不一致。
+        let resolved = if command.contains('/') || command.contains('\\') {
+            PathBuf::from(command)
+        } else {
+            find_executable(command).ok_or_else(|| {
+                anyhow::anyhow!("PATH 及常见安装目录中未找到 `{command}`(可先在「LSP 服务」视图检测)")
+            })?
+        };
+        let mut cmd = tokio::process::Command::new(&resolved);
         cmd.args(args);
         for (k, v) in env {
             cmd.env(k, v);
@@ -631,12 +806,90 @@ mod tests {
     }
 
     #[test]
+    fn extra_bin_dirs_cover_common_user_installs() {
+        let home = Path::new("/Users/tester");
+        let dirs = extra_bin_dirs(Some(home));
+        assert!(dirs.contains(&PathBuf::from("/Users/tester/.cargo/bin")), "rustup 目录: {dirs:?}");
+        assert!(dirs.contains(&PathBuf::from("/Users/tester/.local/bin")), "pipx/uv 目录: {dirs:?}");
+        assert!(dirs.contains(&PathBuf::from("/usr/local/bin")), "Intel Homebrew/手动安装: {dirs:?}");
+        // 无 HOME(异常环境)时仍给出系统级目录,不 panic
+        assert!(!extra_bin_dirs(None).is_empty());
+    }
+
+    /// PATH 之外的兜底目录应能命中:GUI 进程 PATH 缺 ~/.cargo/bin 时,
+    /// rustup 安装的 rust-analyzer 仍可被找到(检测与 spawn 共用该口径)。
+    #[test]
+    fn find_in_dirs_hits_user_cargo_bin_beyond_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let cargo_bin = dir.path().join(".cargo").join("bin");
+        std::fs::create_dir_all(&cargo_bin).unwrap();
+        let exe = cargo_bin.join("rust-analyzer");
+        std::fs::write(&exe, b"#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        // 「PATH」为空目录,可执行文件只在兜底的 ~/.cargo/bin
+        let empty_path = dir.path().join("empty-bin");
+        std::fs::create_dir_all(&empty_path).unwrap();
+        let dirs = std::iter::once(empty_path).chain(extra_bin_dirs(Some(dir.path())));
+        let found = find_in_dirs("rust-analyzer", dirs).expect("应命中 ~/.cargo/bin 兜底目录");
+        assert_eq!(found, exe);
+        // 不存在的命令仍为 None
+        assert!(find_in_dirs("nope", extra_bin_dirs(Some(dir.path()))).is_none());
+    }
+
+    #[test]
     fn ext_to_lang_maps_common() {
         assert_eq!(ext_to_lang("rs"), Some("rust"));
         assert_eq!(ext_to_lang("py"), Some("python"));
         assert_eq!(ext_to_lang("ts"), Some("typescript"));
         assert_eq!(ext_to_lang("tsx"), Some("typescript"));
         assert_eq!(ext_to_lang("unknown"), None);
+    }
+
+    #[test]
+    fn install_plans_resolve_by_available_pm() {
+        // rust:只有 rustup → rustup 方案
+        let (display, argv) =
+            resolve_install_command_with("rust", |b| b == "rustup").unwrap();
+        assert_eq!(argv, vec!["rustup", "component", "add", "rust-analyzer"]);
+        assert_eq!(display, "rustup component add rust-analyzer");
+
+        // rust:只有 brew → 回退 brew
+        let (display, _) = resolve_install_command_with("rust", |b| b == "brew").unwrap();
+        assert_eq!(display, "brew install rust-analyzer");
+
+        // typescript:npm 与 pnpm 同时可用 → npm 优先
+        let (display, _) =
+            resolve_install_command_with("typescript", |b| b == "pnpm" || b == "npm").unwrap();
+        assert!(display.starts_with("npm install"), "应优先 npm:{display}");
+
+        // 无任何包管理器 → None;未收录语言 → None
+        assert!(resolve_install_command_with("typescript", |_| false).is_none());
+        assert!(resolve_install_command_with("cobol", |_| true).is_none());
+
+        // 方案自带的 server 配置与文档一致
+        let ts = install_plan("typescript").unwrap();
+        assert_eq!(ts.server_command, "typescript-language-server");
+        assert_eq!(ts.server_args, Some(&["--stdio"][..]));
+        // 每个收录的语言都能被 ext_to_lang 路由到(配置后立即生效的前提)
+        for p in LSP_INSTALL_PLANS {
+            assert!(
+                ext_to_lang(match p.lang {
+                    "rust" => "rs",
+                    "typescript" => "ts",
+                    "javascript" => "js",
+                    "python" => "py",
+                    "go" => "go",
+                    _ => unreachable!(),
+                })
+                .is_some(),
+                "{} 应可按扩展名路由",
+                p.lang
+            );
+        }
     }
 
     #[test]

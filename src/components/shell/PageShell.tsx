@@ -87,11 +87,14 @@ export function HeroCard({
   icon: Icon,
   title,
   desc,
+  footer,
   onClick,
 }: {
   icon: ComponentType<{ className?: string }>;
   title: string;
   desc: string;
+  /** 卡片底部补充内容(如安装命令行) */
+  footer?: ReactNode;
   onClick?: () => void;
 }) {
   const cls =
@@ -105,6 +108,7 @@ export function HeroCard({
         <span className="truncate text-[13px] leading-5 text-foreground">{title}</span>
       </div>
       <p className="text-xs leading-snug text-foreground-subtle line-clamp-3">{desc}</p>
+      {footer && <div className="mt-auto">{footer}</div>}
     </>
   );
   if (onClick) {

@@ -128,6 +128,10 @@ enum LspAction {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // GUI/异常环境启动时 PATH 可能缺少用户目录(~/.cargo/bin 等):
+    // 从登录 shell 解析补全(终端启动时 PATH 已完整,直接跳过)。
+    // 必须在任何后台线程/子进程 spawn 之前执行。
+    paths::ensure_gui_path();
     let cli = Cli::parse();
     // 旧版本数据目录(~/.local/share/combo)一次性迁移到统一目录 ~/.config/combo
     paths::migrate_legacy_data_dir();
