@@ -193,7 +193,10 @@ const COMBO_GLYPHS: [(u32, [u8; 5]); 5] = [
     (3, [0b111, 0b101, 0b101, 0b101, 0b111]),          // o
 ];
 
-/// 字母颜色:黑色(与静态图标的黑色方块基调一致)
+/// 字母颜色:黑色。
+/// macOS 下忙碌帧以 template 模式渲染(RGB 被忽略,系统自动用菜单栏
+/// 前景色——浅色栏黑、深色栏白);此颜色仅在 Windows/Linux 回退路径
+/// (set_icon 直接渲染 RGB)下生效。
 const LETTER_RGB: [u8; 3] = [0, 0, 0];
 
 /// 预生成的托盘图标:空闲(原图)+ 忙碌动画帧序列。
@@ -294,6 +297,12 @@ fn draw_glyph(
 /// 任一项目(含自动化任务)的 run 进行中时循环播放动画帧,
 /// 全部结束后恢复静态图标。图标更新经 tauri/tray-icon 内部派发到
 /// 主线程执行,可在后台任务中安全调用。
+///
+/// 忙碌帧以 **template 模式**设置(macOS 忽略 RGB、按 alpha 剪影渲染为
+/// 菜单栏前景色):浅色菜单栏下自动为黑色字母、深色菜单栏下自动为白色
+/// 字母;`set_icon_with_as_template` 原子设置图标与标记,避免分两次
+/// 调用造成图标渲染两遍的可见闪烁。恢复静态原图时切回非 template
+/// (原图是黑色方块+白色 C 的彩色图,template 会把它压成单色剪影)。
 pub async fn watch_busy(app: AppHandle, state: AppState) {
     let Some(tray) = app.tray_by_id("main") else {
         return; // 托盘不可用(初始化失败或无托盘环境)
@@ -310,12 +319,15 @@ pub async fn watch_busy(app: AppHandle, state: AppState) {
                 showing_busy = true;
                 let _ = tray.set_tooltip(Some("Combo — 任务执行中"));
             }
-            let _ = tray.set_icon(Some(icons.busy[frame % BUSY_FRAMES].clone()));
+            let _ = tray.set_icon_with_as_template(
+                Some(icons.busy[frame % BUSY_FRAMES].clone()),
+                true,
+            );
             frame = frame.wrapping_add(1);
             tokio::time::sleep(Duration::from_millis(BUSY_FRAME_MS)).await;
         } else {
             if showing_busy {
-                let _ = tray.set_icon(Some(icons.idle.clone()));
+                let _ = tray.set_icon_with_as_template(Some(icons.idle.clone()), false);
                 let _ = tray.set_tooltip(Some("Combo"));
                 showing_busy = false;
             }

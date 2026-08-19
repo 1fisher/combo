@@ -50,7 +50,10 @@ Three components, three languages/dirs:
   (cell = w/7,字母高 ≈ 5/7 画布高,垂直居中,同屏约可见 2 个字母);
   24 与弹跳周期 6 整除保证循环无缝;几何参数按 44px 基准
   等比缩放,`image` crate 仅开 png 特性),tooltip 提示「任务执行中」;
-  全部结束后恢复静态原图。图标更新经 tauri `TrayIcon::set_icon` 内部派发主线程,
+  忙碌帧经 `set_icon_with_as_template(_, true)` 以 **template 模式**设置——
+  macOS 忽略 RGB、按 alpha 剪影自动渲染为菜单栏前景色(浅色栏黑/深色栏白),
+  原子设置避免分两次调用的渲染闪烁;恢复静态原图时切回非 template
+  (原图为彩色,template 会压成单色剪影);全部结束后恢复静态原图。图标更新经 tauri `TrayIcon::set_icon` 内部派发主线程,
   后台任务调用安全。
 - **`src/`** (React 19 + Vite + TS, shadcn/ui) — the frontend. TanStack Query
   for REST data, **Zustand** (`stores/agentStore.ts`) for SSE-driven live state,
