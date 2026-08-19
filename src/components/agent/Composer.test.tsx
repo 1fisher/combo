@@ -264,6 +264,23 @@ describe('Composer 模型选择', () => {
   });
 });
 
+describe('Composer 模式指示(仅「完全访问」)', () => {
+  it('工具栏静态显示「完全访问」,不再提供模式切换菜单', () => {
+    renderComposer();
+
+    // 静态指示存在,且不是可点击按钮
+    const indicator = screen.getByLabelText('模式:完全访问');
+    expect(indicator.tagName).toBe('DIV');
+    expect(screen.queryByRole('button', { name: '切换模式' })).toBeNull();
+
+    // 已移除的模式不再出现
+    expect(screen.queryByText('自动编辑')).toBeNull();
+    expect(screen.queryByText('变更前确认')).toBeNull();
+    expect(screen.queryByText('计划模式')).toBeNull();
+    expect(screen.getByText('完全访问')).toBeTruthy();
+  });
+});
+
 /** 在 window 上派发 ⌘(macOS)/Ctrl 组合键 */
 function pressCombo(key: string, opts: KeyboardEventInit = {}) {
   const ev = new KeyboardEvent('keydown', {

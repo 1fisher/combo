@@ -432,7 +432,8 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   底部用户与连接状态) + 可拖拽分隔条 + 主内容区
   (顶栏帮助/终端按钮;无会话时显示 `ChatEmptyState` 问候语 + 订阅横幅 + 模板卡片,
   会话中显示消息列表,底部为 ZCode 风格 `Composer` 输入坞:项目 chip + 工具栏
-  [添加上下文/模式/用量环/Provider/模型/思考等级/发送;Provider 切换后模型列表按该
+  [添加上下文/完全访问指示(仅此一个权限模式,静态展示,权限全部自动放行)/用量环/
+  Provider/模型/思考等级/发送;Provider 切换后模型列表按该
   Provider 过滤,并自动选用其默认大模型])。`index.html` 固定 `class="dark"`,
   新增 theme token(`--surface`/`--foreground-subtle`/`--brand` 等,见 `index.css`)。
   `StatusBar` 已从布局移除,连接状态折进侧边栏底部;`EditorPane`(文件编辑器)

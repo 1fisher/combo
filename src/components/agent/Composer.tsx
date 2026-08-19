@@ -18,7 +18,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { Button } from '../ui/button';
-import { useAgentStore, type AgentMode } from '../../stores/agentStore';
+import { useAgentStore } from '../../stores/agentStore';
 import { useContextStore, type ContextItem } from '../../stores/contextStore';
 import { useMention, type MentionResult } from '../../hooks/useMention';
 import { useFileIndex } from '../../hooks/useFileIndex';
@@ -100,12 +100,8 @@ function FlameComposerBox({
   );
 }
 
-const MODES: { id: AgentMode; label: string; desc: string }[] = [
-  { id: 'yolo', label: '完全访问', desc: '自动放行全部权限,不弹窗' },
-  { id: 'edit', label: '自动编辑', desc: '自动放行写操作,其余确认' },
-  { id: 'build', label: '变更前确认', desc: '所有权限均弹窗确认' },
-  { id: 'plan', label: '计划模式', desc: '只读模式,不允许变更' },
-];
+/** 仅保留「完全访问」模式:权限自动放行,不弹窗;其余模式(自动编辑/变更前确认/计划)已移除 */
+const MODE = { label: '完全访问', desc: '自动放行全部权限,不弹窗' } as const;
 
 const THOUGHT_LEVELS = [
   { id: 'nothink', label: '无思考' },
@@ -151,10 +147,6 @@ export function Composer({
   const composingRef = useRef(false);
   /** 听写预输入镜像层(确认文本实色、推断文本半透明,textarea 文字透明对齐光标) */
   const dictationMirrorRef = useRef<HTMLDivElement>(null);
-  const agentMode = useAgentStore((s) => s.agentMode);
-  const setAgentMode = useAgentStore((s) => s.setAgentMode);
-  const mode = MODES.find((m) => m.id === agentMode) ?? MODES[0];
-  const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [attachments, setAttachments] = useState<Api.Attachment[]>([]);
   const contextItems = useContextStore((s) => s.items);
@@ -170,9 +162,7 @@ export function Composer({
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
   // 移动端(<768px)弹层用 fixed 定位并钳制在视口内,避免宽菜单向左溢出裁剪
   const isMobile = useIsMobile();
-  const modeBtnRef = useRef<HTMLButtonElement>(null);
   const thoughtBtnRef = useRef<HTMLButtonElement>(null);
-  const modePopoverPos = useAnchorPopover(modeMenuOpen, modeBtnRef, { width: 256, enabled: isMobile });
   const thoughtPopoverPos = useAnchorPopover(thoughtMenuOpen, thoughtBtnRef, { width: 160, enabled: isMobile });
   const [modelErr, setModelErr] = useState('');
   // 模型选择 UI 抽取为共用 ModelPicker(与自动化表单一致:搜索 + 最近使用 + 分组),
@@ -713,70 +703,17 @@ export function Composer({
                     <Plus className="size-4" />
                     <span className="sr-only">添加附件</span>
                   </Button>
-                  <button
-                    type="button"
-                    ref={modeBtnRef}
-                    onClick={() => {
-                      setModeMenuOpen((o) => !o);
-                      setModelMenuOpen(false);
-                    }}
-                    className="relative flex justify-center items-center gap-0 hover:bg-surface-hover p-0 rounded-lg h-7 text-warning hover:text-warning shrink-0"
-                    aria-label="切换模式"
-                    title="切换模式"
+                  {/* 模式:仅保留「完全访问」,无可切换项,静态展示 */}
+                  <div
+                    className="flex justify-center items-center gap-0 p-0 rounded-lg h-7 text-warning shrink-0"
+                    aria-label={`模式:${MODE.label}`}
+                    title={`${MODE.label}:${MODE.desc}`}
                   >
                     <ShieldAlert className="size-4 text-warning pointer-events-none" />
                     <span className="hidden @xl/composer:inline-flex pr-0.5 pl-1 text-[13px] whitespace-nowrap">
-                      {mode.label}
+                      {MODE.label}
                     </span>
-                    <ChevronDown className="hidden size-3.5 text-foreground-subtle pointer-events-none" />
-                  </button>
-                  {modeMenuOpen && (
-                    <>
-                      <div
-                        className="z-40 fixed inset-0"
-                        onClick={() => setModeMenuOpen(false)}
-                      />
-                      <div
-                        className={cn(
-                          'z-50 bg-popover shadow-xl p-1.5 border border-border rounded-xl w-64',
-                          isMobile ? 'fixed' : 'bottom-full left-0 absolute mb-2'
-                        )}
-                        style={
-                          isMobile && modePopoverPos
-                            ? { left: modePopoverPos.left, bottom: modePopoverPos.bottom }
-                            : undefined
-                        }
-                      >
-                        <div className="px-2 py-1 font-medium text-foreground-subtlest text-xs">
-                          Agent 模式
-                        </div>
-                        {MODES.map((m) => (
-                          <button
-                            key={m.id}
-                            type="button"
-                            onClick={() => {
-                              setAgentMode(m.id);
-                              setModeMenuOpen(false);
-                            }}
-                            className={cn(
-                              'flex items-start gap-2 hover:bg-surface-hover px-2 py-1.5 rounded-lg w-full text-[13px] text-left transition-colors',
-                              m.id === agentMode && 'bg-surface-hover'
-                            )}
-                          >
-                            <span className="flex flex-col flex-1 min-w-0">
-                              <span className="font-medium truncate">{m.label}</span>
-                              <span className="text-[11px] text-foreground-subtle truncate">
-                                {m.desc}
-                              </span>
-                            </span>
-                            {m.id === agentMode && (
-                              <Check className="size-3.5 text-brand shrink-0" />
-                            )}
-                          </button>
-                        ))}
-                      </div>
-                    </>
-                  )}
+                  </div>
                 </div>
                 <div className="flex items-center gap-1.5">
                   {/* 模型选择 */}
