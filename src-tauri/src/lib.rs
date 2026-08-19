@@ -227,6 +227,16 @@ async fn init_backend(app: &tauri::AppHandle) {
     };
     state.local_port = port;
 
+    // 托盘忙碌动画:任一项目(含自动化任务)的 run 进行中时,托盘图标切换为
+    // 琥珀色旋转动画,全部结束恢复静态图标。AppState 为 Arc 聚合,克隆共享。
+    {
+        let app_watcher = app.clone();
+        let state_watcher = state.clone();
+        tauri::async_runtime::spawn(async move {
+            tray::watch_busy(app_watcher, state_watcher).await;
+        });
+    }
+
     let origins = vec![
         "tauri://localhost".to_string(),
         "http://localhost:5173".to_string(),

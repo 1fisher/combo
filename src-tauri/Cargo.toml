@@ -9,6 +9,8 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = ["devtools", "tray-icon", "image-png"] }
+# 托盘忙碌动画:解码 tray-icon.png 并程序化生成动画帧(仅用 png 解码)
+image = { version = "0.25", default-features = false, features = ["png"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-updater = "2"
 tauri-plugin-notification = "2"

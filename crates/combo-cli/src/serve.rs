@@ -292,6 +292,12 @@ impl RunState {
     pub(crate) fn is_busy(&self, session_id: &str) -> bool {
         self.active.lock().unwrap().contains_key(session_id)
     }
+
+    /// 全局(跨 workspace/session)是否还有任意 run 正在进行。
+    /// 供桌面端托盘忙碌指示轮询:任一项目有任务在跑即返回 true。
+    pub fn any_busy(&self) -> bool {
+        !self.active.lock().unwrap().is_empty()
+    }
 }
 
 /// combo-cli 默认监听端口(桌面端/浏览器前端默认连接本机 combo-cli 的端口)。
@@ -3261,6 +3267,25 @@ mod tests {
     }
 
     // ---------- 多会话并发:RunState / busy / 服务端持久化 ----------
+
+    #[test]
+    fn runstate_any_busy() {
+        let runs = RunState::default();
+        assert!(!runs.any_busy());
+        runs.start_run("ws1", "s1", "r1");
+        runs.start_run("ws2", "s2", "r2");
+        // 跨 workspace:任一 run 进行中即为 busy
+        assert!(runs.any_busy());
+        runs.finish_run("s1", "r1");
+        assert!(runs.any_busy());
+        runs.finish_run("s2", "r2");
+        assert!(!runs.any_busy());
+        // cancel 同样释放全局 busy
+        runs.start_run("ws1", "s3", "r3");
+        assert!(runs.any_busy());
+        runs.cancel("s3");
+        assert!(!runs.any_busy());
+    }
 
     #[test]
     fn runstate_active_run_lifecycle() {

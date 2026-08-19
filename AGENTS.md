@@ -41,6 +41,13 @@ Three components, three languages/dirs:
   「新建任务」先唤起窗口再 emit `tray-new-task`,`WorkspaceSidebar` 监听后复用
   `onNewTaskRef`(与 ⌘N 同路径);主窗口「关闭」被拦截为隐藏到托盘,真正退出走
   托盘菜单(macOS 另处理 `RunEvent::Reopen`,Dock 图标点击可重新显示窗口)。
+  **托盘忙碌动画**:`init_backend` 构造 `AppState` 后 spawn `tray::watch_busy`
+  轮询 `RunState::any_busy()`(空闲 400ms/动画帧 80ms)——任一项目(含自动化
+  任务)的 run 进行中时,托盘图标切换为琥珀色呼吸方块 + 白色扫光圆环(经典
+  spinner,16 帧程序化生成:以 tray-icon.png 的 alpha 轮廓为底重涂,几何参数按
+  44px 基准等比缩放,`image` crate 仅开 png 特性),tooltip 提示「任务执行中」;
+  全部结束后恢复静态原图。图标更新经 tauri `TrayIcon::set_icon` 内部派发主线程,
+  后台任务调用安全。
 - **`src/`** (React 19 + Vite + TS, shadcn/ui) — the frontend. TanStack Query
   for REST data, **Zustand** (`stores/agentStore.ts`) for SSE-driven live state,
   keyed by `sessionId`.
