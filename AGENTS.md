@@ -312,7 +312,8 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   文本单调稳定、说话中不会消失,推断部分随重解码就地修正,分段收尾回缩时
   保留旧推断待下一段替换**(`mergeDictationTail` 合并,类似输入法组合动画);
   Composer 听写时渲染镜像层区分确认(实色)/推断(半透明斜体)文本。
-  开启/关闭录音有 Web Audio 合成的提示音(上扬/下抑双音,`audio.ts` 的
+  开启/关闭录音有 Web Audio 合成的提示音(轻盈气泡声:高频短促正弦 + 频率指数
+  滑动模拟水泡「啵」,开启两颗升调气泡、关闭两颗降调气泡,`audio.ts` 的
   `playDictationChime`;开启音在点击手势内同步播放以解锁 autoplay 策略,
   关闭音在收尾时播放,自动取消不播)。
   最终文本经 `appendTranscript` 追加进输入框(中英边界智能补空格)。macOS

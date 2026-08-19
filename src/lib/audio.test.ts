@@ -85,11 +85,20 @@ class FakeAudioContext {
   destination = {};
   oscillators: Array<{
     type: string;
-    frequency: { setValueAtTime: ReturnType<typeof vi.fn> };
+    frequency: {
+      setValueAtTime: ReturnType<typeof vi.fn>;
+      exponentialRampToValueAtTime: ReturnType<typeof vi.fn>;
+    };
     start: ReturnType<typeof vi.fn>;
     stop: ReturnType<typeof vi.fn>;
   }> = [];
-  gains: Array<{ gain: { setValueAtTime: ReturnType<typeof vi.fn>; exponentialRampToValueAtTime: ReturnType<typeof vi.fn> } }> = [];
+  gains: Array<{
+    gain: {
+      setValueAtTime: ReturnType<typeof vi.fn>;
+      linearRampToValueAtTime: ReturnType<typeof vi.fn>;
+      exponentialRampToValueAtTime: ReturnType<typeof vi.fn>;
+    };
+  }> = [];
   resume = vi.fn();
 
   constructor() {
@@ -99,7 +108,7 @@ class FakeAudioContext {
   createOscillator() {
     const osc = {
       type: '',
-      frequency: { setValueAtTime: vi.fn() },
+      frequency: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
       connect: vi.fn(),
       start: vi.fn(),
       stop: vi.fn(),
@@ -110,7 +119,11 @@ class FakeAudioContext {
 
   createGain() {
     const gain = {
-      gain: { setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() },
+      gain: {
+        setValueAtTime: vi.fn(),
+        linearRampToValueAtTime: vi.fn(),
+        exponentialRampToValueAtTime: vi.fn(),
+      },
       connect: vi.fn(),
     };
     this.gains.push(gain);
@@ -129,21 +142,29 @@ describe('playDictationChime', () => {
     expect(() => playDictationChime('stop')).not.toThrow();
   });
 
-  it('开启播上扬双音(440→660),关闭播下抑双音(660→440)', () => {
+  it('开启播升调气泡(620→840),关闭播降调气泡(840→620)', () => {
     vi.stubGlobal('AudioContext', FakeAudioContext);
     playDictationChime('start');
     playDictationChime('stop');
     const ctx = FakeAudioContext.instances[0];
     // 首建 resume 解锁 autoplay 策略
     expect(ctx.resume).toHaveBeenCalled();
-    // 4 个音:start 两个 + stop 两个
+    // 4 颗气泡:start 两颗(升调)+ stop 两颗(降调)
     expect(ctx.oscillators).toHaveLength(4);
-    expect(ctx.oscillators[0].frequency.setValueAtTime.mock.calls[0][0]).toBe(440);
-    expect(ctx.oscillators[1].frequency.setValueAtTime.mock.calls[0][0]).toBe(660);
-    expect(ctx.oscillators[2].frequency.setValueAtTime.mock.calls[0][0]).toBe(660);
-    expect(ctx.oscillators[3].frequency.setValueAtTime.mock.calls[0][0]).toBe(440);
-    // 音量包络:0.15 起指数衰减,防爆音
-    expect(ctx.gains[0].gain.setValueAtTime.mock.calls[0][0]).toBe(0.15);
+    expect(ctx.oscillators[0].frequency.setValueAtTime.mock.calls[0][0]).toBe(620);
+    expect(ctx.oscillators[1].frequency.setValueAtTime.mock.calls[0][0]).toBe(840);
+    expect(ctx.oscillators[2].frequency.setValueAtTime.mock.calls[0][0]).toBe(840);
+    expect(ctx.oscillators[3].frequency.setValueAtTime.mock.calls[0][0]).toBe(620);
+    // 气泡感:每个音都有频率指数滑动(上滑/下滑)
+    for (const osc of ctx.oscillators) {
+      expect(osc.frequency.exponentialRampToValueAtTime).toHaveBeenCalled();
+    }
+    // start 上滑至 ~1.8 倍,stop 下滑至 ~0.62 倍
+    expect(ctx.oscillators[0].frequency.exponentialRampToValueAtTime.mock.calls[0][0]).toBeCloseTo(620 * 1.8);
+    expect(ctx.oscillators[2].frequency.exponentialRampToValueAtTime.mock.calls[0][0]).toBeCloseTo(840 * 0.62);
+    // 音量包络:从 0 快起至 0.12 再指数衰减,防爆音
+    expect(ctx.gains[0].gain.setValueAtTime.mock.calls[0][0]).toBe(0);
+    expect(ctx.gains[0].gain.linearRampToValueAtTime).toHaveBeenCalled();
     expect(ctx.gains[0].gain.exponentialRampToValueAtTime).toHaveBeenCalled();
     // 每个音都调度了 start/stop
     for (const osc of ctx.oscillators) {

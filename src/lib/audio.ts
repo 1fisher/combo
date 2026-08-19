@@ -67,29 +67,38 @@ function chimeContext(): AudioContext | null {
   }
 }
 
-/** 合成一个短促正弦音:指数衰减包络避免爆音。 */
-function playChimeTone(ctx: AudioContext, freq: number, startAt: number, duration: number) {
+/**
+ * 合成一个轻盈的气泡音:短促正弦 + 指数频率滑动,模拟水泡「啵」。
+ * 上滑(气泡上浮腔体变紧 → 升调)、下滑(收尾降调)由 slide 控制;
+ * 几毫秒快起 + 指数衰减的包络保证圆润无爆音。
+ */
+function playBubbleTone(ctx: AudioContext, freq: number, startAt: number, slide: number) {
   const osc = ctx.createOscillator();
   const gain = ctx.createGain();
   osc.type = 'sine';
   osc.frequency.setValueAtTime(freq, startAt);
-  gain.gain.setValueAtTime(0.15, startAt);
-  gain.gain.exponentialRampToValueAtTime(0.0001, startAt + duration);
+  osc.frequency.exponentialRampToValueAtTime(freq * slide, startAt + 0.07);
+  gain.gain.setValueAtTime(0, startAt);
+  gain.gain.linearRampToValueAtTime(0.12, startAt + 0.008);
+  gain.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.09);
   osc.connect(gain);
   gain.connect(ctx.destination);
   osc.start(startAt);
-  osc.stop(startAt + duration + 0.02);
+  osc.stop(startAt + 0.11);
 }
 
 /**
  * 语音输入开启/关闭提示音(Web Audio 合成,无音频资源):
- * 开启 = 440→660Hz 上扬双音,关闭 = 660→440Hz 下抑双音,
+ * 轻盈的气泡声 —— 高频短促正弦 + 频率指数滑动模拟水泡「啵」。
+ * 开启 = 两颗依次升调的上浮气泡,关闭 = 两颗依次降调的下沉气泡,
  * 方向感清晰;环境不支持时静默。
  */
 export function playDictationChime(kind: 'start' | 'stop'): void {
   const ctx = chimeContext();
   if (!ctx) return;
   const t = ctx.currentTime + 0.02;
-  const notes = kind === 'start' ? [440, 660] : [660, 440];
-  notes.forEach((freq, i) => playChimeTone(ctx, freq, t + i * 0.09, 0.12));
+  const notes = kind === 'start' ? [620, 840] : [840, 620];
+  notes.forEach((freq, i) =>
+    playBubbleTone(ctx, freq, t + i * 0.1, kind === 'start' ? 1.8 : 0.62)
+  );
 }
