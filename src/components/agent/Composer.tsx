@@ -388,11 +388,13 @@ export function Composer({
     return u ? u.totalInput + u.totalOutput : null;
   }, [activeRuntime]);
 
-  // 当前会话的调用次数(assistant 消息数 ≈ API 调用次数)
-  const callCount = useMemo(
-    () => (activeRuntime ? activeRuntime.messages.filter((m) => m.role === 'assistant').length : 0),
-    [activeRuntime],
-  );
+  // 当前会话的 API 调用次数:来自后端 rig 多轮循环的真实 completion 调用数
+  // (即日志 "Current conversation Turns" 的计数值,经 usage SSE 事件实时
+  // 推送、会话列表 api_calls 播种)。不再按 assistant 消息数估算——
+  // 单次 run 内的工具循环多轮调用只对应一条 assistant 消息,旧逻辑严重低估。
+  const callCount = useAgentStore(
+    (s) => (s.activeSessionId ? s.apiCallsBySession[s.activeSessionId] : undefined)
+  ) ?? 0;
 
   // 全部 provider 的模型,按 provider 分组(可跨 provider 直接选模型)
   const modelGroups = useMemo(() => {

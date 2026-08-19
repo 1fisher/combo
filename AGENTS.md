@@ -135,6 +135,21 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   `providers::apply_context_windows` 在 `workspace_effective_cfg`/
   `list_providers`/`find_provider` 统一应用,models JSON 额外回传
   `context_window_override` 原始覆盖值),与前端 Composer 用量环共用同一份值。
+- **API 调用次数(rig turns)与 agent 命名**:rig 多轮循环每次 completion 调用
+  完成都会产出 `MultiTurnStreamItem::CompletionCall`(即 tracing 日志
+  `Current conversation Turns: N/200` 的计数值,N 为本次 run 内第 N 次模型
+  调用)。`agent.rs::stream_run` 据此逐次上报 `RunEvent::Turns(n)`,serve
+  (`start_agent_run`)以 run 启动时的库内 `conversations.api_calls` 为基数,
+  实时广播 SSE `usage` 事件(双层信封,`{session_id, api_calls}` 为会话
+  **累计**值),run 结束 `store.rs::add_api_calls` 把本次 run 的调用数累加
+  落库;`GET .../sessions` JSON 回传 `api_calls`,finish part 与
+  `run_complete` 的 usage JSON 附带本次 run 的 `turns`。前端
+  `agentStore.apiCallsBySession`(`setApiCalls` 单调取大)经 dispatch 的
+  `usage` 分支实时更新、`useSessions` 用列表 `api_calls` 播种,Composer
+  底部「调用次数」显示该值——**不再按 assistant 消息数估算**(一次 run 的
+  多轮工具循环只对应一条 assistant 消息,旧逻辑严重低估)。agent builder
+  统一 `.name("Combo")`,rig 遥测 span 的 `gen_ai.agent.name` 不再显示
+  "Unnamed Agent"。
 - **File service** (`crates/combo-cli/src/fs.rs`): `GET .../files/list?path=`
   lists one directory (hidden files skipped, dirs first), `GET .../files/content`
   reads text (≤1MB, binary rejected), `PUT .../files/content` writes atomically.

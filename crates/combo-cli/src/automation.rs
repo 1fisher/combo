@@ -538,6 +538,7 @@ pub(crate) async fn trigger(
         cost: 0.0,
         context_tokens: 0,
         context_window: 0,
+        api_calls: 0,
     };
     state.meta.db().upsert_conversation(&conv)?;
     let session_id = conv.id;

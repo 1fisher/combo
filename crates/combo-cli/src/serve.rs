@@ -503,6 +503,10 @@ pub(crate) async fn start_agent_run(
         // 工具调用边界与 run 收尾时 flush(见 request_log::StreamLogBuffer)。
         let mut stream_log_buf = crate::request_log::StreamLogBuffer::default();
         let mut usage: Option<RunUsage> = None;
+        // 本 run 已完成的 completion 调用数(实时广播 + 结束落库用),
+        // 以及 run 启动时会话的 API 调用累计基数(实时事件推送 会话累计)。
+        let mut run_turns: i64 = 0;
+        let api_calls_base: i64 = state2.meta.db().get_api_calls(&session_id).unwrap_or(0);
         let tx_ev = tx.clone();
         // 服务端持久化(节流):assistant 快照至少间隔 1.5s 落库一次,
         // 工具调用/工具结果/最终消息必落;崩溃最多至丢失 1.5s 内的增量。
@@ -606,6 +610,11 @@ pub(crate) async fn start_agent_run(
                     let _ = tx_ev.send(msg_env("created", msg));
                 }
                 RunEvent::Usage(u) => usage = Some(u),
+                RunEvent::Turns(n) => {
+                    // 每次 completion 调用完成:实时广播会话累计 API 调用次数
+                    run_turns = n as i64;
+                    let _ = tx_ev.send(api_calls_env(&session_id, api_calls_base + run_turns));
+                }
             }
             let upd = assistant_message_json(
                 &session_id,
@@ -701,6 +710,13 @@ pub(crate) async fn start_agent_run(
                 cost,
                 u.context_tokens() as i64,
             );
+        }
+
+        // 累计本次 run 的 API 调用次数(completion 调用数)到会话。
+        // 与 token usage 独立落库:provider 不上报 usage 的 run 也计入,
+        // 前端从会话列表 api_calls 恢复累计值。
+        if run_turns > 0 {
+            let _ = state2.meta.db().add_api_calls(&session_id, run_turns);
         }
 
         // 记录当前模型的上下文窗口大小(provider 模型列表/内置定义/手动覆盖
@@ -1358,7 +1374,9 @@ fn tool_result_message_json(
 /// finish part 内嵌的 usage JSON:rune 兼容的 `input_tokens/output_tokens`
 /// (最后一次 completion 调用,≈ 上下文占用)保持不变,追加
 /// `total_input_tokens/total_output_tokens`(本次 run 全部调用累计,
-/// rig 原生 Usage 求和)与缓存命中数,前端用量环与消耗统计取用。
+/// rig 原生 Usage 求和)、缓存命中数与 `turns`(本次 run 的 API 调用
+/// 次数,即 rig 日志 "Current conversation Turns" 计数),前端用量环
+/// 与「调用次数」统计取用。
 fn usage_json(u: &RunUsage) -> Value {
     json!({
         "input_tokens": u.input,
@@ -1366,6 +1384,7 @@ fn usage_json(u: &RunUsage) -> Value {
         "total_input_tokens": u.total_input,
         "total_output_tokens": u.total_output,
         "cached_input_tokens": u.cached_input,
+        "turns": u.turns,
     })
 }
 
@@ -1480,6 +1499,20 @@ impl Drop for RunGuard {
         self.state.questions.cancel_pending(&self.session_id);
         let _ = self.tx.send(session_busy_env(&self.session_id, false, None));
     }
+}
+
+/// API 调用次数实时事件(双层信封):run 内每次 completion 调用完成时广播,
+/// `api_calls` 为该会话的累计次数(run 启动时的库内基数 + 本次 run 已完成
+/// 调用数),前端 Composer 底部「调用次数」直接取用,替代按 assistant
+/// 消息数的本地估算。
+fn api_calls_env(session_id: &str, api_calls: i64) -> Value {
+    json!({
+        "type": "usage",
+        "payload": {
+            "type": "updated",
+            "payload": { "session_id": session_id, "api_calls": api_calls }
+        }
+    })
 }
 
 fn run_complete_env(
@@ -3065,6 +3098,15 @@ mod tests {
     }
 
     #[test]
+    fn api_calls_env_uses_double_envelope() {
+        let env = api_calls_env("s1", 46);
+        assert_eq!(env["type"], "usage");
+        assert_eq!(env["payload"]["type"], "updated");
+        assert_eq!(env["payload"]["payload"]["session_id"], "s1");
+        assert_eq!(env["payload"]["payload"]["api_calls"], 46);
+    }
+
+    #[test]
     fn finish_part_carries_real_usage_when_reported() {
         // provider 上报 usage 时,finish part 的 data 内嵌 usage:
         // input/output(最后一次调用 ≈ 上下文占用)+ total_*(run 累计)
@@ -3074,6 +3116,7 @@ mod tests {
             total_input: 300_000,
             total_output: 4096,
             cached_input: 64_000,
+            turns: 3,
         };
         let with_usage = finish_part("end_turn", 1, Some(&u));
         assert_eq!(with_usage["type"], "finish");
@@ -3082,6 +3125,7 @@ mod tests {
         assert_eq!(with_usage["data"]["usage"]["total_input_tokens"], 300_000);
         assert_eq!(with_usage["data"]["usage"]["total_output_tokens"], 4096);
         assert_eq!(with_usage["data"]["usage"]["cached_input_tokens"], 64_000);
+        assert_eq!(with_usage["data"]["usage"]["turns"], 3);
         // 未上报时不出现 usage 字段(保持旧 wire 形状)
         let without_usage = finish_part("cancelled", 1, None);
         assert!(without_usage["data"].get("usage").is_none());
@@ -3095,12 +3139,14 @@ mod tests {
             total_input: 500,
             total_output: 60,
             cached_input: 0,
+            turns: 2,
         };
         let env = run_complete_env("s1", "r1", "m1", "hi", None, Some(u));
         assert_eq!(env["type"], "run_complete");
         assert_eq!(env["payload"]["payload"]["usage"]["input_tokens"], 100);
         assert_eq!(env["payload"]["payload"]["usage"]["output_tokens"], 20);
         assert_eq!(env["payload"]["payload"]["usage"]["total_input_tokens"], 500);
+        assert_eq!(env["payload"]["payload"]["usage"]["turns"], 2);
         let plain = run_complete_env("s1", "r1", "m1", "hi", Some("err"), None);
         assert!(plain["payload"]["payload"].get("usage").is_none());
     }
@@ -3414,6 +3460,7 @@ mod tests {
             cost: 0.0,
             context_tokens: 0,
             context_window: 0,
+            api_calls: 0,
         };
         state.meta.db().upsert_conversation(&conv).unwrap();
         assert!(state.runs.start_run("ws_t", "s_busy", "r1").is_some());

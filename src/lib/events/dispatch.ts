@@ -75,6 +75,16 @@ export function applyEvent(s: Store, env: EventEnvelope): void {
       if (wasRunning) notifyRunComplete(p.session_id, p.error, summary);
       break;
     }
+    case 'usage': {
+      // API 调用次数(rig turns 计数):每次 completion 调用完成实时推送,
+      // payload 携带该会话的累计值,Composer 底部「调用次数」取用。
+      const p = unwrap<{ session_id: string; api_calls: number }>(env);
+      console.debug(
+        `[${ts()}][dispatch] usage session="${p.session_id}" api_calls=${p.api_calls}`
+      );
+      s.setApiCalls(p.session_id, p.api_calls);
+      break;
+    }
     case 'permission_request': {
       const p = unwrap<Api.PermissionRequest>(env);
       s.enqueuePermission(p);

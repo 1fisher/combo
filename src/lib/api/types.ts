@@ -1875,6 +1875,9 @@ export namespace Api {
     completion_tokens: number;
     /** 最近一次 run 的上下文占用(rig usage 上报,最后一次调用的 input+output) */
     context_tokens?: number;
+    /** 会话累计的 API 调用次数(rig 多轮循环 completion 调用数,run 结束累加;
+     *  Composer 底部「调用次数」取用) */
+    api_calls?: number;
     summary_message_id?: string;
     cost: number;
     todos?: { content: string; status: string; active_form: string }[];

@@ -113,6 +113,12 @@ export function useSessions(workspaceId: string | null) {
     if (!q.data) return;
     const st = useAgentStore.getState();
     reconcileRunsFromSessions(st, st.markRun, q.data);
+    // 播种各会话的累计 API 调用次数(rig turns 计数,后端 sqlite 持久)。
+    // setApiCalls 取单调较大值,run 进行中列表 refetch 带回的旧基数
+    // 不会覆盖实时 usage 事件已推送的新值。
+    for (const s of q.data) {
+      if (typeof s.api_calls === 'number') st.setApiCalls(s.id, s.api_calls);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q.data]);
   return { sessions: q.data, isLoading: q.isLoading, create: create.mutateAsync, activate, remove: remove.mutateAsync, rename: rename.mutateAsync };

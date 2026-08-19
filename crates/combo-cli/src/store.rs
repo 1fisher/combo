@@ -82,6 +82,9 @@ pub struct ConversationMeta {
     /// 最近一次 run 所用模型的上下文窗口大小(token;provider 模型列表/
     /// 内置定义/手动覆盖解析,run 结束时随 usage 一同记录)。
     pub context_window: i64,
+    /// 会话累计的 API 调用次数(rig 多轮循环 completion 调用数,即日志
+    /// "Current conversation Turns" 计数的会话累计;每次 run 结束累加)。
+    pub api_calls: i64,
 }
 
 /// 单条消息的持久化记录(parts 为 JSON 字符串)。
@@ -210,7 +213,8 @@ impl ComboDb {
                 completion_tokens  INTEGER NOT NULL DEFAULT 0,
                 cost               REAL    NOT NULL DEFAULT 0.0,
                 context_tokens     INTEGER NOT NULL DEFAULT 0,
-                context_window     INTEGER NOT NULL DEFAULT 0
+                context_window     INTEGER NOT NULL DEFAULT 0,
+                api_calls          INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_conv_ws ON conversations(workspace_id);
             CREATE TABLE IF NOT EXISTS messages (
@@ -277,6 +281,7 @@ impl ComboDb {
             "ALTER TABLE conversations ADD COLUMN cost REAL NOT NULL DEFAULT 0.0",
             "ALTER TABLE conversations ADD COLUMN context_tokens INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE conversations ADD COLUMN context_window INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE conversations ADD COLUMN api_calls INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE workspace_config ADD COLUMN model TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE automations ADD COLUMN model TEXT NOT NULL DEFAULT ''",
         ];
@@ -464,8 +469,8 @@ impl ComboDb {
             .lock()
             .unwrap()
             .execute(
-                "INSERT INTO conversations (id, workspace_id, title, message_count, created_at, updated_at, prompt_tokens, completion_tokens, cost, context_tokens, context_window)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+                "INSERT INTO conversations (id, workspace_id, title, message_count, created_at, updated_at, prompt_tokens, completion_tokens, cost, context_tokens, context_window, api_calls)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
                  ON CONFLICT(id) DO UPDATE SET
                      title=excluded.title,
                      message_count=excluded.message_count,
@@ -481,7 +486,8 @@ impl ComboDb {
                     c.completion_tokens,
                     c.cost,
                     c.context_tokens,
-                    c.context_window
+                    c.context_window,
+                    c.api_calls
                 ],
             )?;
         Ok(())
@@ -496,7 +502,7 @@ impl ComboDb {
         let conn = self.conn.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT c.id, c.workspace_id, c.title, COUNT(m.id), c.created_at, c.updated_at,
-                    c.prompt_tokens, c.completion_tokens, c.cost, c.context_tokens, c.context_window
+                    c.prompt_tokens, c.completion_tokens, c.cost, c.context_tokens, c.context_window, c.api_calls
              FROM conversations c
              LEFT JOIN messages m ON m.session_id = c.id
              WHERE c.workspace_id=?1
@@ -524,7 +530,7 @@ impl ComboDb {
         let placeholders = workspace_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!(
             "SELECT c.id, c.workspace_id, c.title, COUNT(m.id), c.created_at, c.updated_at,
-                    c.prompt_tokens, c.completion_tokens, c.cost, c.context_tokens, c.context_window
+                    c.prompt_tokens, c.completion_tokens, c.cost, c.context_tokens, c.context_window, c.api_calls
              FROM conversations c
              LEFT JOIN messages m ON m.session_id = c.id
              WHERE c.workspace_id IN ({placeholders})
@@ -604,6 +610,28 @@ impl ComboDb {
         self.conn.lock().unwrap().execute(
             "UPDATE conversations SET context_tokens=?2 WHERE id=?1",
             params![session_id, tokens],
+        )?;
+        Ok(())
+    }
+
+    /// 读取会话累计的 API 调用次数(无会话时返回 None;run 启动时取此前
+    /// 累计值作为基数,实时事件据此推算会话累计)。
+    pub fn get_api_calls(&self, session_id: &str) -> Option<i64> {
+        let conn = self.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT api_calls FROM conversations WHERE id=?1",
+            params![session_id],
+            |r| r.get::<_, i64>(0),
+        )
+        .ok()
+    }
+
+    /// 累加本次 run 的 API 调用次数(completion 调用数)到会话。
+    /// 与 token usage 独立:provider 不上报 usage 的 run 也计入调用次数。
+    pub fn add_api_calls(&self, session_id: &str, delta: i64) -> anyhow::Result<()> {
+        self.conn.lock().unwrap().execute(
+            "UPDATE conversations SET api_calls = api_calls + ?2, updated_at = ?3 WHERE id = ?1",
+            params![session_id, delta, unix_secs()],
         )?;
         Ok(())
     }
@@ -1017,6 +1045,7 @@ fn row_to_conv(r: &rusqlite::Row<'_>) -> rusqlite::Result<ConversationMeta> {
         cost: r.get::<_, Option<f64>>(8)?.unwrap_or(0.0),
         context_tokens: r.get::<_, Option<i64>>(9)?.unwrap_or(0),
         context_window: r.get::<_, Option<i64>>(10)?.unwrap_or(0),
+        api_calls: r.get::<_, Option<i64>>(11)?.unwrap_or(0),
     })
 }
 
@@ -1096,6 +1125,7 @@ mod tests {
             cost: 0.0,
             context_tokens: 0,
             context_window: 0,
+            api_calls: 0,
         }
     }
 
@@ -1221,6 +1251,21 @@ mod tests {
         // 更新覆盖(模型切换后随下次 run 重写)
         db.set_context_window("c1", 262_144).unwrap();
         assert_eq!(db.list_conversations("w1").unwrap()[0].context_window, 262_144);
+    }
+
+    #[test]
+    fn api_calls_accumulate_across_runs() {
+        let db = ComboDb::in_memory();
+        db.upsert_conversation(&conv("c1", "w1")).unwrap();
+        // 新会话基数为 0
+        assert_eq!(db.get_api_calls("c1"), Some(0));
+        assert_eq!(db.get_api_calls("nope"), None);
+        // 三次 run 各自累加 rig turns 计数(completion 调用数)
+        db.add_api_calls("c1", 46).unwrap();
+        db.add_api_calls("c1", 3).unwrap();
+        db.add_api_calls("c1", 1).unwrap();
+        assert_eq!(db.get_api_calls("c1"), Some(50));
+        assert_eq!(db.list_conversations("w1").unwrap()[0].api_calls, 50);
     }
 
     #[test]

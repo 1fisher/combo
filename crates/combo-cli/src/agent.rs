@@ -82,8 +82,10 @@ where
     // rig 默认 max_turns=1(仅一轮),开启工具后需要多轮才能完成工具调用循环。
     // max_turns 是"模型调用总预算"(含首轮、工具续轮、重试),复杂任务(多文件
     // 探索/多工具链式调用)极易超过 30,设为 200 兼顾长任务与失控保护。
+    // name 填入遥测 span 的 gen_ai.agent.name(否则 rig 兜底显示 "Unnamed Agent")。
     let builder = client
         .agent(model)
+        .name("Combo")
         .preamble(preamble)
         .tool_server_handle(handle)
         .default_max_turns(200);
@@ -372,17 +374,22 @@ pub struct RunUsage {
     pub total_output: u64,
     /// 缓存命中的输入 token(cached + cache_creation,计价通常为 10%)。
     pub cached_input: u64,
+    /// 本次 run 的 completion 调用次数(API 调用次数)。与 rig 日志
+    /// "Current conversation Turns: N/max" 的 N 同源:多轮工具循环中每
+    /// 完成一次模型调用记 1,供前端「调用次数」展示。
+    pub turns: u64,
 }
 
 impl RunUsage {
-    /// 从 rig 原生 `Usage`(最后一次调用)与 run 累计值构造。
-    fn new(last: rig::completion::Usage, total: rig::completion::Usage) -> Self {
+    /// 从 rig 原生 `Usage`(最后一次调用)、run 累计值与调用次数构造。
+    fn new(last: rig::completion::Usage, total: rig::completion::Usage, turns: u64) -> Self {
         Self {
             input: last.input_tokens,
             output: last.output_tokens,
             total_input: total.input_tokens,
             total_output: total.output_tokens,
             cached_input: total.cached_input_tokens + total.cache_creation_input_tokens,
+            turns,
         }
     }
 
@@ -423,6 +430,10 @@ pub enum RunEvent {
     },
     /// run 结束后的真实 token 用量(rig 原生 Usage,含最后调用与 run 累计)。
     Usage(RunUsage),
+    /// run 内第 N 次 completion 调用完成(即第 N 次 LLM API 请求)。
+    /// 与 rig 日志 "Current conversation Turns: N/max" 的 N 同源,
+    /// 供前端实时累计「API 调用次数」。
+    Turns(u64),
 }
 
 /// 根据 bash 结构化字段判断工具结果是否为失败态:非 0 退出码或超时。
@@ -535,6 +546,9 @@ where
     // 最后一次调用的 input + output 即当前上下文窗口的实际占用。
     let mut last_usage = rig::completion::Usage::new();
     let mut total_usage = rig::completion::Usage::new();
+    // 本 run 的 completion 调用次数(每次 LLM API 请求完成记 1,
+    // 即 rig 日志 "Current conversation Turns" 的计数值)
+    let mut turns: u64 = 0;
     // tool_call id → 工具名,供 ToolResult 上报时配对
     let mut tool_names: HashMap<String, String> = HashMap::new();
     // 已发出 ToolCall、尚未收到 ToolResult 的 call id:非空说明工具在执行
@@ -662,6 +676,10 @@ where
                 });
             }
             MultiTurnStreamItem::CompletionCall(call) => {
+                // 每个 CompletionCall 项 = 一次真实的 completion API 调用完成
+                // (多轮工具循环每轮一条;usage 可能缺报,调用次数独立累计)
+                turns += 1;
+                on_event(RunEvent::Turns(turns));
                 // 零值 usage 是 rig 约定的"provider 未上报"哨兵
                 if call.usage.has_values() {
                     total_usage += call.usage; // rig 原生累计(AddAssign)
@@ -671,8 +689,9 @@ where
             _ => {}
         }
     }
-    if total_usage.has_values() {
-        on_event(RunEvent::Usage(RunUsage::new(last_usage, total_usage)));
+    // turns > 0 也视为有效 run(provider 不上报 usage 时仍需播报调用次数)
+    if total_usage.has_values() || turns > 0 {
+        on_event(RunEvent::Usage(RunUsage::new(last_usage, total_usage, turns)));
     }
     Ok(Some(out))
 }

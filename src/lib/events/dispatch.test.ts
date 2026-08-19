@@ -294,6 +294,27 @@ describe('applyEvent', () => {
     });
   });
 
+  it('usage 事件实时更新会话累计 API 调用次数(单调取大)', () => {
+    const s = useAgentStore.getState();
+    applyEvent(s, {
+      type: 'usage',
+      payload: {
+        type: 'updated',
+        payload: { session_id: 's1', api_calls: 46 },
+      },
+    });
+    expect(useAgentStore.getState().apiCallsBySession['s1']).toBe(46);
+    // 乱序到达的旧值(如 run 中列表 refetch 带回的旧基数)不回退
+    applyEvent(s, {
+      type: 'usage',
+      payload: {
+        type: 'updated',
+        payload: { session_id: 's1', api_calls: 12 },
+      },
+    });
+    expect(useAgentStore.getState().apiCallsBySession['s1']).toBe(46);
+  });
+
   it('非当前会话的 run 结束会回收其运行态(内存回收)', () => {
     // 用户已切到 s2,后台 s1 的 run 收尾:消息已持久化在服务端,
     // s1 的本地运行态应整体回收而非永久驻留

@@ -86,6 +86,9 @@ interface AgentState {
   questionQueue: Api.QuestionRequest[];
   /** 每个 session 的任务列表(todo_write 工具推送,实时更新) */
   todos: Record<string, Api.TodoItem[]>;
+  /** 每个 session 的累计 API 调用次数(rig turns 计数:usage SSE 事件实时
+   * 推送、会话列表 api_calls 播种;内存态,切项目时回收) */
+  apiCallsBySession: Record<string, number>;
 
   upsertMessage: (sessionId: string, m: Api.Message) => void;
   removeOptimisticMessages: (sessionId: string) => void;
@@ -104,6 +107,11 @@ interface AgentState {
   dismissQuestionBatch: (batchId: string) => void;
   setTodos: (sessionId: string, todos: Api.TodoItem[]) => void;
   clearTodos: (sessionId: string) => void;
+  /**
+   * 设置会话的累计 API 调用次数(取单调较大值:实时事件与会话列表播种
+   * 可能乱序到达,旧值不应覆盖新值;计数只增不减)。
+   */
+  setApiCalls: (sessionId: string, n: number) => void;
   /** 把已全部完成的任务清单作为一张卡片消息插入消息流末尾(归档,不再占用输入坞上方) */
   insertTodoCard: (sessionId: string, runId: string, todos: Api.TodoItem[]) => void;
   clearSessionRuntime: (sessionId: string) => void;
@@ -128,6 +136,7 @@ export const useAgentStore = create<AgentState>()(
         activeSessionId: null,
         bySession: {},
         todos: {},
+        apiCallsBySession: {},
       };
     }),
   setLastWorkspacePath: (path) => set({ lastWorkspacePath: path }),
@@ -178,6 +187,7 @@ export const useAgentStore = create<AgentState>()(
   permissionQueue: [],
   questionQueue: [],
   todos: {},
+  apiCallsBySession: {},
 
   upsertMessage: (sessionId, m) =>
     set((st) => {
@@ -333,6 +343,12 @@ export const useAgentStore = create<AgentState>()(
     set((st) => ({ questionQueue: st.questionQueue.filter((b) => b.id !== batchId) })),
   setTodos: (sessionId, todos) =>
     set((st) => ({ todos: { ...st.todos, [sessionId]: todos } })),
+  setApiCalls: (sessionId, n) =>
+    set((st) => {
+      const cur = st.apiCallsBySession[sessionId] ?? 0;
+      if (n <= cur) return st;
+      return { apiCallsBySession: { ...st.apiCallsBySession, [sessionId]: n } };
+    }),
   clearTodos: (sessionId) =>
     set((st) => {
       const { [sessionId]: _drop, ...rest } = st.todos;

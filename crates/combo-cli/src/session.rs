@@ -70,6 +70,7 @@ pub async fn create(
         cost: 0.0,
         context_tokens: 0,
         context_window: 0,
+        api_calls: 0,
     };
     match state.meta.db().upsert_conversation(&conv) {
         Ok(_) => json_ok(&session_json(&conv, false)),
@@ -135,6 +136,7 @@ fn session_json(c: &ConversationMeta, is_busy: bool) -> Value {
         "cost": c.cost,
         "context_tokens": c.context_tokens,
         "context_window": c.context_window,
+        "api_calls": c.api_calls,
         "created_at": c.created_at,
         "updated_at": c.updated_at,
         "is_busy": is_busy,

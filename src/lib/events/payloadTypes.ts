@@ -10,6 +10,7 @@ export const PAYLOAD_TYPES = [
   'config_changed',
   'skills_event',
   'run_complete',
+  'usage',
   'update_available',
   'question_batch_request',
   'question_batch_notification',
