@@ -43,9 +43,11 @@ Three components, three languages/dirs:
   托盘菜单(macOS 另处理 `RunEvent::Reopen`,Dock 图标点击可重新显示窗口)。
   **托盘忙碌动画**:`init_backend` 构造 `AppState` 后 spawn `tray::watch_busy`
   轮询 `RunState::any_busy()`(空闲 400ms/动画帧 80ms)——任一项目(含自动化
-  任务)的 run 进行中时,托盘图标切换为琥珀色呼吸方块 + 白色扫光圆环(经典
-  spinner,16 帧程序化生成:以 tray-icon.png 的 alpha 轮廓为底重涂,几何参数按
-  44px 基准等比缩放,`image` crate 仅开 png 特性),tooltip 提示「任务执行中」;
+  任务)的 run 进行中时,托盘图标切换为**无背景**的「combo」字母弹跳动画
+  (24 帧程序化生成:五个琥珀色像素字模字母(3/5 列宽、5 行高)从图标左缘外
+  滑入、抛物线弹跳着前进、右缘外滑出循环穿行,相邻字母相位错开 1 帧形成
+  自左向右的弹跳波;24 与弹跳周期 6 整除保证循环无缝;几何参数按 44px 基准
+  等比缩放,`image` crate 仅开 png 特性),tooltip 提示「任务执行中」;
   全部结束后恢复静态原图。图标更新经 tauri `TrayIcon::set_icon` 内部派发主线程,
   后台任务调用安全。
 - **`src/`** (React 19 + Vite + TS, shadcn/ui) — the frontend. TanStack Query

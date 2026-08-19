@@ -2,8 +2,8 @@
 //! - 右键托盘图标弹出菜单,提供主要功能:新建任务、退出
 //! - 左键点击托盘图标切换主窗口显隐(不弹菜单)
 //! - 关闭主窗口改为「隐藏到托盘」,真正退出走托盘菜单「退出 Combo」
-//! - 忙碌动画:任一项目有任务在执行时,图标切换为琥珀色方块 + 白色
-//!   旋转扫光圆环(经典 spinner),任务全部结束后恢复静态图标
+//! - 忙碌动画:任一项目有任务在执行时,图标切换为无背景的「combo」字母
+//!   弹跳动画(五个琥珀色像素字母边弹跳边从左到右穿行),任务全部结束后恢复静态图标
 
 use combo_cli::serve::AppState;
 use std::time::Duration;
@@ -176,12 +176,25 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
 
 // ---------- 忙碌动画 ----------
 
-/// 动画帧数(一整圈扫光的采样数)
-const BUSY_FRAMES: usize = 16;
-/// 忙碌时帧间隔(≈12.5fps,扫光一圈约 1.3s)
+/// 一次完整穿行的帧数(单词从画布左缘外滑入到右缘外滑出)
+const BUSY_FRAMES: usize = 24;
+/// 忙碌时帧间隔(≈12.5fps,「combo」穿行一轮约 1.9s)
 const BUSY_FRAME_MS: u64 = 80;
 /// 空闲时轮询 run 状态的间隔
 const IDLE_POLL_MS: u64 = 400;
+
+/// 「combo」五个字母的像素字模:每字形 5 行高,行内比特 MSB 为最左列
+/// (m 为 5 列宽,其余 3 列宽;字母间以 1 列字模间隔)
+const COMBO_GLYPHS: [(u32, [u8; 5]); 5] = [
+    (3, [0b111, 0b100, 0b100, 0b100, 0b111]),          // c
+    (3, [0b111, 0b101, 0b101, 0b101, 0b111]),          // o
+    (5, [0b10001, 0b11011, 0b10101, 0b10001, 0b10001]), // m
+    (3, [0b100, 0b100, 0b110, 0b101, 0b110]),          // b
+    (3, [0b111, 0b101, 0b101, 0b101, 0b111]),          // o
+];
+
+/// 字母颜色(琥珀):明/暗两种菜单栏背景下对比度均足够
+const LETTER_RGB: [u8; 3] = [244, 151, 17];
 
 /// 预生成的托盘图标:空闲(原图)+ 忙碌动画帧序列。
 struct TrayIcons {
@@ -190,67 +203,88 @@ struct TrayIcons {
 }
 
 /// 程序化生成忙碌动画帧:
-/// 以静态图标的圆角方块轮廓(alpha)为底,方块重涂为琥珀色并随帧呼吸脉动,
-/// 原白色「C」替换为白色圆环,环上亮度沿角度分布——头部最亮、尾迹逆时针渐隐,
-/// 头部随帧顺时针推进,形成经典 spinner;明/暗两种菜单栏背景下对比度均足够。
+/// **无背景**(整帧透明),「combo」五个琥珀色像素字母从画布左缘外滑入、
+/// 弹跳着前进、右缘外滑出,循环往复;相邻字母相位逐个错开,弹跳波
+/// 自左向右传播(左边的字母先起跳)。字母字模 5 行高,弹跳为抛物线
+/// (落地为 0、峰值 amp)。24 帧与弹跳周期 6 帧整除,循环无缝衔接。
 /// (几何参数以 44px 基准图调校,按实际宽度等比缩放)
 fn build_tray_icons() -> Option<TrayIcons> {
     use image::GenericImageView;
 
-    const TAU: f32 = std::f32::consts::TAU;
-    const FRAC_PI_2: f32 = std::f32::consts::FRAC_PI_2;
-
     let base = image::load_from_memory(include_bytes!("../icons/tray-icon.png")).ok()?;
     let (w, h) = base.dimensions();
-    let rgba = base.to_rgba8().into_raw();
-    let idle = tauri::image::Image::new_owned(rgba.clone(), w, h);
+    let idle = tauri::image::Image::new_owned(base.to_rgba8().into_raw(), w, h);
 
-    let (wf, hf) = (w as f32, h as f32);
-    let (cx, cy) = (wf / 2.0, hf / 2.0);
-    let radius = wf * (10.0 / 44.0); // 圆环中心线半径
-    let half_thick = wf * (2.6 / 44.0); // 圆环半厚度(≈C 字形笔画宽度)
-    let aa = (wf * (1.0 / 44.0)).max(0.5); // 径向抗锯齿宽度
-    // 方块脉动的两个琥珀色端点(暗 ↔ 亮)
-    const SQ_DIM: [f32; 3] = [140.0, 60.0, 12.0];
-    const SQ_BRIGHT: [f32; 3] = [232.0, 128.0, 10.0];
+    // 几何/节奏参数(44px 基准,按实际宽度等比缩放)
+    let scale = w as f32 / 44.0;
+    let cell = 1.8 * scale; // 字模单元边长 → 字母高 5*cell ≈ 9px
+    let letter_h = 5.0 * cell;
+    let word_cells: f32 = COMBO_GLYPHS.iter().map(|&(gw, _)| gw as f32 + 1.0).sum(); // 21(含间隔)
+    let word_w = word_cells * cell;        // ≈ 38px,小于画布宽,穿行中段可完整读出
+    let travel = word_w + w as f32;        // 从完全滑入到完全滑出的总行程
+    let speed = travel / BUSY_FRAMES as f32;
+    let amp = 11.0 * scale;                // 弹跳高度
+    let y_bottom = 29.5 * scale;           // 字母落点底边(静止时)
+    let hop_period = 6.0;                  // 单字母弹跳周期(帧)
+    let stagger = 1.0;                     // 相邻字母相位错开(帧)→ 弹跳波自左向右传播
 
     let mut busy = Vec::with_capacity(BUSY_FRAMES);
     for k in 0..BUSY_FRAMES {
-        let t = k as f32 / BUSY_FRAMES as f32;
-        let theta = t * TAU - FRAC_PI_2; // 扫光头部角度
-        let pulse = 0.5 - 0.5 * (t * TAU).cos(); // 方块每圈呼吸一次
-        let square = [
-            SQ_DIM[0] + (SQ_BRIGHT[0] - SQ_DIM[0]) * pulse,
-            SQ_DIM[1] + (SQ_BRIGHT[1] - SQ_DIM[1]) * pulse,
-            SQ_DIM[2] + (SQ_BRIGHT[2] - SQ_DIM[2]) * pulse,
-        ];
-        let frame = rgba
-            .chunks_exact(4)
-            .enumerate()
-            .flat_map(|(i, px)| {
-                let a = px[3];
-                if a == 0 {
-                    return [px[0], px[1], px[2], a];
-                }
-                let (x, y) = ((i % w as usize) as f32, (i / w as usize) as f32);
-                let (dx, dy) = (x + 0.5 - cx, y + 0.5 - cy);
-                let dist = dx.hypot(dy);
-                let ring_w =
-                    (((half_thick + aa) - (dist - radius).abs()) / (2.0 * aa)).clamp(0.0, 1.0);
-                // 尾迹亮度:头部(d=0)最亮,逆时针一周渐隐至 0.15
-                let d = (theta - dy.atan2(dx)).rem_euclid(TAU);
-                let head = 255.0 * ring_w * (0.15 + 0.85 * (1.0 - d / TAU).powf(1.3));
-                [
-                    (square[0] * (1.0 - ring_w) + head).round().min(255.0) as u8,
-                    (square[1] * (1.0 - ring_w) + head).round().min(255.0) as u8,
-                    (square[2] * (1.0 - ring_w) + head).round().min(255.0) as u8,
-                    a,
-                ]
-            })
-            .collect::<Vec<u8>>();
+        let kf = k as f32;
+        let mut frame = vec![0u8; w as usize * h as usize * 4];
+        let mut x = -word_w + speed * kf; // 单词左缘随帧右移;k=0 完全在画布外(接缝空白帧)
+        for (i, &(gw, rows)) in COMBO_GLYPHS.iter().enumerate() {
+            let f = ((kf - i as f32 * stagger) % hop_period).rem_euclid(hop_period) / hop_period;
+            let dy = -amp * 4.0 * f * (1.0 - f); // 抛物线弹跳
+            draw_glyph(&mut frame, w, h, gw, &rows, x, y_bottom - letter_h + dy, cell);
+            x += (gw as f32 + 1.0) * cell;
+        }
         busy.push(tauri::image::Image::new_owned(frame, w, h));
     }
     Some(TrayIcons { idle, busy })
+}
+
+/// 把一个字模画到 RGBA 缓冲的 (x, y_top) 处:每个字模单元映射为 cell×cell
+/// 像素块,相邻单元边界取整衔接(列间无缝、重叠无害);越界像素裁剪,
+/// 完全在画布外的单元直接跳过(避免 clamp 在边缘产生幻影像素)。
+fn draw_glyph(
+    buf: &mut [u8],
+    w: u32,
+    h: u32,
+    gw: u32,
+    rows: &[u8; 5],
+    x: f32,
+    y_top: f32,
+    cell: f32,
+) {
+    let (wi, hi) = (w as i32, h as i32);
+    for (r, row) in rows.iter().enumerate() {
+        for c in 0..gw {
+            if row & (1 << (gw - 1 - c)) == 0 {
+                continue;
+            }
+            let rx0 = (x + c as f32 * cell).round() as i32;
+            let rx1 = (x + (c as f32 + 1.0) * cell).round() as i32;
+            let ry0 = (y_top + r as f32 * cell).round() as i32;
+            let ry1 = (y_top + (r as f32 + 1.0) * cell).round() as i32;
+            if rx1 <= 0 || ry1 <= 0 || rx0 >= wi || ry0 >= hi {
+                continue;
+            }
+            let x0 = rx0.max(0);
+            let x1 = rx1.clamp(x0 + 1, wi);
+            let y0 = ry0.max(0);
+            let y1 = ry1.clamp(y0 + 1, hi);
+            for yy in y0..y1 {
+                for xx in x0..x1 {
+                    let i = (yy as usize * w as usize + xx as usize) * 4;
+                    buf[i] = LETTER_RGB[0];
+                    buf[i + 1] = LETTER_RGB[1];
+                    buf[i + 2] = LETTER_RGB[2];
+                    buf[i + 3] = 255;
+                }
+            }
+        }
+    }
 }
 
 /// 托盘忙碌动画主循环:轮询内嵌 serve 的全局运行态(RunState),
@@ -298,8 +332,8 @@ mod tests {
         [d[i], d[i + 1], d[i + 2], d[i + 3]]
     }
 
-    /// 帧生成正确性:空闲帧为原图;动画帧保持圆角方块 alpha 轮廓,
-    /// 中心显示随帧脉动的琥珀方块色,白色扫光头部顺时针旋转。
+    /// 帧生成正确性:无背景(整帧要么透明要么琥珀字母)、单词自左向右穿行、
+    /// 字母上下弹跳、循环接缝处为空白帧。
     #[test]
     fn busy_frames_generated_correctly() {
         let icons = build_tray_icons().expect("build_tray_icons");
@@ -307,27 +341,66 @@ mod tests {
         assert_eq!(icons.idle.width(), 44);
         assert_eq!(icons.idle.height(), 44);
 
-        // alpha 轮廓(圆角方块)在所有动画帧中保持不变
-        let idle_alpha = icons.idle.rgba().to_vec();
+        // 无背景:所有像素要么完全透明,要么为不透明琥珀字母色
         for f in &icons.busy {
-            for (a, b) in idle_alpha
-                .iter()
-                .skip(3)
-                .step_by(4)
-                .zip(f.rgba().iter().skip(3).step_by(4))
-            {
-                assert_eq!(a, b);
+            for px in f.rgba().chunks_exact(4) {
+                if px[3] == 0 {
+                    assert!(px[0] == 0 && px[1] == 0 && px[2] == 0, "透明像素不应带颜色");
+                } else {
+                    assert_eq!(px[3], 255);
+                    assert_eq!(&px[..3], &LETTER_RGB[..], "非透明像素应为琥珀字母色");
+                }
             }
         }
 
-        // 中心(圆环内)为琥珀方块色:呼吸脉动 k=0 暗 / k=8 亮(取值精确无混叠)
-        assert_eq!(px(&icons.busy[0], 22, 22), [140, 60, 12, 255]);
-        assert_eq!(px(&icons.busy[8], 22, 22), [232, 128, 10, 255]);
+        // k=0 单词完全在画布左缘外 → 空白帧(穿行循环的接缝)
+        assert!(icons.busy[0].rgba().iter().all(|&b| b == 0));
 
-        // 扫光头部随帧顺时针推进:k=0 在顶部、k=8 在底部,离头处亮度回落
-        assert!(px(&icons.busy[0], 20, 12)[0] > 200, "k=0 头部应位于顶部");
-        assert!(px(&icons.busy[0], 23, 31)[0] < 160);
-        assert!(px(&icons.busy[8], 23, 31)[0] > 200, "k=8 头部应位于底部");
-        assert!(px(&icons.busy[8], 20, 12)[0] < 160);
+        // 自左向右:可见像素质心随穿行推进右移(入场/中段/出场三段对比)
+        let centroid_x = |f: &tauri::image::Image| -> f32 {
+            let mut sum = 0.0f32;
+            let mut n = 0.0f32;
+            for (i, px) in f.rgba().chunks_exact(4).enumerate() {
+                if px[3] != 0 {
+                    sum += (i % f.width() as usize) as f32;
+                    n += 1.0;
+                }
+            }
+            assert!(n > 0.0, "帧内应有可见像素");
+            sum / n
+        };
+        let c6 = centroid_x(&icons.busy[6]);
+        let c12 = centroid_x(&icons.busy[12]);
+        let c18 = centroid_x(&icons.busy[18]);
+        assert!(c12 > c6, "中段应比入场段更靠右({c6} → {c12})");
+        assert!(c18 > c12, "出场段应继续右移({c12} → {c18})");
+
+        // 弹跳:字母最高点在帧间明显起伏(抛物线,跳过空白接缝帧)
+        let topmost = |f: &tauri::image::Image| -> u32 {
+            (0..f.height())
+                .find(|&y| (0..f.width()).any(|x| px(f, x, y)[3] != 0))
+                .unwrap_or(f.height())
+        };
+        let tops: Vec<u32> = icons.busy.iter().skip(1).map(|f| topmost(f)).collect();
+        let (mn, mx) = (tops.iter().min().unwrap(), tops.iter().max().unwrap());
+        assert!(mx - mn >= 4, "字母弹跳应有明显幅度({mn}..{mx})");
+    }
+
+    /// 调试用:ASCII 目检动画帧(`cargo test dump_busy -- --nocapture` 查看),
+    /// 采样入场/中段/出场的 7 帧,确认字模形状与弹跳波形。
+    #[test]
+    fn dump_busy_frames_ascii() {
+        let icons = build_tray_icons().expect("build_tray_icons");
+        for k in [3usize, 6, 9, 12, 15, 18, 21] {
+            let f = &icons.busy[k];
+            println!("--- frame {k} ---");
+            for y in 0..f.height() {
+                let mut line = String::new();
+                for x in 0..f.width() {
+                    line.push_str(if px(f, x, y)[3] != 0 { "██" } else { "  " });
+                }
+                println!("{line}");
+            }
+        }
     }
 }
