@@ -83,10 +83,15 @@ pub fn is_protected(raw: &str) -> bool {
         return false;
     };
     let first = rest.split('/').next().unwrap_or("");
-    if matches!(first, "desktop" | "documents" | "downloads") {
+    // 敏感目录名(桌面/文稿/下载)按与 `key` 相同的大小写规则归一:mac/win
+    // 大小写不敏感(全小写),Linux 保留规范大小写——`Documents` 敏感而
+    // 全大写的 `DOCUMENTS` 在区分大小写的 Linux 上是不同目录、不敏感。
+    let names = ["Desktop", "Documents", "Downloads"];
+    if names.iter().any(|n| first == key(n)) {
         return true;
     }
-    rest.starts_with("library/mobile documents")
+    // iCloud 云盘路径同样按 `key` 规则归一后比较。
+    rest.starts_with(&key("Library/Mobile Documents"))
 }
 
 /// `grant` 是否覆盖 `path`(相等或为其祖先目录)。
