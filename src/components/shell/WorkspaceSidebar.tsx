@@ -549,6 +549,16 @@ export function WorkspaceSidebar({
               <span>项目</span>
             </button>
           </div>
+          {/* 当前选中项目名:展示在「任务/项目」页卡右侧,超长截断,悬停见完整路径 */}
+          {activeWs && (
+            <span
+              className="min-w-0 flex-1 truncate text-xs text-foreground-subtle"
+              title={activeWs.path}
+              data-testid="active-project-name"
+            >
+              {projectName(activeWs)}
+            </span>
+          )}
           <div className="flex shrink-0 items-center gap-1">
             <Button
               variant="ghost"

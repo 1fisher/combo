@@ -72,12 +72,26 @@ function wrap() {
   );
 }
 
+/** 「项目」分区容器:项目行的文本查询都限定在此,避免与页卡旁的选中项目名混淆 */
+function projSection() {
+  return within(screen.getByRole('region', { name: '项目' }));
+}
+
 describe('WorkspaceSidebar', () => {
   it('renders project names, not full paths', async () => {
     wrap();
-    expect(await screen.findByText('项目A')).toBeTruthy();
-    expect(screen.getByText('项目B')).toBeTruthy();
+    expect(await projSection().findByText('项目A')).toBeTruthy();
+    expect(projSection().getByText('项目B')).toBeTruthy();
     expect(screen.queryByText('/proj/a')).toBeNull();
+  });
+
+  it('shows the active project name beside the view tabs, following selection', async () => {
+    wrap();
+    // 默认自动选中第一个项目(w1=项目A):页卡右侧显示其项目名
+    expect((await screen.findByTestId('active-project-name')).textContent).toBe('项目A');
+    // 点击项目B 行切换选中,名字跟随变化
+    await userEvent.click(projSection().getByText('项目B').closest('div')!);
+    expect((await screen.findByTestId('active-project-name')).textContent).toBe('项目B');
   });
 
   it('shows token usage badge on each project row, summed from its sessions', async () => {
@@ -90,17 +104,17 @@ describe('WorkspaceSidebar', () => {
     // 项目A 徽章:1200+300+400+100 = 2000 → 2.0K,且在项目A 行内
     const badges = await screen.findAllByText('2.0K');
     expect(badges).toHaveLength(1);
-    const rowA = screen.getByText('项目A').closest('div')!;
+    const rowA = projSection().getByText('项目A').closest('div')!;
     expect(rowA.contains(badges[0])).toBe(true);
-    const rowB = screen.getByText('项目B').closest('div')!;
+    const rowB = projSection().getByText('项目B').closest('div')!;
     expect(rowB.textContent).not.toContain('2.0K');
   });
 
   it('hides project token badge when the project has no token usage', async () => {
     sessionsByWs.set('w1', [{ id: 's1', title: '空会话', prompt_tokens: 0, completion_tokens: 0, cost: 0, created_at: 1 }]);
     wrap();
-    await screen.findByText('项目A');
-    const rowA = screen.getByText('项目A').closest('div')!;
+    await projSection().findByText('项目A');
+    const rowA = projSection().getByText('项目A').closest('div')!;
     expect(rowA.textContent).not.toMatch(/\d+(\.\d+)?[KM]/);
   });
 
@@ -108,18 +122,18 @@ describe('WorkspaceSidebar', () => {
     workspaces.length = 0;
     workspaces.push({ id: 'w9', path: '/tmp/my-repo' });
     wrap();
-    expect(await screen.findByText('my-repo')).toBeTruthy();
+    expect(await projSection().findByText('my-repo')).toBeTruthy();
   });
 
   it('renames a project inline', async () => {
     wrap();
-    const row = (await screen.findByText('项目A')).closest('div')!;
+    const row = (await projSection().findByText('项目A')).closest('div')!;
     await userEvent.click(within(row).getByTitle('重命名项目'));
     const input = await screen.findByDisplayValue('项目A');
     await userEvent.clear(input);
     await userEvent.type(input, '新名字');
     await userEvent.keyboard('{Enter}');
-    expect(await screen.findByText('新名字')).toBeTruthy();
+    expect(await projSection().findByText('新名字')).toBeTruthy();
   });
 
   it('creates a workspace from the picked directory (Tauri)', async () => {
@@ -155,7 +169,7 @@ describe('WorkspaceSidebar', () => {
     vi.mocked(isTauri).mockReturnValue(false);
     wrap();
     // 右键项目A 打开上下文菜单
-    const row = (await screen.findByText('项目A')).closest('div')!;
+    const row = (await projSection().findByText('项目A')).closest('div')!;
     await userEvent.pointer({
       keys: '[MouseRight]',
       target: row,
@@ -168,7 +182,7 @@ describe('WorkspaceSidebar', () => {
     await userEvent.type(input, '/proj/new-a');
     await userEvent.click(screen.getByRole('button', { name: '更换' }));
     // 等 mutation 完成(workspaces 刷新)
-    await screen.findByText('项目A');
+    await projSection().findByText('项目A');
     expect(changeWorkspacePath).toHaveBeenCalledWith('w1', '/proj/new-a');
   });
 
@@ -177,8 +191,8 @@ describe('WorkspaceSidebar', () => {
       { id: 's1', title: 'A的任务', prompt_tokens: 0, completion_tokens: 0, cost: 0, created_at: 1 },
     ]);
     wrap();
-    await screen.findByText('项目A');
-    expect(screen.getByText('项目B')).toBeTruthy();
+    await projSection().findByText('项目A');
+    expect(projSection().getByText('项目B')).toBeTruthy();
     // 「项目」视图下不再展示任务列表
     expect(screen.queryByText('A的任务')).toBeNull();
   });
