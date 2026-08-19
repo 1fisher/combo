@@ -108,6 +108,14 @@ export function deleteSession(workspaceId: string, sessionId: string): Promise<v
   });
 }
 
+/** 清空会话消息(Composer `/clear` 命令):删除全部消息并重置上下文计数,
+ * 会话本身保留(标题与 token 账目不变);run 进行中后端返回 409。 */
+export function clearSession(workspaceId: string, sessionId: string): Promise<void> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/sessions/${sessionId}/clear`, {
+    method: 'POST',
+  });
+}
+
 export function renameSession(
   workspaceId: string,
   sessionId: string,

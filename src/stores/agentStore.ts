@@ -112,6 +112,8 @@ interface AgentState {
    * 可能乱序到达,旧值不应覆盖新值;计数只增不减)。
    */
   setApiCalls: (sessionId: string, n: number) => void;
+  /** 清空会话(/clear 命令)后把调用计数归零——与 setApiCalls 的单调递增互补 */
+  resetApiCalls: (sessionId: string) => void;
   /** 把已全部完成的任务清单作为一张卡片消息插入消息流末尾(归档,不再占用输入坞上方) */
   insertTodoCard: (sessionId: string, runId: string, todos: Api.TodoItem[]) => void;
   clearSessionRuntime: (sessionId: string) => void;
@@ -349,6 +351,8 @@ export const useAgentStore = create<AgentState>()(
       if (n <= cur) return st;
       return { apiCallsBySession: { ...st.apiCallsBySession, [sessionId]: n } };
     }),
+  resetApiCalls: (sessionId) =>
+    set((st) => ({ apiCallsBySession: { ...st.apiCallsBySession, [sessionId]: 0 } })),
   clearTodos: (sessionId) =>
     set((st) => {
       const { [sessionId]: _drop, ...rest } = st.todos;

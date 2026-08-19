@@ -4,8 +4,9 @@ import { FileEdit, Folder, Loader2, CircleAlert } from 'lucide-react';
 import { randomUUID } from '../../lib/clientId';
 import { useAgentStore } from '../../stores/agentStore';
 import { formatContextPrompt, type ContextItem } from '../../stores/contextStore';
-import { cancelAgent, sendAgentMessage, answerQuestion } from '../../lib/api';
+import { cancelAgent, sendAgentMessage, answerQuestion, clearSession } from '../../lib/api';
 import type { Api } from '../../lib/api/types';
+import type { SlashCommandDef } from '../../lib/slashCommands';
 import { useSessionHistory } from '../../hooks/useSessions';
 import { useWorkspaceEvents } from '../../hooks/useWorkspaceEvents';
 import { useAgentMode } from '../../hooks/useAgentMode';
@@ -183,7 +184,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
   ) {
     const fullPrompt = formatContextPrompt(prompt, contextItems);
     if (!workspaceId) {
-      setPostError('请先在侧边栏添加/选择一个项目');
+      setPostError('发送失败:请先在侧边栏添加/选择一个项目');
       return;
     }
     setPostError(null);
@@ -200,7 +201,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
         sid = s.id;
         createdSid = s.id;
       } catch (e) {
-        setPostError(e instanceof Error ? e.message : String(e));
+        setPostError(`发送失败:${e instanceof Error ? e.message : String(e)}`);
         return;
       }
     }
@@ -283,7 +284,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
         } catch (e2) {
           st.markRun(sid, randomUUID(), 'done', e2 instanceof Error ? e2.message : String(e2));
           await discardCreatedSession(createdSid);
-          setPostError(e2 instanceof Error ? e2.message : String(e2));
+          setPostError(`发送失败:${e2 instanceof Error ? e2.message : String(e2)}`);
           return;
         } finally {
           if (sid) setQueued(sid, false);
@@ -292,11 +293,56 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
       const msg = e instanceof Error ? e.message : String(e);
       // POST 失败:回滚提前标记的 running,避免 run 悬挂
       st.markRun(sid!, runId, 'done', msg);
-      setPostError(msg);
+      setPostError(`发送失败:${msg}`);
       st.deleteMessage(sid!, `local-${runId}`);
       await discardCreatedSession(createdSid);
     } finally {
       setQueued(sid!, false);
+    }
+  }
+
+  /**
+   * 斜杠命令处理(Composer 发送拦截转发,见 lib/slashCommands):
+   * - prompt 类:展开为固定提示词,复用 doSend 走正常发送流程(自动建会话/命名);
+   * - `/new`:新建会话并切换(与侧边栏「新建任务」同路径);
+   * - `/clear`:调后端清空消息 + 重置上下文计数,本地清内存并刷新列表。
+   */
+  async function handleCommand(command: SlashCommandDef, args: string) {
+    setDraft('');
+    setPostError(null);
+    if (command.kind === 'prompt' && command.prompt) {
+      await doSend(command.prompt(args));
+      return;
+    }
+    if (command.id === 'new') {
+      if (!workspaceId) {
+        setPostError('请先在侧边栏添加/选择一个项目');
+        return;
+      }
+      try {
+        const s = await createSessionIn(`会话 ${(sessions?.length ?? 0) + 1}`);
+        void activateSession(s.id);
+      } catch (e) {
+        setPostError(e instanceof Error ? e.message : String(e));
+      }
+      return;
+    }
+    if (command.id === 'clear') {
+      if (!workspaceId || !sessionId) {
+        setPostError('当前没有可清空的会话');
+        return;
+      }
+      try {
+        await clearSession(workspaceId, sessionId);
+        const st = useAgentStore.getState();
+        st.clearSessionRuntime(sessionId);
+        st.resetApiCalls(sessionId);
+        qc.invalidateQueries({ queryKey: ['sessions', workspaceId] });
+        qc.invalidateQueries({ queryKey: ['history', workspaceId, sessionId] });
+      } catch (e) {
+        setPostError(e instanceof Error ? e.message : String(e));
+      }
+      return;
     }
   }
 
@@ -313,7 +359,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
     <div className="relative flex flex-col flex-1 w-full h-full min-h-0">
       {postError && (
         <div className="bg-destructive/10 px-4 py-2 border-destructive/30 border-t text-destructive text-xs shrink-0">
-          发送失败:{postError}
+          {postError}
         </div>
       )}
       {/* 时间线 / 变更面板 */}
@@ -416,6 +462,7 @@ export function AgentPanel({ workspaceId }: { workspaceId: string | null }) {
           value={draft}
           onChange={setDraft}
           onSend={(attachments, contextItems) => void doSend(draft, attachments, contextItems)}
+          onCommand={(command, args) => void handleCommand(command, args)}
           running={running}
           onStop={cancel}
           banner={

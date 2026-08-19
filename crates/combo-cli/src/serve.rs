@@ -221,7 +221,7 @@ pub struct ActiveRun {
 }
 
 impl RunState {
-    fn broadcast(&self, ws_id: &str) -> broadcast::Sender<Value> {
+    pub fn broadcast(&self, ws_id: &str) -> broadcast::Sender<Value> {
         let mut m = self.broadcasts.lock().unwrap();
         m.entry(ws_id.to_string())
             .or_insert_with(|| broadcast::channel(1024).0)
@@ -245,7 +245,7 @@ impl RunState {
     /// 标记 session 开始运行,返回该 run 专属的取消信号接收端;
     /// 已有进行中的 run 时返回 None(调用方回 409),且不覆盖已登记的
     /// run 信息。
-    fn start_run(
+    pub(crate) fn start_run(
         &self,
         ws_id: &str,
         session_id: &str,
@@ -979,6 +979,10 @@ fn build_router(
         .route(
             "/v1/workspaces/:id/sessions/:sid/messages",
             post(session::upsert_msg),
+        )
+        .route(
+            "/v1/workspaces/:id/sessions/:sid/clear",
+            post(session::clear),
         )
         .route("/v1/workspaces/:id/files/list", get(fs::list))
         .route(

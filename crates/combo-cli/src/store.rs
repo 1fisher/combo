@@ -614,6 +614,17 @@ impl ComboDb {
         Ok(())
     }
 
+    /// 清空会话消息(/clear 命令)后重置与「当前上下文」相关的计数:
+    /// 上下文占用与 API 调用累计归零;token 账目(prompt/completion/cost)
+    /// 保留——那是历史消耗记录,与上下文是否清空无关。
+    pub fn reset_session_usage(&self, session_id: &str) -> anyhow::Result<()> {
+        self.conn.lock().unwrap().execute(
+            "UPDATE conversations SET context_tokens=0, api_calls=0, updated_at=?2 WHERE id=?1",
+            params![session_id, unix_secs()],
+        )?;
+        Ok(())
+    }
+
     /// 读取会话累计的 API 调用次数(无会话时返回 None;run 启动时取此前
     /// 累计值作为基数,实时事件据此推算会话累计)。
     pub fn get_api_calls(&self, session_id: &str) -> Option<i64> {
@@ -1266,6 +1277,26 @@ mod tests {
         db.add_api_calls("c1", 1).unwrap();
         assert_eq!(db.get_api_calls("c1"), Some(50));
         assert_eq!(db.list_conversations("w1").unwrap()[0].api_calls, 50);
+    }
+
+    #[test]
+    fn reset_session_usage_zeroes_context_counters_but_keeps_billing() {
+        let db = ComboDb::in_memory();
+        db.upsert_conversation(&conv("c1", "w1")).unwrap();
+        // 模拟几轮 run 后的状态:上下文占用、调用累计、token 账目
+        db.set_context_tokens("c1", 120_000).unwrap();
+        db.add_api_calls("c1", 46).unwrap();
+        db.add_usage("c1", 30_000, 8_000, 0.42, 38_000).unwrap();
+        // /clear 清空后:上下文相关计数归零,token 账目(历史消耗)保留
+        db.reset_session_usage("c1").unwrap();
+        let c = &db.list_conversations("w1").unwrap()[0];
+        assert_eq!(c.context_tokens, 0);
+        assert_eq!(c.api_calls, 0);
+        assert_eq!(c.prompt_tokens, 30_000);
+        assert_eq!(c.completion_tokens, 8_000);
+        assert!((c.cost - 0.42).abs() < f64::EPSILON);
+        // 不存在的会话:SQL 命中 0 行,不报错
+        db.reset_session_usage("nope").unwrap();
     }
 
     #[test]

@@ -9,11 +9,13 @@ import { useAgentStore } from '../stores/agentStore';
  * 会话事件负载:run 启动/结束时 serve 广播(含 SSE 订阅快照),
  * 前端据此恢复/收敛运行态。消息持久化已由 serve 服务端落库,
  * 前端不再经 SSE 回写(多会话并发时未订阅的 workspace 也能保留完整历史)。
+ * `cleared` 为 `/clear` 命令清空会话后的通知(任意一端发起,所有端联动)。
  */
 interface SessionEventPayload {
   id: string;
   is_busy?: boolean;
   run_id?: string;
+  cleared?: boolean;
 }
 
 export function useWorkspaceEvents(workspaceId: string | null) {
@@ -30,6 +32,14 @@ export function useWorkspaceEvents(workspaceId: string | null) {
           const inner = env.payload as { type: string; payload: SessionEventPayload };
           const sess = inner?.payload;
           if (!sess?.id) return;
+          if (sess.cleared) {
+            // /clear 清空(本端或其他端发起):清内存消息与调用计数,
+            // 并刷新历史缓存(该会话消息已全部删除)
+            st.clearSessionRuntime(sess.id);
+            st.resetApiCalls(sess.id);
+            void qc.invalidateQueries({ queryKey: ['history', workspaceId, sess.id] });
+            return;
+          }
           const rt = st.bySession[sess.id];
           if (sess.is_busy === false) {
             // run 结束(含订阅快照对账):收敛仍标记为 running 的本地状态,

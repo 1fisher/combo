@@ -34,6 +34,7 @@ import { resolveShortcut } from '../../lib/shortcuts';
 import { useDictation } from '../../hooks/useDictation';
 import { appendTranscript } from '../../lib/audio';
 import { openMicSettings } from '../../lib/openMicSettings';
+import { SLASH_COMMANDS, parseSlashCommand, type SlashCommandDef } from '../../lib/slashCommands';
 import { AttachmentPicker } from './AttachmentPicker';
 import { ModelPicker, useAnchorPopover } from './ModelPicker';
 import { FlameWrap } from '../canvasui/FlameWrap';
@@ -118,19 +119,14 @@ const THOUGHT_LEVELS = [
  * 供模式 / 模型 / 思考等级三个菜单共用。
  */
 
-const SLASH_COMMANDS = [
-  { id: 'clear', label: '/clear', description: '清空当前对话上下文' },
-  { id: 'new', label: '/new', description: '开始新的任务' },
-  { id: 'summary', label: '/summary', description: '总结当前对话内容' },
-  { id: 'review', label: '/review', description: '审查代码变更' },
-  { id: 'tests', label: '/tests', description: '运行项目测试' },
-];
+/** 斜杠命令注册表(见 lib/slashCommands):菜单候选 + 发送时拦截执行 */
 
 export function Composer({
   workspaceId,
   value,
   onChange,
   onSend,
+  onCommand,
   disabled,
   running,
   onStop,
@@ -141,6 +137,8 @@ export function Composer({
   value: string;
   onChange: (v: string) => void;
   onSend: (attachments: Api.Attachment[], contextItems: ContextItem[]) => void;
+  /** 斜杠命令处理器:发送文本命中注册命令时调用(替代 onSend);清空输入由调用方负责 */
+  onCommand?: (command: SlashCommandDef, args: string) => void;
   disabled?: boolean;
   running?: boolean;
   onStop?: () => void;
@@ -494,6 +492,13 @@ export function Composer({
 
   function submit() {
     if (running || disabled || (!value.trim() && attachments.length === 0 && contextItems.length === 0)) return;
+    // 斜杠命令拦截:首 token 命中注册命令(且不带附件/上下文)时本地执行,
+    // 不再作为 prompt 发给 agent;未注册的 `/xxx`(如路径)照常发送
+    const parsed = parseSlashCommand(value);
+    if (parsed && onCommand && attachments.length === 0 && contextItems.length === 0) {
+      onCommand(parsed.command, parsed.args);
+      return;
+    }
     onSend(attachments, contextItems);
     setAttachments([]);
     clearContextItems();

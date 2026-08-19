@@ -216,6 +216,42 @@ pub async fn upsert_msg(
     }
 }
 
+/// POST /v1/workspaces/{id}/sessions/{sid}/clear — 清空会话消息(Composer `/clear` 命令)。
+/// 删除 sqlite 里的全部消息并重置上下文相关计数(context_tokens/api_calls),
+/// 会话本身保留(标题与 token 账目不变)。run 进行中返回 409:历史会在
+/// run 收尾时被服务端写回,清空无意义。清理成功后广播 session updated
+/// 事件(payload 带 `cleared: true`),其他端据此清内存消息并刷新列表。
+pub async fn clear(
+    State(state): State<AppState>,
+    Path((id, sid)): Path<(String, String)>,
+) -> Response {
+    if state.runs.is_busy(&sid) {
+        return json_err(
+            StatusCode::CONFLICT,
+            "该会话有正在进行的任务,请先停止再清空",
+        );
+    }
+    if let Err(e) = state.meta.db().delete_messages_by_session(&id, &sid) {
+        return json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("清空会话失败: {e}"),
+        );
+    }
+    let _ = state.meta.db().reset_session_usage(&sid);
+    // 回收服务端内存态:任务清单与未答问题(同删除会话的做法)
+    state.todos.clear(&sid);
+    state.questions.cancel_pending(&sid);
+    let tx = state.runs.broadcast(&id);
+    let _ = tx.send(json!({
+        "type": "session",
+        "payload": {
+            "type": "updated",
+            "payload": { "id": sid, "cleared": true, "message_count": 0, "api_calls": 0, "is_busy": false }
+        }
+    }));
+    json_ok(&json!({ "cleared": true }))
+}
+
 fn json_ok(v: &Value) -> Response {
     Response::builder()
         .status(StatusCode::OK)
@@ -230,4 +266,97 @@ fn json_err(status: StatusCode, msg: &str) -> Response {
         .header("content-type", "application/json")
         .body(Body::from(json!({ "message": msg }).to_string()))
         .unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn session_test_state() -> AppState {
+        let meta = Arc::new(crate::meta::MetaStore::new());
+        meta.insert(crate::meta::WorkspaceMeta {
+            id: "ws_s".into(),
+            path: std::env::temp_dir(),
+            name: "t".into(),
+            backend_type: crate::store::BackendType::ComboCli,
+        });
+        AppState::test_state(meta, None)
+    }
+
+    fn seed_conv(state: &AppState) {
+        state
+            .meta
+            .db()
+            .upsert_conversation(&crate::store::ConversationMeta {
+                id: "s1".into(),
+                workspace_id: "ws_s".into(),
+                title: "t".into(),
+                message_count: 0,
+                created_at: 1,
+                updated_at: 2,
+                prompt_tokens: 3_000,
+                completion_tokens: 800,
+                cost: 0.42,
+                context_tokens: 9_000,
+                context_window: 128_000,
+                api_calls: 12,
+            })
+            .unwrap();
+    }
+
+    async fn body_json(resp: Response) -> Value {
+        let bytes = axum::body::to_bytes(resp.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[tokio::test]
+    async fn clear_removes_messages_and_resets_usage() {
+        let state = session_test_state();
+        seed_conv(&state);
+        let db = state.meta.db();
+        db.upsert_message("ws_s", "s1", "m1", "user", r#"[{"type":"text"}]"#, 1, 1)
+            .unwrap();
+        db.upsert_message("ws_s", "s1", "m2", "assistant", r#"[]"#, 2, 2)
+            .unwrap();
+
+        let resp = clear(
+            State(state.clone()),
+            Path(("ws_s".to_string(), "s1".to_string())),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert_eq!(body_json(resp).await["cleared"], json!(true));
+
+        // 消息清空;上下文相关计数归零;会话本身与 token 账目保留
+        assert_eq!(db.list_messages("ws_s", "s1").unwrap().len(), 0);
+        let convs = db.list_conversations("ws_s").unwrap();
+        assert_eq!(convs.len(), 1);
+        assert_eq!(convs[0].context_tokens, 0);
+        assert_eq!(convs[0].api_calls, 0);
+        assert_eq!(convs[0].prompt_tokens, 3_000);
+        assert_eq!(convs[0].completion_tokens, 800);
+    }
+
+    #[tokio::test]
+    async fn clear_rejects_busy_session() {
+        let state = session_test_state();
+        seed_conv(&state);
+        let db = state.meta.db();
+        db.upsert_message("ws_s", "s1", "m1", "user", r#"[{"type":"text"}]"#, 1, 1)
+            .unwrap();
+        // 预置一个进行中的 run(同 serve.rs 并发测试的做法)
+        assert!(state.runs.start_run("ws_s", "s1", "run-1").is_some());
+
+        let resp = clear(
+            State(state.clone()),
+            Path(("ws_s".to_string(), "s1".to_string())),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+        // 消息未被删除
+        assert_eq!(db.list_messages("ws_s", "s1").unwrap().len(), 1);
+    }
 }

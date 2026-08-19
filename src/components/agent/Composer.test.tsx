@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useState } from 'react';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -276,6 +277,64 @@ function pressCombo(key: string, opts: KeyboardEventInit = {}) {
   window.dispatchEvent(ev);
   return ev;
 }
+
+describe('Composer 斜杠命令拦截', () => {
+  /** 受控包装:真实场景(AgentPanel)的 draft 是 React state,逐字符重渲染 */
+  function Harness({
+    onSend,
+    onCommand,
+  }: {
+    onSend: () => void;
+    onCommand?: (cmd: { id: string }, args: string) => void;
+  }) {
+    const [draft, setDraft] = useState('');
+    return (
+      <QueryClientProvider client={new QueryClient()}>
+        <Composer
+          workspaceId="ws-1"
+          value={draft}
+          onChange={setDraft}
+          onSend={onSend}
+          onCommand={onCommand}
+        />
+      </QueryClientProvider>
+    );
+  }
+
+  it('已知命令回车发送时转交 onCommand,不触发 onSend', async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    const onCommand = vi.fn();
+    render(<Harness onSend={onSend} onCommand={onCommand} />);
+    await user.type(screen.getByRole('textbox', { name: '输入消息' }), '/clear{Enter}');
+    expect(onCommand).toHaveBeenCalledTimes(1);
+    expect(onCommand.mock.calls[0][0].id).toBe('clear');
+    expect(onCommand.mock.calls[0][1]).toBe('');
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('命令后的文本作为参数传给 onCommand', async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    const onCommand = vi.fn();
+    render(<Harness onSend={onSend} onCommand={onCommand} />);
+    await user.type(screen.getByRole('textbox', { name: '输入消息' }), '/summary 重点看代码{Enter}');
+    expect(onCommand).toHaveBeenCalledTimes(1);
+    expect(onCommand.mock.calls[0][0].id).toBe('summary');
+    expect(onCommand.mock.calls[0][1]).toBe('重点看代码');
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it('未注册的斜杠文本照常作为消息发送', async () => {
+    const user = userEvent.setup();
+    const onSend = vi.fn();
+    const onCommand = vi.fn();
+    render(<Harness onSend={onSend} onCommand={onCommand} />);
+    await user.type(screen.getByRole('textbox', { name: '输入消息' }), '/usr/bin 是什么{Enter}');
+    expect(onCommand).not.toHaveBeenCalled();
+    expect(onSend).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe('Composer 语音输入快捷键(⌘/Ctrl+I)', () => {
   beforeEach(() => {

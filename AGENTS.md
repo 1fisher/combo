@@ -181,6 +181,21 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   `GET/POST/DELETE /v1/workspaces/{id}/sessions`:创建/删除/列表全部直接在
   sqlite 操作,不依赖后端在线。会话列表在左侧显示 `name`(不再是完整路径),
   hover 出现铅笔按钮可重命名。
+- **Composer 斜杠命令**(`/` 命令,`src/lib/slashCommands.ts` + `Composer.tsx`
+  submit 拦截 + `AgentPanel.tsx::handleCommand`):输入 `/` 弹命令菜单
+  (复用 `useMention` 的 command 类型,选中后插入输入框,回车发送时本地拦截
+  执行,不再发给 LLM;命令后可跟参数,如 `/summary 重点看代码`)。两类命令:
+  `local` 纯前端执行——`/new` 新建会话并切换(与侧边栏「新建任务」同路径)、
+  `/clear` 清空当前会话;`prompt` 展开为固定提示词走正常 doSend——
+  `/summary`(总结对话)/`/review`(审查 git 变更)/`/tests`(跑项目测试)。
+  未注册的 `/xxx`(如路径 `/usr/bin`)不拦截,照常作为普通消息发送。
+  `/clear` 经 `POST /v1/workspaces/{id}/sessions/{sid}/clear`(`session.rs::clear`)
+  落地:run 进行中 409;删除 sqlite 全部消息 + `store.rs::reset_session_usage`
+  把 `context_tokens`/`api_calls` 归零(token 账目保留为历史消耗),回收
+  todos/questions 内存态,并广播 session updated 事件(payload 带 `cleared: true`),
+  各端 `useWorkspaceEvents` 据此清内存消息并 invalidate 历史缓存(多端联动)。
+  前端同时 `clearSessionRuntime` + `agentStore.resetApiCalls`(`setApiCalls`
+  单调取大,清零需专用方法)。
 - **敏感目录访问授权(只询问一次)** (`dirperm.rs` + `store.rs` 表 `dir_grants`):
   创建项目 / 更换绑定目录时,若目录位于敏感位置(macOS TCC 保护域:
   `~/Desktop`/`~/Documents`/`~/Downloads`、`~/Library/Mobile Documents`(iCloud)、
