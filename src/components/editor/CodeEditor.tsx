@@ -126,10 +126,20 @@ export function CodeEditor({
     return exts;
   }, [filename, headContent, highlightQuery]);
 
-  // 滚动到指定行(文档内容变化后执行)
+  // 滚动到指定行:同一(文件, 行号)只定位一次。依赖保留 value 仅用于
+  // 等编辑器实例就绪(首次挂载时 viewRef 尚为 null),定位成功后记录 key,
+  // 之后用户编辑导致 value 变化不再把光标拉回该行(修复搜索定位后按回车跳行)。
+  const lastRevealKeyRef = useRef<string | null>(null);
   useEffect(() => {
     const view = viewRef.current;
-    if (!view || !highlightLine) return;
+    if (!highlightLine) {
+      // 无定位行(普通打开/切换文件)时重置记录,下次带行号打开仍可定位
+      lastRevealKeyRef.current = null;
+      return;
+    }
+    if (!view) return;
+    const key = `${filePath ?? filename}:${highlightLine}`;
+    if (lastRevealKeyRef.current === key) return;
     const raf = requestAnimationFrame(() => {
       try {
         const line = view.state.doc.line(highlightLine);
@@ -137,12 +147,13 @@ export function CodeEditor({
           selection: { anchor: line.from },
           effects: EditorView.scrollIntoView(line.from, { y: 'center' }),
         });
+        lastRevealKeyRef.current = key;
       } catch {
         // 行号超出范围,忽略
       }
     });
     return () => cancelAnimationFrame(raf);
-  }, [highlightLine, value]);
+  }, [highlightLine, value, filename, filePath]);
 
   // 监听搜索面板出现,用图标替换文字按钮
   const containerRef = useRef<HTMLDivElement>(null);
