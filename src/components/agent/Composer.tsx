@@ -18,6 +18,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { Button } from '../ui/button';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
 import { useAgentStore } from '../../stores/agentStore';
 import { useContextStore, type ContextItem } from '../../stores/contextStore';
 import { useMention, type MentionResult } from '../../hooks/useMention';
@@ -105,9 +106,10 @@ function FlameComposerBox({
 const MODE = { label: '完全访问', desc: '自动放行全部权限,不弹窗' } as const;
 
 const THOUGHT_LEVELS = [
-  { id: 'nothink', label: '无思考' },
-  { id: 'high', label: '高' },
-  { id: 'max', label: '最高' },
+  /** 颜色标记:无思考=灰(静默)、高=蓝(常规思考)、最高=琥珀(最强思考) */
+  { id: 'nothink', label: '无思考', color: 'text-foreground-subtle' },
+  { id: 'high', label: '高', color: 'text-primary' },
+  { id: 'max', label: '最高', color: 'text-warning' },
 ] as const;
 
 /**
@@ -151,6 +153,8 @@ export function Composer({
   const removeContextItem = useContextStore((s) => s.removeItem);
   const clearContextItems = useContextStore((s) => s.clear);
   const [thoughtMenuOpen, setThoughtMenuOpen] = useState(false);
+  /** 模式指示 Tooltip:受控 open,hover/聚焦走 radix onOpenChange,点击手动置 true */
+  const [modeTipOpen, setModeTipOpen] = useState(false);
 
   // agent / model 选择
   const { data: agentInfo } = useAgentInfo(workspaceId);
@@ -708,17 +712,27 @@ export function Composer({
                     <Plus className="size-4" />
                     <span className="sr-only">添加附件</span>
                   </Button>
-                  {/* 模式:仅保留「完全访问」,无可切换项,静态展示 */}
-                  <div
-                    className="flex justify-center items-center gap-0 p-0 rounded-lg h-7 text-warning shrink-0"
-                    aria-label={`模式:${MODE.label}`}
-                    title={`${MODE.label}:${MODE.desc}`}
-                  >
-                    <ShieldAlert className="size-4 text-warning pointer-events-none" />
-                    <span className="hidden @xl/composer:inline-flex pr-0.5 pl-1 text-[13px] whitespace-nowrap">
-                      {MODE.label}
-                    </span>
-                  </div>
+                  {/* 模式:仅保留「完全访问」,无可切换项,静态展示;悬停或点击显示 Tooltip */}
+                  <TooltipProvider>
+                    <Tooltip open={modeTipOpen} onOpenChange={setModeTipOpen}>
+                      <TooltipTrigger asChild>
+                        <div
+                          className="flex justify-center items-center gap-0 p-0 rounded-lg h-7 text-success shrink-0"
+                          aria-label={`模式:${MODE.label}`}
+                          onClick={() => setModeTipOpen(true)}
+                        >
+                          <ShieldAlert className="size-4 text-success pointer-events-none" />
+                          <span className="hidden @xl/composer:inline-flex pr-0.5 pl-1 text-[13px] whitespace-nowrap">
+                            {MODE.label}
+                          </span>
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent side="top" className="flex flex-col items-start gap-0.5">
+                        <span className="font-medium">{MODE.label}</span>
+                        <span className="text-background/70">{MODE.desc}</span>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 </div>
                 <div className="flex items-center gap-1.5">
                   {/* 模型选择 */}
@@ -745,7 +759,10 @@ export function Composer({
                         setThoughtMenuOpen((o) => !o);
                         setModelMenuOpen(false);
                       }}
-                      className="flex justify-between items-center gap-1 hover:bg-surface-hover px-1.5 py-1.5 rounded-lg w-fit h-7 text-[13px] text-foreground-subtle hover:text-foreground whitespace-nowrap transition-colors"
+                      className={cn(
+                        'flex justify-between items-center gap-1 hover:bg-surface-hover px-1.5 py-1.5 rounded-lg w-fit h-7 text-[13px] whitespace-nowrap transition-colors',
+                        thought.color
+                      )}
                       aria-label="思考等级"
                       title="思考等级"
                     >
@@ -783,7 +800,12 @@ export function Composer({
                                 t.id === currentThoughtId && 'bg-surface-hover'
                               )}
                             >
-                              <span className="flex-1 min-w-0 font-medium truncate">
+                              <span
+                                className={cn(
+                                  'flex-1 min-w-0 font-medium truncate',
+                                  t.color
+                                )}
+                              >
                                 {t.label}
                               </span>
                               {t.id === currentThoughtId && (
