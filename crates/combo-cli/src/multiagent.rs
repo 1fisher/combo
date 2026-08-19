@@ -502,7 +502,7 @@ pub fn agent_tool(
                     last_broadcast: Instant::now(),
                 }));
                 {
-                    let mut b = board.lock().unwrap();
+                    let mut b = board.lock().unwrap_or_else(|e| e.into_inner());
                     b.last_broadcast = Instant::now()
                         .checked_sub(BROADCAST_MIN_INTERVAL)
                         .unwrap_or_else(Instant::now);
@@ -538,7 +538,7 @@ pub fn agent_tool(
                                 &ws_disabled,
                             );
                             {
-                                let mut b = board.lock().unwrap();
+                                let mut b = board.lock().unwrap_or_else(|e| e.into_inner());
                                 if let Some(t) =
                                     b.tasks.iter_mut().find(|t| t.task_id == task_id)
                                 {
@@ -561,7 +561,7 @@ pub fn agent_tool(
                                 cancel,
                                 Vec::new(),
                                 move |ev: RunEvent| {
-                                    let mut b = board_ev.lock().unwrap();
+                                    let mut b = board_ev.lock().unwrap_or_else(|e| e.into_inner());
                                     let force = {
                                         let Some(t) = b
                                             .tasks
@@ -602,7 +602,7 @@ pub fn agent_tool(
 
                             // 终态落板 + 读取用量/调用数
                             let (usage, turns) = {
-                                let mut b = board.lock().unwrap();
+                                let mut b = board.lock().unwrap_or_else(|e| e.into_inner());
                                 let (status, error) = match &result {
                                     Ok(Some(_)) => ("done", None),
                                     Ok(None) => ("cancelled", None),
@@ -630,16 +630,25 @@ pub fn agent_tool(
                                 );
                                 let cost = (u.total_input as f64 / 1_000_000.0) * pin
                                     + (u.total_output as f64 / 1_000_000.0) * pout;
-                                let _ = meta.db().add_usage(
+                                if let Err(e) = meta.db().add_usage(
                                     &session_id,
                                     u.total_input as i64,
                                     u.total_output as i64,
                                     cost,
                                     u.context_tokens() as i64,
-                                );
+                                ) {
+                                    tracing::warn!(
+                                        "multiagent: 子任务用量落库失败 session={session_id}: {e:#}"
+                                    );
+                                }
                             }
                             if turns > 0 {
-                                let _ = meta.db().add_api_calls(&session_id, turns as i64);
+                                if let Err(e) = meta.db().add_api_calls(&session_id, turns as i64)
+                                {
+                                    tracing::warn!(
+                                        "multiagent: 子任务 API 调用数落库失败 session={session_id}: {e:#}"
+                                    );
+                                }
                                 if let Some(total) = meta.db().get_api_calls(&session_id) {
                                     let _ = tx.send(api_calls_env(&session_id, total));
                                 }
