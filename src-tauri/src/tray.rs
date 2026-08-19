@@ -193,8 +193,8 @@ const COMBO_GLYPHS: [(u32, [u8; 5]); 5] = [
     (3, [0b111, 0b101, 0b101, 0b101, 0b111]),          // o
 ];
 
-/// 字母颜色(琥珀):明/暗两种菜单栏背景下对比度均足够
-const LETTER_RGB: [u8; 3] = [244, 151, 17];
+/// 字母颜色:黑色(与静态图标的黑色方块基调一致)
+const LETTER_RGB: [u8; 3] = [0, 0, 0];
 
 /// 预生成的托盘图标:空闲(原图)+ 忙碌动画帧序列。
 struct TrayIcons {
@@ -203,10 +203,11 @@ struct TrayIcons {
 }
 
 /// 程序化生成忙碌动画帧:
-/// **无背景**(整帧透明),「combo」五个琥珀色像素字母从画布左缘外滑入、
+/// **无背景**(整帧透明),「combo」五个黑色像素字母从画布左缘外滑入、
 /// 弹跳着前进、右缘外滑出,循环往复;相邻字母相位逐个错开,弹跳波
-/// 自左向右传播(左边的字母先起跳)。字母字模 5 行高,弹跳为抛物线
-/// (落地为 0、峰值 amp)。24 帧与弹跳周期 6 帧整除,循环无缝衔接。
+/// 自左向右传播(左边的字母先起跳)。字号按「两个字母(+字间距)恰好
+/// 占满画布宽」取值,字母垂直居中;弹跳为抛物线(静止为 0、峰值 amp)。
+/// 24 帧与弹跳周期 6 帧整除,循环无缝衔接。
 /// (几何参数以 44px 基准图调校,按实际宽度等比缩放)
 fn build_tray_icons() -> Option<TrayIcons> {
     use image::GenericImageView;
@@ -217,14 +218,16 @@ fn build_tray_icons() -> Option<TrayIcons> {
 
     // 几何/节奏参数(44px 基准,按实际宽度等比缩放)
     let scale = w as f32 / 44.0;
-    let cell = 1.8 * scale; // 字模单元边长 → 字母高 5*cell ≈ 9px
+    // 字号:两个 3 列字母 + 1 列字间隔 = 7 单元恰好占满画布宽;
+    // 字母高 5 单元 ≈ 画布高的 71%,垂直居中
+    let cell = w as f32 / 7.0;
     let letter_h = 5.0 * cell;
     let word_cells: f32 = COMBO_GLYPHS.iter().map(|&(gw, _)| gw as f32 + 1.0).sum(); // 21(含间隔)
-    let word_w = word_cells * cell;        // ≈ 38px,小于画布宽,穿行中段可完整读出
+    let word_w = word_cells * cell;        // ≈ 132px,远大于画布宽,同屏约可见 2 个字母
     let travel = word_w + w as f32;        // 从完全滑入到完全滑出的总行程
     let speed = travel / BUSY_FRAMES as f32;
-    let amp = 11.0 * scale;                // 弹跳高度
-    let y_bottom = 29.5 * scale;           // 字母落点底边(静止时)
+    let amp = 5.5 * scale;                 // 弹跳高度(顶部留 ~1px 余量,不裁剪)
+    let y_bottom = (h as f32 + letter_h) / 2.0; // 静止时字母底边(整体垂直居中)
     let hop_period = 6.0;                  // 单字母弹跳周期(帧)
     let stagger = 1.0;                     // 相邻字母相位错开(帧)→ 弹跳波自左向右传播
 
@@ -332,8 +335,8 @@ mod tests {
         [d[i], d[i + 1], d[i + 2], d[i + 3]]
     }
 
-    /// 帧生成正确性:无背景(整帧要么透明要么琥珀字母)、单词自左向右穿行、
-    /// 字母上下弹跳、循环接缝处为空白帧。
+    /// 帧生成正确性:无背景(整帧要么透明要么黑色字母)、字号两字母占满
+    /// 画布宽、单词自左向右穿行、字母上下弹跳、循环接缝处为空白帧。
     #[test]
     fn busy_frames_generated_correctly() {
         let icons = build_tray_icons().expect("build_tray_icons");
@@ -341,39 +344,84 @@ mod tests {
         assert_eq!(icons.idle.width(), 44);
         assert_eq!(icons.idle.height(), 44);
 
-        // 无背景:所有像素要么完全透明,要么为不透明琥珀字母色
+        // 无背景:所有像素要么完全透明,要么为不透明字母色
         for f in &icons.busy {
             for px in f.rgba().chunks_exact(4) {
                 if px[3] == 0 {
                     assert!(px[0] == 0 && px[1] == 0 && px[2] == 0, "透明像素不应带颜色");
                 } else {
                     assert_eq!(px[3], 255);
-                    assert_eq!(&px[..3], &LETTER_RGB[..], "非透明像素应为琥珀字母色");
+                    assert_eq!(&px[..3], &LETTER_RGB[..], "非透明像素应为字母色");
                 }
             }
         }
 
+        // 字母为黑色(用户要求:文字黑色)
+        assert_eq!(LETTER_RGB, [0, 0, 0]);
+
+        // 字号:两个 3 列字母 + 字间隔 = 7 单元占满画布宽,字母高 ≈ 5/7 画布高
+        let span = |f: &tauri::image::Image| -> (u32, u32, u32, u32) {
+            let (mut x0, mut x1, mut y0, mut y1) = (u32::MAX, 0u32, u32::MAX, 0u32);
+            for y in 0..f.height() {
+                for x in 0..f.width() {
+                    if px(f, x, y)[3] != 0 {
+                        x0 = x0.min(x);
+                        x1 = x1.max(x);
+                        y0 = y0.min(y);
+                        y1 = y1.max(y);
+                    }
+                }
+            }
+            (x0, x1, y0, y1)
+        };
+        let (_, _, y0, y1) = span(&icons.busy[13]);
+        assert!(
+            y1 - y0 + 1 >= 30,
+            "字母高应 ≈ 5/7 画布高(31px,实测 {y0}..{y1})"
+        );
+        let (x0, x1, _, _) = span(&icons.busy[13]);
+        assert!(
+            x1 - x0 + 1 >= 40,
+            "穿行中段字母应横向占满画布(实测 {x0}..{x1})"
+        );
+
         // k=0 单词完全在画布左缘外 → 空白帧(穿行循环的接缝)
         assert!(icons.busy[0].rgba().iter().all(|&b| b == 0));
 
-        // 自左向右:可见像素质心随穿行推进右移(入场/中段/出场三段对比)
-        let centroid_x = |f: &tauri::image::Image| -> f32 {
-            let mut sum = 0.0f32;
-            let mut n = 0.0f32;
+        // 自左向右:相邻帧的列轮廓最佳对齐位移应为正(单词持续右移)。
+        // 不用可见质心——单词远宽于画布时,字母间隙会使可见质心非单调回摆。
+        let column_profile = |f: &tauri::image::Image| -> Vec<u32> {
+            let mut p = vec![0u32; f.width() as usize];
             for (i, px) in f.rgba().chunks_exact(4).enumerate() {
                 if px[3] != 0 {
-                    sum += (i % f.width() as usize) as f32;
-                    n += 1.0;
+                    p[i % f.width() as usize] += 1;
                 }
             }
-            assert!(n > 0.0, "帧内应有可见像素");
-            sum / n
+            p
         };
-        let c6 = centroid_x(&icons.busy[6]);
-        let c12 = centroid_x(&icons.busy[12]);
-        let c18 = centroid_x(&icons.busy[18]);
-        assert!(c12 > c6, "中段应比入场段更靠右({c6} → {c12})");
-        assert!(c18 > c12, "出场段应继续右移({c12} → {c18})");
+        let dot_at = |a: &[u32], b: &[u32], s: i32| -> u64 {
+            (0..a.len() as i32)
+                .map(|x| {
+                    let t = x + s;
+                    if t >= 0 && (t as usize) < b.len() {
+                        a[x as usize] as u64 * b[t as usize] as u64
+                    } else {
+                        0
+                    }
+                })
+                .sum()
+        };
+        for k in [6usize, 12, 18] {
+            let a = column_profile(&icons.busy[k]);
+            let b = column_profile(&icons.busy[k + 1]);
+            let best_pos = (1..=14).map(|s| dot_at(&a, &b, s)).max().unwrap();
+            let best_nonpos = (-6..=0).map(|s| dot_at(&a, &b, s)).max().unwrap();
+            assert!(
+                best_pos > best_nonpos,
+                "帧 {k}→{} 的最佳对齐应为正位移(右移),正 {best_pos} vs 非正 {best_nonpos}",
+                k + 1
+            );
+        }
 
         // 弹跳:字母最高点在帧间明显起伏(抛物线,跳过空白接缝帧)
         let topmost = |f: &tauri::image::Image| -> u32 {
