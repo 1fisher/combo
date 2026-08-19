@@ -3,7 +3,8 @@
 //! - 左键点击托盘图标切换主窗口显隐(不弹菜单)
 //! - 关闭主窗口改为「隐藏到托盘」,真正退出走托盘菜单「退出 Combo」
 //! - 忙碌动画:任一项目有任务在执行时,图标切换为无背景的「combo」字母
-//!   弹跳动画(五个琥珀色像素字母边弹跳边从左到右穿行),任务全部结束后恢复静态图标
+//!   弹跳动画(五个黑色像素字母边弹跳边从右往左穿行,中间大边缘小),
+//!   任务全部结束后恢复静态图标
 
 use combo_cli::serve::AppState;
 use std::time::Duration;
@@ -206,12 +207,13 @@ struct TrayIcons {
 }
 
 /// 程序化生成忙碌动画帧:
-/// **无背景**(整帧透明),「combo」五个黑色像素字母从画布左缘外滑入、
-/// 弹跳着前进、右缘外滑出,循环往复;相邻字母相位逐个错开,弹跳波
-/// 自左向右传播(左边的字母先起跳)。字号按「两个字母(+字间距)恰好
-/// 占满画布宽」取值,字母垂直居中;弹跳为抛物线(静止为 0、峰值 amp)。
-/// 24 帧与弹跳周期 6 帧整除,循环无缝衔接。
-/// (几何参数以 44px 基准图调校,按实际宽度等比缩放)
+/// **无背景**(整帧透明),「combo」五个黑色像素字母从画布右缘外滑入、
+/// 弹跳着向左前进、左缘外滑出,循环往复;相邻字母相位逐个错开,弹跳波
+/// 自左向右传播。字母字号随水平位置缩放:画布中间为满字号(两个 3 列
+/// 字母 + 字间隔占满画布宽、高 ≈ 5/7 画布高),越靠边缘越小(边缘及
+/// 画布外为满字号的 0.5 倍),以字母中心为锚线性过渡、始终垂直居中。
+/// 弹跳为抛物线(静止为 0、峰值 amp)。24 帧与弹跳周期 6 帧整除,
+/// 循环无缝衔接。(几何参数以 44px 基准图调校,按实际宽度等比缩放)
 fn build_tray_icons() -> Option<TrayIcons> {
     use image::GenericImageView;
 
@@ -221,29 +223,47 @@ fn build_tray_icons() -> Option<TrayIcons> {
 
     // 几何/节奏参数(44px 基准,按实际宽度等比缩放)
     let scale = w as f32 / 44.0;
-    // 字号:两个 3 列字母 + 1 列字间隔 = 7 单元恰好占满画布宽;
-    // 字母高 5 单元 ≈ 画布高的 71%,垂直居中
+    // 满字号:两个 3 列字母 + 1 列字间隔 = 7 单元恰好占满画布宽;
+    // 满字高 5 单元 ≈ 画布高的 71%(画布中间的字母用满字号,
+    // 越靠边缘越小,边缘及画布外缩至 0.5 倍)
     let cell = w as f32 / 7.0;
-    let letter_h = 5.0 * cell;
-    let word_cells: f32 = COMBO_GLYPHS.iter().map(|&(gw, _)| gw as f32 + 1.0).sum(); // 21(含间隔)
-    let word_w = word_cells * cell;        // ≈ 132px,远大于画布宽,同屏约可见 2 个字母
+    let word_cells: f32 = COMBO_GLYPHS.iter().map(|&(gw, _)| gw as f32 + 1.0).sum(); // 22(含间隔)
+    let word_w = word_cells * cell;        // ≈ 138px,远大于画布宽,同屏约可见 2~3 个字母
     let travel = word_w + w as f32;        // 从完全滑入到完全滑出的总行程
     let speed = travel / BUSY_FRAMES as f32;
     let amp = 5.5 * scale;                 // 弹跳高度(顶部留 ~1px 余量,不裁剪)
-    let y_bottom = (h as f32 + letter_h) / 2.0; // 静止时字母底边(整体垂直居中)
     let hop_period = 6.0;                  // 单字母弹跳周期(帧)
     let stagger = 1.0;                     // 相邻字母相位错开(帧)→ 弹跳波自左向右传播
+    // 初始相位微调:让主字母 m(单词正中)在循环中点(k = BUSY_FRAMES/2)
+    // 恰好经过画布中心——离散帧上呈现完整的「边缘小 → 中心满字号 →
+    // 边缘小」对称缩放周期(不调相位时字母过心时刻落在两帧之间,
+    // 峰值字号只能达到约 0.93 倍)
+    let lead_off: f32 = COMBO_GLYPHS.iter().take(2).map(|&(gw, _)| gw as f32 + 1.0).sum();
+    let lead_center = (lead_off + COMBO_GLYPHS[2].0 as f32 * 0.5) * cell;
+    let phase0 = speed * (BUSY_FRAMES as f32 * 0.5) - w as f32 * 0.5 - lead_center;
 
     let mut busy = Vec::with_capacity(BUSY_FRAMES);
+    let half_w = w as f32 * 0.5;
     for k in 0..BUSY_FRAMES {
         let kf = k as f32;
         let mut frame = vec![0u8; w as usize * h as usize * 4];
-        let mut x = -word_w + speed * kf; // 单词左缘随帧右移;k=0 完全在画布外(接缝空白帧)
+        // 反向穿行:单词左缘随帧左移;k=0 完全在画布右外(接缝空白帧)
+        let mut x = w as f32 + phase0 - speed * kf;
         for (i, &(gw, rows)) in COMBO_GLYPHS.iter().enumerate() {
             let f = ((kf - i as f32 * stagger) % hop_period).rem_euclid(hop_period) / hop_period;
             let dy = -amp * 4.0 * f * (1.0 - f); // 抛物线弹跳
-            draw_glyph(&mut frame, w, h, gw, &rows, x, y_bottom - letter_h + dy, cell);
-            x += (gw as f32 + 1.0) * cell;
+            // 字号随水平位置缩放:字母中心在画布中间为 1.0、边缘(及
+            // 画布外)线性收窄到 0.5;以字母中心为锚、宽高同步缩放,
+            // 垂直始终居中——形成「边缘滑入的小字母边左移边放大,
+            // 过中心后再缩小滑出」的景深效果
+            let gw_f = gw as f32;
+            let cx = x + gw_f * cell * 0.5; // 字母中心(未缩放排布)
+            let t = ((cx - half_w) / half_w).abs().min(1.0); // 中间 0 → 边缘 1
+            let s = 1.0 - 0.5 * t;
+            let left = cx - gw_f * cell * s * 0.5;
+            let top = h as f32 * 0.5 - 5.0 * cell * s * 0.5 + dy;
+            draw_glyph(&mut frame, w, h, gw, &rows, left, top, cell * s);
+            x += (gw_f + 1.0) * cell;
         }
         busy.push(tauri::image::Image::new_owned(frame, w, h));
     }
@@ -347,8 +367,9 @@ mod tests {
         [d[i], d[i + 1], d[i + 2], d[i + 3]]
     }
 
-    /// 帧生成正确性:无背景(整帧要么透明要么黑色字母)、字号两字母占满
-    /// 画布宽、单词自左向右穿行、字母上下弹跳、循环接缝处为空白帧。
+    /// 帧生成正确性:无背景(整帧要么透明要么黑色字母)、中间满字号
+    /// (两字母占满画布宽)、边缘缩至 0.5 倍、单词自右向左穿行、
+    /// 字母上下弹跳、循环接缝处为空白帧。
     #[test]
     fn busy_frames_generated_correctly() {
         let icons = build_tray_icons().expect("build_tray_icons");
@@ -386,21 +407,25 @@ mod tests {
             }
             (x0, x1, y0, y1)
         };
-        let (_, _, y0, y1) = span(&icons.busy[13]);
+        // 字号随水平位置缩放:帧 12 时 m 恰好在画布正中,应为满字号
+        // (高 ≈ 5/7 画布高 = 31px);帧 2 时字母刚从右缘滑入,应缩至
+        // 满字号的约 0.5 倍(高 ≈16px)
+        let (_, _, y0, y1) = span(&icons.busy[12]);
         assert!(
             y1 - y0 + 1 >= 30,
-            "字母高应 ≈ 5/7 画布高(31px,实测 {y0}..{y1})"
+            "画布中间的字母应保持满字号(高 ≈31px,实测 {y0}..{y1})"
         );
-        let (x0, x1, _, _) = span(&icons.busy[13]);
+        let (x0, x1, ey0, ey1) = span(&icons.busy[2]);
+        assert!(x1 >= x0, "帧 2 应有字母刚滑入画布");
         assert!(
-            x1 - x0 + 1 >= 40,
-            "穿行中段字母应横向占满画布(实测 {x0}..{x1})"
+            ey1 - ey0 + 1 <= 20,
+            "画布边缘的字母应缩至满字号的约 0.5 倍(高 ≈16px,实测 {ey0}..{ey1})"
         );
 
-        // k=0 单词完全在画布左缘外 → 空白帧(穿行循环的接缝)
+        // k=0 单词完全在画布右缘外 → 空白帧(穿行循环的接缝)
         assert!(icons.busy[0].rgba().iter().all(|&b| b == 0));
 
-        // 自左向右:相邻帧的列轮廓最佳对齐位移应为正(单词持续右移)。
+        // 自右向左:相邻帧的列轮廓最佳对齐位移应为负(单词持续左移)。
         // 不用可见质心——单词远宽于画布时,字母间隙会使可见质心非单调回摆。
         let column_profile = |f: &tauri::image::Image| -> Vec<u32> {
             let mut p = vec![0u32; f.width() as usize];
@@ -426,16 +451,17 @@ mod tests {
         for k in [6usize, 12, 18] {
             let a = column_profile(&icons.busy[k]);
             let b = column_profile(&icons.busy[k + 1]);
-            let best_pos = (1..=14).map(|s| dot_at(&a, &b, s)).max().unwrap();
-            let best_nonpos = (-6..=0).map(|s| dot_at(&a, &b, s)).max().unwrap();
+            let best_neg = (-14..=-1).map(|s| dot_at(&a, &b, s)).max().unwrap();
+            let best_nonneg = (0..=6).map(|s| dot_at(&a, &b, s)).max().unwrap();
             assert!(
-                best_pos > best_nonpos,
-                "帧 {k}→{} 的最佳对齐应为正位移(右移),正 {best_pos} vs 非正 {best_nonpos}",
+                best_neg > best_nonneg,
+                "帧 {k}→{} 的最佳对齐应为负位移(左移),负 {best_neg} vs 非负 {best_nonneg}",
                 k + 1
             );
         }
 
-        // 弹跳:字母最高点在帧间明显起伏(抛物线,跳过空白接缝帧)
+        // 弹跳:字母最高点在帧间明显起伏(抛物线弹跳叠加字号缩放;
+        // 跳过空白接缝帧)
         let topmost = |f: &tauri::image::Image| -> u32 {
             (0..f.height())
                 .find(|&y| (0..f.width()).any(|x| px(f, x, y)[3] != 0))
@@ -464,3 +490,4 @@ mod tests {
         }
     }
 }
+
