@@ -29,9 +29,10 @@ describe('ShortcutsView', () => {
     expect(screen.getByText('新建任务')).toBeTruthy();
     expect(screen.getByText('知识图谱')).toBeTruthy();
     expect(screen.getByText('语音输入')).toBeTruthy();
-    // 默认绑定展示(automation = ⌘ A)
+    // 默认绑定展示(automation = ⌘ ⇧ A)
     const btn = screen.getByTestId('shortcut-binding-view:automation');
     expect(btn.textContent).toContain('⌘');
+    expect(btn.textContent).toContain('⇧');
     expect(btn.textContent).toContain('A');
   });
 
@@ -51,7 +52,7 @@ describe('ShortcutsView', () => {
     render(<ShortcutsView />);
     const btn = screen.getByTestId('shortcut-binding-view:search');
     fireEvent.click(btn);
-    press('A', { metaKey: true }); // ⌘A 已被「自动化」占用
+    press('A', { metaKey: true, shiftKey: true }); // ⌘⇧A 已被「自动化」占用
     expect(useShortcutStore.getState().bindings['view:search']).toBe('k');
     const conflict = screen.getByTestId('shortcut-conflict');
     expect(conflict.textContent).toContain('自动化');

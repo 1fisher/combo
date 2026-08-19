@@ -63,9 +63,9 @@ afterEach(() => {
 });
 
 describe('WorkspaceSidebar 视图快捷键', () => {
-  it('⌘/Ctrl+A 切换到自动化视图', () => {
+  it('⌘/Ctrl+Shift+A 切换到自动化视图(默认键避开 ⌘A 全选)', () => {
     const opened = renderSidebar();
-    const ev = press('a');
+    const ev = press('a', { shift: true });
     expect(ev.defaultPrevented).toBe(true);
     expect(opened).toEqual(['automation']);
   });
@@ -85,12 +85,12 @@ describe('WorkspaceSidebar 视图快捷键', () => {
     expect(opened).toEqual(['search']);
   });
 
-  it('焦点在输入框时 ⌘/Ctrl+A 让位给原生全选,不切视图', () => {
+  it('焦点在输入框时 ⌘/Ctrl+Shift+A 让位给原生行为,不切视图', () => {
     const opened = renderSidebar();
     scratch = document.createElement('input');
     document.body.appendChild(scratch);
     scratch.focus();
-    const ev = press('a', { target: scratch });
+    const ev = press('a', { target: scratch, shift: true });
     expect(ev.defaultPrevented).toBe(false);
     expect(opened).toEqual([]);
   });
@@ -105,9 +105,9 @@ describe('WorkspaceSidebar 视图快捷键', () => {
     expect(opened).toEqual(['search']);
   });
 
-  it('已被其他组件处理(defaultPrevented)的 ⌘/Ctrl+A 不再切视图', () => {
+  it('已被其他组件处理(defaultPrevented)的 ⌘/Ctrl+Shift+A 不再切视图', () => {
     const opened = renderSidebar();
-    const ev = press('a', { prePrevented: true });
+    const ev = press('a', { prePrevented: true, shift: true });
     expect(ev.defaultPrevented).toBe(true); // 由模拟的组件处理者标记
     expect(opened).toEqual([]);
   });
@@ -116,7 +116,8 @@ describe('WorkspaceSidebar 视图快捷键', () => {
     const opened = renderSidebar();
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'a', bubbles: true }));
     press('x');
-    press('a', { shift: true }); // ⌘⇧A 未分配
+    press('a'); // ⌘A(原生全选)不属于侧边栏快捷键
+    press('q', { shift: true }); // ⌘⇧Q 未分配
     press('s'); // ⌘S(保存,编辑器视图)不属于侧边栏
     expect(opened).toEqual([]);
   });
@@ -131,7 +132,7 @@ describe('WorkspaceSidebar 自定义快捷键', () => {
   it('改绑后原键位失效、新键位触发视图切换', () => {
     useShortcutStore.getState().setBinding('view:automation', '⇧z');
     const opened = renderSidebar();
-    expect(press('a').defaultPrevented).toBe(false); // 原 ⌘A 不再触发
+    expect(press('a', { shift: true }).defaultPrevented).toBe(false); // 原 ⌘⇧A 不再触发
     const ev = press('z', { shift: true });
     expect(ev.defaultPrevented).toBe(true);
     expect(opened).toEqual(['automation']);

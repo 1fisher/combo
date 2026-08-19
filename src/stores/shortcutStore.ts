@@ -28,7 +28,17 @@ export const useShortcutStore = create<ShortcutState>()(
     }),
     {
       name: 'combo.shortcuts',
-      version: 1,
+      version: 2,
+      // v2:automation 默认键 'a'(⌘A 与全选冲突)改为 '⇧a'——旧持久化里仍是
+      // 旧默认 'a' 的自动迁移;用户显式改过其他键(或禁用)的保留不动
+      migrate: (persisted) => {
+        const saved = (persisted as Partial<Pick<ShortcutState, 'bindings'>> | undefined)
+          ?.bindings;
+        if (saved && saved['view:automation'] === 'a') {
+          saved['view:automation'] = '⇧a';
+        }
+        return persisted as ShortcutState;
+      },
       // 新增动作时旧持久化数据缺键,合并默认值兜底
       merge: (persisted, current) => {
         const saved = (persisted as Partial<Pick<ShortcutState, 'bindings'>> | undefined)

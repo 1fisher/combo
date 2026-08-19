@@ -54,7 +54,8 @@ export const SHORTCUT_ACTIONS: readonly ShortcutActionMeta[] = [
     id: 'view:automation',
     label: '自动化',
     desc: '打开自动化视图',
-    defaultCombo: 'a',
+    // 不用 'a'(⌘/Ctrl+A):与编辑器/输入框原生全选冲突,焦点不在可编辑区时会被劫持
+    defaultCombo: '⇧a',
     editableExempt: false,
   },
   {

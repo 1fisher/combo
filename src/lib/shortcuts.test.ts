@@ -71,16 +71,21 @@ describe('findBindingOwner', () => {
 describe('resolveShortcut', () => {
   const bindings: ShortcutBindings = defaultBindings();
 
-  it('默认绑定下 ⌘A 分派 automation', () => {
-    const e = keyEvent({ key: 'a', metaKey: true });
+  it('默认绑定下 ⌘⇧A 分派 automation', () => {
+    const e = keyEvent({ key: 'A', metaKey: true, shiftKey: true });
     expect(resolveShortcut(e, bindings, ['view:automation'])).toBe('view:automation');
+  });
+
+  it('默认绑定下 ⌘A 不再分派 automation(让位给原生全选)', () => {
+    const e = keyEvent({ key: 'a', metaKey: true });
+    expect(resolveShortcut(e, bindings, ['view:automation'])).toBeNull();
   });
 
   it('defaultPrevented 或编辑区让位时返回 null;豁免动作在编辑区仍触发', () => {
     const editable = document.createElement('input');
     const inInput = { target: editable } as unknown as KeyboardEvent;
-    // 编辑区内 ⌘A 让位(与原生全选重叠)
-    const ev = keyEvent({ key: 'a', metaKey: true });
+    // 编辑区内 ⌘⇧A 让位(非豁免动作)
+    const ev = keyEvent({ key: 'A', metaKey: true, shiftKey: true });
     Object.defineProperty(ev, 'target', { value: editable });
     expect(resolveShortcut(ev, bindings, ['view:automation'])).toBeNull();
     // ⌘K 豁免,输入框内也触发
@@ -88,7 +93,7 @@ describe('resolveShortcut', () => {
     Object.defineProperty(evK, 'target', { value: editable });
     expect(resolveShortcut(evK, bindings, ['view:search'])).toBe('view:search');
     // 已被其他组件处理的按键跳过
-    const evSwallow = keyEvent({ key: 'a', metaKey: true });
+    const evSwallow = keyEvent({ key: 'A', metaKey: true, shiftKey: true });
     evSwallow.preventDefault();
     expect(resolveShortcut(evSwallow, bindings, ['view:automation'])).toBeNull();
     expect(inInput).toBeTruthy(); // 平台 lint:占位引用
