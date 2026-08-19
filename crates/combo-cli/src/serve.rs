@@ -26,6 +26,7 @@ use crate::git;
 use crate::graph;
 use crate::host;
 use crate::lan;
+use crate::lsp;
 use crate::meta::MetaStore;
 use crate::question::QuestionRegistry;
 use crate::todo::TodoStore;
@@ -1035,6 +1036,8 @@ fn build_router(
         )
         // ---- 知识图谱 ----
         .route("/v1/workspaces/:id/graph", get(graph::graph))
+        // ---- workspace 语言统计(会话界面 LSP 检测提示) ----
+        .route("/v1/workspaces/:id/languages", get(lsp::workspace_languages))
         .route("/v1/workspaces/:id/git/status", get(git::status))
         .route("/v1/workspaces/:id/git/repos", get(git::repos))
         .route("/v1/workspaces/:id/git/diff", get(git::diff))

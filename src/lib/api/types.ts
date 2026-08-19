@@ -2185,6 +2185,22 @@ export namespace Api {
     path?: string | null;
   };
 
+  // workspace 语言统计(GET /v1/workspaces/:id/languages,按扩展名聚合;
+  // 语言标识与 [lsp.<lang>] 配置键一致,供会话界面展示 LSP 检测提示)。
+  export type WorkspaceLanguageStat = {
+    /** 语言标识,如 rust/typescript/python。 */
+    lang: string;
+    /** 该语言源文件数(按扩展名统计)。 */
+    files: number;
+  };
+
+  export type WorkspaceLanguages = {
+    /** 按文件数降序。 */
+    languages: WorkspaceLanguageStat[];
+    /** 是否因超过扫描上限被截断。 */
+    truncated: boolean;
+  };
+
   // LSP 命令检测结果。
   export type LspCheckResult = {
     found: boolean;

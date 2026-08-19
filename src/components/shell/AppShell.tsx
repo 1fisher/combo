@@ -285,7 +285,7 @@ function AppShellInner() {
             </header>
             <div className="relative flex min-h-0 flex-1">
               <div className={cn('flex min-h-0 w-full flex-1', view !== 'agent' && 'hidden')}>
-                <AgentPanel workspaceId={workspaceId} />
+                <AgentPanel workspaceId={workspaceId} onOpenLspView={() => setView('lsp')} />
               </div>
               <div className={cn('flex min-h-0 w-full flex-1', view !== 'terminal' && 'hidden')}>
                 {paneMounted.terminal && (
@@ -337,7 +337,7 @@ function AppShellInner() {
                     </Suspense>
                   )
                 ) : (
-                  <AgentPanel workspaceId={workspaceId} />
+                  <AgentPanel workspaceId={workspaceId} onOpenLspView={() => setView('lsp')} />
                 )}
               </div>
             </div>

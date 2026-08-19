@@ -540,6 +540,19 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   成功/失败+重试/取消),`useLspInstallStatus` 运行中每秒轮询、终态自动
   invalidate 列表与方案;列表行「未找到」且有方案时提供「安装」按钮;表单
   检测未找到且语言在方案内时提供「一键安装」。
+- **会话界面 LSP 检测提示**(`LspStatusBanner.tsx`):`GET
+  /v1/workspaces/:id/languages`(`lsp.rs::workspace_languages`)按扩展名统计
+  workspace 各语言源文件数(walkdir 只遍历文件名不读内容,跳过忽略目录/
+  隐藏文件,上限 4000 文件截断,`spawn_blocking`;语言标识与 `ext_to_lang`
+  即 `[lsp.<lang>]` 配置键同口径)。前端 `useWorkspaceLspStatus` 把语言统计与
+  `['lsp-servers']` 缓存(同 LSP 视图,安装终态 invalidate 后自动收敛)交叉,
+  `lib/lspStatus.ts::computeLspIssues` 只保留「有意义」的语言(文件数 ≥3 且
+  ≥ 最多语言数的 5%,最多 4 条,避免仓库零散脚本噪音),在 AgentPanel 消息区
+  顶部渲染横幅:`not-found`(已配置 server 但 `executable === false`,如 rust
+  配了 rust-analyzer 却不在 PATH)为红色「语言服务检测异常」、`missing`(项目
+  有该语言源码但未配置 server)为琥珀「语言服务未配置」,逐语言展示源文件数、
+  命令与建议命令;「去配置」跳 LSP 视图,「忽略」为内存态、**切换项目后自动
+  复位重检**(AgentPanel 对 workspaceId 的 effect 清零)。
 - **Generated types are NOT purely generated.** `npm run gen:api` runs
   `openapi-typescript` over `swagger/swagger.json` (vendored from the rune repo at
   commit `28ed89ff`, see `swagger/README.md`) then **appends a hand-maintained

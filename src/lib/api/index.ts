@@ -523,6 +523,11 @@ export function checkLspCommand(command: string): Promise<Api.LspCheckResult> {
   return apiRequest('/v1/lsp/check', { method: 'POST', body: { command } });
 }
 
+// workspace 语言统计:按扩展名聚合源文件数(会话界面 LSP 检测提示用)
+export function getWorkspaceLanguages(workspaceId: string): Promise<Api.WorkspaceLanguages> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/languages`);
+}
+
 // LSP 一键安装:后台执行安装命令,成功后自动写 [lsp.<lang>] 配置
 export function listLspPlans(): Promise<Api.LspInstallPlan[]> {
   return apiRequest('/v1/lsp/plans');

@@ -8,7 +8,11 @@
 //! 通过 `LspManager` 暴露给 agent。
 
 use crate::config::{LspServerConfig, ResolvedConfig};
+use crate::serve::AppState;
 use anyhow::Result;
+use axum::extract::{Path as AxumPath, State};
+use axum::http::StatusCode;
+use axum::response::Response;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -251,6 +255,85 @@ pub fn ext_to_lang(ext: &str) -> Option<&'static str> {
         _ => return None,
     };
     Some(m)
+}
+
+// =========================== workspace 语言统计 ===========================
+
+/// 语言统计扫描文件数上限(超过截断;只遍历文件名不读内容,速度远快于图谱扫描)。
+const MAX_LANG_SCAN_FILES: usize = 4000;
+
+/// GET /v1/workspaces/{id}/languages — 按扩展名统计 workspace 各语言源文件数。
+///
+/// 与 `ext_to_lang` 同一口径(即 LSP 工具按扩展名路由的口径),供会话界面
+/// 展示「项目语言 vs 已配置 LSP server 的检测状态」:如 rust 项目未配置
+/// rust-analyzer、或已配置但 PATH 中找不到可执行文件时给出提示。
+pub async fn workspace_languages(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    let root = match crate::fs::resolve_root(&state, &id) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+    match tokio::task::spawn_blocking(move || count_languages(&root)).await {
+        Ok((langs, truncated)) => {
+            let arr: Vec<Value> = langs
+                .into_iter()
+                .map(|(lang, files)| json!({ "lang": lang, "files": files }))
+                .collect();
+            crate::fs::ok_json(json!({ "languages": arr, "truncated": truncated }))
+        }
+        Err(e) => crate::fs::error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("语言统计任务异常: {e}"),
+        ),
+    }
+}
+
+/// 遍历 workspace 统计各语言源文件数(跳过 node_modules/target 等目录与隐藏
+/// 文件;上限 MAX_LANG_SCAN_FILES 防超大仓库拖慢)。返回按文件数降序的
+/// `(语言标识, 文件数)` 列表与是否截断。
+fn count_languages(root: &Path) -> (Vec<(String, usize)>, bool) {
+    let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+    let mut seen = 0usize;
+    let mut truncated = false;
+    for entry in walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_entry(|e| {
+            if e.depth() == 0 {
+                return true;
+            }
+            let name = e.file_name().to_string_lossy();
+            if e.file_type().is_dir() {
+                return !crate::fs::is_skip_dir(&name);
+            }
+            true
+        })
+        .filter_map(|e| e.ok())
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy();
+        if name.starts_with('.') {
+            continue;
+        }
+        let ext = name
+            .rsplit_once('.')
+            .map(|(_, e)| e.to_ascii_lowercase())
+            .unwrap_or_default();
+        if let Some(lang) = ext_to_lang(&ext) {
+            *counts.entry(lang.to_string()).or_insert(0) += 1;
+        }
+        seen += 1;
+        if seen >= MAX_LANG_SCAN_FILES {
+            truncated = true;
+            break;
+        }
+    }
+    let mut langs: Vec<(String, usize)> = counts.into_iter().collect();
+    langs.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    (langs, truncated)
 }
 
 // =========================== LspClient ===========================
@@ -847,6 +930,50 @@ mod tests {
         assert_eq!(ext_to_lang("ts"), Some("typescript"));
         assert_eq!(ext_to_lang("tsx"), Some("typescript"));
         assert_eq!(ext_to_lang("unknown"), None);
+    }
+
+    /// 语言统计:按扩展名聚合、跳过忽略目录/隐藏文件、按文件数降序。
+    #[test]
+    fn count_languages_aggregates_and_skips_ignored() {
+        let dir = tempfile::tempdir().unwrap();
+        let mk = |rel: &str| {
+            let p = dir.path().join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, b"").unwrap();
+        };
+        mk("src/main.rs");
+        mk("src/lib.rs");
+        mk("src/ui/mod.rs");
+        mk("web/app.ts");
+        mk("web/util.tsx");
+        mk("web/vite.config.mts");
+        // 应被跳过:忽略目录、隐藏文件、非源码扩展名
+        mk("node_modules/pkg/index.js");
+        mk("target/debug/x.rs");
+        mk(".hidden/secret.rs");
+        mk(".env.rs");
+        mk("README.md");
+
+        let (langs, truncated) = count_languages(dir.path());
+        assert!(!truncated);
+        let flat: Vec<(String, usize)> = langs;
+        assert_eq!(
+            flat,
+            vec![
+                ("rust".to_string(), 3),
+                ("typescript".to_string(), 3),
+            ],
+            "rust 与 typescript 各 3 个,同数按字母序;javascript/bash 不出现"
+        );
+    }
+
+    /// 大扩展名统一小写后再映射(Windows 下的 Main.RS)。
+    #[test]
+    fn count_languages_lowercases_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Main.RS"), b"").unwrap();
+        let (langs, _) = count_languages(dir.path());
+        assert_eq!(langs, vec![("rust".to_string(), 1)]);
     }
 
     #[test]
