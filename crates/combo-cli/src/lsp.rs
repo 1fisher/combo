@@ -122,6 +122,51 @@ pub fn resolve_spawn_program(program: &str) -> String {
         .unwrap_or_else(|| program.to_string())
 }
 
+/// 向 PATH 目录列表追加一个条目(去空白、跳过空条目、保序去重)。
+fn push_path_dir(dirs: &mut Vec<String>, dir: &str) {
+    let dir = dir.trim();
+    if !dir.is_empty() && !dirs.iter().any(|d| d == dir) {
+        dirs.push(dir.to_string());
+    }
+}
+
+/// 为 spawn 外部命令构造子进程 PATH——**spawn 时统一「加载 shell 环境」**:
+/// 按优先级合并 ①已解析命令所在目录 ②登录 shell PATH(`paths.rs::
+/// login_shell_path_cached`,GUI/launchd 进程读不到 .zshrc,探测结果缓存
+/// 一次)③进程 PATH(`ensure_gui_path` 启动时可能已合并过)④常见用户级
+/// 安装目录(`extra_bin_dirs`)。①排最前是关键:npm / typescript-language-server
+/// 等是 `#!/usr/bin/env node` 脚本,shebang 的解释器仍按 **PATH** 查找,
+/// 只把命令本身解析成绝对路径不够——受限 PATH 下报 `env: node: No such
+/// file or directory`(退出码 127);node 与 npm 通常同目录(Homebrew 的
+/// `/opt/homebrew/bin`、nvm 的版本目录),目录置首保证命中同版本解释器。
+/// 子进程再派生的进程(npm 拉起 node/git 等)同样继承该 PATH。
+pub fn spawn_path_for(program: Option<&str>) -> String {
+    let mut dirs: Vec<String> = Vec::new();
+    if let Some(parent) = program.and_then(|p| Path::new(p).parent()) {
+        push_path_dir(&mut dirs, &parent.to_string_lossy());
+    }
+    if let Some(shell) = crate::paths::login_shell_path_cached() {
+        for d in shell.split([':', ';']) {
+            push_path_dir(&mut dirs, d);
+        }
+    }
+    for d in std::env::var("PATH")
+        .unwrap_or_default()
+        .split([':', ';'])
+    {
+        push_path_dir(&mut dirs, d);
+    }
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()
+        .map(PathBuf::from);
+    for d in extra_bin_dirs(home.as_deref()) {
+        push_path_dir(&mut dirs, &d.to_string_lossy());
+    }
+    let sep = if cfg!(windows) { ";" } else { ":" };
+    dirs.join(sep)
+}
+
 // =========================== 一键安装方案 ===========================
 
 /// 某语言 LSP server 的一键安装方案(`POST /v1/lsp/install` 使用)。
@@ -390,10 +435,24 @@ impl LspClient {
                 anyhow::anyhow!("PATH 及常见安装目录中未找到 `{command}`(可先在「LSP 服务」视图检测)")
             })?
         };
+        // 子进程 PATH 补全:typescript-language-server 等是 `#!/usr/bin/env node`
+        // 脚本,shebang 解释器按 PATH 查找——GUI 受限 PATH 下需注入登录 shell
+        // PATH 与命令所在目录(node 与 server 常同目录)才能启动。经
+        // spawn_blocking 执行:登录 shell 探测首次可能耗时,不阻塞 runtime。
+        let env_path = {
+            let s = resolved.to_string_lossy().into_owned();
+            tokio::task::spawn_blocking(move || spawn_path_for(Some(&s)))
+                .await
+                .unwrap_or_default()
+        };
         let mut cmd = tokio::process::Command::new(&resolved);
         cmd.args(args);
         for (k, v) in env {
             cmd.env(k, v);
+        }
+        // 用户在 [lsp.<lang>] 的 env 里显式配置了 PATH 时尊重之
+        if !env_path.is_empty() && !env.contains_key("PATH") {
+            cmd.env("PATH", env_path);
         }
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -996,6 +1055,29 @@ mod tests {
             exe,
             "兜底目录中的命令应解析为绝对路径"
         );
+    }
+
+    /// spawn 子进程 PATH 构造:命令所在目录排最前(shebang 解释器优先命中
+    /// 同目录的同版本),且目录去重、不丢进程 PATH。
+    #[test]
+    fn spawn_path_for_puts_program_dir_first_and_dedups() {
+        let dir = tempfile::tempdir().unwrap();
+        let prog = dir.path().join("npm");
+        let p = spawn_path_for(Some(prog.to_str().unwrap()));
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        let first = p.split(sep).next().unwrap();
+        assert_eq!(
+            PathBuf::from(first),
+            dir.path(),
+            "命令所在目录应排最前: {p}"
+        );
+        assert_eq!(
+            p.split(sep).filter(|d| *d == first).count(),
+            1,
+            "目录应去重(兜底目录与命令目录重叠时不重复): {p}"
+        );
+        // 无命令时也应给出可用 PATH(登录 shell/进程 PATH/兜底目录合并)
+        assert!(!spawn_path_for(None).is_empty());
     }
 
     /// 语言统计:按扩展名聚合、跳过忽略目录/隐藏文件、按文件数降序。

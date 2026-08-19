@@ -861,7 +861,17 @@ async fn run_bash_command(
         c
     };
     cmd.current_dir(cwd);
-    for key in &["PATH", "HOME", "USER", "LANG", "LC_ALL", "LC_CTYPE"] {
+    // PATH 统一经 spawn_path_for 补全(命令所在目录 + 登录 shell PATH + 常见
+    // 安装目录兜底):GUI/launchd 启动的进程 PATH 只有系统目录,agent 执行
+    // npm/node 等会 command not found;登录 shell 探测有缓存,仅首次多一次
+    // $SHELL -ilc。PATH 不再原样透传进程环境,与 LSP 安装命令同一口径。
+    let env_path = tokio::task::spawn_blocking(|| crate::lsp::spawn_path_for(None))
+        .await
+        .unwrap_or_default();
+    if !env_path.is_empty() {
+        cmd.env("PATH", env_path);
+    }
+    for key in &["HOME", "USER", "LANG", "LC_ALL", "LC_CTYPE"] {
         if let Ok(val) = std::env::var(key) {
             cmd.env(key, val);
         }

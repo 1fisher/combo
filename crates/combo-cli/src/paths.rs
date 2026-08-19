@@ -11,6 +11,7 @@
 //!   旧目录不存在时为 no-op;同名冲突保留 mtime 较新的一份。
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// 统一配置目录:`COMBO_CONFIG_DIR` 环境变量 > `~/.config/combo`。
 pub fn default_config_dir() -> PathBuf {
@@ -182,6 +183,64 @@ fn parse_shell_path_marker(out: &str) -> Option<String> {
         .map(String::from)
 }
 
+/// 从登录 shell 解析用户完整 PATH:`$SHELL -ilc`(读 .zprofile/.zshrc)
+/// 优先,zsh 无 tty 拒绝 `-i` 等场景回落 `-lc`。echo 用单引号包住标记,
+/// 让 `$PATH` 由 shell 展开后输出;只认 `__COMBO_PATH__=` 标记行。
+/// 解析失败返回 None(调用方静默放弃)。
+fn query_login_shell_path() -> Option<String> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| {
+        if cfg!(target_os = "macos") {
+            "/bin/zsh".into()
+        } else {
+            "/bin/bash".into()
+        }
+    });
+    query_login_shell_path_from(&shell)
+}
+
+/// `query_login_shell_path` 的实现,shell 路径显式注入(测试用,避免改写
+/// 进程 `SHELL` 环境变量与并行测试竞态——bash 工具等也读 `$SHELL`)。
+fn query_login_shell_path_from(shell: &str) -> Option<String> {
+    let probe = "echo '__COMBO_PATH__=$PATH'";
+    let run = |interactive: bool| {
+        let mut cmd = std::process::Command::new(shell);
+        if interactive {
+            cmd.arg("-ilc");
+        } else {
+            cmd.arg("-lc");
+        }
+        cmd.arg(probe).output()
+    };
+    // 先交互式(覆盖 .zshrc);zsh 无 tty 拒绝 -i 等场景回落 -l
+    let out = match run(true) {
+        Ok(o) if o.status.success() => Some(String::from_utf8_lossy(&o.stdout).into_owned()),
+        _ => None,
+    }
+    .or_else(|| match run(false) {
+        Ok(o) if o.status.success() => Some(String::from_utf8_lossy(&o.stdout).into_owned()),
+        _ => None,
+    })?;
+    parse_shell_path_marker(&out)
+}
+
+/// 登录 shell PATH 的进程内缓存查询,供 spawn 外部命令时「加载 shell 环境」
+/// (见 `lsp::spawn_path_for`)。进程 PATH 已含 `$HOME` 下目录(终端启动,
+/// 或 `ensure_gui_path` 启动时已合并)时视为完整,直接跳过查询、避免每次
+/// spawn 都拉起 shell;查询失败返回 None,由其余来源(进程 PATH + 兜底
+/// 目录)兜住。
+pub fn login_shell_path_cached() -> Option<String> {
+    static CACHED: OnceLock<Option<String>> = OnceLock::new();
+    CACHED
+        .get_or_init(|| {
+            let current = std::env::var("PATH").unwrap_or_default();
+            if path_has_home_entry(&current) {
+                return None;
+            }
+            query_login_shell_path()
+        })
+        .clone()
+}
+
 /// GUI(Finder/Dock/launchd)启动的进程 PATH 只有系统目录,不继承用户
 /// shell 的 .zshrc/.zprofile——`~/.cargo/bin`、`/opt/homebrew/bin` 等都
 /// 不在,导致 LSP 检测「未找到」、npm/rustup 等命令无法 spawn。
@@ -190,7 +249,8 @@ fn parse_shell_path_marker(out: &str) -> Option<String> {
 /// 从登录 shell(`$SHELL -ilc`)解析用户完整 PATH 并合并(shell 顺序
 /// 优先,进程独有目录追加尾部)。终端启动时 PATH 已完整,检测即跳过、
 /// 零开销。**必须在启动早期(单线程阶段)调用**——内部修改进程环境
-/// 变量。解析失败静默放弃,由 `lsp::find_executable` 的目录兜底兜住。
+/// 变量。解析失败静默放弃,由 `lsp::find_executable` 的目录兜底兜住;
+/// spawn 外部命令时的按需补全走 `login_shell_path_cached()`。
 pub fn ensure_gui_path() -> bool {
     #[cfg(windows)]
     {
@@ -203,39 +263,7 @@ pub fn ensure_gui_path() -> bool {
         if path_has_home_entry(&current) {
             return false;
         }
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| {
-            if cfg!(target_os = "macos") {
-                "/bin/zsh".into()
-            } else {
-                "/bin/bash".into()
-            }
-        });
-        // -l 登录 shell(读 .zprofile/.bash_profile),-i 交互(读 .zshrc,
-        // 大多数用户 PATH 配在这里);echo 用单引号包住标记,让 $PATH 由
-        // shell 展开后输出
-        let probe = "echo '__COMBO_PATH__=$PATH'";
-        let run = |interactive: bool| {
-            let mut cmd = std::process::Command::new(&shell);
-            if interactive {
-                cmd.arg("-ilc");
-            } else {
-                cmd.arg("-lc");
-            }
-            cmd.arg(probe).output()
-        };
-        // 先交互式(覆盖 .zshrc);zsh 无 tty 拒绝 -i 等场景回落 -l
-        let out = match run(true) {
-            Ok(o) if o.status.success() => Some(String::from_utf8_lossy(&o.stdout).into_owned()),
-            _ => None,
-        }
-        .or_else(|| match run(false) {
-            Ok(o) if o.status.success() => Some(String::from_utf8_lossy(&o.stdout).into_owned()),
-            _ => None,
-        });
-        let Some(out) = out else {
-            return false;
-        };
-        let Some(shell_path) = parse_shell_path_marker(&out) else {
+        let Some(shell_path) = query_login_shell_path() else {
             return false;
         };
         if !path_has_home_entry(&shell_path) {
@@ -294,6 +322,27 @@ mod tests {
         );
         assert!(parse_shell_path_marker("no marker here").is_none());
         assert!(parse_shell_path_marker("__COMBO_PATH__=\r\n").is_none(), "空 PATH 不算");
+    }
+
+    /// 登录 shell PATH 查询:shell 输出标记行时能正确解析(spawn 时按需
+    /// 「加载 shell 环境」的探测基础)。shell 路径直接注入,不改写进程
+    /// SHELL 环境变量(bash 工具测试并行读 $SHELL,改写会互相污染)。
+    #[cfg(unix)]
+    #[test]
+    fn query_login_shell_path_parses_marker_from_fake_shell() {
+        let dir = tempfile::tempdir().unwrap();
+        let fake = dir.path().join("fakesh");
+        fs::write(
+            &fake,
+            "#!/bin/sh\necho __COMBO_PATH__=/opt/homebrew/bin:/usr/bin:/bin\n",
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let got = query_login_shell_path_from(&fake.to_string_lossy());
+        assert_eq!(got.as_deref(), Some("/opt/homebrew/bin:/usr/bin:/bin"));
     }
 
     #[test]

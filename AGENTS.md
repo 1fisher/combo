@@ -531,7 +531,21 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   启动的进程不读 `.zshrc`,PATH 缺 `$HOME` 下目录时从 `$SHELL -ilc`
   解析用户完整 PATH 合并(shell 顺序在前,进程独有目录追加;VS Code
   shell-env 同思路),`~/.cargo/bin`、`/opt/homebrew/bin` 等用户目录由此
-  进入进程 PATH——与 find_executable 兜底互为双保险。REST(`serve.rs`,`AppState.lsp_install` 共享状态,
+  进入进程 PATH——与 find_executable 兜底互为双保险。**spawn 时统一注入
+  shell 环境**(`lsp.rs::spawn_path_for` 构造子进程 PATH = 已解析命令所在
+  目录 → 登录 shell PATH(`paths.rs::login_shell_path_cached`,`$SHELL -ilc`
+  探测、OnceLock 缓存、进程 PATH 已含 HOME 目录时跳过)→ 进程 PATH →
+  `extra_bin_dirs` 兜底):只把命令解析成绝对路径**不够**——npm /
+  typescript-language-server 等是 `#!/usr/bin/env node` 脚本,shebang 解释器
+  仍按 **PATH** 查找,受限 PATH 下报 `env: node: No such file or directory`
+  (退出码 127);命令所在目录排最前,保证 node 与 npm 同目录(Homebrew
+  `/opt/homebrew/bin`、nvm 版本目录)命中同版本解释器,子进程派生的
+  node/git 也继承。三处 spawn 统一走该口径:`run_lsp_install`(安装命令)、
+  `LspClient::start`(LSP server 子进程,`[lsp.<lang>]` env 显式配了 PATH
+  时尊重之)、`tools.rs::run_bash_command`(agent bash 工具,不再原样透传
+  进程 PATH)。探测实现为 `paths.rs::query_login_shell_path_from`(shell
+  路径可注入,测试不改写进程 `$SHELL`——bash 工具测试并行读它,改写会
+  互相污染)。REST(`serve.rs`,`AppState.lsp_install` 共享状态,
   同一时刻至多一个任务):`GET /v1/lsp/plans`(方案列表,`install_command`
   为解析后的实际命令,null=本机缺包管理器)、`POST /v1/lsp/install`
   (`{name}` 后台 spawn 执行安装命令,运行中再发起 409;Windows 上 npm 等

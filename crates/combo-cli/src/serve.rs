@@ -2277,6 +2277,16 @@ async fn run_lsp_install(
     // (Homebrew `/opt/homebrew/bin` 等),GUI 启动的进程 PATH 只有系统目录时,
     // 直接 spawn 裸命令会 os error 2——与检测同口径,先解析再启动。
     let program = crate::lsp::resolve_spawn_program(&argv[0]);
+    // 子进程 PATH 也要补全:npm 等是 `#!/usr/bin/env node` 脚本,shebang 解释器
+    // 按 PATH 查找,受限 PATH 下 node 不可见 → 退出码 127(env: node: No such
+    // file or directory)。注入登录 shell PATH + 命令所在目录(node 与 npm 常同
+    // 目录,Homebrew/nvm 皆然);npm 派生的子进程(node/git 等)也继承该 PATH。
+    let env_path = {
+        let p = program.clone();
+        tokio::task::spawn_blocking(move || crate::lsp::spawn_path_for(Some(&p)))
+            .await
+            .unwrap_or_default()
+    };
     let mut command = if cfg!(windows) {
         let mut c = tokio::process::Command::new("cmd");
         c.arg("/C").arg(&program).args(&argv[1..]);
@@ -2286,6 +2296,9 @@ async fn run_lsp_install(
         c.args(&argv[1..]);
         c
     };
+    if !env_path.is_empty() {
+        command.env("PATH", env_path);
+    }
     let child = command
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
