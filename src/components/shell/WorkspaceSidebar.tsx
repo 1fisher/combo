@@ -11,6 +11,7 @@ import {
   GripVertical,
   Hash,
   ListFilter,
+  Loader2,
   Maximize2,
   MessageCirclePlus,
   MoreHorizontal,
@@ -149,6 +150,35 @@ function ProjectTokenBadge({ wsId }: { wsId: string }) {
     queryFn: () => listSessions(wsId),
   });
   return <WorkspaceTokenBadge sessions={q.data} />;
+}
+
+/**
+ * 「项目」视图行的运行中标记:该项目下有任务正在处理时显示旋转图标。
+ * - 服务端 is_busy 为准(会话列表查询);非当前项目收不到 SSE 事件,
+ *   存在 busy 会话时短间隔轮询,让后台结束的 run 在几秒内熄灭标记。
+ * - 当前项目叠加本地 SSE 运行态:run 启动后会话列表尚未 refetch,
+ *   本地 runs 先行点亮,无额外延迟。
+ */
+function ProjectBusyIndicator({ wsId }: { wsId: string }) {
+  const q = useQuery({
+    queryKey: ['sessions', wsId],
+    queryFn: () => listSessions(wsId),
+    refetchInterval: (query) =>
+      (query.state.data ?? []).some((s) => s.is_busy === true) ? 5000 : false,
+  });
+  const sessions = q.data;
+  const serverBusy = (sessions ?? []).some((s) => s.is_busy === true);
+  // selector 返回布尔:仅当该项目任一会话的本地 running 翻转时重渲染
+  const localRunning = useAgentStore((st) =>
+    (sessions ?? []).some((s) => st.bySession[s.id]?.run?.status === 'running'),
+  );
+  if (!serverBusy && !localRunning) return null;
+  return (
+    <Loader2
+      className="size-3 shrink-0 animate-spin text-brand"
+      aria-label="该项目有任务正在处理中"
+    />
+  );
 }
 
 /** 可折叠分区:标题 + 折叠箭头 + 悬停操作(+ 等) */
@@ -738,6 +768,7 @@ export function WorkspaceSidebar({
                       <span className="min-w-0 flex-1 truncate font-medium" title={w.path}>
                         {projectName(w)}
                       </span>
+                      <ProjectBusyIndicator wsId={w.id} />
                       <ProjectTokenBadge wsId={w.id} />
                       <button
                         onClick={(e) => {

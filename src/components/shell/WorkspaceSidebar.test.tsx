@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
+import { useAgentStore } from '../../stores/agentStore';
 import { isTauri } from '../../lib/connection';
 import { open } from '@tauri-apps/plugin-dialog';
 import { changeWorkspacePath, createWorkspace } from '../../lib/api';
@@ -210,5 +211,24 @@ describe('WorkspaceSidebar', () => {
     expect(await screen.findByRole('button', { name: '项目A' })).toBeTruthy();
     expect(await screen.findByText('A的任务')).toBeTruthy();
     expect(screen.queryByText('B的任务')).toBeNull();
+  });
+
+  it('shows a running indicator on project rows with a busy session', async () => {
+    // 项目A 有任务在跑(is_busy),项目B 全空闲 → 仅项目A 行点亮标记
+    sessionsByWs.set('w1', [
+      { id: 's1', title: 'A的任务', prompt_tokens: 0, completion_tokens: 0, cost: 0, created_at: 1, is_busy: true },
+    ]);
+    sessionsByWs.set('w2', [
+      { id: 's2', title: 'B的任务', prompt_tokens: 0, completion_tokens: 0, cost: 0, created_at: 1, is_busy: false },
+    ]);
+    useAgentStore.setState({ bySession: {} });
+    wrap();
+    const rowA = (await projSection().findByText('项目A')).closest('div')!;
+    // 徽章数据来自 sessions 查询(异步),等标记出现
+    await waitFor(() =>
+      expect(rowA.querySelector('[aria-label="该项目有任务正在处理中"]')).not.toBeNull(),
+    );
+    const rowB = projSection().getByText('项目B').closest('div')!;
+    expect(rowB.querySelector('[aria-label="该项目有任务正在处理中"]')).toBeNull();
   });
 });

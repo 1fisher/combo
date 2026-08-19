@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConversationList } from './ConversationList';
 import { useAgentStore } from '../../stores/agentStore';
 
-const sessions: { id: string; title: string; created_at: number }[] = [
+const sessions: { id: string; title: string; created_at: number; is_busy?: boolean }[] = [
   { id: 's1', title: '会话一', created_at: 1_700_000_000 },
   { id: 's2', title: '会话二', created_at: 1_700_000_100 },
 ];
@@ -63,5 +63,36 @@ describe('ConversationList', () => {
     await userEvent.clear(input);
     await userEvent.type(input, '新名称{Enter}');
     expect(sessions[0].title).toBe('新名称');
+  });
+
+  it('marks busy sessions with a running indicator (server is_busy & local run state)', async () => {
+    sessions.length = 0;
+    sessions.push(
+      { id: 'b1', title: '服务端运行中', created_at: 1_700_000_000, is_busy: true },
+      { id: 'b2', title: '本地运行中', created_at: 1_700_000_100 },
+      { id: 'b3', title: '空闲会话', created_at: 1_700_000_200 },
+    );
+    useAgentStore.setState({
+      activeWorkspaceId: 'w1',
+      activeSessionId: null,
+      bySession: {
+        b2: { messages: [], queued: false, run: { runId: 'r1', status: 'running' } },
+      },
+    });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <ConversationList />
+      </QueryClientProvider>
+    );
+    await screen.findByText('空闲会话');
+    // 服务端 is_busy 与本地 running 各自点亮所在行
+    const busyRows = screen.getAllByTitle('任务正在处理中');
+    expect(busyRows).toHaveLength(2);
+    expect(busyRows.some((r) => r.textContent?.includes('服务端运行中'))).toBe(true);
+    expect(busyRows.some((r) => r.textContent?.includes('本地运行中'))).toBe(true);
+    // 空闲会话行不带标记
+    const idleRow = screen.getByText('空闲会话').closest('div')!;
+    expect(idleRow.getAttribute('title')).toBeNull();
   });
 });

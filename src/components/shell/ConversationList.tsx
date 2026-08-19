@@ -62,6 +62,7 @@ export function ConversationList({
           key={s.id}
           session={s}
           isActive={activeSessionId === s.id}
+          isBusy={s.is_busy === true}
           onActivate={() => {
             void activate(s.id);
             onNavigate?.();

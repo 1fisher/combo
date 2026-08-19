@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { MessageSquare, Pencil, Trash2 } from 'lucide-react';
+import { Loader2, MessageSquare, Pencil, Trash2 } from 'lucide-react';
 import type { Api } from '../../lib/api/types';
+import { useAgentStore } from '../../stores/agentStore';
 import { cn } from '../../lib/utils';
 
 function formatTime(secs: number | undefined): string {
@@ -34,6 +35,8 @@ interface SessionRowProps {
   rowClassName?: string;
   showTime?: boolean;
   iconClassName?: string;
+  /** 服务端上报的运行态(会话列表 is_busy);与本地 SSE 运行态取或 */
+  isBusy?: boolean;
 }
 
 export function SessionRow({
@@ -45,10 +48,16 @@ export function SessionRow({
   rowClassName,
   showTime = true,
   iconClassName,
+  isBusy = false,
 }: SessionRowProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(session.title);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  // 本地 SSE 运行态:selector 返回布尔,仅该会话 running 状态翻转时重渲染本行
+  const localRunning = useAgentStore(
+    (s) => s.bySession[session.id]?.run?.status === 'running',
+  );
+  const busy = isBusy || localRunning;
 
   useEffect(() => {
     if (!ctxMenu) return;
@@ -90,19 +99,27 @@ export function SessionRow({
           isActive && 'bg-surface-hover text-foreground',
           rowClassName,
         )}
+        title={busy ? '任务正在处理中' : undefined}
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
           setCtxMenu({ x: e.clientX, y: e.clientY });
         }}
       >
-        <MessageSquare
-          className={cn(
-            'size-3.5 shrink-0',
-            isActive ? 'text-foreground' : 'text-foreground-subtlest',
-            iconClassName,
-          )}
-        />
+        {busy ? (
+          <Loader2
+            className={cn('size-3.5 shrink-0 animate-spin text-brand', iconClassName)}
+            aria-label="任务正在处理中"
+          />
+        ) : (
+          <MessageSquare
+            className={cn(
+              'size-3.5 shrink-0',
+              isActive ? 'text-foreground' : 'text-foreground-subtlest',
+              iconClassName,
+            )}
+          />
+        )}
         {editing ? (
           <input
             autoFocus
