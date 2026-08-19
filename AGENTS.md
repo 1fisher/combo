@@ -267,8 +267,9 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   共用)。`on_finish: Option<AgentFinishCallback>` 在后台 run 真正结束时调用
   (reason: end_turn|cancelled|error + 友好错误文案),自动化任务据此落运行结果;
   普通对话传 None。
-- **本地语音识别(`asr.rs`,Composer 语音输入)**:输入框话筒按钮的听写服务,
-  完全本地离线。**模型可选**(`AsrModel`,配置 `[asr] model` 或设置界面
+- **本地语音识别(`asr.rs`,Composer 语音输入)**:输入框话筒按钮的听写服务
+  (快捷键 ⌘/Ctrl+I 与按钮同路径 `dictation` `toggle`,`Composer.tsx` 全局
+  keydown,Shift/Alt 变体让位浏览器开发者工具 ⌘⇧I),完全本地离线。**模型可选**(`AsrModel`,配置 `[asr] model` 或设置界面
   「语音识别模型」切换,`POST /v1/transcribe/model` 运行时切换并写入配置
   跨重启保留;模型文件按 id 隔离在 `<数据目录>/models/<id>/`;默认
   `sense-voice`):

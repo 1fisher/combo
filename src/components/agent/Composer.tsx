@@ -599,6 +599,21 @@ export function Composer({
     onChange(appendTranscript(value, text));
     requestAnimationFrame(() => areaRef.current?.focus());
   });
+  // ⌘/Ctrl+I 开关语音输入(与话筒按钮同路径)。keydown 同为用户手势,开启
+  // 提示音可在手势内同步播放解锁 autoplay;Shift/Alt 变体让位(浏览器/系统组合)
+  const dictationToggleRef = useRef(dictation.toggle);
+  dictationToggleRef.current = dictation.toggle;
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+      if (e.key.toLowerCase() !== 'i') return;
+      if (e.defaultPrevented) return; // 已被其他组件(如编辑器)处理的按键跳过
+      e.preventDefault();
+      dictationToggleRef.current();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   // 录音中显示在输入框末尾的预输入文本:已确认(分段固化)部分稳定保留,
   // 推断部分实时修正(说话中不会整段消失);停止后清空,由 onText 追加 final
   const asrPending =
@@ -1113,7 +1128,7 @@ export function Composer({
                           ? `停止并完成识别(${dictation.seconds}s)`
                           : dictation.state === 'transcribing'
                             ? '识别中…'
-                            : '语音输入'
+                            : '语音输入 (⌘/Ctrl+I)'
                       }
                     >
                       {dictation.state === 'transcribing' ? (

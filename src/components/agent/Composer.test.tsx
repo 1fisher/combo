@@ -5,6 +5,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Composer } from './Composer';
 import { useAgentStore } from '../../stores/agentStore';
 
+// ⌘/Ctrl+I 快捷键测试用:捕获 dictation.toggle 调用(vi.mock 会被提升,需 hoisted)
+const { dictationToggle } = vi.hoisted(() => ({ dictationToggle: vi.fn() }));
+
 // 与模型菜单渲染无关的 hooks 全部打桩,专注验证「不同 provider 同名模型」的选中态
 vi.mock('../../hooks/useMention', () => ({
   useMention: () => ({
@@ -27,6 +30,21 @@ vi.mock('../../hooks/useSkills', () => ({
 
 vi.mock('../../hooks/useSessions', () => ({
   useSessions: () => ({ sessions: [], create: vi.fn() }),
+}));
+
+// 听写 hook 打桩:快捷键测试只关心 toggle 是否被触发
+vi.mock('../../hooks/useDictation', () => ({
+  useDictation: () => ({
+    state: 'idle',
+    seconds: 0,
+    confirmedText: '',
+    partialText: '',
+    modelProgress: null,
+    error: '',
+    errorAction: null,
+    toggle: dictationToggle,
+    cancel: vi.fn(),
+  }),
 }));
 
 vi.mock('../../hooks/useAgentModel', () => ({
@@ -243,5 +261,55 @@ describe('Composer 模型选择', () => {
     expect(menu.style.bottom).toBe(`${window.innerHeight - 600 + 8}px`);
     // 菜单右缘仍在视口内(左侧 8 + 宽 288)
     expect(menu.getBoundingClientRect().right).toBeLessThanOrEqual(window.innerWidth - 8);
+  });
+});
+
+/** 在 window 上派发 ⌘(macOS)/Ctrl 组合键 */
+function pressCombo(key: string, opts: KeyboardEventInit = {}) {
+  const ev = new KeyboardEvent('keydown', {
+    key,
+    metaKey: true,
+    bubbles: true,
+    cancelable: true,
+    ...opts,
+  });
+  window.dispatchEvent(ev);
+  return ev;
+}
+
+describe('Composer 语音输入快捷键(⌘/Ctrl+I)', () => {
+  beforeEach(() => {
+    dictationToggle.mockClear();
+  });
+
+  it('⌘I / Ctrl+I 触发语音输入开关', () => {
+    renderComposer();
+    const ev = pressCombo('i');
+    expect(ev.defaultPrevented).toBe(true);
+    expect(dictationToggle).toHaveBeenCalledTimes(1);
+
+    const ctrlEv = pressCombo('i', { metaKey: false, ctrlKey: true });
+    expect(ctrlEv.defaultPrevented).toBe(true);
+    expect(dictationToggle).toHaveBeenCalledTimes(2);
+  });
+
+  it('Shift/Alt 变体与无修饰键不触发(让位浏览器开发者工具 ⌘⇧I 等)', () => {
+    renderComposer();
+    expect(pressCombo('i', { shiftKey: true }).defaultPrevented).toBe(false);
+    expect(pressCombo('i', { altKey: true }).defaultPrevented).toBe(false);
+    expect(pressCombo('i', { metaKey: false }).defaultPrevented).toBe(false);
+    expect(pressCombo('k').defaultPrevented).toBe(false);
+    expect(dictationToggle).not.toHaveBeenCalled();
+  });
+
+  it('已被其他组件处理的按键(defaultPrevented)不重复触发', () => {
+    renderComposer();
+    // 先挂一个捕获阶段监听抢先 preventDefault,模拟编辑器等组件已处理
+    const swallow = (e: KeyboardEvent) => e.preventDefault();
+    window.addEventListener('keydown', swallow, { capture: true });
+    const ev = pressCombo('i');
+    window.removeEventListener('keydown', swallow, { capture: true });
+    expect(ev.defaultPrevented).toBe(true);
+    expect(dictationToggle).not.toHaveBeenCalled();
   });
 });

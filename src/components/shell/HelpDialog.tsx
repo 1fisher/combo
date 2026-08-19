@@ -20,6 +20,7 @@ const SHORTCUTS: { keys: string[]; label: string }[] = [
   { keys: ['⌘', '⇧', 'G'], label: '知识图谱' },
   { keys: ['Enter'], label: '发送消息' },
   { keys: ['Shift', 'Enter'], label: '消息内换行' },
+  { keys: ['⌘', 'I'], label: '语音输入' },
   { keys: ['⌘', 'F'], label: '文件内搜索(编辑器视图)' },
   { keys: ['⌘', '⇧', 'F'], label: '跨文件内容搜索(编辑器视图)' },
   { keys: ['⌘', 'W'], label: '关闭当前文件(编辑器视图)' },
