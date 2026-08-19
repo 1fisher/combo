@@ -321,7 +321,7 @@ function AppShellInner() {
                 {workspaceId ? (
                   paneMounted.editor && (
                     <Suspense fallback={<PanelLoading />}>
-                      <EditorPane workspaceId={workspaceId} />
+                      <EditorPane workspaceId={workspaceId} isActive={view === 'editor'} />
                     </Suspense>
                   )
                 ) : (

@@ -93,6 +93,10 @@ pub fn run() {
             if let Err(e) = tray::init(app.handle()) {
                 eprintln!("系统托盘初始化失败: {e:?}");
             }
+            // macOS:替换默认应用菜单,去掉「关闭窗口 ⌘W」,把按键留给前端
+            // (前端编辑器视图用 ⌘W 关闭当前文件)
+            #[cfg(target_os = "macos")]
+            tray::init_app_menu(app.handle());
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 init_backend(&handle).await;

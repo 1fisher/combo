@@ -48,8 +48,15 @@ function fileUrl(workspaceId: string, path: string): string {
 /**
  * 右侧编辑器面板:文件目录树 / Git 面板 + 打开文件 tabs + 行号 + 编辑器 + 保存。
  * 移动端下文件/Git 面板变为从左侧滑出的抽屉,编辑器全宽显示。
+ *
+ * 快捷键(仅编辑器视图激活时生效,见 active prop):
+ * - ⌘/Ctrl+S 保存当前文件
+ * - ⌘/Ctrl+F 当前文件内搜索(markdown 预览时自动切到编辑模式再打开面板)
+ * - ⌘/Ctrl+Shift+F 跨文件内容搜索(聚焦文件树搜索框)
+ * - ⌘/Ctrl+W 关闭当前文件(浏览器会保留 ⌘W 关标签页,桌面端已移除菜单项可拦截)
+ * - ⌘/Ctrl+Alt+←/→ 在打开的文件 tab 间切换
  */
-export function EditorPane({ workspaceId }: { workspaceId: string }) {
+export function EditorPane({ workspaceId, isActive = true }: { workspaceId: string; isActive?: boolean }) {
   const openFiles = useEditorStore((s) => s.openFiles);
   const activePath = useEditorStore((s) => s.activePath);
   const setActive = useEditorStore((s) => s.setActive);
@@ -79,6 +86,10 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
   const [highlightLine, setHighlightLine] = useState<number | null>(null);
   /** 编辑器视图引用(用于打开文件内搜索面板) */
   const editorViewRef = useRef<EditorView | null>(null);
+  /** 待打开搜索面板标记:markdown 预览切换到编辑模式后,等编辑器就绪再打开 */
+  const pendingSearchRef = useRef(false);
+  /** 聚焦文件树搜索框信号(递增触发 FileExplorer 聚焦) */
+  const [searchFocusSignal, setSearchFocusSignal] = useState(0);
 
   /** 文件/Git 侧边栏宽度(桌面端可拖拽) */
   const [fileSidebarW, setFileSidebarW] = useState(FILE_SIDEBAR_DEFAULT);
@@ -180,17 +191,81 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
     }
   }
 
-  // Cmd/Ctrl+S 保存
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
-        e.preventDefault();
-        void save();
-      }
+  /** 聚焦文件树搜索框(git 视图时先切回文件树;移动端同步展开抽屉) */
+  const focusFileTreeSearch = useCallback(() => {
+    setSidebarMode('files');
+    setSidebarOpen(true);
+    setSearchFocusSignal((s) => s + 1);
+  }, []);
+
+  /** 打开当前文件内搜索面板;markdown 预览时先切编辑模式,非文本文件退化为跨文件搜索 */
+  const openInFileSearch = useCallback(() => {
+    if (!active || active.kind !== 'text') {
+      focusFileTreeSearch();
+      return;
     }
+    if (isMarkdown(active.name) && mdPreview) {
+      // 预览模式没有编辑器实例:先切到编辑模式,等 onEditorReady 后再打开面板
+      pendingSearchRef.current = true;
+      setMdPreview(false);
+      return;
+    }
+    const view = editorViewRef.current;
+    if (view && view.dom.isConnected) {
+      view.focus();
+      openSearchPanel(view);
+    }
+  }, [active, mdPreview, focusFileTreeSearch]);
+
+  // 编辑器视图快捷键(经 ref 引用最新渲染闭包,监听仅在视图激活时挂载)
+  const shortcutRef = useRef<(e: KeyboardEvent) => void>(() => {});
+  shortcutRef.current = (e: KeyboardEvent) => {
+    if (!(e.metaKey || e.ctrlKey)) return;
+    const key = e.key.toLowerCase();
+    // ⌘/Ctrl+F 文件内搜索 / ⌘/Ctrl+Shift+F 跨文件内容搜索
+    if (key === 'f') {
+      e.preventDefault();
+      if (e.shiftKey) focusFileTreeSearch();
+      else openInFileSearch();
+      return;
+    }
+    // ⌘/Ctrl+W 关闭当前文件(从 store 实时读取,避免连续按键时闭包过期)
+    if (key === 'w') {
+      const cur = useEditorStore.getState().activePath;
+      if (cur) {
+        e.preventDefault();
+        closeFile(cur);
+      }
+      return;
+    }
+    // ⌘/Ctrl+S 保存
+    if (key === 's') {
+      e.preventDefault();
+      void save();
+      return;
+    }
+    // ⌘/Ctrl+Alt+←/→ 在打开的文件 tab 间切换(同样实时读取)
+    if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+      const st = useEditorStore.getState();
+      if (st.openFiles.length > 1 && st.activePath) {
+        const idx = st.openFiles.findIndex((f) => f.path === st.activePath);
+        if (idx >= 0) {
+          e.preventDefault();
+          const delta = e.key === 'ArrowRight' ? 1 : -1;
+          const next = st.openFiles[(idx + delta + st.openFiles.length) % st.openFiles.length];
+          setActive(next.path);
+        }
+      }
+      return;
+    }
+  };
+
+  useEffect(() => {
+    if (!isActive) return;
+    const onKey = (e: KeyboardEvent) => shortcutRef.current(e);
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  });
+  }, [isActive]);
 
   // git 模式下右侧显示 diff 或 graph;否则显示编辑器
   const showDiff = sidebarMode === 'git' && gitSubView === 'changes' && diffPath !== null;
@@ -234,6 +309,7 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
               onOpenFile={handleOpenFile}
               onError={setLoadError}
               onSearchQueryChange={setHighlightQuery}
+              focusSearchSignal={searchFocusSignal}
             />
           </div>
         ) : (
@@ -397,13 +473,16 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
                         />
                       )}
                       <span className="max-w-36 truncate">{f.name}</span>
-                      <X
-                        className="h-3 w-3 shrink-0 opacity-60 transition-opacity hover:opacity-100 md:opacity-0 md:group-hover:opacity-60"
+                      <span
+                        className="flex shrink-0"
+                        title="关闭文件 (⌘/Ctrl+W)"
                         onClick={(e) => {
                           e.stopPropagation();
                           closeFile(f.path);
                         }}
-                      />
+                      >
+                        <X className="h-3 w-3 shrink-0 opacity-60 transition-opacity hover:opacity-100 md:opacity-0 md:group-hover:opacity-60" />
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -438,13 +517,10 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
                 {/* 文件内搜索按钮 */}
                 <div className="flex shrink-0 items-center border-l px-1">
                   <button
-                    onClick={() => {
-                      const view = editorViewRef.current;
-                      if (view) openSearchPanel(view);
-                    }}
+                    onClick={openInFileSearch}
                     className="flex items-center justify-center rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                     aria-label="文件内搜索"
-                    title="文件内搜索 (⌘F)"
+                    title="文件内搜索 (⌘/Ctrl+F)"
                   >
                     <Search className="h-3.5 w-3.5" />
                   </button>
@@ -476,6 +552,12 @@ export function EditorPane({ workspaceId }: { workspaceId: string }) {
                       highlightLine={highlightLine}
                       onEditorReady={(view) => {
                         editorViewRef.current = view;
+                        // markdown 预览 → 编辑模式的切换完成,补发搜索面板
+                        if (pendingSearchRef.current) {
+                          pendingSearchRef.current = false;
+                          view.focus();
+                          openSearchPanel(view);
+                        }
                       }}
                     />
                   )}

@@ -25,6 +25,8 @@ interface Props {
   onOpenFile: (path: string, name: string, line?: number) => void;
   onError: (msg: string) => void;
   onSearchQueryChange?: (query: string) => void;
+  /** 聚焦搜索框信号:每次递增时把焦点移入文件内容搜索框(供 ⌘/Ctrl+Shift+F 快捷键) */
+  focusSearchSignal?: number;
 }
 
 interface SearchOptions {
@@ -40,11 +42,18 @@ const MAX_RESULTS = 500;
  * 懒加载的目录树:目录首次展开时才向后端请求子项。
  * 支持文件内容搜索(正则/区分大小写/完整单词)和右键目录搜索。
  */
-export function FileExplorer({ workspaceId, onOpenFile, onError, onSearchQueryChange }: Props) {
+export function FileExplorer({
+  workspaceId,
+  onOpenFile,
+  onError,
+  onSearchQueryChange,
+  focusSearchSignal,
+}: Props) {
   const [byDir, setByDir] = useState<Record<string, Api.FileEntry[]>>({});
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [menu, setMenu] = useState<{ x: number; y: number; entry: Api.FileEntry } | null>(null);
   const addItem = useContextStore((s) => s.addItem);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // 搜索状态
   const [searchQuery, setSearchQuery] = useState('');
@@ -70,6 +79,12 @@ export function FileExplorer({ workspaceId, onOpenFile, onError, onSearchQueryCh
     // 切换项目时重新加载根目录
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId]);
+
+  // 外部请求聚焦搜索框(⌘/Ctrl+Shift+F;signal 递增触发,挂载时的初始值 0 不触发)
+  useEffect(() => {
+    if (focusSearchSignal) searchInputRef.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusSearchSignal]);
 
   // debounce 搜索输入
   useEffect(() => {
@@ -134,10 +149,7 @@ export function FileExplorer({ workspaceId, onOpenFile, onError, onSearchQueryCh
   function searchInDir(dir: string) {
     setSearchDir(dir);
     // 如果搜索框为空,聚焦搜索框让用户输入
-    if (!searchQuery) {
-      const input = document.querySelector<HTMLInputElement>('input[placeholder*="搜索文件内容"]');
-      input?.focus();
-    }
+    if (!searchQuery) searchInputRef.current?.focus();
   }
 
   function contextMenuItems(entry: Api.FileEntry): MenuItem[] {
@@ -355,9 +367,11 @@ export function FileExplorer({ workspaceId, onOpenFile, onError, onSearchQueryCh
           <div className="relative flex-1">
             <Search className="pointer-events-none absolute left-2 top-1/2 size-3 -translate-y-1/2 text-muted-foreground" />
             <input
+              ref={searchInputRef}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="搜索文件内容…"
+              data-file-search
               className="h-7 w-full rounded-md border border-input-border bg-background pl-7 pr-6 text-xs outline-none placeholder:text-foreground-subtlest focus-visible:border-input-border-focused"
             />
             {searchQuery && (

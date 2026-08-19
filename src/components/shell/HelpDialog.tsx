@@ -15,6 +15,11 @@ const SHORTCUTS: { keys: string[]; label: string }[] = [
   { keys: ['⌘', 'K'], label: '搜索项目或任务' },
   { keys: ['Enter'], label: '发送消息' },
   { keys: ['Shift', 'Enter'], label: '消息内换行' },
+  { keys: ['⌘', 'F'], label: '文件内搜索(编辑器视图)' },
+  { keys: ['⌘', '⇧', 'F'], label: '跨文件内容搜索(编辑器视图)' },
+  { keys: ['⌘', 'W'], label: '关闭当前文件(编辑器视图)' },
+  { keys: ['⌘', 'S'], label: '保存当前文件(编辑器视图)' },
+  { keys: ['⌘', '⌥', '←/→'], label: '切换打开的文件(编辑器视图)' },
 ];
 
 const TIPS: { icon: string; title: string; desc: string }[] = [
