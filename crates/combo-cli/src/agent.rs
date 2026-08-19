@@ -253,12 +253,39 @@ impl AskConfig {
     }
 }
 
+/// 每次发往 LLM 的请求在 tracing 日志标记 provider/模型 ID,便于调试核对
+/// (例如确认是否走了 opencode-zen 的 deepseek-v4-flash-free)。
+/// anthropic/google 走官方 SDK 默认 endpoint,显示占位;不打印 API key。
+fn llm_endpoint_for_log(cfg: &AskConfig, ptype: &str) -> String {
+    match ptype {
+        "anthropic" => "https://api.anthropic.com(官方 SDK 默认)".to_string(),
+        "google" => "https://generativelanguage.googleapis.com(官方 SDK 默认)".to_string(),
+        _ => cfg.endpoint(),
+    }
+}
+
+/// 在 tracing 日志输出本次 LLM 请求的模型标识(provider id + model + endpoint)。
+/// 所有 LLM 调用入口(ask_answer / stream_run / chat_loop)统一调用,
+/// 保证控制台日志每次请求都能看到实际使用的模型 ID。
+fn log_llm_request(cfg: &AskConfig) {
+    let ptype = cfg.provider.provider_type.as_deref().unwrap_or("openai");
+    tracing::info!(
+        "LLM 请求: provider={} type={} model={} effort={} endpoint={}",
+        cfg.provider.id,
+        ptype,
+        cfg.model,
+        cfg.reasoning_effort.as_deref().unwrap_or("default"),
+        llm_endpoint_for_log(cfg, ptype)
+    );
+}
+
 /// 单轮问答:返回最终答案。
 pub async fn ask_answer(
     cfg: &AskConfig,
     question: &str,
     workspace_dir: Option<PathBuf>,
 ) -> Result<String> {
+    log_llm_request(cfg);
     let builtin = if cfg.tools {
         crate::tools::builtin_tools(workspace_dir, cfg.lsp.clone())
     } else {
@@ -420,6 +447,7 @@ pub async fn stream_run<F>(
 where
     F: FnMut(RunEvent),
 {
+    log_llm_request(cfg);
     let mut builtin = if cfg.tools {
         crate::tools::builtin_tools(workspace_dir, cfg.lsp.clone())
     } else {
@@ -653,6 +681,7 @@ where
 pub async fn chat_loop(cfg: &AskConfig) -> Result<()> {
     // 加载当前目录的 AGENTS.md(项目基础规则)进 preamble。
     let cfg = cfg.with_workspace(std::env::current_dir().ok(), &[]);
+    log_llm_request(&cfg);
     let model = cfg.model.clone();
     let builtin = if cfg.tools {
         crate::tools::builtin_tools(std::env::current_dir().ok(), cfg.lsp.clone())

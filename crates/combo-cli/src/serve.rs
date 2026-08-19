@@ -453,6 +453,13 @@ pub(crate) async fn start_agent_run(
         &model_name,
         history.len(),
     );
+    // 控制台同步打一行(与上方 JSONL 请求日志对齐),终端/tauri dev
+    // 日志里每次请求都能直接看到实际使用的 provider 与模型 ID。
+    tracing::info!(
+        "agent run 启动: ws={ws_id} session={} run={run_id} provider={provider_id} model={model_name} history={}",
+        req.session_id,
+        history.len()
+    );
 
     // 3.5 上下文压缩为手动触发:run 启动不再自动压缩,
     //     由 agent 按需调用 compact 工具(见 compact.rs)总结历史。
