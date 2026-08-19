@@ -546,11 +546,20 @@ export function GitPanel({ workspaceId, repo = '', onRepoChange, selectedDiffPat
               <button
                 onClick={() => void handleRemote('sync')}
                 disabled={!!remoteBusy}
-                className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
+                className={cn(
+                  'flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-[10px] transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50',
+                  remoteBusy === 'sync' && 'combo-btn-active text-foreground',
+                )}
                 title="同步:拉取远程变更并推送本地提交"
               >
-                <ArrowUpDown className={cn('h-3 w-3', remoteBusy === 'sync' && 'animate-bounce')} />
-                同步
+                {remoteBusy === 'sync' ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <ArrowUpDown className="h-3 w-3" />
+                )}
+                <span className={cn(remoteBusy === 'sync' && 'combo-badge-active')}>
+                  同步
+                </span>
               </button>
             </div>
           </div>
@@ -707,15 +716,22 @@ export function GitPanel({ workspaceId, repo = '', onRepoChange, selectedDiffPat
               <button
                 onClick={() => void handleGenerate()}
                 disabled={generating}
-                className="flex items-center gap-1 text-[10px] text-primary/70 transition-colors hover:text-primary disabled:opacity-50"
+                className={cn(
+                  'flex items-center gap-1 text-[10px] transition-colors hover:text-primary disabled:opacity-50',
+                  generating && 'combo-btn-active text-primary',
+                )}
                 title="基于已暂存变更生成提交信息(模型可在设置中配置)"
               >
                 {generating ? (
                   <Loader2 className="h-3 w-3 animate-spin" />
                 ) : (
-                  <Sparkles className="h-3 w-3" />
+                  <span className="combo-sparkle inline-flex">
+                    <Sparkles className="sparkle-glow h-3 w-3" />
+                  </span>
                 )}
-                {generating ? '生成中...' : 'AI 生成'}
+                <span className={cn(generating && 'combo-badge-active')}>
+                  {generating ? '生成中...' : 'AI 生成'}
+                </span>
               </button>
             </div>
           </div>

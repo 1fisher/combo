@@ -318,3 +318,55 @@
 
 /* 首屏 Combo 线框字与粒子流光已全部改由 canvas 渲染
    (HeroParticles.tsx,含浮动动画),不再使用这里的 CSS 动画 */
+
+/* ---- Git 视图按钮动画:同步 / AI 生成提交信息 ----
+   ① 品牌色脉冲光晕:活跃(进行中)按钮的柔和呼吸光晕,传达"正在处理"。
+   ② 光带扫掠:与 .run-shimmer 同思路,沿按钮自左向右循环扫过,点缀进行中状态。
+   ③ AI 生成 idle 时的魔法微光:Sparkles 图标轻微明暗呼吸 + 微小上浮,暗示"点一下变出魔法"。 */
+@keyframes combo-btn-glow {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in oklab, var(--brand) 0%, transparent); }
+  50%      { box-shadow: 0 0 10px 1px color-mix(in oklab, var(--brand) 45%, transparent); }
+}
+.combo-btn-active {
+  position: relative;
+  overflow: hidden;
+  animation: combo-btn-glow 1.6s ease-in-out infinite;
+}
+@keyframes combo-btn-shimmer {
+  from { left: -120%; }
+  to   { left: 120%; }
+}
+.combo-btn-active::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -120%;
+  width: 40%;
+  pointer-events: none;
+  transform: skewX(-16deg);
+  background: linear-gradient(
+    100deg,
+    transparent,
+    color-mix(in oklab, var(--brand) 22%, transparent),
+    color-mix(in oklab, var(--brand) 40%, transparent),
+    color-mix(in oklab, var(--brand) 22%, transparent),
+    transparent
+  );
+  animation: combo-btn-shimmer 1.2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+@keyframes combo-sparkle {
+  0%, 100% { opacity: 0.72; transform: scale(1) translateY(0); }
+  50%      { opacity: 1;    transform: scale(1.22) translateY(-1px); }
+}
+.combo-sparkle .sparkle-glow {
+  animation: combo-sparkle 1.8s ease-in-out infinite;
+  filter: drop-shadow(0 0 4px color-mix(in oklab, var(--brand) 70%, transparent));
+}
+@keyframes combo-badge-pulse {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.06); }
+}
+.combo-badge-active {
+  animation: combo-badge-pulse 1.4s ease-in-out infinite;
+}
