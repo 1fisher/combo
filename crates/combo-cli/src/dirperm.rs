@@ -69,7 +69,10 @@ fn key(p: &str) -> String {
 pub fn is_protected(raw: &str) -> bool {
     let p = normalize(raw);
     let k = key(&p);
-    if k == "/volumes" || k.starts_with("/volumes/") {
+    // 外置/移动卷(macOS `/Volumes` 下的挂载点):挂载点为约定命名,大小写无关
+    // 比较保证跨平台一致(Linux 上不存在的路径也要按敏感位置判断)。
+    let k_lower = k.to_lowercase();
+    if k_lower == "/volumes" || k_lower.starts_with("/volumes/") {
         return true;
     }
     let Some(home) = std::env::var_os("HOME") else {
