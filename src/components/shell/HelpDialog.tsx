@@ -4,29 +4,17 @@ import {
   DialogHeader,
   DialogTitle,
 } from '../ui/dialog';
+import {
+  SHORTCUT_ACTIONS,
+  comboToParts,
+  FIXED_SHORTCUTS,
+} from '../../lib/shortcuts';
+import { useShortcutStore } from '../../stores/shortcutStore';
 
 interface HelpDialogProps {
   open: boolean;
   onOpenChange: (v: boolean) => void;
 }
-
-const SHORTCUTS: { keys: string[]; label: string }[] = [
-  { keys: ['⌘', 'N'], label: '新建任务' },
-  { keys: ['⌘', 'K'], label: '搜索项目或任务' },
-  { keys: ['⌘', 'A'], label: '自动化' },
-  { keys: ['⌘', '⇧', 'S'], label: '技能' },
-  { keys: ['⌘', '⇧', 'M'], label: 'MCP 工具' },
-  { keys: ['⌘', '⇧', 'D'], label: '统计' },
-  { keys: ['⌘', '⇧', 'G'], label: '知识图谱' },
-  { keys: ['Enter'], label: '发送消息' },
-  { keys: ['Shift', 'Enter'], label: '消息内换行' },
-  { keys: ['⌘', 'I'], label: '语音输入' },
-  { keys: ['⌘', 'F'], label: '文件内搜索(编辑器视图)' },
-  { keys: ['⌘', '⇧', 'F'], label: '跨文件内容搜索(编辑器视图)' },
-  { keys: ['⌘', 'W'], label: '关闭当前文件(编辑器视图)' },
-  { keys: ['⌘', 'S'], label: '保存当前文件(编辑器视图)' },
-  { keys: ['⌘', '⌥', '←/→'], label: '切换打开的文件(编辑器视图)' },
-];
 
 const TIPS: { icon: string; title: string; desc: string }[] = [
   {
@@ -52,6 +40,8 @@ const TIPS: { icon: string; title: string; desc: string }[] = [
 ];
 
 export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
+  // 可配置部分实时跟随快捷键设置(管理入口:侧边栏底部「快捷键管理」)
+  const bindings = useShortcutStore((s) => s.bindings);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
@@ -63,9 +53,33 @@ export function HelpDialog({ open, onOpenChange }: HelpDialogProps) {
           <div>
             <h3 className="mb-2 text-[13px] font-medium text-foreground-subtle">
               快捷键
+              <span className="ml-1.5 text-xs font-normal text-foreground-subtlest">
+                (可在侧边栏底部「快捷键管理」中自定义)
+              </span>
             </h3>
             <div className="flex flex-col gap-1.5">
-              {SHORTCUTS.map((s) => (
+              {SHORTCUT_ACTIONS.map((a) => (
+                <div
+                  key={a.id}
+                  className="flex items-center justify-between rounded-lg px-1 py-1"
+                >
+                  <span className="text-[13px] text-foreground">{a.label}</span>
+                  <span className="flex items-center gap-1">
+                    {comboToParts(bindings[a.id]).map((k) => (
+                      <kbd
+                        key={k}
+                        className="rounded border border-border bg-surface px-1.5 py-0.5 text-[11px] text-foreground-subtle"
+                      >
+                        {k}
+                      </kbd>
+                    ))}
+                    {bindings[a.id] == null && (
+                      <span className="text-[11px] text-foreground-subtlest">已禁用</span>
+                    )}
+                  </span>
+                </div>
+              ))}
+              {FIXED_SHORTCUTS.map((s) => (
                 <div
                   key={s.label}
                   className="flex items-center justify-between rounded-lg px-1 py-1"

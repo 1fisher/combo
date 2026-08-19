@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import userEvent from '@testing-library/user-event';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
 import type { SideView } from './AppShell';
+import { defaultBindings } from '../../lib/shortcuts';
+import { useShortcutStore } from '../../stores/shortcutStore';
 
 vi.mock('../../lib/api', () => ({
   listWorkspaces: vi.fn(async () => []),
@@ -52,6 +54,7 @@ let scratch: HTMLElement | null = null;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  useShortcutStore.setState({ bindings: defaultBindings() });
 });
 
 afterEach(() => {
@@ -116,5 +119,35 @@ describe('WorkspaceSidebar 视图快捷键', () => {
     press('a', { shift: true }); // ⌘⇧A 未分配
     press('s'); // ⌘S(保存,编辑器视图)不属于侧边栏
     expect(opened).toEqual([]);
+  });
+});
+
+describe('WorkspaceSidebar 自定义快捷键', () => {
+  beforeEach(() => {
+    // store 依赖 zustand persist(上面 import 已注册);直接重置后注入自定义
+    useShortcutStore.setState({ bindings: defaultBindings() });
+  });
+
+  it('改绑后原键位失效、新键位触发视图切换', () => {
+    useShortcutStore.getState().setBinding('view:automation', '⇧z');
+    const opened = renderSidebar();
+    expect(press('a').defaultPrevented).toBe(false); // 原 ⌘A 不再触发
+    const ev = press('z', { shift: true });
+    expect(ev.defaultPrevented).toBe(true);
+    expect(opened).toEqual(['automation']);
+  });
+
+  it('禁用某视图快捷键后按键不再触发', () => {
+    useShortcutStore.getState().setBinding('view:skills', null);
+    const opened = renderSidebar();
+    press('s', { shift: true });
+    expect(opened).toEqual([]);
+  });
+
+  it('底部「快捷键管理」按钮打开 shortcuts 视图', () => {
+    const opened = renderSidebar();
+    const btn = screen.getByRole('button', { name: '快捷键管理' });
+    fireEvent.click(btn);
+    expect(opened).toEqual(['shortcuts']);
   });
 });

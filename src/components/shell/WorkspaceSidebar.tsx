@@ -10,6 +10,7 @@ import {
   FolderInput,
   GripVertical,
   Hash,
+  Keyboard,
   ListFilter,
   Loader2,
   Maximize2,
@@ -42,6 +43,13 @@ import { useActiveWorkspaceId } from '../../hooks/useActiveWorkspaceId';
 import { useAgentStore } from '../../stores/agentStore';
 import { useConnectionStore } from '../../stores/connectionStore';
 import { isTauri } from '../../lib/connection';
+import {
+  comboToLabel,
+  comboToParts,
+  resolveShortcut,
+  type ShortcutAction,
+} from '../../lib/shortcuts';
+import { useShortcutStore } from '../../stores/shortcutStore';
 import { createSession as createSessionApi, listSessions } from '../../lib/api';
 import type { Api } from '../../lib/api/types';
 import { ConversationList } from './ConversationList';
@@ -61,40 +69,27 @@ function basename(p: string): string {
 
 /** 侧边栏全页视图导航项(渲染与快捷键、托盘事件共用同一份配置) */
 const SIDE_NAV_ITEMS = [
-  { view: 'search', label: '搜索', icon: Search, kbd: '⌘ K', title: '搜索 (⌘/Ctrl+K)' },
-  { view: 'automation', label: '自动化', icon: CalendarClock, kbd: '⌘ A', title: '自动化 (⌘/Ctrl+A)' },
-  { view: 'skills', label: '技能', icon: WandSparkles, kbd: '⌘ ⇧ S', title: '技能 (⌘/Ctrl+Shift+S)' },
-  { view: 'mcp', label: 'MCP', icon: Boxes, kbd: '⌘ ⇧ M', title: 'MCP 工具 (⌘/Ctrl+Shift+M)' },
-  { view: 'stats', label: '统计', icon: BarChart3, kbd: '⌘ ⇧ D', title: '用量统计 (⌘/Ctrl+Shift+D)' },
-  { view: 'graph', label: '图谱', icon: Waypoints, kbd: '⌘ ⇧ G', title: '知识图谱 (⌘/Ctrl+Shift+G)' },
+  { view: 'search', label: '搜索', icon: Search, title: '搜索' },
+  { view: 'automation', label: '自动化', icon: CalendarClock, title: '自动化' },
+  { view: 'skills', label: '技能', icon: WandSparkles, title: '技能' },
+  { view: 'mcp', label: 'MCP', icon: Boxes, title: 'MCP 工具' },
+  { view: 'stats', label: '统计', icon: BarChart3, title: '用量统计' },
+  { view: 'graph', label: '图谱', icon: Waypoints, title: '知识图谱' },
 ] as const;
 
 /** 合法的侧边栏视图名(托盘事件 payload 校验用) */
 const SIDE_VIEWS: readonly string[] = SIDE_NAV_ITEMS.map((i) => i.view);
 
-/** 输入框内无原生行为冲突、无需让位的快捷键(⌘/Ctrl+K 命令面板惯例) */
-const EDITABLE_EXEMPT = new Set(['k']);
-
-/**
- * 视图快捷键 → 视图。「⇧」前缀表示需 Shift;⌘/Ctrl+K 无文本编辑冲突直接切换,
- * 其余(⌘A 全选等)焦点在可编辑区域时让位给原生行为。
- */
-const SHORTCUT_TO_VIEW: Record<string, SideView> = {
-  k: 'search',
-  a: 'automation',
-  '⇧s': 'skills',
-  '⇧m': 'mcp',
-  '⇧d': 'stats',
-  '⇧g': 'graph',
-};
-
-/** 事件目标是否为可编辑元素(输入框/文本域/CodeMirror 等富文本编辑区) */
-function isEditableTarget(t: EventTarget | null): boolean {
-  if (!(t instanceof HTMLElement)) return false;
-  if (t.isContentEditable) return true;
-  const tag = t.tagName;
-  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
-}
+/** sidebar 全局监听负责分派的动作(⌘N 与视图切换;语音输入由 Composer 分派) */
+const SIDEBAR_ACTION_IDS = [
+  'newTask',
+  'view:search',
+  'view:automation',
+  'view:skills',
+  'view:mcp',
+  'view:stats',
+  'view:graph',
+] as const satisfies readonly ShortcutAction[];
 
 /** 项目名:优先后端返回的 name,回退到目录 basename。 */
 function projectName(w: { name?: string; path: string }): string {
@@ -322,29 +317,20 @@ export function WorkspaceSidebar({
   const onOpenViewRef = useRef(onOpenView);
   onOpenViewRef.current = onOpenView;
 
-  // ⌘/Ctrl+N 新建任务, ⌘/Ctrl+K 搜索;视图快捷键见 SHORTCUT_TO_VIEW
+  // 全局快捷键(⌘/Ctrl+N 新建任务、视图切换)走 shortcutStore 的绑定:
+  // 键位可在「快捷键」视图自定义;分派规则(编辑区让位等)见 resolveShortcut
+  const shortcutBindings = useShortcutStore((s) => s.bindings);
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
-      if (e.key.toLowerCase() === 'n' && !e.shiftKey) {
-        e.preventDefault();
-        onNewTaskRef.current();
-        return;
-      }
-      const combo = (e.shiftKey ? '⇧' : '') + e.key.toLowerCase();
-      const view = SHORTCUT_TO_VIEW[combo];
-      if (!view) return;
-      // CodeMirror 等组件已处理(defaultPrevented)的按键跳过;
-      // ⌘/Ctrl+A 等与文本全选等原生行为重叠的组合,焦点在可编辑区域时让位
-      // (⌘K 等无冲突键豁免,输入框内也可触发)
-      if (e.defaultPrevented) return;
-      if (isEditableTarget(e.target) && !EDITABLE_EXEMPT.has(combo)) return;
+      const action = resolveShortcut(e, shortcutBindings, SIDEBAR_ACTION_IDS);
+      if (!action) return;
       e.preventDefault();
-      onOpenViewRef.current?.(view);
+      if (action === 'newTask') onNewTaskRef.current();
+      else onOpenViewRef.current?.(action.slice('view:'.length) as SideView);
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [shortcutBindings]);
 
   // 托盘菜单事件(仅 Tauri 桌面端;后端已先唤起主窗口):
   // 「新建任务」新建会话;「打开视图」切换到对应全页视图
@@ -562,27 +548,32 @@ export function WorkspaceSidebar({
           >
             <MessageCirclePlus className="size-4 shrink-0" />
             <span className="min-w-0 flex-1 truncate text-[13px]">新建任务</span>
-            <span className="shrink-0 text-xs font-normal text-foreground-subtlest">⌘ N</span>
+            <span className="shrink-0 text-xs font-normal text-foreground-subtlest">
+              {comboToLabel(shortcutBindings.newTask)}
+            </span>
           </button>
-          {/* 主内容区全页视图导航:自动化/搜索/技能/MCP/统计/图谱(快捷键见 SHORTCUT_TO_VIEW) */}
-          {SIDE_NAV_ITEMS.map((item) => (
-            <button
-              key={item.view}
-              type="button"
-              onClick={() => onOpenView?.(item.view)}
-              className={cn(
-                'flex h-8 w-full shrink-0 cursor-pointer items-center gap-2 overflow-hidden rounded-lg pl-2.5 pr-2.5 text-left transition-colors hover:bg-surface-hover hover:text-foreground',
-                activeView === item.view && 'bg-surface-hover text-brand'
-              )}
-              title={item.title}
-            >
-              <item.icon className="size-4 shrink-0" />
-              <span className="min-w-0 flex-1 truncate text-[13px]">{item.label}</span>
-              <span className="shrink-0 text-xs font-normal text-foreground-subtlest">
-                {item.kbd}
-              </span>
-            </button>
-          ))}
+          {/* 主内容区全页视图导航:自动化/搜索/技能/MCP/统计/图谱(键位可在快捷键视图自定义) */}
+          {SIDE_NAV_ITEMS.map((item) => {
+            const combo = shortcutBindings[`view:${item.view}` as ShortcutAction];
+            return (
+              <button
+                key={item.view}
+                type="button"
+                onClick={() => onOpenView?.(item.view)}
+                className={cn(
+                  'flex h-8 w-full shrink-0 cursor-pointer items-center gap-2 overflow-hidden rounded-lg pl-2.5 pr-2.5 text-left transition-colors hover:bg-surface-hover hover:text-foreground',
+                  activeView === item.view && 'bg-surface-hover text-brand'
+                )}
+                title={`${item.title}(${comboToParts(combo).join('+') || '未绑定'})`}
+              >
+                <item.icon className="size-4 shrink-0" />
+                <span className="min-w-0 flex-1 truncate text-[13px]">{item.label}</span>
+                <span className="shrink-0 text-xs font-normal text-foreground-subtlest">
+                  {comboToLabel(combo)}
+                </span>
+              </button>
+            );
+          })}
         </div>
         {/* 视图切换 + 工具按钮 */}
         <div className="flex min-w-0 items-center justify-between gap-2 pl-2.5 pr-3">
@@ -879,6 +870,16 @@ export function WorkspaceSidebar({
           </span>
         </button>
         <div className="flex shrink-0 items-center gap-1.5">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="shrink-0 text-foreground-subtle hover:bg-surface-hover hover:text-foreground"
+            aria-label="快捷键管理"
+            title="快捷键管理"
+            onClick={() => onOpenViewRef.current?.('shortcuts')}
+          >
+            <Keyboard className="size-4" />
+          </Button>
           <Button
             variant="ghost"
             size="icon-sm"

@@ -31,6 +31,8 @@ import type { Api } from '../../lib/api/types';
 import { cn, usageColor } from '../../lib/utils';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { useUIPreferences } from '../../stores/uiPreferencesStore';
+import { useShortcutStore } from '../../stores/shortcutStore';
+import { resolveShortcut } from '../../lib/shortcuts';
 import { useDictation } from '../../hooks/useDictation';
 import { appendTranscript } from '../../lib/audio';
 import { openMicSettings } from '../../lib/openMicSettings';
@@ -599,21 +601,22 @@ export function Composer({
     onChange(appendTranscript(value, text));
     requestAnimationFrame(() => areaRef.current?.focus());
   });
-  // ⌘/Ctrl+I 开关语音输入(与话筒按钮同路径)。keydown 同为用户手势,开启
-  // 提示音可在手势内同步播放解锁 autoplay;Shift/Alt 变体让位(浏览器/系统组合)
+  // ⌘/Ctrl+I(默认,可在快捷键视图自定义)开关语音输入(与话筒按钮同路径)。
+  // keydown 同为用户手势,开启提示音可在手势内同步播放解锁 autoplay;
+  // 分派规则(编辑区让位、defaultPrevented 让位)统一在 resolveShortcut
   const dictationToggleRef = useRef(dictation.toggle);
   dictationToggleRef.current = dictation.toggle;
+  const shortcutBindings = useShortcutStore((s) => s.bindings);
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
-      if (e.key.toLowerCase() !== 'i') return;
-      if (e.defaultPrevented) return; // 已被其他组件(如编辑器)处理的按键跳过
-      e.preventDefault();
-      dictationToggleRef.current();
+      if (resolveShortcut(e, shortcutBindings, ['dictation'])) {
+        e.preventDefault();
+        dictationToggleRef.current();
+      }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [shortcutBindings]);
   // 录音中显示在输入框末尾的预输入文本:已确认(分段固化)部分稳定保留,
   // 推断部分实时修正(说话中不会整段消失);停止后清空,由 onText 追加 final
   const asrPending =
