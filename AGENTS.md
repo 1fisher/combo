@@ -264,7 +264,9 @@ install `@tauri-apps/cli` first. `bundle.active` is `false` in
   前端 `AutomationPanel.tsx`(侧边栏「自动化」按钮打开)作为**主内容区视图**(与
   会话/终端/编辑器同级,非 Dialog;顶栏有自动化切换按钮,点击侧边栏「自动化」
   或顶栏图标在 agent ↔ automation 视图间切换)三视图:列表(启用开关/
-  立即运行/历史/编辑/删除)/ 表单(名称/目标项目/提示词/调度类型)/ 运行历史。
+  立即运行/历史/编辑/删除)/ 表单(名称/目标项目/运行模型/思考强度/提示词/调度
+  类型;模型选择紧邻目标项目,复用与 Composer 同一套 `ModelPicker`——搜索 +
+  最近使用 + 按 provider 分组跨选,顶部带「跟随项目默认」清除项)/ 运行历史。
 - **项目知识图谱**(`graph.rs` + `GraphView.tsx`,侧边栏「图谱」按钮):`GET
   /v1/workspaces/:id/graph` 扫描 workspace 源码(上限 2500 文件,跳过
   node_modules/target 等目录与隐藏目录),启发式正则解析文件间 import 依赖

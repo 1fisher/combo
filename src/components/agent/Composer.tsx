@@ -1,4 +1,4 @@
-import { useLayoutEffect, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useLayoutEffect, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import {
   ArrowUp,
@@ -6,13 +6,11 @@ import {
   Check,
   ChevronDown,
   FileText,
-  History,
   Loader2,
   Mic,
   Paperclip,
   Plus,
   Quote,
-  Search,
   ShieldAlert,
   Sparkles,
   Square,
@@ -37,7 +35,7 @@ import { useDictation } from '../../hooks/useDictation';
 import { appendTranscript } from '../../lib/audio';
 import { openMicSettings } from '../../lib/openMicSettings';
 import { AttachmentPicker } from './AttachmentPicker';
-import { ProviderLogo } from './ProviderLogo';
+import { ModelPicker, useAnchorPopover } from './ModelPicker';
 import { FlameWrap } from '../canvasui/FlameWrap';
 import { DEFAULT_CONTEXT_WINDOW, formatTokenCount, getContextUsage, getRealUsage } from '../../lib/tokens';
 
@@ -116,42 +114,9 @@ const THOUGHT_LEVELS = [
 ] as const;
 
 /**
- * 弹层锚点定位(移动端适配):fixed 弹层相对锚点元素定位,水平方向钳制在视口内
- * (左右各留 8px),避免 w-72 等较宽下拉在窄屏向左溢出被裁剪(如 Composer 模型菜单
- * 移动端偏左显示不全);垂直方向贴合锚点上方 8px。桌面端不启用,沿用 absolute 定位。
- * 默认右对齐锚点右边缘(与 right-0 语义一致),空间不足时钳制进视口。
+ * 弹层锚点定位(移动端适配)已抽取到 ModelPicker.tsx 的 useAnchorPopover,
+ * 供模式 / 模型 / 思考等级三个菜单共用。
  */
-function useAnchorPopover(
-  open: boolean,
-  anchorRef: RefObject<HTMLElement | null>,
-  opts: { width: number; enabled: boolean }
-): { left: number; bottom: number } | null {
-  const [pos, setPos] = useState<{ left: number; bottom: number } | null>(null);
-  useLayoutEffect(() => {
-    if (!open || !opts.enabled) {
-      setPos(null);
-      return;
-    }
-    const el = anchorRef.current;
-    if (!el) return;
-    function update() {
-      const anchor = anchorRef.current;
-      if (!anchor) return;
-      const rect = anchor.getBoundingClientRect();
-      const vw = window.innerWidth;
-      const left = Math.min(Math.max(rect.right - opts.width, 8), Math.max(8, vw - opts.width - 8));
-      setPos({ left, bottom: window.innerHeight - rect.top + 8 });
-    }
-    update();
-    window.addEventListener('scroll', update, true);
-    window.addEventListener('resize', update);
-    return () => {
-      window.removeEventListener('scroll', update, true);
-      window.removeEventListener('resize', update);
-    };
-  }, [open, anchorRef, opts.width, opts.enabled]);
-  return pos;
-}
 
 const SLASH_COMMANDS = [
   { id: 'clear', label: '/clear', description: '清空当前对话上下文' },
@@ -206,15 +171,12 @@ export function Composer({
   // 移动端(<768px)弹层用 fixed 定位并钳制在视口内,避免宽菜单向左溢出裁剪
   const isMobile = useIsMobile();
   const modeBtnRef = useRef<HTMLButtonElement>(null);
-  const modelBtnRef = useRef<HTMLButtonElement>(null);
   const thoughtBtnRef = useRef<HTMLButtonElement>(null);
   const modePopoverPos = useAnchorPopover(modeMenuOpen, modeBtnRef, { width: 256, enabled: isMobile });
-  const modelPopoverPos = useAnchorPopover(modelMenuOpen, modelBtnRef, { width: 288, enabled: isMobile });
   const thoughtPopoverPos = useAnchorPopover(thoughtMenuOpen, thoughtBtnRef, { width: 160, enabled: isMobile });
   const [modelErr, setModelErr] = useState('');
-  const [modelSearch, setModelSearch] = useState('');
-  // 最近使用的模型(全局记录,持久化),用于菜单顶部快速切换
-  const recentModels = useAgentStore((s) => s.recentModels);
+  // 模型选择 UI 抽取为共用 ModelPicker(与自动化表单一致:搜索 + 最近使用 + 分组),
+  // 这里保留受控 open 状态用于与思考等级菜单互斥
   // FlameWrap 原生(layoutsubtree)模式下外层 wrapper 无行内内容会塌陷为 0 高,
   // 需用输入框实际高度显式撑开;每帧渲染前同步测量,避免挂载时机导致高度缺失
   const boxRef = useRef<HTMLDivElement>(null);
@@ -396,67 +358,17 @@ export function Composer({
     (s) => (s.activeSessionId ? s.apiCallsBySession[s.activeSessionId] : undefined)
   ) ?? 0;
 
-  // 全部 provider 的模型,按 provider 分组(可跨 provider 直接选模型)
-  const modelGroups = useMemo(() => {
-    const out: {
-      providerId: string;
-      providerName: string;
-      models: { id: string; name: string }[];
-    }[] = [];
-    for (const m of modelList) {
-      let g = out.find((x) => x.providerId === m.provider);
-      if (!g) {
-        g = { providerId: m.provider, providerName: m.providerName, models: [] };
-        out.push(g);
-      }
-      g.models.push({ id: m.id, name: m.name });
-    }
-    return out;
-  }, [modelList]);
+  // 全部 provider 的模型分组 / 搜索过滤 / 最近使用解析已随 UI 一并抽取到
+  // ModelPicker(见 './ModelPicker'),这里只保留与运行相关的模型解析逻辑
 
-  // 模型搜索:按模型 id/名称(忽略大小写)过滤,命中后分组内保持原有排序,空组剔除
-  const filteredModelGroups = useMemo(() => {
-    const q = modelSearch.trim().toLowerCase();
-    if (!q) return modelGroups;
-    const out: typeof modelGroups = [];
-    for (const g of modelGroups) {
-      const models = g.models.filter(
-        (m) => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q)
-      );
-      if (models.length) out.push({ ...g, models });
-    }
-    return out;
-  }, [modelGroups, modelSearch]);
-
-  // 最近使用的模型:解析回当前 provider 列表中的条目(已下线的模型不再展示),
-  // 同样受搜索过滤,置顶展示方便在常用模型间快速切换
-  const recentModelEntries = useMemo(() => {
-    const q = modelSearch.trim().toLowerCase();
-    const out: { id: string; name: string; providerId: string; providerName: string }[] = [];
-    for (const r of recentModels) {
-      const hit = modelList.find((m) => m.id === r.model && m.provider === r.provider);
-      if (!hit) continue;
-      if (q && !hit.id.toLowerCase().includes(q) && !hit.name.toLowerCase().includes(q)) continue;
-      out.push({
-        id: hit.id,
-        name: hit.name,
-        providerId: hit.provider,
-        providerName: hit.providerName,
-      });
-    }
-    return out;
-  }, [recentModels, modelList, modelSearch]);
-
-  function handleModelChange(modelId: string, provider: string) {
-    setModelMenuOpen(false);
+  function handleModelChange(provider: string, model: string) {
     setModelErr('');
     if (workspaceId) {
-      useAgentStore.getState().setModelSelection(workspaceId, { model: modelId, provider });
+      useAgentStore.getState().setModelSelection(workspaceId, { model, provider });
     }
-    // 记录最近使用,菜单顶部置顶展示
-    useAgentStore.getState().pushRecentModel({ model: modelId, provider });
+    // 「最近使用」记录由 ModelPicker 在选中时写入
     setModel.mutate(
-      { model: { model: modelId, provider } },
+      { model: { model, provider } },
       {
         onError: (e) => setModelErr(e instanceof Error ? e.message : '切换失败,请稍后重试'),
       }
@@ -868,192 +780,20 @@ export function Composer({
                 </div>
                 <div className="flex items-center gap-1.5">
                   {/* 模型选择 */}
-                  <div className="relative shrink-0">
-                    <button
-                      type="button"
-                      ref={modelBtnRef}
-                      onClick={() => {
-                        if (!modelMenuOpen) setModelSearch('');
-                        setModelMenuOpen((o) => !o);
-                        setThoughtMenuOpen(false);
-                      }}
-                      className={cn(
-                        'flex justify-between items-center gap-1 hover:bg-surface-hover px-1.5 py-1.5 rounded-lg w-fit h-7 text-[13px] whitespace-nowrap transition-colors',
-                        currentProvider?.has_api_key
-                          ? 'text-foreground-subtle hover:text-foreground'
-                          : 'text-warning hover:text-warning'
-                      )}
-                      aria-label="切换模型"
-                      title="切换模型"
-                    >
-                      {setModel.isPending ? (
-                        <Loader2 className="size-4 animate-spin pointer-events-none" />
-                      ) : (
-                        <ProviderLogo
-                          providerId={currentProviderId}
-                          name={currentProvider?.name}
-                          className="size-4 pointer-events-none shrink-0"
-                        />
-                      )}
-                      <span className="min-w-0 max-w-[8rem] truncate">
-                        {currentModelId || '默认模型'}
-                      </span>
-                      <ChevronDown className="size-3.5 text-foreground-subtlest pointer-events-none" />
-                    </button>
-                    {modelMenuOpen && (
-                      <>
-                        <div
-                          className="z-40 fixed inset-0"
-                          onClick={() => setModelMenuOpen(false)}
-                        />
-                        {/* 弹层为 flex 纵向布局:标题 + 搜索框固定顶部,模型列表单独滚动,
-                            列表滚动时搜索框保持可见 */}
-                        <div
-                          className={cn(
-                            'z-50 flex flex-col bg-popover shadow-xl p-1.5 border border-border rounded-xl w-72 max-h-80',
-                            isMobile ? 'fixed' : 'right-0 bottom-full absolute mb-2'
-                          )}
-                          style={
-                            isMobile && modelPopoverPos
-                              ? { left: modelPopoverPos.left, bottom: modelPopoverPos.bottom }
-                              : undefined
-                          }
-                        >
-                          <div className="flex justify-between items-center px-2 py-1 font-medium text-foreground-subtlest text-xs">
-                            <span>选择模型</span>
-                            {currentModelId && (
-                              <span className="text-[11px] text-foreground-subtle truncate">
-                                当前: {currentModelId}
-                              </span>
-                            )}
-                          </div>
-                          <div className="px-1 pb-1">
-                            <div className="flex items-center gap-1.5 bg-surface px-2 py-1 border border-border rounded-lg">
-                              <Search className="size-3.5 text-foreground-subtlest shrink-0" />
-                              <input
-                                value={modelSearch}
-                                onChange={(e) => setModelSearch(e.target.value)}
-                                placeholder="搜索模型"
-                                className="bg-transparent outline-none w-full text-[13px] text-foreground placeholder:text-foreground-subtlest"
-                              />
-                              {modelSearch && (
-                                <button
-                                  type="button"
-                                  onClick={() => setModelSearch('')}
-                                  className="text-foreground-subtlest hover:text-foreground transition-colors shrink-0"
-                                  aria-label="清空搜索"
-                                >
-                                  <X className="size-3.5" />
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                          <div data-testid="model-menu-list" className="flex-1 min-h-0 overflow-y-auto">
-                            {/* 最近使用的模型置顶,方便在常用模型间快速切换 */}
-                            {recentModelEntries.length > 0 && (
-                              <div className="pb-1">
-                                <div className="flex items-center gap-1.5 px-2 pt-1 pb-0.5 font-medium text-[11px] text-foreground-subtlest">
-                                  <History className="size-3" />
-                                  <span>最近使用</span>
-                                </div>
-                                {recentModelEntries.map((m) => {
-                                  const isSelected =
-                                    m.id === currentModelId && m.providerId === currentProviderId;
-                                  return (
-                                    // 行容器:主体是「切换模型」按钮,右侧附「从最近使用移除」按钮。
-                                    // 删除按钮悬停行时显示(触屏无 hover,保持常驻),点击不关闭菜单可连续删除
-                                    <div
-                                      key={`recent-${m.providerId}/${m.id}`}
-                                      className={cn(
-                                        'group/recent flex items-center gap-1 hover:bg-surface-hover rounded-lg transition-colors',
-                                        isSelected && 'bg-surface-hover'
-                                      )}
-                                    >
-                                      <button
-                                        type="button"
-                                        onClick={() => handleModelChange(m.id, m.providerId)}
-                                        className="flex flex-1 items-center gap-2 px-2 py-1.5 rounded-lg min-w-0 text-[13px] text-left transition-colors"
-                                      >
-                                        <span className="flex-1 min-w-0 font-medium truncate">
-                                          {m.name || m.id}
-                                        </span>
-                                        {/* 最近使用跨 provider,补充展示 provider 名便于区分同名模型 */}
-                                        <span className="max-w-24 text-[11px] text-foreground-subtlest truncate shrink-0">
-                                          {m.providerName}
-                                        </span>
-                                        {isSelected && (
-                                          <Check className="size-3.5 text-brand shrink-0" />
-                                        )}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          useAgentStore
-                                            .getState()
-                                            .removeRecentModel({ model: m.id, provider: m.providerId })
-                                        }
-                                        aria-label={`从最近使用中移除 ${m.name || m.id}(${m.providerName})`}
-                                        title="从最近使用中移除"
-                                        className="hover:bg-surface opacity-60 md:focus-visible:opacity-100 md:group-hover/recent:opacity-100 md:opacity-0 focus-visible:opacity-100 mr-1 p-1 rounded-md text-foreground-subtlest hover:text-foreground transition-all shrink-0"
-                                      >
-                                        <X className="size-3" />
-                                      </button>
-                                    </div>
-                                  );
-                                })}
-                                <div className="mx-2 mt-1 border-border border-t" />
-                              </div>
-                            )}
-                            {filteredModelGroups.length === 0 ? (
-                              <div className="px-2 py-2 text-[13px] text-foreground-subtle">
-                                {modelGroups.length === 0
-                                  ? '暂无可用的模型。可在「设置」中配置 API Key 后拉取模型。'
-                                  : '未找到匹配的模型。'}
-                              </div>
-                            ) : (
-                            filteredModelGroups.map((g) => (
-                              <div key={g.providerId}>
-                                <div className="flex items-center gap-1.5 px-2 pt-1.5 pb-0.5 font-medium text-[11px] text-foreground-subtlest">
-                                  <ProviderLogo
-                                    providerId={g.providerId}
-                                    name={g.providerName}
-                                    className="size-3.5"
-                                  />
-                                  <span className="truncate">{g.providerName}</span>
-                                </div>
-                                {g.models.map((m) => {
-                                  // 选中态必须同时匹配 provider + 模型 id:不同 provider 下
-                                  // 可能存在同名模型(如 deepseek / opencode-zen 都有
-                                  // deepseek-v4-flash-free),只比较 id 会全部高亮打勾
-                                  const isSelected =
-                                    m.id === currentModelId && g.providerId === currentProviderId;
-                                  return (
-                                    <button
-                                      key={`${g.providerId}/${m.id}`}
-                                      type="button"
-                                      onClick={() => handleModelChange(m.id, g.providerId)}
-                                      className={cn(
-                                        'flex items-center gap-2 hover:bg-surface-hover px-2 py-1.5 rounded-lg w-full text-[13px] text-left transition-colors',
-                                        isSelected && 'bg-surface-hover'
-                                      )}
-                                    >
-                                      <span className="flex-1 min-w-0 font-medium truncate">
-                                        {m.name || m.id}
-                                      </span>
-                                      {isSelected && (
-                                        <Check className="size-3.5 text-brand shrink-0" />
-                                      )}
-                                    </button>
-                                  );
-                                })}
-                              </div>
-                            ))
-                            )}
-                          </div>
-                        </div>
-                      </>
-                    )}
-                  </div>
+                  <ModelPicker
+                    providers={providers}
+                    selected={
+                      currentModelId ? { provider: currentProviderId, model: currentModelId } : null
+                    }
+                    onSelect={handleModelChange}
+                    open={modelMenuOpen}
+                    onOpenChange={(v) => {
+                      setModelMenuOpen(v);
+                      if (v) setThoughtMenuOpen(false);
+                    }}
+                    pending={setModel.isPending}
+                    warn={!currentProvider?.has_api_key}
+                  />
                   {/* 思考等级 */}
                   <div className="relative shrink-0">
                     <button

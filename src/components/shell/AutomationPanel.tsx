@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   AlarmClock,
   Calendar,
@@ -7,7 +7,6 @@ import {
   CalendarRange,
   ChevronLeft,
   Clock,
-  Cpu,
   History,
   Loader2,
   Pencil,
@@ -31,6 +30,7 @@ import { useWorkspaces } from '../../hooks/useWorkspaces';
 import { useProviders } from '../../hooks/useAgentModel';
 import { confirmDialog } from '../../lib/confirm';
 import { cn } from '../../lib/utils';
+import { ModelPicker } from '../agent/ModelPicker';
 import { HeroCard, HeroEmpty, INPUT_CLS, LABEL_CLS, PAGE, ViewScroll } from './PageShell';
 import type { Api } from '../../lib/api/types';
 
@@ -276,26 +276,13 @@ export function AutomationPanel() {
   const [err, setErr] = useState('');
   const [runningId, setRunningId] = useState<string | null>(null);
 
-  // 表单中的模型选择:provider 列表按目标项目解析(编辑态取任务绑定的项目)
+  // 表单中的模型选择:provider 列表按目标项目解析(编辑态取任务绑定的项目),
+  // 选中 UI 与 Composer 共用 ModelPicker(搜索 + 最近使用 + 按 provider 分组)
   const formWsId =
     view.kind === 'form' ? draft.workspaceId || view.editing?.workspace_id || null : null;
   const { data: providers } = useProviders(formWsId);
-
-  // 扁平化 provider → 模型,作为「单独指定模型」下拉的可选项
-  const modelOptions = useMemo(() => {
-    if (!providers) return [];
-    const out: { value: string; label: string }[] = [];
-    for (const p of providers) {
-      const pName = p.name ?? p.id;
-      const models = Array.isArray(p.models) ? p.models : [];
-      for (const m of models) {
-        const mid = m.id;
-        if (!mid) continue;
-        out.push({ value: `${p.id}::${mid}`, label: `${m.name ?? mid} · ${pName}` });
-      }
-    }
-    return out;
-  }, [providers]);
+  // 已单独指定模型(provider + model 同时非空才生效,否则跟随项目默认)
+  const modelSet = !!(draft.providerId && draft.modelId);
 
   // 进入表单视图时初始化草稿:编辑对象优先,其次模板预设,最后空草稿
   useEffect(() => {
@@ -657,6 +644,47 @@ export function AutomationPanel() {
                       ))}
                     </select>
                   </div>
+                  {/* 运行模型:紧邻目标项目设置;未单独指定时整行铺开,
+                      选中模型后右侧并入思考强度,与项目相关的配置集中在一处 */}
+                  <div className={cn(!modelSet && 'sm:col-span-2')}>
+                    <label className={LABEL_CLS}>
+                      运行模型
+                    </label>
+                    <ModelPicker
+                      variant="form"
+                      providers={providers}
+                      selected={
+                        modelSet
+                          ? { provider: draft.providerId, model: draft.modelId }
+                          : null
+                      }
+                      onSelect={(provider, model) =>
+                        setDraft({ ...draft, providerId: provider, modelId: model })
+                      }
+                      onClear={() => setDraft({ ...draft, providerId: '', modelId: '' })}
+                    />
+                    <p className="mt-1.5 text-xs text-foreground-subtlest">
+                      默认跟随目标项目当前使用的模型;单独指定后,该任务每次运行都使用所选模型。
+                    </p>
+                  </div>
+                  {modelSet && (
+                    <div>
+                      <label className={LABEL_CLS}>
+                        思考强度
+                      </label>
+                      <select
+                        className={SELECT_CLS}
+                        value={draft.reasoningEffort}
+                        onChange={(e) => setDraft({ ...draft, reasoningEffort: e.target.value })}
+                      >
+                        {THOUGHT_LEVELS.map((t) => (
+                          <option key={t.id} value={t.id}>
+                            {t.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex min-h-0 flex-1 flex-col">
@@ -947,82 +975,6 @@ export function AutomationPanel() {
                 {err && (
                   <div className="rounded-lg bg-red-500/10 px-3 py-2.5 text-[13px] text-red-600 dark:text-red-400">
                     {err}
-                  </div>
-                )}
-              </section>
-
-              {/* 右栏:模型设置(单独指定,缺省跟随项目默认) */}
-              <section className="flex flex-col gap-4 rounded-xl border border-border bg-surface-hover/30 p-6">
-                <h3 className="flex items-center gap-1.5 text-[13px] font-medium text-foreground-subtle">
-                  <Cpu className="size-3.5" /> 模型设置
-                </h3>
-                <div>
-                  <label className={LABEL_CLS}>
-                    运行模型
-                  </label>
-                  {(() => {
-                    const modelSel =
-                      draft.providerId && draft.modelId
-                        ? `${draft.providerId}::${draft.modelId}`
-                        : '';
-                    // 编辑任务保存的模型可能不在当前列表(如 provider 已删除):仍展示以便保留
-                    const known = modelOptions.some((o) => o.value === modelSel);
-                    const keep =
-                      modelSel && !known
-                        ? [{ value: modelSel, label: `${draft.modelId} · ${draft.providerId}` }]
-                        : [];
-                    return (
-                      <select
-                        className={SELECT_CLS}
-                        value={modelSel}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          if (!v) {
-                            setDraft({ ...draft, providerId: '', modelId: '' });
-                          } else {
-                            const idx = v.indexOf('::');
-                            setDraft({
-                              ...draft,
-                              providerId: v.slice(0, idx),
-                              modelId: v.slice(idx + 2),
-                            });
-                          }
-                        }}
-                      >
-                        <option value="">跟随项目默认</option>
-                        {keep.map((o) => (
-                          <option key={o.value} value={o.value}>
-                            {o.label}
-                          </option>
-                        ))}
-                        {modelOptions.map((o) => (
-                          <option key={o.value} value={o.value}>
-                            {o.label}
-                          </option>
-                        ))}
-                      </select>
-                    );
-                  })()}
-                  <p className="mt-1.5 text-xs text-foreground-subtlest">
-                    默认跟随目标项目当前使用的模型;单独指定后,该任务每次运行都使用所选模型。
-                  </p>
-                </div>
-                {draft.providerId && draft.modelId && (
-                  <div>
-                    <label className={LABEL_CLS}>
-                      思考强度
-                    </label>
-                    <select
-                      className={SELECT_CLS}
-                      value={draft.reasoningEffort}
-                      onChange={(e) => setDraft({ ...draft, reasoningEffort: e.target.value })}
-                    >
-                      {THOUGHT_LEVELS.map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.label}
-                        </option>
-                      ))}
-                    </select>
                   </div>
                 )}
               </section>
