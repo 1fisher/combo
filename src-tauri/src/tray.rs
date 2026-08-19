@@ -21,10 +21,14 @@ pub const EVENT_TRAY_OPEN_VIEW: &str = "tray-open-view";
 /// macOS:用自建菜单替换 Tauri 默认应用菜单。
 /// 默认菜单「文件 > 关闭窗口 (⌘W)」会在原生层截获 ⌘W(触发窗口关闭→隐藏到托盘),
 /// 前端「⌘W 关闭当前文件」就永远收不到按键;自建菜单保留 App/编辑/显示/窗口
-/// 标准项(⌘C/⌘V/⌘Q/全屏等不受影响),仅去掉「关闭窗口」——主窗口关闭本就被
+/// 标准项(⌘A/⌘C/⌘V/⌘Q/全屏等不受影响),仅去掉「关闭窗口」——主窗口关闭本就被
 /// 拦截为隐藏到托盘,真正退出走托盘菜单,行为不受影响。
-/// 注意「编辑」菜单不放 select_all:预定义「全选」自带 ⌘A 会同样截获按键,
-/// 而 ⌘A 已分配给「自动化」视图(输入框/CodeMirror 内的全选由 web 层自己处理)。
+/// 注意「编辑」菜单**必须**保留 select_all(全选 ⌘A):macOS 上 WKWebView
+/// textarea/CodeMirror 的 ⌘A 全选依赖 AppKit responder chain 的 `selectAll:`
+/// 动作——主菜单没有该加速键项时按键只会变成普通 keydown 到达 web 层,
+/// 什么也不发生(⌘A 在 Composer/编辑器内完全失效,已实测复现);加上后
+/// DOM keydown 仍照常派发给 web 层(defaultPrevented=false),前端快捷键
+/// 默认 ⌘⇧A 切换「自动化」视图不受影响。
 #[cfg(target_os = "macos")]
 pub fn init_app_menu(app: &AppHandle) {
     use tauri::menu::{MenuBuilder, SubmenuBuilder};
@@ -48,6 +52,7 @@ pub fn init_app_menu(app: &AppHandle) {
             .cut()
             .copy()
             .paste()
+            .select_all()
             .build()?;
         let view_menu = SubmenuBuilder::new(app, "显示").fullscreen().build()?;
         let window_menu = SubmenuBuilder::new(app, "窗口").minimize().maximize().build()?;
@@ -85,7 +90,9 @@ pub fn show_main_window(app: &AppHandle) {
 pub fn init(app: &AppHandle) -> tauri::Result<()> {
     let new_task = MenuItem::with_id(app, "new-task", "新建任务", true, Some("CmdOrCtrl+N"))?;
     let sep_head = PredefinedMenuItem::separator(app)?;
-    let view_auto = MenuItem::with_id(app, "view-automation", "自动化", true, Some("CmdOrCtrl+A"))?;
+    // accelerator 仅作显示(与前端 shortcuts.ts 默认绑定保持一致:自动化 ⌘/Ctrl+Shift+A;
+    // c1bf63a 后前端默认键已从 ⌘A 改为 ⌘⇧A 避开全选冲突,托盘显示同步跟进)
+    let view_auto = MenuItem::with_id(app, "view-automation", "自动化", true, Some("CmdOrCtrl+Shift+A"))?;
     let view_search = MenuItem::with_id(app, "view-search", "搜索", true, Some("CmdOrCtrl+K"))?;
     let view_skills = MenuItem::with_id(app, "view-skills", "技能", true, Some("CmdOrCtrl+Shift+S"))?;
     let view_mcp = MenuItem::with_id(app, "view-mcp", "MCP 工具", true, Some("CmdOrCtrl+Shift+M"))?;
