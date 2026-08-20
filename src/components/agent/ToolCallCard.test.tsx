@@ -70,30 +70,36 @@ describe('ToolCallCard', () => {
     expect(document.querySelector('code.language-typescript .hljs-keyword')).toBeTruthy();
   });
 
-  it('不同工具显示不同图标(read/grep/search/write 各有专属,未知回退扳手)', () => {
-    const cases: Array<[string, string]> = [
-      ['read', 'lucide-file-text'],
-      ['write', 'lucide-file-pen-line'],
-      ['replace', 'lucide-replace'],
-      ['search', 'lucide-search'],
-      ['grep', 'lucide-text-search'],
-      ['web_search', 'lucide-globe'],
-      ['current_datetime', 'lucide-clock-3'],
-      ['question', 'lucide-circle-question-mark'],
-      ['todo_write', 'lucide-list-todo'],
-      ['compact', 'lucide-archive'],
-      ['agent', 'lucide-bot'],
-      ['diagnostics', 'lucide-stethoscope'],
-      ['definition', 'lucide-locate-fixed'],
-      ['references', 'lucide-link-2'],
-      ['hover', 'lucide-message-square-text'],
-      ['mcp_unknown_tool', 'lucide-wrench'],
+  it('不同工具显示不同图标且颜色体现风险等级(未知回退扳手+中性灰)', () => {
+    // [工具名, 图标 class, 风险色:绿=只读 蓝=交互 黄=状态变更 红=写/执行]
+    const cases: Array<[string, string, string]> = [
+      ['read', 'lucide-file-text', 'text-green-500'],
+      ['write', 'lucide-file-pen-line', 'text-red-500'],
+      ['replace', 'lucide-replace', 'text-red-500'],
+      ['search', 'lucide-search', 'text-green-500'],
+      ['grep', 'lucide-text-search', 'text-green-500'],
+      ['web_search', 'lucide-globe', 'text-green-500'],
+      ['current_datetime', 'lucide-clock-3', 'text-green-500'],
+      ['question', 'lucide-circle-question-mark', 'text-brand'],
+      ['todo_write', 'lucide-list-todo', 'text-brand'],
+      ['compact', 'lucide-archive', 'text-amber-500'],
+      ['agent', 'lucide-bot', 'text-amber-500'],
+      ['diagnostics', 'lucide-stethoscope', 'text-green-500'],
+      ['definition', 'lucide-locate-fixed', 'text-green-500'],
+      ['references', 'lucide-link-2', 'text-green-500'],
+      ['hover', 'lucide-message-square-text', 'text-green-500'],
+      ['bash', 'lucide-terminal', 'text-red-500'],
+      ['mcp_unknown_tool', 'lucide-wrench', 'text-muted-foreground'],
     ];
-    for (const [name, cls] of cases) {
+    for (const [name, cls, color] of cases) {
       const { unmount } = render(
         <ToolCallCard call={{ id: 'tc-i', name, input: '{}', finished: true }} />
       );
       expect(document.querySelector(`svg.${cls}`), `${name} 应显示 ${cls}`).toBeTruthy();
+      expect(
+        document.querySelector(`svg.${cls}.${color}`),
+        `${name} 图标应为 ${color}`
+      ).toBeTruthy();
       unmount();
     }
   });

@@ -11,7 +11,7 @@ import { JsonView, tryParseJson } from './JsonView';
 import { BashCode } from './BashCode';
 import { BASH_TOOLS, commandFromInput, formatDurationMs, stripCommandEcho } from './bashTools';
 import { CodeView } from './CodeView';
-import { toolIcon } from './toolIcons';
+import { toolIcon, toolIconClass } from './toolIcons';
 import { toolPathFromInput } from './ToolCallCard';
 
 const FILE_DIFF_TOOLS = new Set(['write', 'edit', 'multiedit']);
@@ -279,7 +279,8 @@ export function ToolResultCard({
   const v = useToolResultView(result, command);
   const [expanded, setExpanded] = useState(false);
   const { showError, timedOut, exitCode, metaInfo, changeStats, isLong, content } = v;
-  // 按工具名取专属图标(与 ToolCallCard 同一套映射,未知回退扳手)
+  // 按工具名取专属图标(与 ToolCallCard 同一套映射,未知回退扳手),
+  // 颜色体现风险:绿=只读、蓝=交互、黄=状态变更、红=写/执行有破坏性
   const ResultGlyph = toolIcon(v.name);
 
   return (
@@ -291,7 +292,7 @@ export function ToolResultCard({
         ) : (
           <CheckCircle className="size-3.5 text-green-500" />
         )}
-        <ResultGlyph className="size-3 text-muted-foreground" />
+        <ResultGlyph className={`size-3 ${toolIconClass(v.name)}`} />
         <span className="font-mono text-[11px] text-muted-foreground">{v.titleLabel}</span>
         {/* 失败/超时状态:标记在消息项上(成功已有对勾图标,不重复加文字) */}
         {showError && (

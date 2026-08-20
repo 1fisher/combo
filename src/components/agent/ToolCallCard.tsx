@@ -8,7 +8,7 @@ import { BashCode } from './BashCode';
 import { CodeView } from './CodeView';
 import { ToolResultBody } from './ToolResultCard';
 import { BASH_TOOLS, commandFromInput, formatDurationMs } from './bashTools';
-import { toolIcon } from './toolIcons';
+import { toolIcon, toolIconClass } from './toolIcons';
 
 export interface ToolCallInfo {
   id: string;
@@ -82,8 +82,10 @@ export function ToolCallCard({
       ? formatDurationMs(resultMeta.duration_ms)
       : null;
   const [expanded, setExpanded] = useState(false);
-  // 按工具名取专属图标(read/write/grep/搜索/LSP… 各不相同,未知回退扳手)
+  // 按工具名取专属图标(read/write/grep/搜索/LSP… 各不相同,未知回退扳手),
+  // 颜色体现风险:绿=只读、蓝=交互、黄=状态变更、红=写/执行有破坏性
   const ToolGlyph = toolIcon(call.name);
+  const toolGlyphClass = toolIconClass(call.name);
 
   return (
     <details
@@ -92,7 +94,7 @@ export function ToolCallCard({
     >
       <summary className="flex cursor-pointer items-center gap-2 px-3 py-2">
         {call.finished ? (
-          <ToolGlyph className="h-3.5 w-3.5 shrink-0 text-brand" />
+          <ToolGlyph className={`h-3.5 w-3.5 shrink-0 ${toolGlyphClass}`} />
         ) : (
           <span className="font-mono text-xs">⚙</span>
         )}
