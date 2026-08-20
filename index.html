@@ -3,7 +3,17 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Combo</title>
+    <title>Combo — AI Agent IDE</title>
+    <meta
+      name="description"
+      content="Combo — 开源 Agent IDE:内嵌 combo-cli 智能体,多项目工作台、多会话并行,工具调用与输出实时可见,支持浏览器与移动端远程访问。"
+    />
+    <!-- 浏览器标签页图标:复用应用图标(public/combo-icon.png,与 Tauri/托盘图标同源) -->
+    <link rel="icon" type="image/png" href="/combo-icon.png" />
+    <link rel="apple-touch-icon" href="/combo-icon.png" />
+    <link rel="apple-touch-icon" sizes="128x128" href="/combo-icon.png" />
+    <!-- 移动端浏览器状态栏底色,对齐深色主题 --background(#101116) -->
+    <meta name="theme-color" content="#101116" />
     <!-- 启动画面(加载动画):纯 CSS + vanilla JS(public/splash.js),不依赖 React,
          在 bundle 下载/解析期间即可展示。React 挂载完成后由 main.tsx 派发
          combo:app-ready 事件,splash 收尾(粒子合并成图标 → 流光 combo → 淡出)。
