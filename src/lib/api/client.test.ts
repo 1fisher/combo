@@ -49,6 +49,29 @@ describe('apiRequest', () => {
     } satisfies Partial<ApiError>);
   });
 
+  it('surfaces plain-text error body instead of statusText (axum (StatusCode, String) 形态,如 409 Conflict)', async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response('该会话已有正在进行的任务,请等待完成或先停止', {
+        status: 409,
+        statusText: 'Conflict',
+      })
+    );
+    await expect(apiRequest('/v1/workspaces/w1/agent')).rejects.toMatchObject({
+      status: 409,
+      message: '该会话已有正在进行的任务,请等待完成或先停止',
+    } satisfies Partial<ApiError>);
+  });
+
+  it('falls back to statusText when error body is empty', async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      new Response('', { status: 409, statusText: 'Conflict' })
+    );
+    await expect(apiRequest('/v1/workspaces/w1/agent')).rejects.toMatchObject({
+      status: 409,
+      message: 'Conflict',
+    } satisfies Partial<ApiError>);
+  });
+
   it('returns undefined for 204 responses', async () => {
     vi.mocked(fetch).mockResolvedValue(new Response(null, { status: 204 }));
     const out = await apiRequest<void>('/v1/workspaces');

@@ -50,6 +50,11 @@ fn cfg_no_key() -> AskConfig {
 }
 
 fn make_state() -> AppState {
+    // 测试会真实触发 agent run,把请求日志重定向到临时目录,
+    // 防止 test-model 测试数据污染真实 ~/.config/combo/logs 并混入用量统计。
+    combo_cli::request_log::set_log_dir_override(Some(
+        std::env::temp_dir().join("combo-test-logs"),
+    ));
     let meta = Arc::new(MetaStore::new());
     meta.insert(WorkspaceMeta {
         id: "ws_cli".into(),

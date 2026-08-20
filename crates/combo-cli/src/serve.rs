@@ -152,8 +152,19 @@ impl AppState {
     }
 
     /// 测试用最小状态(仅 meta/browse_root/relay,其余取默认)。
+    ///
+    /// 同时把 agent 请求日志重定向到临时目录:测试会真实触发 agent run
+    /// (`run_agent_ws` 等),不隔离的话 `test-model` 测试数据会写进真实
+    /// `~/.config/combo/logs/` 并混入用量统计。持 ENV_LOCK 与 request_log
+    /// 的目录测试串行,避免 override 被并行读写。
     #[cfg(test)]
     pub(crate) fn test_state(meta: Arc<MetaStore>, browse_root: Option<PathBuf>) -> Self {
+        {
+            let _env = crate::paths::ENV_LOCK.lock().unwrap();
+            crate::request_log::set_log_dir_override(Some(
+                std::env::temp_dir().join("combo-test-logs"),
+            ));
+        }
         let provider = crate::providers::ProviderInfo {
             id: "test".into(),
             name: None,
@@ -715,12 +726,21 @@ pub(crate) async fn start_agent_run(
             }
         }
 
+        // 答案已完整流出(final 消息 + run_complete + todo 终态均已广播),
+        // 到此为止 run 对客户端就是"结束"。这里立即释放 busy 并广播
+        // is_busy=false,再去做收尾账务(on_finish 回调、request_log 落盘、
+        // usage/api_calls 写库——多进程共享 sqlite 时每次写最多可等 5s 锁);
+        // 若等账务跑完才释放,期间该会话的任何再次发起都会 409 Conflict,
+        // 前端也会把「已完成」的会话继续显示成运行中。panic 等异常路径仍由
+        // RunGuard 的 Drop 兜底释放。
+        drop(_run_guard);
+
         // run 真正结束:通知调用方(自动化任务据此落运行结果)。
         if let Some(cb) = on_finish {
             cb(&reason, error.clone());
         }
-
-        // 记录响应日志(agent 返回的内容;usage 记 run 累计消耗)
+        // 记录响应日志(agent 返回的内容;usage 记 run 累计消耗,
+        // turns 记 API 调用数供用量统计的「请求次数」聚合)
         crate::request_log::log_response(
             &run_id2,
             &session_id,
@@ -728,6 +748,7 @@ pub(crate) async fn start_agent_run(
             &text,
             error.as_deref(),
             usage.map(|u| (u.total_input, u.total_output)),
+            run_turns.max(0) as u64,
             &tool_call_summaries,
         );
 
@@ -1543,7 +1564,9 @@ fn persist_msg(meta: &MetaStore, ws_id: &str, msg: &Value) {
 }
 
 /// run 生命周期护栏:Drop 时释放 busy 标记并广播 is_busy=false。
-/// 无论任务正常结束、出错还是 panic,会话都不会卡在「运行中」。
+/// 正常路径在 run_complete 广播后即显式 drop(见 start_agent_run,答案
+/// 完成即释放,不等收尾账务);其余退出路径(出错中途 return、panic)由
+/// Drop 兜底,会话都不会卡在「运行中」。
 struct RunGuard {
     state: AppState,
     session_id: String,
@@ -3949,6 +3972,52 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         assert!(!state.runs.is_busy("other-sid"));
+    }
+
+    #[tokio::test]
+    async fn busy_released_before_on_finish_bookkeeping() {
+        let state = multi_session_test_state();
+        // 回归:run_complete 广播后即释放 busy(不等 on_finish/落库等收尾账务),
+        // 否则账务耗时(多进程 sqlite 锁等待)期间同会话再次发起会 409,
+        // 前端也会把已完成的会话继续显示成运行中。
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let busy_at_finish = std::sync::Arc::new(Mutex::new(None::<bool>));
+        let d = done.clone();
+        let b = busy_at_finish.clone();
+        let st = state.clone();
+        start_agent_run(
+            &state,
+            "ws_t",
+            AgentRunRequest {
+                session_id: "rel-sid".into(),
+                run_id: "rel-run".into(),
+                prompt: "你好".into(),
+                history: None,
+                workspace_dir: None,
+                model: None,
+            },
+            Some(Box::new(move |_reason, _err| {
+                *b.lock().unwrap() = Some(st.runs.is_busy("rel-sid"));
+                d.store(true, std::sync::atomic::Ordering::SeqCst);
+            })),
+        )
+        .await
+        .unwrap();
+        for _ in 0..250 {
+            if done.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(
+            done.load(std::sync::atomic::Ordering::SeqCst),
+            "on_finish 未被调用(run 未收尾)"
+        );
+        assert_eq!(
+            busy_at_finish.lock().unwrap().unwrap(),
+            false,
+            "on_finish 触发时 busy 应已释放"
+        );
     }
 
     #[tokio::test]

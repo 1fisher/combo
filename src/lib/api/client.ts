@@ -17,6 +17,37 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * 把非 2xx 响应解析为 ApiError。错误体两种形态:
+ * - JSON `{message, code, path}`(如 dir_permission_required);
+ * - 纯文本(axum `(StatusCode, String)` 错误即此形态,body 是中文提示但
+ *   content-type 为 text/plain,如 409 的「该会话已有正在进行的任务…」)。
+ * 此前只按 JSON 解析,失败退回 statusText(用户只看到 "Conflict" 这类
+ * 状态名,拿不到真实原因),这里改为文本兜底。body 只能读一次,故先
+ * 读 text 再尝试 JSON.parse。
+ */
+async function toApiError(res: Response): Promise<ApiError> {
+  let message = res.statusText;
+  let code: string | undefined;
+  let errPath: string | undefined;
+  const raw = await res.text().catch(() => '');
+  if (raw) {
+    try {
+      const j = JSON.parse(raw) as { message?: unknown; code?: unknown; path?: unknown };
+      if (j && typeof j === 'object') {
+        if (typeof j.message === 'string' && j.message) message = j.message;
+        if (typeof j.code === 'string' && j.code) code = j.code;
+        if (typeof j.path === 'string' && j.path) errPath = j.path;
+      }
+    } catch {
+      /* 非 JSON:纯文本错误体,截断后直接作为错误消息 */
+      const t = raw.trim().slice(0, 500);
+      if (t) message = t;
+    }
+  }
+  return new ApiError(res.status, message, code, errPath);
+}
+
 export async function apiRequest<T>(
   path: string,
   opts: { method?: string; query?: Record<string, string>; body?: unknown; timeoutMs?: number } = {}
@@ -62,18 +93,7 @@ export async function apiRequest<T>(
     if (timer) clearTimeout(timer);
   }
   if (!res.ok) {
-    let message = res.statusText;
-    let code: string | undefined;
-    let path: string | undefined;
-    try {
-      const j = (await res.json()) as { message?: string; code?: string; path?: string };
-      if (j.message) message = j.message;
-      code = j.code;
-      path = j.path;
-    } catch {
-      /* keep statusText */
-    }
-    throw new ApiError(res.status, message, code, path);
+    throw await toApiError(res);
   }
   if (res.status === 204) return undefined as T;
   const text = await res.text();
@@ -130,16 +150,7 @@ export async function apiRequestRaw<T>(
     if (timer) clearTimeout(timer);
   }
   if (!res.ok) {
-    let message = res.statusText;
-    let code: string | undefined;
-    try {
-      const j = (await res.json()) as { message?: string; code?: string };
-      if (j.message) message = j.message;
-      code = j.code;
-    } catch {
-      /* keep statusText */
-    }
-    throw new ApiError(res.status, message, code);
+    throw await toApiError(res);
   }
   const text = await res.text();
   if (!text) return undefined as T;
@@ -193,16 +204,7 @@ export async function apiRequestBinary(
     if (timer) clearTimeout(timer);
   }
   if (!res.ok) {
-    let message = res.statusText;
-    let code: string | undefined;
-    try {
-      const j = (await res.json()) as { message?: string; code?: string };
-      if (j.message) message = j.message;
-      code = j.code;
-    } catch {
-      /* keep statusText */
-    }
-    throw new ApiError(res.status, message, code);
+    throw await toApiError(res);
   }
   return res.arrayBuffer();
 }
@@ -246,16 +248,7 @@ export async function apiRequestNdjson(
     throw new ApiError(0, 'network error');
   }
   if (!res.ok) {
-    let message = res.statusText;
-    let code: string | undefined;
-    try {
-      const j = (await res.json()) as { message?: string; code?: string };
-      if (j.message) message = j.message;
-      code = j.code;
-    } catch {
-      /* keep statusText */
-    }
-    throw new ApiError(res.status, message, code);
+    throw await toApiError(res);
   }
   const dispatch = (raw: string) => {
     const line = raw.trim();

@@ -128,7 +128,12 @@ export function AgentPanel({
   }, [sessionId, history]);
 
   const messages = rt?.messages ?? [];
-  const running = rt?.run?.status === 'running' && messages.some((m) => m.streaming);
+  // running 只看 run 状态:消息的 streaming 标志仅用于渲染(光标等),
+  // 历史灌入(hydrateMessages)后全部为 false,而 run 可能仍在进行
+  // (如长工具调用期间无消息更新)。若此处叠加 streaming 条件,会在
+  // 「后端 busy、本地无流式消息」时显示发送按钮,点击必得 409 Conflict。
+  // run 状态由 session busy 事件(含订阅快照)与会话列表对账收敛,可信。
+  const running = rt?.run?.status === 'running';
 
   // 每轮「发送 → 收到首个 assistant token」耗时 <2s → combo+1;超时归零
   useEffect(() => {
@@ -307,6 +312,22 @@ export function AgentPanel({
       void autoTitleFromPrompt(sid!, sendPrompt);
     } catch (e) {
       const err = e as { status?: number; message?: string };
+      // 409 Conflict:服务端该会话确有进行中的 run(本端运行态丢失/过期,
+      // 如历史灌入后误判空闲)。不能标记「运行失败」——那会掩盖仍在进行的
+      // run;正确做法是回滚乐观消息并恢复运行态:停止按钮回归,run 真正
+      // 结束时由 session busy=false 事件(不看 run_id)与列表对账收敛为 done。
+      if (err?.status === 409) {
+        st.deleteMessage(sid!, `local-${runId}`);
+        markRunStarted(sid!);
+        st.markRun(sid!, runId, 'running');
+        setPostError(
+          e instanceof Error && e.message && e.message !== 'Conflict'
+            ? e.message
+            : '该会话已有正在进行的任务,请等待完成或先停止',
+        );
+        await discardCreatedSession(createdSid);
+        return;
+      }
       // 后端重启后会话丢失(404):若是复用的旧会话则自动重建后重试一次
       if (reused && err?.status === 404) {
         st.deleteMessage(sid!, `local-${runId}`);
