@@ -1,79 +1,27 @@
 import { CircleAlert, CircleCheck, X } from 'lucide-react';
 import type { LspIssue, LspReady } from '../../lib/lspStatus';
 import { cn } from '../../lib/utils';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
 
 /**
- * 会话界面的 LSP 状态横幅,显示在消息区上方:
- * - `issues` 非空(有问题)→ 警示模式:
- *   - `not-found`(已配置但 PATH 中找不到可执行文件)→ 错误红,标题「语言服务检测异常」;
- *   - `missing`(项目有该语言源码但未配置 server)→ 琥珀警告,标题「语言服务未配置」。
- * - `issues` 为空且 `ready` 非空(LSP 已配置齐全)→ 正向模式:
- *   绿色轻量一行,标题「语言服务已就绪」,逐语言列出可用 server,
- *   确认代码诊断/导航工具可用。
+ * 会话界面的 LSP 问题横幅:项目主要语言的 LSP 未就绪时显示在消息区上方,
+ * - `not-found`(已配置但 PATH 中找不到可执行文件)→ 错误红,标题「语言服务检测异常」;
+ * - `missing`(项目有该语言源码但未配置 server)→ 琥珀警告,标题「语言服务未配置」。
  *
- * 「去配置」/「详情」跳转 LSP 服务视图(可一键安装/表单配置);「忽略」本次隐藏
+ * 「去配置」跳转 LSP 服务视图(可一键安装/表单配置);「忽略」本次隐藏
  * (内存态,切换项目后自动复位重检)。
+ *
+ * 正常状态不使用本横幅(避免大条幅噪音),改用 LspReadyIndicator 的小 icon。
  */
 export function LspStatusBanner({
   issues,
-  ready = [],
   onOpenLsp,
   onDismiss,
 }: {
   issues: LspIssue[];
-  /** 已就绪的语言列表(仅 issues 为空时展示)。 */
-  ready?: LspReady[];
   onOpenLsp: () => void;
   onDismiss: () => void;
 }) {
-  if (issues.length === 0) {
-    // 正向模式:项目主要语言的 LSP 全部就绪
-    return (
-      <div
-        data-testid="lsp-status-banner"
-        data-state="ready"
-        className={cn(
-          'flex items-start gap-2 bg-emerald-500/10 mx-4 mt-2 px-3 py-2 border rounded-xl text-xs shrink-0',
-          'border-emerald-500/30 text-emerald-700 dark:text-emerald-400',
-        )}
-      >
-        <CircleCheck className="mt-0.5 size-3.5 shrink-0" />
-        <div className="flex flex-col gap-1 min-w-0 flex-1">
-          <span className="font-medium leading-5">语言服务已就绪</span>
-          <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-0.5 leading-snug text-foreground-subtle">
-            {ready.map((r, i) => (
-              <span key={r.lang} className="inline-flex items-baseline gap-1 min-w-0">
-                {i > 0 && <span className="opacity-50">·</span>}
-                <span className="font-medium text-foreground">{r.label}</span>
-                <code className="font-mono opacity-80 break-all">{r.command}</code>
-              </span>
-            ))}
-          </div>
-          <span className="leading-snug text-foreground-subtle">
-            代码诊断 / 跳转定义 / 引用查找 / 悬停信息工具已可用
-          </span>
-        </div>
-        <div className="flex items-center gap-1 shrink-0">
-          <button
-            type="button"
-            onClick={onOpenLsp}
-            className="hover:bg-surface-hover text-brand rounded-md px-1.5 py-1 font-medium transition-colors"
-          >
-            详情
-          </button>
-          <button
-            type="button"
-            aria-label="忽略本次提示"
-            title="忽略本次提示(切换项目后会重新检测)"
-            onClick={onDismiss}
-            className="hover:bg-surface-hover flex justify-center items-center rounded-md size-6 text-foreground-subtle transition-colors"
-          >
-            <X className="size-3.5" />
-          </button>
-        </div>
-      </div>
-    );
-  }
   const hasError = issues.some((i) => i.kind === 'not-found');
   return (
     <div
@@ -134,5 +82,47 @@ export function LspStatusBanner({
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * LSP 就绪指示器(正常状态的轻量展示):消息区右上角一枚小绿勾,
+ * 悬停弹出 tooltip 显示就绪详情(语言 + server + 可用工具),点击跳 LSP 视图
+ * (触屏没有 hover,点击兜底)。与 Composer「完全访问」的 icon+tooltip 范式一致。
+ */
+export function LspReadyIndicator({
+  ready,
+  onOpenLsp,
+}: {
+  ready: LspReady[];
+  onOpenLsp: () => void;
+}) {
+  return (
+    <TooltipProvider>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            data-testid="lsp-ready-indicator"
+            aria-label="语言服务已就绪,点击查看详情"
+            title="语言服务已就绪"
+            onClick={onOpenLsp}
+            className="hover:bg-surface-hover flex justify-center items-center rounded-md size-6 text-emerald-600 dark:text-emerald-400 transition-colors"
+          >
+            <CircleCheck className="size-3.5" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" align="end" className="flex flex-col items-start gap-0.5">
+          <span className="font-medium">语言服务已就绪</span>
+          {ready.map((r) => (
+            <span key={r.lang} className="min-w-0 max-w-[16rem]">
+              {r.label} · <code className="font-mono">{r.command}</code>
+              <span className="text-background/60">({r.files} 个源文件)</span>
+            </span>
+          ))}
+          <span className="text-background/70">代码诊断 / 跳转定义 / 引用查找 / 悬停信息工具已可用</span>
+        </TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }

@@ -18,7 +18,7 @@ import { Composer } from './Composer';
 import { RunningIndicator } from './RunningIndicator';
 import { ComboOverlay, nextCombo, settleCombo } from './ComboOverlay';
 import { ChatEmptyState } from './ChatEmptyState';
-import { LspStatusBanner } from './LspStatusBanner';
+import { LspStatusBanner, LspReadyIndicator } from './LspStatusBanner';
 import { FileChangesPanel, type ChangeStatus } from './FileChangesPanel';
 import { TodoList } from './TodoList';
 import { SubAgentPanel } from './SubAgentPanel';
@@ -68,14 +68,12 @@ export function AgentPanel({
   const [showChanges, setShowChanges] = useState(false);
   const [changeStatuses, setChangeStatuses] = useState<Record<string, ChangeStatus>>({});
   // 项目 LSP 状态:主要语言未配置 server / 可执行文件缺失时在会话区顶部警示;
-  // 全部就绪时正向展示「语言服务已就绪」(可用语言 + server)。
-  // 「忽略」为内存态,切换项目后自动复位(切换即重检);两条横幅的忽略态互相独立。
+  // 全部就绪时只在消息区右上角放一枚小绿勾(LspReadyIndicator),hover 看详情,
+  // 不占横幅。问题横幅的「忽略」为内存态,切换项目后自动复位(切换即重检)。
   const { issues: lspIssues, ready: lspReady } = useWorkspaceLspStatus(workspaceId);
   const [lspDismissed, setLspDismissed] = useState(false);
-  const [lspReadyDismissed, setLspReadyDismissed] = useState(false);
   useEffect(() => {
     setLspDismissed(false);
-    setLspReadyDismissed(false);
   }, [workspaceId]);
   // 连击(combo)计数:连续快速回复时累加,超时/切会话归零;
   // 流式期间每条内容更新也 +1(叠加,不封顶)。
@@ -388,7 +386,7 @@ export function AgentPanel({
         </div>
       )}
       {/* LSP 状态横幅:主要语言未就绪时警示(如 rust 未找到 rust-analyzer);
-          全部就绪时正向展示「语言服务已就绪」确认诊断/导航工具可用(问题优先,只显示其一) */}
+          全部就绪时降级为消息区右上角的小绿勾指示器(hover 看详情,问题优先,只显示其一) */}
       {workspaceId && lspIssues.length > 0 && !lspDismissed && (
         <LspStatusBanner
           issues={lspIssues}
@@ -396,13 +394,10 @@ export function AgentPanel({
           onDismiss={() => setLspDismissed(true)}
         />
       )}
-      {workspaceId && lspIssues.length === 0 && lspReady.length > 0 && !lspReadyDismissed && (
-        <LspStatusBanner
-          issues={[]}
-          ready={lspReady}
-          onOpenLsp={onOpenLspView}
-          onDismiss={() => setLspReadyDismissed(true)}
-        />
+      {workspaceId && lspIssues.length === 0 && lspReady.length > 0 && (
+        <div className="flex justify-end items-center mx-4 mt-1 shrink-0">
+          <LspReadyIndicator ready={lspReady} onOpenLsp={onOpenLspView} />
+        </div>
       )}
       {/* 时间线 / 变更面板 */}
       <div className={cn('flex-1 min-h-0', showChanges ? 'overflow-hidden' : 'overflow-y-auto')}>
