@@ -10,8 +10,8 @@ import {
 } from '../lib/api';
 import { useAgentStore } from '../stores/agentStore';
 
-/** 任务列表分页大小:每页 80 条,滚动接近列表尾部时自动加载下一页。 */
-export const SESSION_PAGE_SIZE = 80;
+/** 任务列表分页大小:每页 5 条,滚动接近列表尾部时自动加载下一页。 */
+export const SESSION_PAGE_SIZE = 18;
 
 /**
  * 模块级集合:记录最近创建的会话 ID。

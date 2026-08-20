@@ -237,8 +237,18 @@ export async function resolveProxyBaseUrl(): Promise<string> {
   return found ?? `http://127.0.0.1:${DEFAULT_LOCAL_PORT}`;
 }
 
-export async function connectLoop(opts: { intervalMs?: number } = {}): Promise<void> {
-  const intervalMs = opts.intervalMs ?? 2000;
+/**
+ * 健康检查间隔(自适应):
+ * - 连接正常时低频探活(15s)——健康轮询只为刷新连接状态,无需高频;
+ * - 断连时快速重试(2s)——尽快恢复,并保持「连续 3 次失败触发重扫描」
+ *   的恢复节奏(约 6s)不变;
+ * - 页面不可见(后台标签/最小化到托盘)时暂停探活,恢复可见后 ≤2s 内补查。
+ */
+const HEALTHY_INTERVAL_MS = 15_000;
+const UNHEALTHY_INTERVAL_MS = 2_000;
+
+export async function connectLoop(opts: { retryIntervalMs?: number } = {}): Promise<void> {
+  const retryMs = opts.retryIntervalMs ?? UNHEALTHY_INTERVAL_MS;
   let base = getProxyBaseUrl();
   if (!base) {
     base = await resolveProxyBaseUrl();
@@ -256,6 +266,11 @@ export async function connectLoop(opts: { intervalMs?: number } = {}): Promise<v
       base = await resolveProxyBaseUrl();
       setProxyBaseUrl(base);
       staleCount = 0;
+    }
+    // 页面不可见时跳过探活(避免后台标签/托盘最小化时持续打 /v1/health)
+    if (typeof document !== 'undefined' && document.hidden) {
+      await new Promise((r) => setTimeout(r, retryMs));
+      continue;
     }
     const ok = await checkHealth(base);
     useConnectionStore.getState().setStatus(ok ? 'connected' : 'disconnected');
@@ -286,6 +301,7 @@ export async function connectLoop(opts: { intervalMs?: number } = {}): Promise<v
       staleCount = 0;
       useConnectionStore.getState().setError(null);
     }
-    await new Promise((r) => setTimeout(r, intervalMs));
+    // 正常连接低频探活,断连时快速重试
+    await new Promise((r) => setTimeout(r, ok ? HEALTHY_INTERVAL_MS : retryMs));
   }
 }

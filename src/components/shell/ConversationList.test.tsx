@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ConversationList } from './ConversationList';
 import { useAgentStore } from '../../stores/agentStore';
+import { SESSION_PAGE_SIZE } from '../../hooks/useSessions';
 import { listSessionsPage } from '../../lib/api';
 
 const sessions: { id: string; title: string; created_at: number; is_busy?: boolean }[] = [
@@ -12,7 +13,7 @@ const sessions: { id: string; title: string; created_at: number; is_busy?: boole
 ];
 
 vi.mock('../../lib/api', () => ({
-  // 分页版列表(每页 80):按 offset 切片,total 为全部会话数
+  // 分页版列表:按 offset 切片,total 为全部会话数
   listSessionsPage: vi.fn(
     async (_w: string, limit: number, offset: number) => ({
       sessions: sessions.slice(offset, offset + limit),
@@ -108,8 +109,9 @@ describe('ConversationList', () => {
   });
 
   it('loads the next page when the sentinel scrolls into view', async () => {
-    // 3 页数据(total > 已加载数),首页只出前 80 条
-    const many = Array.from({ length: 200 }, (_, i) => ({
+    // 3 页数据(total > 已加载数),首页只出第一页
+    const total = SESSION_PAGE_SIZE * 2 + 1;
+    const many = Array.from({ length: total }, (_, i) => ({
       id: `p${i}`,
       title: `分页任务${i}`,
       created_at: 1_700_000_000 + i,
@@ -120,26 +122,26 @@ describe('ConversationList', () => {
 
     renderList();
     expect(await screen.findByText('分页任务0')).toBeTruthy();
-    // 首页只加载 80 条,未出现第 81 条
-    expect(screen.queryByText('分页任务80')).toBeNull();
+    // 首页只加载第一页,未出现第二页首条
+    expect(screen.queryByText(`分页任务${SESSION_PAGE_SIZE}`)).toBeNull();
     expect(listSessionsPage).toHaveBeenCalledTimes(1);
     expect(vi.mocked(listSessionsPage).mock.calls[0]).toEqual(
-      expect.arrayContaining(['w1', 80, 0]),
+      expect.arrayContaining(['w1', SESSION_PAGE_SIZE, 0]),
     );
 
-    // 哨兵进入视口 → 自动拉第二页(offset 80)
+    // 哨兵进入视口 → 自动拉第二页(offset = 页大小)
     const observer = FakeIntersectionObserver.instances[0];
     expect(observer?.el).toBe(screen.getByTestId('session-list-sentinel'));
     intersect(observer, true);
-    expect(await screen.findByText('分页任务80')).toBeTruthy();
+    expect(await screen.findByText(`分页任务${SESSION_PAGE_SIZE}`)).toBeTruthy();
     expect(listSessionsPage).toHaveBeenCalledTimes(2);
     expect(vi.mocked(listSessionsPage).mock.calls[1]).toEqual(
-      expect.arrayContaining(['w1', 80, 80]),
+      expect.arrayContaining(['w1', SESSION_PAGE_SIZE, SESSION_PAGE_SIZE]),
     );
 
-    // 再滚一页 → 第三页(offset 160,含最后一条 199);随后 total 与已加载数相等,不再请求
+    // 再滚一页 → 第三页(offset 2×页大小,含最后一条);随后 total 与已加载数相等,不再请求
     intersect(observer, true);
-    expect(await screen.findByText('分页任务199')).toBeTruthy();
+    expect(await screen.findByText(`分页任务${total - 1}`)).toBeTruthy();
     expect(listSessionsPage).toHaveBeenCalledTimes(3);
     intersect(observer, true);
     expect(listSessionsPage).toHaveBeenCalledTimes(3);
