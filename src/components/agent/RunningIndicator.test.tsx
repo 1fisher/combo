@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
-import { formatElapsed, RunningIndicator } from './RunningIndicator';
+import { formatElapsed, RunningIndicator, streamTailPreview } from './RunningIndicator';
 import { useAgentStore } from '../../stores/agentStore';
 
 /** 往 store 里灌一条正在流式的 assistant 消息(激活会话 s1) */
@@ -41,6 +41,66 @@ describe('formatElapsed', () => {
 
   it('负数按 0 处理', () => {
     expect(formatElapsed(-500)).toBe('00:00');
+  });
+});
+
+describe('streamTailPreview', () => {
+  it('无流式内容返回空串', () => {
+    expect(streamTailPreview(undefined)).toBe('');
+    expect(streamTailPreview({ messages: [] })).toBe('');
+    expect(
+      streamTailPreview({
+        messages: [{ streaming: false, parts: [{ type: 'text', data: { text: '已结束' } }] }],
+      })
+    ).toBe('');
+  });
+
+  it('折叠换行与空白为单行,首尾空白去除', () => {
+    expect(
+      streamTailPreview({
+        messages: [
+          { streaming: true, parts: [{ type: 'text', data: { text: '第一行\n  第二行\t\t尾' } }] },
+        ],
+      })
+    ).toBe('第一行 第二行 尾');
+  });
+
+  it('超长保留尾部并加省略号前缀(按码点,不切断 emoji)', () => {
+    const text = 'a'.repeat(50) + '🎯🎯' + 'b'.repeat(10);
+    const out = streamTailPreview({ messages: [{ streaming: true, parts: [{ type: 'text', data: { text } }] }] }, 12);
+    expect(out.startsWith('…')).toBe(true);
+    expect(out).toBe('…' + '🎯🎯' + 'b'.repeat(10));
+  });
+
+  it('未超长原样返回', () => {
+    expect(
+      streamTailPreview({ messages: [{ streaming: true, parts: [{ type: 'text', data: { text: '短内容' } }] }] }, 96)
+    ).toBe('短内容');
+  });
+
+  it('取最后一段有内容的 part:正文(text)出现后覆盖思考(reasoning)', () => {
+    const parts = [
+      { type: 'reasoning', data: { thinking: '思考中…' } },
+      { type: 'text', data: { text: '正文回答' } },
+    ];
+    expect(streamTailPreview({ messages: [{ streaming: true, parts }] })).toBe('正文回答');
+    // 只有思考时显示思考
+    expect(
+      streamTailPreview({
+        messages: [{ streaming: true, parts: [{ type: 'reasoning', data: { thinking: '纯思考' } }] }],
+      })
+    ).toBe('纯思考');
+  });
+
+  it('多条流式消息取最后出现的非空 part', () => {
+    expect(
+      streamTailPreview({
+        messages: [
+          { streaming: true, parts: [{ type: 'text', data: { text: '旧消息内容' } }] },
+          { streaming: true, parts: [{ type: 'text', data: { text: '最新消息内容' } }] },
+        ],
+      })
+    ).toBe('最新消息内容');
   });
 });
 
@@ -86,5 +146,29 @@ describe('RunningIndicator', () => {
       vi.advanceTimersByTime(1500);
     });
     expect(screen.queryByText(/字\/s/)).toBeNull();
+  });
+
+  it('有流式内容时在耗时后显示单行尾部预览,无内容时不显示', () => {
+    vi.useFakeTimers();
+    seedStreaming('正在流式输出的回答内容');
+    render(<RunningIndicator startedAt={Date.now()} />);
+    // 首次 tick(挂载即采样)即可见
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
+    expect(screen.getByText('正在流式输出的回答内容')).toBeTruthy();
+    // 预览随内容推进:新内容出现后一个采样周期内替换
+    seedStreaming('新的流式内容');
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(screen.getByText('新的流式内容')).toBeTruthy();
+    // 超长内容保留尾部(截断逻辑由 streamTailPreview 单测覆盖)
+    // 会话无流式消息(工具执行中)→ 预览区消失
+    useAgentStore.setState({ activeSessionId: 's3', bySession: {} });
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
+    expect(screen.queryByText('新的流式内容')).toBeNull();
   });
 });

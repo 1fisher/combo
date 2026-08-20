@@ -17,8 +17,54 @@ export function formatElapsed(ms: number): string {
 /** 流式输出速度采样间隔(毫秒) */
 const SPEED_SAMPLE_MS = 500;
 
+/** 流式尾部预览的最大字符数(按 Unicode 码点),超出保留尾部并加省略号 */
+const PREVIEW_MAX_CHARS = 96;
+
+/** 结构化 part 形状:兼容 Api.ContentPart(text/reasoning),避免耦合生成类型 */
+interface PartLike {
+  type: unknown;
+  data?: unknown;
+}
+
+function partText(p: PartLike): string {
+  if (p.type === 'text') {
+    const d = p.data as { text?: unknown } | undefined;
+    return typeof d?.text === 'string' ? d.text : '';
+  }
+  if (p.type === 'reasoning') {
+    const d = p.data as { thinking?: unknown } | undefined;
+    return typeof d?.thinking === 'string' ? d.thinking : '';
+  }
+  return '';
+}
+
 /**
- * 采样当前流式消息(文本 + 思考)的字符增量,EMA 平滑为字符/秒。
+ * 提取当前流式输出的尾部预览(单行):取最后一段有内容的 text/reasoning
+ * part(正文优先于更早的思考),折叠所有空白(换行/markdown 缩进压成单空格),
+ * 超长保留尾部并加「…」前缀 —— 搭配 justify-end + overflow-hidden 渲染,
+ * 最新内容始终可见、旧内容从左边滚出,形成滚动效果。
+ */
+export function streamTailPreview(
+  rt: { messages: { streaming: boolean; parts: ReadonlyArray<PartLike> }[] } | undefined,
+  maxChars = PREVIEW_MAX_CHARS,
+): string {
+  let last = '';
+  for (const m of rt?.messages ?? []) {
+    if (!m.streaming) continue;
+    for (const p of m.parts) {
+      const v = partText(p);
+      if (v) last = v;
+    }
+  }
+  const raw = last.replace(/\s+/g, ' ').trim();
+  if (!raw) return '';
+  const chars = Array.from(raw);
+  if (chars.length <= maxChars) return raw;
+  return '…' + chars.slice(-maxChars).join('');
+}
+
+/**
+ * 采样当前流式输出速度,EMA 平滑为字符/秒。
  * 与 Composer 火焰热力同源:工具执行期无流式内容,速度自然衰减到 0。
  */
 export function useStreamCharRate(active: boolean): number {
@@ -38,8 +84,7 @@ export function useStreamCharRate(active: boolean): number {
       for (const m of rt?.messages ?? []) {
         if (!m.streaming) continue;
         for (const p of m.parts) {
-          if (p.type === 'text') len += p.data.text.length;
-          else if (p.type === 'reasoning') len += p.data.thinking.length;
+          len += partText(p).length;
         }
       }
       const now = performance.now();
@@ -60,9 +105,33 @@ export function useStreamCharRate(active: boolean): number {
 }
 
 /**
+ * 采样当前流式输出的尾部预览(与速度同频 500ms):SSE 每个 delta 都会更新
+ * store,若用订阅式 selector 会让本组件随每帧流式内容重渲染,采样式把
+ * 渲染频率钉在 2Hz,内容「滚动推进」的观感不受影响。
+ */
+export function useStreamPreview(active: boolean): string {
+  const [preview, setPreview] = useState('');
+  useEffect(() => {
+    if (!active) {
+      setPreview('');
+      return;
+    }
+    const tick = () => {
+      const st = useAgentStore.getState();
+      const rt = st.activeSessionId ? st.bySession[st.activeSessionId] : undefined;
+      setPreview(streamTailPreview(rt));
+    };
+    tick();
+    const id = window.setInterval(tick, SPEED_SAMPLE_MS);
+    return () => window.clearInterval(id);
+  }, [active]);
+  return preview;
+}
+
+/**
  * 运行中指示器:贴在输入坞(composer)上方,展示「正在执行 + 流式输出速度 +
- * 累计耗时」,附带流光特效(高光自左向右循环扫过,见 index.css 的 .run-shimmer,
- * 光带宽度随胶囊宽度自适应)。
+ * 累计耗时 + 流式内容尾部预览(单行滚动)」,附带流光特效(高光自左向右
+ * 循环扫过,见 index.css 的 .run-shimmer,光带宽度随胶囊宽度自适应)。
  */
 export function RunningIndicator({ startedAt }: { startedAt?: number }) {
   const [now, setNow] = useState(() => Date.now());
@@ -71,22 +140,35 @@ export function RunningIndicator({ startedAt }: { startedAt?: number }) {
     return () => clearInterval(timer);
   }, []);
   const streamRate = useStreamCharRate(startedAt != null);
+  const preview = useStreamPreview(startedAt != null);
   if (startedAt == null) return null;
   return (
     <div
       role="status"
-      className="relative mb-2 flex w-fit items-center gap-2 overflow-hidden rounded-full border border-brand/25 bg-brand/10 px-3 py-1 text-xs"
+      className="relative mb-2 flex w-fit max-w-full items-center gap-2 overflow-hidden rounded-full border border-brand/25 bg-brand/10 px-3 py-1 text-xs"
     >
-      <Loader2 className="size-3 animate-spin text-brand" />
-      <span className="font-medium text-foreground">正在执行</span>
+      <Loader2 className="size-3 shrink-0 animate-spin text-brand" />
+      <span className="shrink-0 font-medium text-foreground">正在执行</span>
       {streamRate >= 1 && (
-        <span className="font-mono tabular-nums text-foreground-subtle">
+        <span className="shrink-0 font-mono tabular-nums text-foreground-subtle">
           {formatTokenCount(streamRate)} 字/s
         </span>
       )}
-      <span className="font-mono tabular-nums text-foreground-subtle">
+      <span className="shrink-0 font-mono tabular-nums text-foreground-subtle">
         {formatElapsed(now - startedAt)}
       </span>
+      {preview && (
+        // 单行滚动预览:内容右对齐、左侧溢出裁切(justify-end + overflow-hidden),
+        // 流式内容增长时最新文字始终贴右可见、旧文字从左边滚出。
+        // aria-hidden:纯状态装饰,避免屏幕阅读器被不断更新的碎片打断。
+        <span
+          aria-hidden
+          title={preview}
+          className="flex max-w-[9rem] min-w-0 justify-end overflow-hidden sm:max-w-56"
+        >
+          <span className="shrink-0 whitespace-nowrap text-foreground-subtle/80">{preview}</span>
+        </span>
+      )}
       {/* 流光层:纯装饰 */}
       <span className="run-shimmer" aria-hidden />
     </div>
