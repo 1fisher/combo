@@ -74,4 +74,18 @@ describe('LspReadyIndicator', () => {
     expect(screen.getByText('typescript-language-server', { exact: false })).toBeTruthy();
     expect(screen.getByText(/代码诊断 \/ 跳转定义 \/ 引用查找 \/ 悬停信息工具已可用/)).toBeTruthy();
   });
+
+  it('tooltip 内容带状态颜色标记(标题绿勾 + 每语言状态点)', async () => {
+    const user = userEvent.setup();
+    render(<LspReadyIndicator ready={READY} onOpenLsp={vi.fn()} />);
+    await user.hover(screen.getByTestId('lsp-ready-indicator'));
+    await screen.findByText('语言服务已就绪');
+    // 标题行带绿色勾图标,每语言一行各带一个绿色状态点(radix tooltip 经 Portal
+    // 渲染到 document.body,须查 document 而非 render 的 container)
+    const title = screen.getByText('语言服务已就绪').closest('span')!;
+    expect(title.querySelector('.text-emerald-600, .text-emerald-400')).toBeTruthy();
+    const dots = document.querySelectorAll('[data-lsp-ready-lang] > span[aria-hidden]');
+    expect(dots).toHaveLength(READY.length);
+    dots.forEach((d) => expect(d.className).toContain('bg-emerald-500'));
+  });
 });

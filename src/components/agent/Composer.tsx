@@ -729,7 +729,7 @@ export function Composer({
                       </TooltipTrigger>
                       <TooltipContent side="top" className="flex flex-col items-start gap-0.5">
                         <span className="font-medium">{MODE.label}</span>
-                        <span className="text-background/70">{MODE.desc}</span>
+                        <span className="text-muted-foreground">{MODE.desc}</span>
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>

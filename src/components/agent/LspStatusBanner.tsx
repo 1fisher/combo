@@ -112,15 +112,26 @@ export function LspReadyIndicator({
             <CircleCheck className="size-3.5" />
           </button>
         </TooltipTrigger>
-        <TooltipContent side="bottom" align="end" className="flex flex-col items-start gap-0.5">
-          <span className="font-medium">语言服务已就绪</span>
+        <TooltipContent side="bottom" align="end" className="flex flex-col items-start gap-1">
+          <span className="flex items-center gap-1.5 font-medium">
+            <CircleCheck className="size-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
+            语言服务已就绪
+          </span>
           {ready.map((r) => (
-            <span key={r.lang} className="min-w-0 max-w-[16rem]">
-              {r.label} · <code className="font-mono">{r.command}</code>
-              <span className="text-background/60">({r.files} 个源文件)</span>
+            <span key={r.lang} data-lsp-ready-lang className="flex items-center gap-1.5 min-w-0 max-w-[16rem]">
+              <span
+                aria-hidden
+                className="size-1.5 rounded-full bg-emerald-500 shrink-0"
+                title="已就绪"
+              />
+              <span className="font-medium whitespace-nowrap">{r.label}</span>
+              <code className="font-mono text-muted-foreground break-all">{r.command}</code>
+              <span className="text-muted-foreground whitespace-nowrap">({r.files} 个源文件)</span>
             </span>
           ))}
-          <span className="text-background/70">代码诊断 / 跳转定义 / 引用查找 / 悬停信息工具已可用</span>
+          <span className="pt-0.5 border-t border-card-border w-full text-muted-foreground">
+            代码诊断 / 跳转定义 / 引用查找 / 悬停信息工具已可用
+          </span>
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>
