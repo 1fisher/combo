@@ -31,4 +31,23 @@ describe('editorStore diagnostics', () => {
     useEditorStore.getState().resetOpenFiles();
     expect(useEditorStore.getState().diagnostics).toEqual({});
   });
+
+  it('revealLine/clearReveal 维护跳转请求,重复请求仍生成新引用', () => {
+    const st = useEditorStore.getState();
+    expect(useEditorStore.getState().revealRequest).toBeNull();
+    st.revealLine('src/App.tsx', 3);
+    const first = useEditorStore.getState().revealRequest;
+    expect(first).toMatchObject({ path: 'src/App.tsx', line: 3 });
+    // 重复同一目标:nonce 不同 → 新引用(EditorPane effect 重新消费)
+    st.revealLine('src/App.tsx', 3);
+    const second = useEditorStore.getState().revealRequest;
+    expect(second).not.toBe(first);
+    expect(second).toMatchObject({ path: 'src/App.tsx', line: 3 });
+    useEditorStore.getState().clearReveal();
+    expect(useEditorStore.getState().revealRequest).toBeNull();
+    // 切换项目一并清空跳转请求
+    st.revealLine('src/App.tsx', 3);
+    useEditorStore.getState().resetOpenFiles();
+    expect(useEditorStore.getState().revealRequest).toBeNull();
+  });
 });

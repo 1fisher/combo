@@ -1,11 +1,11 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FileEdit, Folder, Loader2, CircleAlert } from 'lucide-react';
 import { randomUUID } from '../../lib/clientId';
 import { useAgentStore } from '../../stores/agentStore';
 import { useEditorStore } from '../../stores/editorStore';
 import { formatContextPrompt, type ContextItem } from '../../stores/contextStore';
-import { cancelAgent, sendAgentMessage, answerQuestion, clearSession } from '../../lib/api';
+import { cancelAgent, sendAgentMessage, answerQuestion, clearSession, getFileContent } from '../../lib/api';
 import type { Api } from '../../lib/api/types';
 import type { SlashCommandDef } from '../../lib/slashCommands';
 import { useSessionHistory } from '../../hooks/useSessions';
@@ -13,7 +13,7 @@ import { useWorkspaceEvents } from '../../hooks/useWorkspaceEvents';
 import { useAgentMode } from '../../hooks/useAgentMode';
 import { useWorkspaces } from '../../hooks/useWorkspaces';
 import { useSessions, markRunStarted } from '../../hooks/useSessions';
-import { useWorkspaceLspStatus } from '../../hooks/useWorkspaceLsp';
+import { useWorkspaceLspStatus, useLspAllDiagnostics } from '../../hooks/useWorkspaceLsp';
 import { MessageList } from './MessageList';
 import { Composer } from './Composer';
 import { RunningIndicator } from './RunningIndicator';
@@ -41,10 +41,13 @@ const EMPTY_SUBAGENTS: Api.SubAgentTask[] = [];
 export function AgentPanel({
   workspaceId,
   onOpenLspView,
+  onOpenEditorView,
 }: {
   workspaceId: string | null;
   /** 跳转 LSP 服务视图(横幅「去配置」按钮,由 AppShell 的 setView('lsp') 提供)。 */
   onOpenLspView: () => void;
+  /** 跳转编辑器视图(诊断列表点击跳转用,setView('editor'))。 */
+  onOpenEditorView?: () => void;
 }) {
   useWorkspaceEvents(workspaceId);
   useAgentMode(workspaceId);
@@ -78,6 +81,31 @@ export function AgentPanel({
     setLspDismissed(false);
   }, [workspaceId]);
   const activeEditorDiag = useEditorStore((s) => (s.activePath ? s.diagnostics[s.activePath] : null));
+  // 跨文件聚合诊断(tooltip 错误列表):以当前文件的诊断计数为 revision,
+  // 保存/编辑后计数变化即自动重取,与编辑器波浪线保持同步
+  const { data: lspAllDiags } = useLspAllDiagnostics(workspaceId, activeEditorDiag);
+  // 点击 tooltip 中的某条诊断:打开(或激活)文件 → 请求定位到错误行 → 切编辑器视图
+  const openFileAtLine = useCallback(
+    async (path: string, line: number) => {
+      if (!workspaceId) return;
+      try {
+        const st = useEditorStore.getState();
+        const opened = st.openFiles.some((f) => f.path === path);
+        if (!opened) {
+          const r = await getFileContent(workspaceId, path);
+          const name = path.split('/').pop() ?? path;
+          st.openFile(path, name, r.content);
+        } else {
+          st.setActive(path);
+        }
+        useEditorStore.getState().revealLine(path, line);
+        onOpenEditorView?.();
+      } catch {
+        /* 文件读取失败(已删除/二进制等)静默忽略 */
+      }
+    },
+    [workspaceId, onOpenEditorView],
+  );
   // 连击(combo)计数:连续快速回复时累加,超时/切会话归零;
   // 流式期间每条内容更新也 +1(叠加,不封顶)。
   const [combo, setCombo] = useState(0);
@@ -399,7 +427,13 @@ export function AgentPanel({
       )}
       {workspaceId && lspIssues.length === 0 && lspReady.length > 0 && (
         <div className="flex justify-end items-center mx-4 mt-1 shrink-0">
-          <LspReadyIndicator ready={lspReady} onOpenLsp={onOpenLspView} fileDiags={activeEditorDiag} />
+          <LspReadyIndicator
+            ready={lspReady}
+            onOpenLsp={onOpenLspView}
+            fileDiags={activeEditorDiag}
+            entries={lspAllDiags?.items}
+            onOpenFileAtLine={openFileAtLine}
+          />
         </div>
       )}
       {/* 时间线 / 变更面板 */}

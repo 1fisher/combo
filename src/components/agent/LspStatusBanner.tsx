@@ -1,4 +1,6 @@
+import { useMemo } from 'react';
 import { CircleAlert, CircleCheck, CircleX, X } from 'lucide-react';
+import type { Api } from '../../lib/api/types';
 import type { LspIssue, LspReady } from '../../lib/lspStatus';
 import { cn } from '../../lib/utils';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip';
@@ -87,25 +89,44 @@ export function LspStatusBanner({
 
 /**
  * LSP 就绪指示器(正常状态的轻量展示):消息区右上角一枚小图标,
- * 悬停弹出 tooltip 显示就绪详情(语言 + server + 可用工具),点击跳 LSP 视图
+ * 悬停弹出 tooltip 显示就绪详情(语言 + server),点击跳 LSP 视图
  * (触屏没有 hover,点击兜底)。与 Composer「完全访问」的 icon+tooltip 范式一致。
  *
- * 联动当前编辑文件 的实时诊断计数(`fileDiags`):
- * 有错误 → 红色 ✕、tooltip 顶部报「N 个错误」;仅警告 → 琥珀 ⚠;
- * 无诊断 → 绿色 ✓。编辑器内的具体波浪线由 CodeMirror linter 渲染。
+ * 诊断联动:
+ * - `entries`(后端聚合的跨文件错误/警告,`/lsp/diagnostics/all`)可用时,
+ *   tooltip 按「相对项目路径」分组列出真实代码行与简短错误消息,点击某条
+ *   经 `onOpenFileAtLine` 打开文件并定位到该行(编辑器内波浪线为完整详情);
+ * - `entries` 未加载时回退当前文件计数(`fileDiags`):有错误 → 红色 ✕、
+ *   仅警告 → 琥珀 ⚠;无诊断 → 绿色 ✓。
  */
+const DIAG_LIST_MAX = 12;
+
 export function LspReadyIndicator({
   ready,
   onOpenLsp,
   fileDiags,
+  entries,
+  onOpenFileAtLine,
 }: {
   ready: LspReady[];
   onOpenLsp: () => void;
   /** 当前编辑文件的 LSP 诊断计数(null = 无编辑文件或该文件无 LSP 支持) */
   fileDiags?: { errors: number; warnings: number } | null;
+  /** 跨文件聚合的诊断条目(undefined = 尚未加载,回退 fileDiags 计数) */
+  entries?: Api.LspDiagEntry[];
+  /** 点击某条诊断跳转(打开文件并定位行,1-based) */
+  onOpenFileAtLine?: (path: string, line: number) => void;
 }) {
-  const hasErrors = (fileDiags?.errors ?? 0) > 0;
-  const hasWarnings = (fileDiags?.warnings ?? 0) > 0;
+  const total = useMemo(() => {
+    const errs = (entries ?? []).filter((e) => e.severity === 1).length;
+    const warns = (entries ?? []).filter((e) => e.severity === 2).length;
+    return { errs, warns };
+  }, [entries]);
+  // entries 已加载 → 以跨文件总数为准;否则回退当前文件计数
+  const errs = entries ? total.errs : (fileDiags?.errors ?? 0);
+  const warns = entries ? total.warns : (fileDiags?.warnings ?? 0);
+  const hasErrors = errs > 0;
+  const hasWarnings = warns > 0;
   const Icon = hasErrors ? CircleX : hasWarnings ? CircleAlert : CircleCheck;
   const iconCls = hasErrors
     ? 'text-destructive'
@@ -113,6 +134,19 @@ export function LspReadyIndicator({
       ? 'text-amber-500'
       : 'text-emerald-600 dark:text-emerald-400';
   const state = hasErrors ? 'error' : hasWarnings ? 'warning' : 'ready';
+  // 按相对路径分组(entries 已按 severity→path→line 排序,组内顺序保留)
+  const groups = useMemo(() => {
+    const m = new Map<string, Api.LspDiagEntry[]>();
+    for (const e of entries ?? []) {
+      const arr = m.get(e.path);
+      if (arr) arr.push(e);
+      else m.set(e.path, [e]);
+    }
+    return [...m.entries()];
+  }, [entries]);
+  const visibleGroups = groups.slice(0, DIAG_LIST_MAX);
+  const shownCount = visibleGroups.reduce((n, [, items]) => n + items.length, 0);
+  const hidden = (entries?.length ?? 0) - shownCount;
   return (
     <TooltipProvider>
       <Tooltip>
@@ -123,9 +157,9 @@ export function LspReadyIndicator({
             data-state={state}
             aria-label={
               hasErrors
-                ? `当前文件有 ${fileDiags!.errors} 个错误,点击查看 LSP 详情`
+                ? `${errs} 个错误,点击查看 LSP 详情`
                 : hasWarnings
-                  ? `当前文件有 ${fileDiags!.warnings} 个警告,点击查看 LSP 详情`
+                  ? `${warns} 个警告,点击查看 LSP 详情`
                   : '语言服务已就绪,点击查看详情'
             }
             title="语言服务状态"
@@ -138,16 +172,28 @@ export function LspReadyIndicator({
             <Icon className="size-3.5" />
           </button>
         </TooltipTrigger>
-        <TooltipContent side="bottom" align="end" className="flex flex-col items-start gap-1">
+        <TooltipContent
+          side="bottom"
+          align="end"
+          className="flex flex-col items-start gap-1.5 max-w-[22rem]"
+        >
           {hasErrors ? (
-            <span data-lsp-file-state="error" className="flex items-center gap-1.5 font-medium text-destructive">
+            <span
+              data-lsp-file-state="error"
+              className="flex items-center gap-1.5 font-medium text-destructive"
+            >
               <CircleX className="size-3 shrink-0" />
-              当前文件:{fileDiags!.errors} 个错误{hasWarnings ? ` / ${fileDiags!.warnings} 个警告` : ''}
+              {entries ? '' : '当前文件:'}
+              {errs} 个错误{hasWarnings ? ` / ${warns} 个警告` : ''}
             </span>
           ) : hasWarnings ? (
-            <span data-lsp-file-state="warning" className="flex items-center gap-1.5 font-medium text-amber-600 dark:text-amber-400">
+            <span
+              data-lsp-file-state="warning"
+              className="flex items-center gap-1.5 font-medium text-amber-600 dark:text-amber-400"
+            >
               <CircleAlert className="size-3 shrink-0" />
-              当前文件:{fileDiags!.warnings} 个警告
+              {entries ? '' : '当前文件:'}
+              {warns} 个警告
             </span>
           ) : (
             <span className="flex items-center gap-1.5 font-medium">
@@ -155,8 +201,53 @@ export function LspReadyIndicator({
               语言服务已就绪
             </span>
           )}
+          {groups.length > 0 && (
+            <div className="flex flex-col gap-1.5 w-full max-h-56 overflow-y-auto">
+              {visibleGroups.map(([path, items]) => (
+                <div key={path} className="flex flex-col gap-0.5 min-w-0 w-full">
+                  <span
+                    className="font-mono text-[11px] text-muted-foreground truncate w-full"
+                    title={path}
+                  >
+                    {path}
+                  </span>
+                  {items.map((e, i) => (
+                    <button
+                      key={`${path}:${e.line}:${i}`}
+                      type="button"
+                      data-lsp-diag-item={e.severity === 1 ? 'error' : 'warning'}
+                      onClick={() => onOpenFileAtLine?.(e.path, e.line + 1)}
+                      title={`${path}:${e.line + 1} ${e.message}`}
+                      className="hover:bg-surface-hover flex items-baseline gap-1.5 w-full rounded px-1 -mx-1 text-left transition-colors"
+                    >
+                      <span
+                        className={cn(
+                          'font-mono text-[11px] tabular-nums shrink-0',
+                          e.severity === 1
+                            ? 'text-destructive'
+                            : 'text-amber-600 dark:text-amber-400',
+                        )}
+                      >
+                        {e.line + 1}
+                      </span>
+                      <span className="text-xs leading-snug truncate">{e.message}</span>
+                    </button>
+                  ))}
+                </div>
+              ))}
+              {hidden > 0 && (
+                <span className="text-muted-foreground text-xs">
+                  还有 {hidden} 条未显示,编辑器内查看全部
+                </span>
+              )}
+            </div>
+          )}
           {ready.map((r) => (
-            <span key={r.lang} data-lsp-ready-lang className="flex items-center gap-1.5 min-w-0 max-w-[16rem]">
+            <span
+              key={r.lang}
+              data-lsp-ready-lang
+              className="flex items-center gap-1.5 min-w-0 max-w-[16rem]"
+            >
               <span
                 aria-hidden
                 className="size-1.5 rounded-full bg-emerald-500 shrink-0"
@@ -164,13 +255,14 @@ export function LspReadyIndicator({
               />
               <span className="font-medium whitespace-nowrap">{r.label}</span>
               <code className="font-mono text-muted-foreground break-all">{r.command}</code>
-              <span className="text-muted-foreground whitespace-nowrap">({r.files} 个源文件)</span>
             </span>
           ))}
           <span className="pt-0.5 border-t border-card-border w-full text-muted-foreground">
-            {hasErrors || hasWarnings
-              ? '编辑器内以波浪线标注具体位置,保存后运行完整检查'
-              : '代码诊断 / 跳转定义 / 引用查找 / 悬停信息工具已可用'}
+            {groups.length > 0
+              ? '点击条目跳转到对应行;编辑器内以波浪线标注具体位置'
+              : hasErrors || hasWarnings
+                ? '编辑器内以波浪线标注具体位置,保存后运行完整检查'
+                : '代码诊断 / 跳转定义 / 引用查找 / 悬停信息工具已可用'}
           </span>
         </TooltipContent>
       </Tooltip>

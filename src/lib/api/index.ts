@@ -553,6 +553,12 @@ export function fetchLspDiagnostics(
   );
 }
 
+// 聚合全部文件的实时 LSP 诊断(错误/警告,相对路径 + 行号 + 消息),
+// LSP 状态 tooltip 的跨文件错误列表用。
+export function fetchAllLspDiagnostics(workspaceId: string): Promise<Api.LspAllDiagnostics> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/lsp/diagnostics/all`);
+}
+
 // LSP 一键安装:后台执行安装命令,成功后自动写 [lsp.<lang>] 配置
 export function listLspPlans(): Promise<Api.LspInstallPlan[]> {
   return apiRequest('/v1/lsp/plans');

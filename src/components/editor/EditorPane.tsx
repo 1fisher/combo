@@ -67,6 +67,8 @@ export function EditorPane({ workspaceId, isActive = true }: { workspaceId: stri
   const openFileInStore = useEditorStore((s) => s.openFile);
   const setHeadContent = useEditorStore((s) => s.setHeadContent);
   const setDiagnostics = useEditorStore((s) => s.setDiagnostics);
+  const revealRequest = useEditorStore((s) => s.revealRequest);
+  const clearReveal = useEditorStore((s) => s.clearReveal);
 
   const isMobile = useIsMobile();
   const [sidebarMode, setSidebarMode] = useState<'files' | 'git'>('files');
@@ -86,6 +88,16 @@ export function EditorPane({ workspaceId, isActive = true }: { workspaceId: stri
   const [highlightQuery, setHighlightQuery] = useState<string | null>(null);
   /** 搜索结果定位行号(打开后跳转并高亮该行) */
   const [highlightLine, setHighlightLine] = useState<number | null>(null);
+  // 消费「跳转到文件某行」请求(消息区 LSP 诊断列表点击发起):目标即当前
+  // 激活文件时定位(先清空再设值,重复点击同一行也能再次触发定位),随即
+  // 清掉请求;目标不是当前文件(不该发生)则原样保留待后续激活时消费。
+  useEffect(() => {
+    if (!revealRequest || revealRequest.path !== activePath) return;
+    const line = revealRequest.line;
+    setHighlightLine(null);
+    setHighlightLine(line);
+    clearReveal();
+  }, [revealRequest, activePath, clearReveal]);
   /** 编辑器视图引用(用于打开文件内搜索面板) */
   const editorViewRef = useRef<EditorView | null>(null);
   /** 待打开搜索面板标记:markdown 预览切换到编辑模式后,等编辑器就绪再打开 */

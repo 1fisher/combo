@@ -1050,6 +1050,10 @@ fn build_router(
             "/v1/workspaces/:id/lsp/diagnostics",
             get(lsp::lsp_document_diagnostics),
         )
+        .route(
+            "/v1/workspaces/:id/lsp/diagnostics/all",
+            get(lsp::lsp_document_diagnostics_all),
+        )
         .route("/v1/workspaces/:id/git/status", get(git::status))
         .route("/v1/workspaces/:id/git/repos", get(git::repos))
         .route("/v1/workspaces/:id/git/diff", get(git::diff))

@@ -2208,6 +2208,18 @@ export namespace Api {
     diagnostics: LspDiagnostic[];
   };
 
+  // GET /v1/workspaces/:id/lsp/diagnostics/all 的响应:聚合所有已推送诊断的
+  // 文件(编辑器打开过的 + server 顺带推送的相关文件),只含 error/warning,
+  // line/character 0-based,按 severity→path→line 排序。
+  export type LspDiagEntry = LspDiagnostic & {
+    /** 相对 workspace 根的路径(根外文件为绝对路径)。 */
+    path: string;
+  };
+
+  export type LspAllDiagnostics = {
+    items: LspDiagEntry[];
+  };
+
   // workspace 语言统计(GET /v1/workspaces/:id/languages,按扩展名聚合;
   // 语言标识与 [lsp.<lang>] 配置键一致,供会话界面展示 LSP 检测提示)。
   export type WorkspaceLanguageStat = {

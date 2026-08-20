@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { LspStatusBanner, LspReadyIndicator } from './LspStatusBanner';
+import type { Api } from '../../lib/api/types';
 import type { LspIssue, LspReady } from '../../lib/lspStatus';
 
 const NOT_FOUND: LspIssue = {
@@ -73,6 +74,53 @@ describe('LspReadyIndicator', () => {
     expect(screen.getByText('rust-analyzer', { exact: false })).toBeTruthy();
     expect(screen.getByText('typescript-language-server', { exact: false })).toBeTruthy();
     expect(screen.getByText(/代码诊断 \/ 跳转定义 \/ 引用查找 \/ 悬停信息工具已可用/)).toBeTruthy();
+    // 就绪列表不再展示源文件计数(噪音信息)
+    expect(screen.queryByText(/个源文件/)).toBeNull();
+  });
+
+  it('tooltip 按相对路径分组列出错误行与消息,点击跳转到对应行', async () => {
+    const user = userEvent.setup();
+    const onOpenFileAtLine = vi.fn();
+    const entries: Api.LspDiagEntry[] = [
+      { path: 'src/App.tsx', line: 2, character: 8, endLine: 2, endCharacter: 12, severity: 1, message: "Type 'string' is not assignable to type 'number'", source: 'typescript' },
+      { path: 'src/App.tsx', line: 5, character: 0, endLine: 5, endCharacter: 3, severity: 2, message: 'unused variable', source: 'typescript' },
+      { path: 'src/lib.rs', line: 0, character: 0, endLine: 0, endCharacter: 1, severity: 1, message: 'borrow of moved value', source: 'rust-analyzer' },
+    ];
+    render(
+      <LspReadyIndicator
+        ready={READY}
+        onOpenLsp={vi.fn()}
+        entries={entries}
+        onOpenFileAtLine={onOpenFileAtLine}
+      />,
+    );
+    const btn = screen.getByTestId('lsp-ready-indicator');
+    expect(btn.dataset.state).toBe('error');
+    await user.hover(btn);
+    // 相对项目目录的文件名分组 + 总数(跨文件聚合,无「当前文件:」前缀)
+    expect(await screen.findByText('src/App.tsx')).toBeTruthy();
+    expect(screen.getByText('src/lib.rs')).toBeTruthy();
+    expect(screen.getByText(/2 个错误 \/ 1 个警告/)).toBeTruthy();
+    // 行号 1-based + 简短错误消息
+    expect(screen.getByText('3')).toBeTruthy();
+    expect(screen.getByText(/Type 'string' is not assignable/)).toBeTruthy();
+    // 点击某条 → 跳转回调携带文件与 1-based 行号(radix tooltip 经 Portal 渲染,查 document)
+    const items = Array.from(document.querySelectorAll('[data-lsp-diag-item]'));
+    expect(items).toHaveLength(3);
+    await user.click(items[0] as HTMLElement);
+    expect(onOpenFileAtLine).toHaveBeenCalledWith('src/App.tsx', 3);
+    // 底部提示切换为「点击跳转」语义
+    expect(screen.getByText(/点击条目跳转到对应行/)).toBeTruthy();
+  });
+
+  it('entries 为空数组时按已就绪展示(不渲染错误列表)', async () => {
+    const user = userEvent.setup();
+    render(<LspReadyIndicator ready={READY} onOpenLsp={vi.fn()} entries={[]} />);
+    const btn = screen.getByTestId('lsp-ready-indicator');
+    expect(btn.dataset.state).toBe('ready');
+    await user.hover(btn);
+    expect(await screen.findByText('语言服务已就绪')).toBeTruthy();
+    expect(document.querySelectorAll('[data-lsp-diag-item]')).toHaveLength(0);
   });
 
   it('tooltip 内容带状态颜色标记(标题绿勾 + 每语言状态点)', async () => {

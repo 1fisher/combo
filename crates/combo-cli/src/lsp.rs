@@ -544,6 +544,23 @@ pub async fn lsp_document_diagnostics(
     }
 }
 
+/// GET /v1/workspaces/{id}/lsp/diagnostics/all — 聚合**全部文件**的实时诊断
+/// (编辑器打开过的文件 + server 顺带推送的相关文件),按相对项目目录路径
+/// 分组排序,供 LSP 状态 tooltip 列出「文件:行号 + 简短消息」并可点击跳转。
+/// 只含 error/warning;结构同单文件诊断的扁平条目,额外带 `path` 字段。
+pub async fn lsp_document_diagnostics_all(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    match editor_manager(&state, &id).await {
+        Ok(Some(manager)) => {
+            crate::fs::ok_json(json!({ "items": manager.all_diagnostics().await }))
+        }
+        Ok(None) => crate::fs::ok_json(json!({ "items": [] })),
+        Err(resp) => resp,
+    }
+}
+
 // =========================== LspClient ===========================
 
 /// 单个 LSP server 子进程的 JSON-RPC 客户端。
@@ -952,6 +969,48 @@ fn slim_diagnostic(d: Value) -> Value {
     })
 }
 
+/// 把各 client 的诊断缓存聚合为扁平条目列表(供 tooltip 跨文件错误列表):
+/// uri → 相对 workspace 根路径(根外文件保留绝对路径),逐条 `slim_diagnostic`
+/// 并附 `path`;只保留 error(1)/warning(2);排序 severity → path → line。
+/// 纯函数便于单测;`all_diagnostics` 收集缓存后调用。
+fn collect_all_diags(root: &Path, maps: &[HashMap<String, Vec<Value>>]) -> Vec<Value> {
+    // LSP server 推送的 uri 通常是文件系统真实路径——macOS 上 workspace 根
+    // 若经 symlink(如 /tmp → /private/tmp)则直接 strip 失败,先 canonicalize
+    // 根再兜底剥离(失败保留原绝对路径,条目不丢)
+    let root_real = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let mut out = Vec::new();
+    for m in maps {
+        for (uri, diags) in m {
+            let abs = uri.strip_prefix("file://").unwrap_or(uri.as_str());
+            let rel = Path::new(abs)
+                .strip_prefix(root)
+                .or_else(|_| Path::new(abs).strip_prefix(&root_real))
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_else(|_| abs.to_string());
+            for d in diags {
+                // severity 缺失按 LSP 惯例视为 info(3),不进错误列表
+                if d.get("severity").and_then(Value::as_u64).unwrap_or(3) > 2 {
+                    continue;
+                }
+                let mut slim = slim_diagnostic(d.clone());
+                slim["path"] = json!(rel);
+                out.push(slim);
+            }
+        }
+    }
+    fn str_of<'a>(v: &'a Value, k: &str) -> &'a str {
+        v.get(k).and_then(Value::as_str).unwrap_or("")
+    }
+    let u64_of = |v: &Value, k: &str| v.get(k).and_then(Value::as_u64).unwrap_or(0);
+    out.sort_by(|a, b| {
+        u64_of(a, "severity")
+            .cmp(&u64_of(b, "severity"))
+            .then_with(|| str_of(a, "path").cmp(str_of(b, "path")))
+            .then_with(|| u64_of(a, "line").cmp(&u64_of(b, "line")))
+    });
+    out
+}
+
 impl LspManager {
     pub fn new(workspace_root: PathBuf, configs: BTreeMap<String, LspServerConfig>) -> Self {
         Self {
@@ -960,6 +1019,19 @@ impl LspManager {
             clients: Mutex::new(HashMap::new()),
             open_docs: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// 聚合**所有** client 诊断缓存中「已推送过诊断的文件」(编辑器打开过的
+    /// 文件 + server 顺带推送的相关文件,如 ts server 会推依赖文件),
+    /// 转为相对 workspace 根的扁平条目并排序——tooltip 跨文件错误列表用。
+    /// 只保留 error(1)/warning(2),info/hint 噪音大不进列表。
+    pub async fn all_diagnostics(&self) -> Vec<Value> {
+        let clients = self.clients.lock().await;
+        let mut maps = Vec::with_capacity(clients.len());
+        for c in clients.values() {
+            maps.push(c.diagnostics.lock().await.clone());
+        }
+        collect_all_diags(&self.workspace_root, &maps)
     }
 
     /// 是否配置了任意 LSP server(决定是否注册 LSP 工具)。
@@ -1593,6 +1665,69 @@ mod tests {
         let v = body_json(resp).await;
         assert_eq!(v["language"], json!(null));
         assert_eq!(v["diagnostics"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn lsp_document_diagnostics_all_without_config_returns_empty() {
+        let (state, _dir) = lsp_test_state("diagall");
+        let resp = lsp_document_diagnostics_all(State(state), AxumPath("ws".into())).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["items"], json!([]));
+    }
+
+    /// 聚合:uri → 相对路径、只留 error/warning、按 severity→path→line 排序。
+    #[test]
+    fn collect_all_diags_sorts_filters_and_relativizes() {
+        let root = Path::new("/proj");
+        let mk = |uri: &str, sev: u64, line: u64, msg: &str| {
+            (
+                uri.to_string(),
+                vec![json!({
+                    "range": { "start": { "line": line, "character": 3 },
+                               "end": { "line": line, "character": 9 } },
+                    "severity": sev,
+                    "message": msg,
+                    "source": "typescript",
+                })],
+            )
+        };
+        let mut ts = HashMap::new();
+        let (k, v) = mk("file:///proj/src/App.tsx", 2, 4, "unused var");
+        ts.insert(k, v);
+        let (k, v) = mk("file:///proj/src/B.tsx", 1, 0, "type error");
+        ts.insert(k, v);
+        let (k, v) = mk("file:///proj/src/A.tsx", 4, 7, "hint 会被过滤");
+        ts.insert(k, v);
+        let mut ra = HashMap::new();
+        let (k, v) = mk("file:///proj/src/lib.rs", 1, 2, "borrow err");
+        ra.insert(k, v);
+        // workspace 根外的文件保留绝对路径
+        let (k, v) = mk("file:///other/x.rs", 1, 1, "outside");
+        ra.insert(k, v);
+        let out = collect_all_diags(root, &[ts, ra]);
+        assert_eq!(out.len(), 4, "info/hint 应被过滤");
+        let order: Vec<(String, u64)> = out
+            .iter()
+            .map(|v| {
+                (
+                    v["path"].as_str().unwrap().to_string(),
+                    v["line"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            order,
+            vec![
+                ("/other/x.rs".into(), 1),
+                ("src/B.tsx".into(), 0),
+                ("src/lib.rs".into(), 2),
+                ("src/App.tsx".into(), 4),
+            ],
+            "error(1) 组内按 path 字典序在前,warning(2) 随后;根外文件保留绝对路径"
+        );
+        assert_eq!(out[0]["message"], json!("outside"));
+        assert_eq!(out[0]["character"], json!(3));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { getWorkspaceLanguages } from '../lib/api';
+import { fetchAllLspDiagnostics, getWorkspaceLanguages } from '../lib/api';
 import { useLspServers } from './useLsp';
 import { computeLspIssues, computeLspReady, type LspIssue, type LspReady } from '../lib/lspStatus';
 
@@ -39,4 +39,26 @@ export function useWorkspaceLspStatus(workspaceId: string | null): {
     [languages, serverList],
   );
   return { issues, ready, loading: langs.isPending || servers.isPending };
+}
+
+/**
+ * 跨文件聚合的实时 LSP 诊断(LSP 状态 tooltip 的错误列表数据源):
+ * `GET /v1/workspaces/:id/lsp/diagnostics/all`——编辑器打开过的文件 +
+ * server 顺带推送的相关文件,只含 error/warning。
+ *
+ * `rev` 为「当前编辑文件的诊断计数」(对象引用):保存/编辑导致计数变化时
+ * queryKey 随之改变、自动重取,保证 tooltip 列表与编辑器波浪线同步;
+ * 其余时间 10s 内直接用缓存。查询失败静默回退为空列表(后端离线不打扰)。
+ */
+export function useLspAllDiagnostics(
+  workspaceId: string | null | undefined,
+  rev?: { errors: number; warnings: number } | null,
+) {
+  return useQuery({
+    queryKey: ['lsp-all-diagnostics', workspaceId, rev?.errors ?? 0, rev?.warnings ?? 0],
+    queryFn: () => fetchAllLspDiagnostics(workspaceId!),
+    enabled: !!workspaceId,
+    staleTime: 10_000,
+    retry: 1,
+  });
 }

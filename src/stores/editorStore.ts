@@ -24,6 +24,8 @@ interface EditorState {
   activePath: string | null;
   /** path → LSP 诊断计数(实时,编辑/保存后更新;关闭文件时清理)。 */
   diagnostics: Record<string, FileDiagnostics>;
+  /** 待消费的「跳转到文件某行」请求(消息区诊断列表点击发起,编辑器视图消费)。 */
+  revealRequest: { path: string; line: number; nonce: number } | null;
   openFile: (path: string, name: string, content: string, kind?: FileKind) => void;
   setActive: (path: string | null) => void;
   setContent: (path: string, content: string) => void;
@@ -34,6 +36,9 @@ interface EditorState {
   setHeadContent: (path: string, headContent: string | null) => void;
   /** 上报/清除某文件的 LSP 诊断计数(null 删除条目) */
   setDiagnostics: (path: string, d: FileDiagnostics | null) => void;
+  /** 请求编辑器跳转到某文件某行(1-based);EditorPane 定位后 clearReveal 消费 */
+  revealLine: (path: string, line: number) => void;
+  clearReveal: () => void;
   /** 切换项目时清空所有打开的文件 */
   resetOpenFiles: () => void;
 }
@@ -42,6 +47,7 @@ export const useEditorStore = create<EditorState>((set) => ({
   openFiles: [],
   activePath: null,
   diagnostics: {},
+  revealRequest: null,
 
   openFile: (path, name, content, kind = 'text') =>
     set((st) => {
@@ -101,5 +107,11 @@ export const useEditorStore = create<EditorState>((set) => ({
       return { diagnostics: { ...st.diagnostics, [path]: d } };
     }),
 
-  resetOpenFiles: () => set({ openFiles: [], activePath: null, diagnostics: {} }),
+  revealLine: (path, line) =>
+    set({ revealRequest: { path, line, nonce: Date.now() + Math.random() } }),
+
+  clearReveal: () => set({ revealRequest: null }),
+
+  resetOpenFiles: () =>
+    set({ openFiles: [], activePath: null, diagnostics: {}, revealRequest: null }),
 }));
