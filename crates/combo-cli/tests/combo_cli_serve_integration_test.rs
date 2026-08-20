@@ -78,6 +78,7 @@ fn make_state() -> AppState {
             std::env::temp_dir().join("combo-tts-test-models"),
             combo_cli::tts::TtsModel::PiperZhXiaoya,
         )),
+        lsp_docs: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         lsp_install: Arc::new(Mutex::new(
             combo_cli::serve::LspInstallState::default(),
         )),
@@ -353,6 +354,7 @@ async fn git_repos_discovers_root_and_subdir_repos() {
             std::env::temp_dir().join("combo-tts-test-models"),
             combo_cli::tts::TtsModel::PiperZhXiaoya,
         )),
+        lsp_docs: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         lsp_install: Arc::new(Mutex::new(
             combo_cli::serve::LspInstallState::default(),
         )),

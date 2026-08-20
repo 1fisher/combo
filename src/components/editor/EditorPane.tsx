@@ -2,7 +2,8 @@ import { useCallback, useEffect, useRef, useState, type PointerEvent } from 'rea
 import { Eye, Folder, GitBranch, History, PanelLeft, Pencil, Search, X } from 'lucide-react';
 import { EditorView } from '@codemirror/view';
 import { openSearchPanel } from '@codemirror/search';
-import { getFileContent, getGitFileAtHead, putFileContent } from '../../lib/api';
+import { forceLinting } from '@codemirror/lint';
+import { getFileContent, getGitFileAtHead, putFileContent, syncLspDocument } from '../../lib/api';
 import { useEditorStore, type FileKind } from '../../stores/editorStore';
 import { getProxyBaseUrl } from '../../lib/connection';
 import { getClientId } from '../../lib/clientId';
@@ -65,6 +66,7 @@ export function EditorPane({ workspaceId, isActive = true }: { workspaceId: stri
   const markSaved = useEditorStore((s) => s.markSaved);
   const openFileInStore = useEditorStore((s) => s.openFile);
   const setHeadContent = useEditorStore((s) => s.setHeadContent);
+  const setDiagnostics = useEditorStore((s) => s.setDiagnostics);
 
   const isMobile = useIsMobile();
   const [sidebarMode, setSidebarMode] = useState<'files' | 'git'>('files');
@@ -183,6 +185,15 @@ export function EditorPane({ workspaceId, isActive = true }: { workspaceId: stri
         setHeadContent(active.path, headContent);
       } catch {
         /* ignore */
+      }
+      // 同步 didSave 给 LSP(触发 rust-analyzer cargo check 等落盘分析)并
+      // 立即重拉诊断,波浪线反映保存后的最新状态
+      try {
+        await syncLspDocument(workspaceId, active.path, active.content, true);
+        const view = editorViewRef.current;
+        if (view && view.dom.isConnected) forceLinting(view);
+      } catch {
+        /* LSP 不可用时静默跳过 */
       }
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : String(e));
@@ -546,10 +557,12 @@ export function EditorPane({ workspaceId, isActive = true }: { workspaceId: stri
                       value={active.content}
                       filename={active.name}
                       filePath={active.path}
+                      workspaceId={workspaceId}
                       onChange={(val) => setContent(active.path, val)}
                       headContent={active.headContent ?? undefined}
                       highlightQuery={highlightQuery}
                       highlightLine={highlightLine}
+                      onDiagnostics={(p, d) => setDiagnostics(p, d)}
                       onEditorReady={(view) => {
                         editorViewRef.current = view;
                         // markdown 预览 → 编辑模式的切换完成,补发搜索面板

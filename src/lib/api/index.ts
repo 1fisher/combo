@@ -528,6 +528,31 @@ export function getWorkspaceLanguages(workspaceId: string): Promise<Api.Workspac
   return apiRequest(`/v1/workspaces/${workspaceId}/languages`);
 }
 
+// 编辑器 LSP 文档同步(didOpen/didChange 全量文本,saved=true 额外发 didSave)。
+// 扩展名无对应 server 时返回 language: null,前端据此跳过诊断轮询。
+export function syncLspDocument(
+  workspaceId: string,
+  path: string,
+  text: string,
+  saved = false,
+): Promise<Api.LspDocumentSyncResult> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/lsp/document`, {
+    method: 'POST',
+    body: { path, text, saved },
+  });
+}
+
+// 拉取某文件的实时 LSP 诊断(服务端等待推送的预算毫秒数,默认 2500、上限 5000)。
+export function fetchLspDiagnostics(
+  workspaceId: string,
+  path: string,
+  waitMs = 2500,
+): Promise<Api.LspDocumentDiagnostics> {
+  return apiRequest(
+    `/v1/workspaces/${workspaceId}/lsp/diagnostics?path=${encodeURIComponent(path)}&wait=${waitMs}`,
+  );
+}
+
 // LSP 一键安装:后台执行安装命令,成功后自动写 [lsp.<lang>] 配置
 export function listLspPlans(): Promise<Api.LspInstallPlan[]> {
   return apiRequest('/v1/lsp/plans');

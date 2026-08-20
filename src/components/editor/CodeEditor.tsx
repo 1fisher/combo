@@ -3,6 +3,7 @@ import CodeMirror from '@uiw/react-codemirror';
 import { EditorView } from '@codemirror/view';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { search } from '@codemirror/search';
+import { linter, lintGutter } from '@codemirror/lint';
 import { go } from '@codemirror/lang-go';
 import { javascript } from '@codemirror/lang-javascript';
 import { json } from '@codemirror/lang-json';
@@ -14,6 +15,8 @@ import { rust } from '@codemirror/lang-rust';
 import { FileText, MessageSquarePlus, Quote } from 'lucide-react';
 import { createGitGutter } from './gitGutter';
 import { searchHighlightPlugin } from './searchHighlight';
+import { syncLspDocument, fetchLspDiagnostics } from '../../lib/api';
+import { countSeverity, toCmDiagnostics } from '../../lib/lspDiagnostics';
 import { useContextStore } from '../../stores/contextStore';
 import { ContextMenu, type MenuItem } from '../ui/ContextMenu';
 
@@ -64,15 +67,19 @@ export function CodeEditor({
   value,
   filename,
   filePath,
+  workspaceId,
   onChange,
   headContent,
   highlightQuery,
   highlightLine,
   onEditorReady,
+  onDiagnostics,
 }: {
   value: string;
   filename: string;
   filePath?: string;
+  /** 所属 workspace(提供且文件有对应 LSP server 时启用实时诊断波浪线)。 */
+  workspaceId?: string | null;
   onChange: (value: string) => void;
   /** 文件在 HEAD 的内容;提供后启用 git gutter 行标记 */
   headContent?: string;
@@ -82,10 +89,15 @@ export function CodeEditor({
   highlightLine?: number | null;
   /** 编辑器创建/更新时回调,暴露 EditorView 供外部控制 */
   onEditorReady?: (view: EditorView) => void;
+  /** LSP 诊断回调(每次同步后上报错误/警告计数;null 表示该文件无 LSP 支持) */
+  onDiagnostics?: (path: string, counts: { errors: number; warnings: number } | null) => void;
 }) {
   const viewRef = useRef<EditorView | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const addItem = useContextStore((s) => s.addItem);
+  // 回调经 ref 转发:extensions useMemo 不因父组件重渲染而重建(避免 linter 重复挂载)
+  const diagCbRef = useRef(onDiagnostics);
+  diagCbRef.current = onDiagnostics;
 
   const extensions = useMemo(() => {
     const lang = langForFile(filename);
@@ -96,6 +108,33 @@ export function CodeEditor({
     const q = highlightQuery?.trim();
     if (q) {
       exts.push(searchHighlightPlugin(q));
+    }
+    // LSP 实时诊断:文档变化 debounce 后把全文同步给后端(didOpen/didChange),
+    // 拉回诊断画成波浪线 + 行标记;未配置对应 server 的文件跳过。
+    if (workspaceId && filePath) {
+      const wsId = workspaceId;
+      const docPath = filePath;
+      exts.push(
+        linter(
+          async (view) => {
+            try {
+              const text = view.state.doc.toString();
+              const sync = await syncLspDocument(wsId, docPath, text);
+              if (!sync.language) {
+                diagCbRef.current?.(docPath, null);
+                return [];
+              }
+              const { diagnostics } = await fetchLspDiagnostics(wsId, docPath, 1800);
+              diagCbRef.current?.(docPath, countSeverity(diagnostics));
+              return toCmDiagnostics(diagnostics, view.state.doc);
+            } catch {
+              return []; // 后端离线/请求失败不打断编辑
+            }
+          },
+          { delay: 700 },
+        ),
+        lintGutter(),
+      );
     }
     // 高亮匹配样式 — 侧边栏搜索用蓝绿色,文件内搜索面板用黄色,便于区分
     exts.push(
@@ -124,7 +163,14 @@ export function CodeEditor({
       exts.push(...createGitGutter(headContent));
     }
     return exts;
-  }, [filename, headContent, highlightQuery]);
+  }, [filename, headContent, highlightQuery, workspaceId, filePath]);
+
+  // 卸载/切文件时清掉该文件的诊断计数(状态指示器随之复位)
+  useEffect(() => {
+    if (!filePath) return;
+    const cb = diagCbRef.current;
+    return () => cb?.(filePath, null);
+  }, [filePath]);
 
   // 滚动到指定行:同一(文件, 行号)只定位一次。依赖保留 value 仅用于
   // 等编辑器实例就绪(首次挂载时 viewRef 尚为 null),定位成功后记录 key,

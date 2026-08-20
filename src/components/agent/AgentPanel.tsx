@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { FileEdit, Folder, Loader2, CircleAlert } from 'lucide-react';
 import { randomUUID } from '../../lib/clientId';
 import { useAgentStore } from '../../stores/agentStore';
+import { useEditorStore } from '../../stores/editorStore';
 import { formatContextPrompt, type ContextItem } from '../../stores/contextStore';
 import { cancelAgent, sendAgentMessage, answerQuestion, clearSession } from '../../lib/api';
 import type { Api } from '../../lib/api/types';
@@ -68,13 +69,15 @@ export function AgentPanel({
   const [showChanges, setShowChanges] = useState(false);
   const [changeStatuses, setChangeStatuses] = useState<Record<string, ChangeStatus>>({});
   // 项目 LSP 状态:主要语言未配置 server / 可执行文件缺失时在会话区顶部警示;
-  // 全部就绪时只在消息区右上角放一枚小绿勾(LspReadyIndicator),hover 看详情,
-  // 不占横幅。问题横幅的「忽略」为内存态,切换项目后自动复位(切换即重检)。
+  // 全部就绪时只在消息区右上角放一枚小图标(LspReadyIndicator),hover 看详情,
+  // 并联动当前编辑文件的实时诊断计数(有错误变红)。问题横幅的「忽略」为内存态,
+  // 切换项目后自动复位(切换即重检)。
   const { issues: lspIssues, ready: lspReady } = useWorkspaceLspStatus(workspaceId);
   const [lspDismissed, setLspDismissed] = useState(false);
   useEffect(() => {
     setLspDismissed(false);
   }, [workspaceId]);
+  const activeEditorDiag = useEditorStore((s) => (s.activePath ? s.diagnostics[s.activePath] : null));
   // 连击(combo)计数:连续快速回复时累加,超时/切会话归零;
   // 流式期间每条内容更新也 +1(叠加,不封顶)。
   const [combo, setCombo] = useState(0);
@@ -396,7 +399,7 @@ export function AgentPanel({
       )}
       {workspaceId && lspIssues.length === 0 && lspReady.length > 0 && (
         <div className="flex justify-end items-center mx-4 mt-1 shrink-0">
-          <LspReadyIndicator ready={lspReady} onOpenLsp={onOpenLspView} />
+          <LspReadyIndicator ready={lspReady} onOpenLsp={onOpenLspView} fileDiags={activeEditorDiag} />
         </div>
       )}
       {/* 时间线 / 变更面板 */}

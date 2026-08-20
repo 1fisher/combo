@@ -90,6 +90,10 @@ pub struct AppState {
     pub tts: Arc<tts::TtsService>,
     /// LSP server 一键安装任务(同一时刻至多一个,前端轮询状态)。
     pub lsp_install: Arc<Mutex<LspInstallState>>,
+    /// 编辑器文档的常驻 LSP 会话(ws_id → (配置指纹, manager));
+    /// 与 agent 工具的 per-run LspManager 分离,跨 run 存活以保持文档打开状态,
+    /// 诊断即时推送。锁跨 await 持有,故用 tokio Mutex。
+    pub lsp_docs: Arc<tokio::sync::Mutex<HashMap<String, (String, Arc<lsp::LspManager>)>>>,
 }
 
 impl AppState {
@@ -143,6 +147,7 @@ impl AppState {
             )),
             tts: Arc::new(tts),
             lsp_install: Arc::new(Mutex::new(LspInstallState::default())),
+            lsp_docs: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         })
     }
 
@@ -201,6 +206,7 @@ impl AppState {
                 tts::TtsModel::PiperZhXiaoya,
             )),
             lsp_install: Arc::new(Mutex::new(LspInstallState::default())),
+            lsp_docs: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
 }
@@ -1038,6 +1044,12 @@ fn build_router(
         .route("/v1/workspaces/:id/graph", get(graph::graph))
         // ---- workspace 语言统计(会话界面 LSP 检测提示) ----
         .route("/v1/workspaces/:id/languages", get(lsp::workspace_languages))
+        // ---- 编辑器文档同步与实时诊断(didOpen/didChange 全量 → publishDiagnostics) ----
+        .route("/v1/workspaces/:id/lsp/document", post(lsp::lsp_document_sync))
+        .route(
+            "/v1/workspaces/:id/lsp/diagnostics",
+            get(lsp::lsp_document_diagnostics),
+        )
         .route("/v1/workspaces/:id/git/status", get(git::status))
         .route("/v1/workspaces/:id/git/repos", get(git::repos))
         .route("/v1/workspaces/:id/git/diff", get(git::diff))

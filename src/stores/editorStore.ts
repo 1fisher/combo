@@ -2,6 +2,12 @@ import { create } from 'zustand';
 
 export type FileKind = 'text' | 'image' | 'pdf';
 
+/** 单文件 LSP 诊断计数(编辑器同步后上报,状态指示器联动用)。 */
+export interface FileDiagnostics {
+  errors: number;
+  warnings: number;
+}
+
 export interface OpenFile {
   path: string;
   name: string;
@@ -16,6 +22,8 @@ export interface OpenFile {
 interface EditorState {
   openFiles: OpenFile[];
   activePath: string | null;
+  /** path → LSP 诊断计数(实时,编辑/保存后更新;关闭文件时清理)。 */
+  diagnostics: Record<string, FileDiagnostics>;
   openFile: (path: string, name: string, content: string, kind?: FileKind) => void;
   setActive: (path: string | null) => void;
   setContent: (path: string, content: string) => void;
@@ -24,6 +32,8 @@ interface EditorState {
   markSaved: (path: string, content: string) => void;
   /** 更新文件的 HEAD 内容(git gutter 基准) */
   setHeadContent: (path: string, headContent: string | null) => void;
+  /** 上报/清除某文件的 LSP 诊断计数(null 删除条目) */
+  setDiagnostics: (path: string, d: FileDiagnostics | null) => void;
   /** 切换项目时清空所有打开的文件 */
   resetOpenFiles: () => void;
 }
@@ -31,6 +41,7 @@ interface EditorState {
 export const useEditorStore = create<EditorState>((set) => ({
   openFiles: [],
   activePath: null,
+  diagnostics: {},
 
   openFile: (path, name, content, kind = 'text') =>
     set((st) => {
@@ -60,7 +71,8 @@ export const useEditorStore = create<EditorState>((set) => ({
         const neighbor = openFiles[Math.min(idx, openFiles.length - 1)];
         activePath = neighbor ? neighbor.path : null;
       }
-      return { openFiles, activePath };
+      const { [path]: _removed, ...diagnostics } = st.diagnostics;
+      return { openFiles, activePath, diagnostics };
     }),
 
   markSaved: (path, content) =>
@@ -77,5 +89,17 @@ export const useEditorStore = create<EditorState>((set) => ({
       ),
     })),
 
-  resetOpenFiles: () => set({ openFiles: [], activePath: null }),
+  setDiagnostics: (path, d) =>
+    set((st) => {
+      if (!d) {
+        const { [path]: _removed, ...rest } = st.diagnostics;
+        return { diagnostics: rest };
+      }
+      // 计数相同不产生新引用,避免订阅方无谓重渲染
+      const prev = st.diagnostics[path];
+      if (prev && prev.errors === d.errors && prev.warnings === d.warnings) return st;
+      return { diagnostics: { ...st.diagnostics, [path]: d } };
+    }),
+
+  resetOpenFiles: () => set({ openFiles: [], activePath: null, diagnostics: {} }),
 }));

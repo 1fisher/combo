@@ -2185,6 +2185,29 @@ export namespace Api {
     path?: string | null;
   };
 
+  // 编辑器 LSP 文档同步与实时诊断(combo-cli serve 本地端点)。
+  // 位置为 LSP 0-based 行列(UTF-16 code unit),severity 1=error 2=warning 3=info 4=hint。
+  export type LspDiagnostic = {
+    line: number;
+    character: number;
+    endLine: number;
+    endCharacter: number;
+    severity: 1 | 2 | 3 | 4;
+    message: string;
+    source?: string | null;
+  };
+
+  // POST /v1/workspaces/:id/lsp/document 的响应;扩展名无对应 server 时 language 为 null。
+  export type LspDocumentSyncResult = {
+    language: string | null;
+  };
+
+  // GET /v1/workspaces/:id/lsp/diagnostics?path= 的响应。
+  export type LspDocumentDiagnostics = {
+    language: string | null;
+    diagnostics: LspDiagnostic[];
+  };
+
   // workspace 语言统计(GET /v1/workspaces/:id/languages,按扩展名聚合;
   // 语言标识与 [lsp.<lang>] 配置键一致,供会话界面展示 LSP 检测提示)。
   export type WorkspaceLanguageStat = {

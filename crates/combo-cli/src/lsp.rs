@@ -398,6 +398,139 @@ fn count_languages(root: &Path) -> (Vec<(String, usize)>, bool) {
     (langs, truncated)
 }
 
+// =========================== 编辑器文档同步与实时诊断 ===========================
+
+/// POST /v1/workspaces/{id}/lsp/document 的请求体。
+#[derive(serde::Deserialize)]
+pub struct LspDocumentBody {
+    /// workspace 相对路径。
+    pub path: String,
+    /// 文档当前全量文本(编辑器缓冲区内容,未保存的修改也包含在内)。
+    pub text: String,
+    /// 是否伴随保存(额外发 didSave,触发 rust-analyzer cargo check 等落盘分析)。
+    #[serde(default)]
+    pub saved: bool,
+}
+
+/// 取(或按当前配置重建)某 workspace 的编辑器常驻 LSP 会话。
+///
+/// 与 agent 工具的 per-run LspManager 分离:编辑器会话跨 run 存活,client
+/// lazy 启动后常驻(server 进程内保持打开文档状态,诊断即时推送)。
+/// 配置指纹(格式化字符串)变化时丢弃旧 manager——旧 client 由 Arc 引用
+/// 计数回收,`kill_on_drop` 关闭子进程。未配置任何 server 时返回 None。
+async fn editor_manager(state: &AppState, ws_id: &str) -> Result<Option<Arc<LspManager>>, Response> {
+    let root = match crate::fs::resolve_root(state, ws_id) {
+        Ok(r) => r,
+        Err(resp) => return Err(resp),
+    };
+    let configs = state.cfg.lock().unwrap().lsp.clone();
+    if configs.is_empty() {
+        return Ok(None);
+    }
+    let sig = format!("{configs:?}");
+    let mut map = state.lsp_docs.lock().await;
+    if let Some((s, m)) = map.get(ws_id) {
+        if *s == sig {
+            return Ok(Some(m.clone()));
+        }
+    }
+    let m = Arc::new(LspManager::new(root, configs));
+    map.insert(ws_id.to_string(), (sig, m.clone()));
+    Ok(Some(m))
+}
+
+/// 在 workspace 根内安全解析文档相对路径,返回 (绝对路径, 无点扩展名)。
+fn resolve_doc_path(state: &AppState, id: &str, rel: &str) -> Result<(PathBuf, String), Response> {
+    let root = match crate::fs::resolve_root(state, id) {
+        Ok(r) => r,
+        Err(resp) => return Err(resp),
+    };
+    let path = match crate::fs::safe_join(&root, rel) {
+        Ok(p) => p,
+        Err(e) => {
+            return Err(crate::fs::error(
+                StatusCode::BAD_REQUEST,
+                &format!("非法路径: {e}"),
+            ))
+        }
+    };
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    Ok((path, ext))
+}
+
+/// POST /v1/workspaces/{id}/lsp/document — 编辑器打开/编辑时同步文档内容。
+///
+/// 首次 didOpen,后续 didChange(全量文本,未保存的修改也可见);
+/// `saved=true` 额外发 didSave。扩展名无对应 server 时 `language` 为 null,
+/// 前端据此跳过诊断轮询。
+pub async fn lsp_document_sync(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    axum::Json(body): axum::Json<LspDocumentBody>,
+) -> Response {
+    let (path, ext) = match resolve_doc_path(&state, &id, &body.path) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let manager = match editor_manager(&state, &id).await {
+        Ok(m) => m,
+        Err(resp) => return resp,
+    };
+    let Some(manager) = manager else {
+        return crate::fs::ok_json(json!({ "language": null }));
+    };
+    match manager.sync_document(&path, &ext, &body.text, body.saved).await {
+        Ok(lang) => crate::fs::ok_json(json!({ "language": lang })),
+        Err(e) => crate::fs::error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("LSP 文档同步失败: {e}"),
+        ),
+    }
+}
+
+/// GET /v1/workspaces/{id}/lsp/diagnostics?path=&wait= — 拉取某文件的实时诊断。
+///
+/// `wait` 为等待 server 推送的预算毫秒数(默认 2500,上限 5000);超时返回
+/// 当前缓存(冷启动中可能为空,前端稍后重试)。诊断为扁平结构
+/// (line/character 0-based,severity 1=error 2=warning 3=info 4=hint)。
+pub async fn lsp_document_diagnostics(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
+) -> Response {
+    let Some(rel) = params.get("path") else {
+        return crate::fs::error(StatusCode::BAD_REQUEST, "缺少 path 参数");
+    };
+    let wait = params
+        .get("wait")
+        .and_then(|w| w.parse::<u64>().ok())
+        .unwrap_or(2500)
+        .min(5000);
+    let (path, ext) = match resolve_doc_path(&state, &id, rel) {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    let manager = match editor_manager(&state, &id).await {
+        Ok(m) => m,
+        Err(resp) => return resp,
+    };
+    let Some(manager) = manager else {
+        return crate::fs::ok_json(json!({ "language": null, "diagnostics": [] }));
+    };
+    match manager.diagnostics_for_editor(&path, &ext, wait).await {
+        Ok(Some(diags)) => crate::fs::ok_json(json!({ "language": ext_to_lang(&ext), "diagnostics": diags })),
+        Ok(None) => crate::fs::ok_json(json!({ "language": null, "diagnostics": [] })),
+        Err(e) => crate::fs::error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("LSP 诊断获取失败: {e}"),
+        ),
+    }
+}
+
 // =========================== LspClient ===========================
 
 /// 单个 LSP server 子进程的 JSON-RPC 客户端。
@@ -557,6 +690,25 @@ impl LspClient {
             }
         });
         self.notify_async("textDocument/didOpen", params).await
+    }
+
+    /// textDocument/didChange(全量文本;version 由 LspManager 的打开表单调递增)。
+    pub async fn did_change(&self, abs_path: &Path, text: &str, version: u32) -> Result<()> {
+        let uri = path_to_uri(abs_path);
+        let params = json!({
+            "textDocument": { "uri": uri, "version": version },
+            "contentChanges": [{ "text": text }],
+        });
+        self.notify_async("textDocument/didChange", params).await
+    }
+
+    /// textDocument/didSave(带全量文本;触发 rust-analyzer cargo check 等落盘分析)。
+    pub async fn did_save(&self, abs_path: &Path, text: &str) -> Result<()> {
+        let uri = path_to_uri(abs_path);
+        let params = json!({
+            "textDocument": { "uri": uri, "text": text },
+        });
+        self.notify_async("textDocument/didSave", params).await
     }
 
     /// 取回某文件最新诊断(server 通过 publishDiagnostics 主动 push)。
@@ -731,10 +883,42 @@ fn extract_hover_text(res: &Value) -> Option<String> {
 /// 多语言 LSP 路由器。按文件扩展名找到配置的语言 server,lazy 启动并复用。
 ///
 /// 生命周期绑定到所注册的 agent 工具:工具 drop → Arc 引用归零 → client drop → 子进程关闭。
+/// (编辑器会话由 serve 层的 `AppState.lsp_docs` 单独持有一份常驻 manager。)
 pub struct LspManager {
     workspace_root: PathBuf,
     configs: BTreeMap<String, LspServerConfig>,
     clients: Mutex<HashMap<String, Arc<LspClient>>>,
+    /// 已打开文档 uri → 当前版本号(didOpen 为 1,之后 didChange 递增)。
+    /// agent 工具与编辑器共用同一张表,保证版本单调、不重复 didOpen。
+    open_docs: Mutex<HashMap<String, u32>>,
+}
+
+/// 计算文档同步动作:未打开 → didOpen(version=1);已打开 → didChange(version+1)。
+/// 抽成纯函数便于单测。
+fn next_doc_version(open_docs: &HashMap<String, u32>, uri: &str) -> (bool, u32) {
+    match open_docs.get(uri) {
+        None => (true, 1),
+        Some(v) => (false, v + 1),
+    }
+}
+
+/// 把 LSP 诊断对象精简为扁平 JSON(编辑器/状态指示器直接渲染用的 wire 结构)。
+/// 字段缺失时给安全默认(severity 默认 3=info,位置默认 0)。
+fn slim_diagnostic(d: Value) -> Value {
+    let pos = |obj: &str, key: &str| {
+        d.pointer(&format!("/range/{obj}/{key}"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+    };
+    json!({
+        "line": pos("start", "line"),
+        "character": pos("start", "character"),
+        "endLine": pos("end", "line"),
+        "endCharacter": pos("end", "character"),
+        "severity": d.get("severity").and_then(Value::as_u64).unwrap_or(3),
+        "message": d.get("message").and_then(Value::as_str).unwrap_or(""),
+        "source": d.get("source").and_then(Value::as_str),
+    })
 }
 
 impl LspManager {
@@ -743,6 +927,7 @@ impl LspManager {
             workspace_root,
             configs,
             clients: Mutex::new(HashMap::new()),
+            open_docs: Mutex::new(HashMap::new()),
         }
     }
 
@@ -778,16 +963,18 @@ impl LspManager {
         Ok(arc)
     }
 
-    /// 打开文件(若未打开)并等待诊断就绪。
+    /// 打开或更新文档并等待诊断就绪(agent 工具入口)。
     ///
     /// LSP server(如 rust-analyzer)首次加载项目可能先推送空诊断,
     /// 分析完成后才推送实际诊断。因此等待策略:
     /// 1. 轮询直到 diagnostics 中出现该文件 uri(最多 30s);
     /// 2. 继续轮询直到诊断稳定(连续 3 次读取相同)或非空,最多再等 10s。
-    async fn ensure_opened(&self, client: &LspClient, abs_path: &Path, lang: &str) -> Result<()> {
+    async fn ensure_opened(&self, client: &LspClient, abs_path: &Path) -> Result<()> {
         let text = std::fs::read_to_string(abs_path)
             .map_err(|e| anyhow::anyhow!("读取文件失败 {}: {e}", abs_path.display()))?;
-        client.did_open(abs_path, &text, lang).await?;
+        // 与编辑器共用同一文档同步入口:首次 didOpen,后续 didChange,版本单调
+        let ext = abs_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        self.sync_document(abs_path, ext, &text, false).await?;
         let uri = path_to_uri(abs_path);
         let diags = client.diagnostics.clone();
 
@@ -826,13 +1013,87 @@ impl LspManager {
         Ok(())
     }
 
+    /// 同步文档内容给 LSP server(编辑器与 agent 工具共用的唯一入口):
+    /// 首次 → didOpen(version=1);后续 → didChange(version+1,全量文本)。
+    /// `save=true` 时额外发 didSave,触发 rust-analyzer cargo check 等落盘分析。
+    /// 扩展名无对应 server 时返回 Ok(None),调用方据此跳过诊断请求。
+    pub async fn sync_document(
+        &self,
+        abs_path: &Path,
+        ext: &str,
+        text: &str,
+        save: bool,
+    ) -> Result<Option<String>> {
+        let Some(lang) = self.lang_for_ext(ext) else {
+            return Ok(None);
+        };
+        let client = self.client_for(&lang).await?;
+        let uri = path_to_uri(abs_path);
+        let (first, version) = {
+            let mut docs = self.open_docs.lock().await;
+            let r = next_doc_version(&docs, &uri);
+            docs.insert(uri, r.1);
+            r
+        };
+        if first {
+            client.did_open(abs_path, text, &lang).await?;
+        } else {
+            client.did_change(abs_path, text, version).await?;
+        }
+        if save {
+            client.did_save(abs_path, text).await?;
+        }
+        Ok(Some(lang))
+    }
+
+    /// 等待并返回某文件的结构化诊断(编辑器场景,轻量等待):
+    /// 轮询直到 server 推送该 uri 的诊断(上限 `wait_ms`),出现后再做短稳定
+    /// 窗口(连续两次条数相同即认为稳定,上限 400ms),返回精简后的 JSON 数组。
+    /// 超时返回当前缓存(可能为空——如 rust-analyzer 首次冷启动仍在分析,
+    /// 前端稍后重试即可)。扩展名无对应 server 时返回 Ok(None)。
+    pub async fn diagnostics_for_editor(
+        &self,
+        abs_path: &Path,
+        ext: &str,
+        wait_ms: u64,
+    ) -> Result<Option<Vec<Value>>> {
+        let Some(lang) = self.lang_for_ext(ext) else {
+            return Ok(None);
+        };
+        let client = self.client_for(&lang).await?;
+        let uri = path_to_uri(abs_path);
+        let cache = client.diagnostics.clone();
+        // 1. 等待 uri 首次出现(server 已开始处理)
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(wait_ms);
+        while !cache.lock().await.contains_key(&uri) {
+            if std::time::Instant::now() >= deadline {
+                return Ok(Some(Vec::new()));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+        }
+        // 2. 稳定窗口:server 对同一次变更可能连发多批,条数不再变化即返回
+        let stable_deadline = std::time::Instant::now() + std::time::Duration::from_millis(400);
+        let mut prev_len: Option<usize> = None;
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(120)).await;
+            let cur = cache.lock().await.get(&uri).cloned().unwrap_or_default();
+            if prev_len == Some(cur.len()) {
+                return Ok(Some(cur.into_iter().map(slim_diagnostic).collect()));
+            }
+            prev_len = Some(cur.len());
+            if std::time::Instant::now() >= stable_deadline {
+                let last = cache.lock().await.get(&uri).cloned().unwrap_or_default();
+                return Ok(Some(last.into_iter().map(slim_diagnostic).collect()));
+            }
+        }
+    }
+
     /// 获取文件诊断(错误/警告)。返回人类可读的多行文本。
-    pub async fn diagnostics(&self, abs_path: &Path, ext: &str) -> Result<String> {
-        let lang = self
+    pub async fn diagnostics(&self, abs_path: &Path, ext: &str) -> Result<String> {        let lang = self
             .lang_for_ext(ext)
             .ok_or_else(|| anyhow::anyhow!("扩展名 `.{ext}` 无对应 LSP server"))?;
         let client = self.client_for(&lang).await?;
-        self.ensure_opened(client.as_ref(), abs_path, &lang).await?;
+        self.ensure_opened(client.as_ref(), abs_path).await?;
         let diags = client.get_diagnostics(abs_path).await;
         Ok(format_diagnostics(&diags, abs_path))
     }
@@ -843,7 +1104,7 @@ impl LspManager {
             .lang_for_ext(ext)
             .ok_or_else(|| anyhow::anyhow!("扩展名 `.{ext}` 无对应 LSP server"))?;
         let client = self.client_for(&lang).await?;
-        self.ensure_opened(client.as_ref(), abs_path, &lang).await?;
+        self.ensure_opened(client.as_ref(), abs_path).await?;
         let locs = client.definition(abs_path, line, col).await?;
         Ok(format_locations(&locs))
     }
@@ -854,7 +1115,7 @@ impl LspManager {
             .lang_for_ext(ext)
             .ok_or_else(|| anyhow::anyhow!("扩展名 `.{ext}` 无对应 LSP server"))?;
         let client = self.client_for(&lang).await?;
-        self.ensure_opened(client.as_ref(), abs_path, &lang).await?;
+        self.ensure_opened(client.as_ref(), abs_path).await?;
         let locs = client.references(abs_path, line, col).await?;
         Ok(format_locations(&locs))
     }
@@ -865,7 +1126,7 @@ impl LspManager {
             .lang_for_ext(ext)
             .ok_or_else(|| anyhow::anyhow!("扩展名 `.{ext}` 无对应 LSP server"))?;
         let client = self.client_for(&lang).await?;
-        self.ensure_opened(client.as_ref(), abs_path, &lang).await?;
+        self.ensure_opened(client.as_ref(), abs_path).await?;
         let text = client.hover(abs_path, line, col).await?;
         Ok(text.unwrap_or_else(|| "无 hover 信息".into()))
     }
@@ -957,7 +1218,6 @@ fn uri_to_path(uri: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn finds_executable_on_path() {
         assert!(find_executable("/bin/ls").is_some());
@@ -1165,6 +1425,126 @@ mod tests {
                 p.lang
             );
         }
+    }
+
+    /// 构造带临时目录 workspace 的测试 AppState(不配置任何 LSP server)。
+    fn lsp_test_state(tag: &str) -> (AppState, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("combo-lspdoc-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+        let meta = std::sync::Arc::new(crate::meta::MetaStore::new());
+        meta.insert(crate::meta::WorkspaceMeta {
+            id: "ws".into(),
+            path: dir.clone(),
+            name: "test".into(),
+            backend_type: crate::store::BackendType::ComboCli,
+        });
+        (AppState::test_state(meta, None), dir)
+    }
+
+    /// 读取 axum Response 的 JSON body。
+    async fn body_json(resp: Response) -> Value {
+        let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    /// next_doc_version:首次 → didOpen(version=1);已打开 → didChange(递增)。
+    #[test]
+    fn next_doc_version_first_then_increment() {
+        let mut docs = HashMap::new();
+        assert_eq!(next_doc_version(&docs, "file:///a.rs"), (true, 1));
+        docs.insert("file:///a.rs".to_string(), 1);
+        assert_eq!(next_doc_version(&docs, "file:///a.rs"), (false, 2));
+        docs.insert("file:///a.rs".to_string(), 7);
+        assert_eq!(next_doc_version(&docs, "file:///a.rs"), (false, 8));
+        // 其他文件不受影响
+        assert_eq!(next_doc_version(&docs, "file:///b.rs"), (true, 1));
+    }
+
+    /// slim_diagnostic:range/severity/message/source 展开为扁平字段,缺字段给安全默认。
+    #[test]
+    fn slim_diagnostic_maps_and_defaults() {
+        let full = json!({
+            "range": {
+                "start": { "line": 3, "character": 8 },
+                "end": { "line": 3, "character": 12 },
+            },
+            "severity": 1,
+            "message": "expected `;`",
+            "source": "rust-analyzer",
+        });
+        let slim = slim_diagnostic(full);
+        assert_eq!(slim["line"], json!(3));
+        assert_eq!(slim["character"], json!(8));
+        assert_eq!(slim["endLine"], json!(3));
+        assert_eq!(slim["endCharacter"], json!(12));
+        assert_eq!(slim["severity"], json!(1));
+        assert_eq!(slim["message"], json!("expected `;`"));
+        assert_eq!(slim["source"], json!("rust-analyzer"));
+
+        // 缺 range/severity/source:位置 0、severity 回落 3(info)、source null
+        let empty = slim_diagnostic(json!({ "message": "x" }));
+        assert_eq!(empty["line"], json!(0));
+        assert_eq!(empty["severity"], json!(3));
+        assert_eq!(empty["source"], json!(null));
+    }
+
+    /// 未配置任何 LSP server 时,文档同步直接返回 language:null(不启动子进程)。
+    #[tokio::test]
+    async fn lsp_document_sync_without_config_returns_null_language() {
+        let (state, _dir) = lsp_test_state("no-config");
+        let resp = lsp_document_sync(
+            State(state),
+            AxumPath("ws".into()),
+            axum::Json(LspDocumentBody {
+                path: "src/main.rs".into(),
+                text: "fn main() {".into(),
+                saved: false,
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["language"], json!(null));
+    }
+
+    /// 路径越出 workspace 根目录 → 400(与文件服务同口径的 safe_join 校验)。
+    #[tokio::test]
+    async fn lsp_document_sync_rejects_path_escape() {
+        let (state, _dir) = lsp_test_state("escape");
+        let resp = lsp_document_sync(
+            State(state),
+            AxumPath("ws".into()),
+            axum::Json(LspDocumentBody {
+                path: "../outside.rs".into(),
+                text: String::new(),
+                saved: false,
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    /// 诊断端点:缺 path 参数 → 400;未配置 server → language:null + 空列表。
+    #[tokio::test]
+    async fn lsp_document_diagnostics_validations() {
+        let (state, _dir) = lsp_test_state("diag");
+        let resp = lsp_document_diagnostics(
+            State(state.clone()),
+            AxumPath("ws".into()),
+            axum::extract::Query(HashMap::new()),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let mut q = HashMap::new();
+        q.insert("path".to_string(), "src/main.rs".to_string());
+        let resp = lsp_document_diagnostics(State(state), AxumPath("ws".into()), axum::extract::Query(q)).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = body_json(resp).await;
+        assert_eq!(v["language"], json!(null));
+        assert_eq!(v["diagnostics"], json!([]));
     }
 
     #[test]

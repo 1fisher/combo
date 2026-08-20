@@ -88,4 +88,25 @@ describe('LspReadyIndicator', () => {
     expect(dots).toHaveLength(READY.length);
     dots.forEach((d) => expect(d.className).toContain('bg-emerald-500'));
   });
+
+  it('当前文件有错误时指示器变红,tooltip 报错误数', async () => {
+    const user = userEvent.setup();
+    render(<LspReadyIndicator ready={READY} onOpenLsp={vi.fn()} fileDiags={{ errors: 2, warnings: 1 }} />);
+    const btn = screen.getByTestId('lsp-ready-indicator');
+    expect(btn.dataset.state).toBe('error');
+    expect(btn.className).toContain('text-destructive');
+    await user.hover(btn);
+    expect(await screen.findByText(/当前文件:2 个错误 \/ 1 个警告/)).toBeTruthy();
+    expect(screen.getByText(/编辑器内以波浪线标注具体位置/)).toBeTruthy();
+  });
+
+  it('当前文件仅警告时指示器为琥珀色', async () => {
+    const user = userEvent.setup();
+    render(<LspReadyIndicator ready={READY} onOpenLsp={vi.fn()} fileDiags={{ errors: 0, warnings: 3 }} />);
+    const btn = screen.getByTestId('lsp-ready-indicator');
+    expect(btn.dataset.state).toBe('warning');
+    expect(btn.className).toContain('text-amber-500');
+    await user.hover(btn);
+    expect(await screen.findByText(/当前文件:3 个警告/)).toBeTruthy();
+  });
 });
