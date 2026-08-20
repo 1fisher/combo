@@ -78,6 +78,7 @@ describe('ConversationList', () => {
       bySession: {
         b2: { messages: [], queued: false, run: { runId: 'r1', status: 'running' } },
       },
+      autoOpenDecidedKey: null,
     });
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
@@ -94,5 +95,39 @@ describe('ConversationList', () => {
     // 空闲会话行不带标记
     const idleRow = screen.getByText('空闲会话').closest('div')!;
     expect(idleRow.getAttribute('title')).toBeNull();
+  });
+
+  it('未读会话带角标与高亮,点开该会话后清除', async () => {
+    sessions.length = 0;
+    sessions.push(
+      { id: 'u1', title: '未读会话', created_at: 1_700_000_000 },
+      { id: 'u2', title: '已读会话', created_at: 1_700_000_100 },
+    );
+    useAgentStore.setState({
+      activeWorkspaceId: 'w1',
+      activeSessionId: 'u2',
+      bySession: {},
+      unreadSessions: { u1: true },
+      autoOpenDecidedKey: null,
+    });
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={qc}>
+        <ConversationList />
+      </QueryClientProvider>
+    );
+    await screen.findByText('已读会话');
+    // 未读行:角标 + 行 title 提示;已读行没有
+    expect(screen.getAllByLabelText('有未读的新结果')).toHaveLength(1);
+    const unreadRow = screen.getByText('未读会话').closest('div')!;
+    expect(unreadRow.getAttribute('title')).toBe('有未读的新结果');
+    const readRow = screen.getByText('已读会话').closest('div')!;
+    expect(readRow.getAttribute('title')).toBeNull();
+    // 点击未读会话 → 选中且角标清除
+    await userEvent.click(screen.getByText('未读会话'));
+    const st = useAgentStore.getState();
+    expect(st.activeSessionId).toBe('u1');
+    expect(st.unreadSessions['u1']).toBeUndefined();
+    expect(screen.queryByLabelText('有未读的新结果')).toBeNull();
   });
 });

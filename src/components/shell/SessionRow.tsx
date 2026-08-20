@@ -57,6 +57,8 @@ export function SessionRow({
   const localRunning = useAgentStore(
     (s) => s.bySession[session.id]?.run?.status === 'running',
   );
+  // 未读标记:run 在未查看该会话期间结束(状态变了但没读过),点开后清除
+  const unread = useAgentStore((s) => s.unreadSessions[session.id] === true);
   const busy = isBusy || localRunning;
 
   useEffect(() => {
@@ -99,7 +101,7 @@ export function SessionRow({
           isActive && 'bg-surface-hover text-foreground',
           rowClassName,
         )}
-        title={busy ? '任务正在处理中' : undefined}
+        title={busy ? '任务正在处理中' : unread ? '有未读的新结果' : undefined}
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -112,13 +114,22 @@ export function SessionRow({
             aria-label="任务正在处理中"
           />
         ) : (
-          <MessageSquare
-            className={cn(
-              'size-3.5 shrink-0',
-              isActive ? 'text-foreground' : 'text-foreground-subtlest',
-              iconClassName,
+          <span className="relative flex shrink-0">
+            <MessageSquare
+              className={cn(
+                'size-3.5',
+                isActive || unread ? 'text-foreground' : 'text-foreground-subtlest',
+                iconClassName,
+              )}
+            />
+            {/* 未读角标:run 结束但用户还没看过该会话的结果 */}
+            {unread && !isActive && (
+              <span
+                className="absolute -top-1 -right-1 size-2 rounded-full bg-brand ring-2 ring-background"
+                aria-label="有未读的新结果"
+              />
             )}
-          />
+          </span>
         )}
         {editing ? (
           <input
@@ -136,7 +147,10 @@ export function SessionRow({
         ) : (
           <>
             <button
-              className="min-w-0 flex-1 truncate"
+              className={cn(
+                'min-w-0 flex-1 truncate text-left',
+                unread && !isActive && 'font-medium text-foreground',
+              )}
               onClick={onActivate}
             >
               {session.title}

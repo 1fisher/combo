@@ -38,6 +38,11 @@ export function markRunStarted(id: string) {
   setTimeout(() => recentlyRan.delete(id), RECENT_RUN_WINDOW_MS);
 }
 
+/** 该会话是否刚在本端发起 run(对账逻辑跳过,避免被旧的 is_busy=false 误收敛)。 */
+export function isRecentlyRan(id: string): boolean {
+  return Date.now() - (recentlyRan.get(id) ?? 0) < RECENT_RUN_WINDOW_MS;
+}
+
 /**
  * 会话列表 → 本地 run 状态对账(纯函数,便于测试):
  * 服务端 is_busy=false 而本地仍 running 的会话,说明 run 已在未订阅期间
@@ -52,10 +57,41 @@ export function reconcileRunsFromSessions(
     if (s.is_busy !== false) continue;
     const rt = store.bySession[s.id];
     if (rt?.run?.status !== 'running') continue;
-    if (Date.now() - (recentlyRan.get(s.id) ?? 0) < RECENT_RUN_WINDOW_MS) continue;
+    if (isRecentlyRan(s.id)) continue;
     markRun(s.id, rt.run.runId, 'done');
   }
 }
+
+/**
+ * 切回项目时挑选要直接打开的会话(纯函数,便于测试):
+ * 有正在处理(is_busy)的会话 → 打开最近有活动的那个;否则不选中任何会话。
+ */
+export function pickAutoOpenSession(
+  sessions: { id: string; is_busy?: boolean; created_at?: number; updated_at?: number }[],
+  activeSessionId: string | null
+): string | null {
+  if (activeSessionId != null) return null;
+  const busy = sessions.filter((s) => s.is_busy === true);
+  if (busy.length === 0) return null;
+  const toMs = (ts?: number) => (ts ? (ts > 1e12 ? ts : ts * 1000) : 0);
+  // 多个在处理时取最近有活动的(无时间戳时保持列表顺序)
+  let best = busy[0];
+  let bestTs = Math.max(toMs(best.updated_at), toMs(best.created_at));
+  for (const s of busy.slice(1)) {
+    const ts = Math.max(toMs(s.updated_at), toMs(s.created_at));
+    if (ts > bestTs) {
+      best = s;
+      bestTs = ts;
+    }
+  }
+  return best.id;
+}
+
+/**
+ * 「切回项目自动打开 busy 会话」的去重键存放在 agentStore.autoOpenDecidedKey
+ * (内存态):每次项目切换(workspaceSwitchSeq)只决策一次,避免后台新起的
+ * run(自动化等)打断用户正在进行的操作。
+ */
 
 export function useSessions(workspaceId: string | null) {
   const qc = useQueryClient();
@@ -87,6 +123,8 @@ export function useSessions(workspaceId: string | null) {
   const remove = useMutation({
     mutationFn: (sessionId: string) => deleteSession(workspaceId!, sessionId),
     onSuccess: (_data, deletedId) => {
+      // 删除会话:未读角标与 busy 跟踪一并清理
+      useAgentStore.getState().clearSessionRuntime(deletedId);
       qc.invalidateQueries({ queryKey: ['sessions', workspaceId] });
       if (activeSessionId === deletedId) {
         setActiveSessionId(null);
@@ -113,6 +151,13 @@ export function useSessions(workspaceId: string | null) {
     if (!q.data) return;
     const st = useAgentStore.getState();
     reconcileRunsFromSessions(st, st.markRun, q.data);
+    // 观察 busy 状态:run 在切走会话/项目期间结束(本地已无运行态)时,
+    // 由 store 的 busy 集合检测「busy → 空闲」转变并标记未读。
+    // 刚发起 run 的会话跳过(列表可能带回旧的 is_busy=false)。
+    for (const s of q.data) {
+      if (s.is_busy === true) st.observeSessionBusy(s.id, true);
+      else if (s.is_busy === false && !isRecentlyRan(s.id)) st.observeSessionBusy(s.id, false);
+    }
     // 播种各会话的累计 API 调用次数(rig turns 计数,后端 sqlite 持久)。
     // setApiCalls 取单调较大值,run 进行中列表 refetch 带回的旧基数
     // 不会覆盖实时 usage 事件已推送的新值。
@@ -121,6 +166,23 @@ export function useSessions(workspaceId: string | null) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q.data]);
+  // 切回项目时:若有正在处理的会话则直接打开它,否则保持不选中
+  // (切换项目时 activeSessionId 已清空)。每次项目切换只决策一次,
+  // 且等列表拉取 settle(避免缓存的旧 is_busy 误判)。
+  useEffect(() => {
+    if (!workspaceId || !q.data || q.isFetching) return;
+    const st = useAgentStore.getState();
+    const key = `${workspaceId}#${st.workspaceSwitchSeq}`;
+    if (st.autoOpenDecidedKey === key) return;
+    useAgentStore.setState({ autoOpenDecidedKey: key });
+    const target = pickAutoOpenSession(q.data, st.activeSessionId);
+    if (target) {
+      const ts = new Date().toISOString().slice(11, 23);
+      console.debug(`[${ts}][sessions] 切回项目自动打开处理中的会话 session="${target}"`);
+      void activate(target);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId, q.data, q.isFetching]);
   return { sessions: q.data, isLoading: q.isLoading, create: create.mutateAsync, activate, remove: remove.mutateAsync, rename: rename.mutateAsync };
 }
 

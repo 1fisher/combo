@@ -42,6 +42,8 @@ export function useWorkspaceEvents(workspaceId: string | null) {
             return;
           }
           const rt = st.bySession[sess.id];
+          // 观察 busy 状态(未读标记:切走的会话在后台结束 → busy→空闲 转变)
+          st.observeSessionBusy(sess.id, sess.is_busy);
           if (sess.is_busy === false) {
             // run 结束(含订阅快照对账):收敛仍标记为 running 的本地状态,
             // 修复「切走再切回时错过 run_complete 导致会话永远转圈」。

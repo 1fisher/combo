@@ -318,3 +318,120 @@ describe('agentStore 最近使用模型', () => {
     expect(useAgentStore.getState().recentModels).toHaveLength(2);
   });
 });
+
+describe('agentStore 会话未读标记与 busy 观察', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useAgentStore.setState({
+      activeWorkspaceId: 'w1',
+      lastWorkspacePath: null,
+      activeSessionId: 's1',
+      bySession: {},
+      permissionQueue: [],
+      questionQueue: [],
+      modelSelections: {},
+      todos: {},
+      unreadSessions: {},
+      busySessions: {},
+      workspaceSwitchSeq: 0,
+    });
+  });
+
+  it('非当前会话的 run 结束标记未读,当前会话不标', () => {
+    const st = useAgentStore.getState();
+    // s1 是当前会话:run 结束时用户正看着 → 已读
+    st.markRun('s1', 'r1', 'running');
+    st.markRun('s1', 'r1', 'done');
+    expect(useAgentStore.getState().unreadSessions['s1']).toBeUndefined();
+    expect(useAgentStore.getState().busySessions['s1']).toBeUndefined();
+
+    // s2 非当前:running → done 状态变了但没读过 → 未读
+    st.markRun('s2', 'r2', 'running');
+    expect(useAgentStore.getState().busySessions['s2']).toBe(true);
+    st.markRun('s2', 'r2', 'done');
+    expect(useAgentStore.getState().unreadSessions['s2']).toBe(true);
+    expect(useAgentStore.getState().busySessions['s2']).toBeUndefined();
+  });
+
+  it('打开(选中)未读会话即清除未读标记', () => {
+    const st = useAgentStore.getState();
+    st.markRun('s2', 'r2', 'running');
+    st.markRun('s2', 'r2', 'done');
+    expect(useAgentStore.getState().unreadSessions['s2']).toBe(true);
+    st.setActiveSessionId('s2');
+    expect(useAgentStore.getState().unreadSessions['s2']).toBeUndefined();
+    // 切走再切回:已读状态保持
+    st.setActiveSessionId(null);
+    expect(useAgentStore.getState().unreadSessions['s2']).toBeUndefined();
+  });
+
+  it('切换项目保留未读标记,切回后经 busy 观察补记', () => {
+    const st = useAgentStore.getState();
+    // 在 w1/s1 发起 run 后切到 w2:运行态被回收,busy 跟踪保留
+    st.markRun('s1', 'r1', 'running');
+    st.setActiveWorkspace('w2');
+    expect(useAgentStore.getState().bySession).toEqual({});
+    expect(useAgentStore.getState().busySessions['s1']).toBe(true);
+    // 模拟切回 w1 后会话列表/SSE 观察到空闲:状态变了且未被查看 → 未读
+    st.observeSessionBusy('s1', false);
+    expect(useAgentStore.getState().unreadSessions['s1']).toBe(true);
+    expect(useAgentStore.getState().busySessions['s1']).toBeUndefined();
+  });
+
+  it('observeSessionBusy:当前会话 busy→空闲 不标未读', () => {
+    const st = useAgentStore.getState();
+    st.observeSessionBusy('s1', true);
+    st.observeSessionBusy('s1', false);
+    expect(useAgentStore.getState().unreadSessions['s1']).toBeUndefined();
+    expect(useAgentStore.getState().busySessions['s1']).toBeUndefined();
+  });
+
+  it('observeSessionBusy:从未 busy 的会话空闲不标未读,undefined 忽略', () => {
+    const st = useAgentStore.getState();
+    st.observeSessionBusy('s9', false);
+    expect(useAgentStore.getState().unreadSessions['s9']).toBeUndefined();
+    st.observeSessionBusy('s9', undefined);
+    st.observeSessionBusy('s9', null);
+    expect(useAgentStore.getState().busySessions['s9']).toBeUndefined();
+  });
+
+  it('clearSessionRuntime(/clear、删除会话)一并清理未读与 busy 条目', () => {
+    const st = useAgentStore.getState();
+    st.markRun('s2', 'r2', 'running');
+    st.markRun('s2', 'r2', 'done');
+    st.observeSessionBusy('s3', true);
+    st.clearSessionRuntime('s2');
+    st.clearSessionRuntime('s3');
+    const after = useAgentStore.getState();
+    expect(after.unreadSessions['s2']).toBeUndefined();
+    expect(after.busySessions['s3']).toBeUndefined();
+    // 显式清除未读的 action 也可单独使用
+    st.observeSessionBusy('s4', true);
+    st.observeSessionBusy('s4', false);
+    st.clearSessionUnread('s4');
+    expect(useAgentStore.getState().unreadSessions['s4']).toBeUndefined();
+  });
+
+  it('workspaceSwitchSeq 随项目切换递增,同项目重复设置不变', () => {
+    const st = useAgentStore.getState();
+    const seq0 = st.workspaceSwitchSeq;
+    st.setActiveWorkspace('w2');
+    expect(useAgentStore.getState().workspaceSwitchSeq).toBe(seq0 + 1);
+    st.setActiveWorkspace('w2');
+    expect(useAgentStore.getState().workspaceSwitchSeq).toBe(seq0 + 1);
+    st.setActiveWorkspace('w1');
+    expect(useAgentStore.getState().workspaceSwitchSeq).toBe(seq0 + 2);
+  });
+
+  it('未读标记不入 localStorage(内存态)', () => {
+    const st = useAgentStore.getState();
+    st.markRun('s2', 'r2', 'running');
+    st.markRun('s2', 'r2', 'done');
+    const saved = JSON.parse(localStorage.getItem('combo.agent')!) as {
+      state: Record<string, unknown>;
+    };
+    expect(saved.state.unreadSessions).toBeUndefined();
+    expect(saved.state.busySessions).toBeUndefined();
+    expect(saved.state.workspaceSwitchSeq).toBeUndefined();
+  });
+});

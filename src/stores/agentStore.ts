@@ -55,6 +55,18 @@ interface AgentState {
   setLastWorkspacePath: (path: string | null) => void;
   activeSessionId: string | null;
   setActiveSessionId: (id: string | null) => void;
+  /**
+   * 项目切换计数:每次 setActiveWorkspace 变化 +1(内存态,不持久化)。
+   * 供「切回项目时若有正在处理的会话则直接打开」按次一次性决策,
+   * 区分「同一项目列表刷新」与「切走再切回」。
+   */
+  workspaceSwitchSeq: number;
+  /**
+   * 「切回项目自动打开 busy 会话」已决策的去重键(`${wsId}#${切换序号}`,
+   * 内存态):每次项目切换只决策一次,避免后台新起的 run(自动化等)
+   * 打断用户当前操作。useSessions 的 effect 读写。
+   */
+  autoOpenDecidedKey: string | null;
   /** 每个 workspace 用户手动选中的模型,跨重启保留 */
   modelSelections: Record<string, ModelSelection>;
   setModelSelection: (workspaceId: string, sel: ModelSelection) => void;
@@ -107,6 +119,30 @@ interface AgentState {
   /** 把已全部完成的任务清单作为一张卡片消息插入消息流末尾(归档,不再占用输入坞上方) */
   insertTodoCard: (sessionId: string, runId: string, todos: Api.TodoItem[]) => void;
   clearSessionRuntime: (sessionId: string) => void;
+
+  /**
+   * 会话未读标记(内存态):run 在用户未查看该会话期间结束(状态由处理中
+   * 变为完成/出错/取消)时置位;点开该会话(或 /clear、删除)时清除。
+   * 跨项目保留 —— 切走项目再切回仍能看到未读角标。
+   */
+  unreadSessions: Record<string, true>;
+  /** 清除单个会话的未读标记 */
+  clearSessionUnread: (sessionId: string) => void;
+  /**
+   * 已知处于 busy(处理中)的会话集合(内存态,跨项目保留)。
+   * 来源:本地 run 启动(markRun running)、会话事件与会话列表的 is_busy。
+   * 检测 busy → 空闲 的状态转变:切走会话/项目后 run 在后台结束时,
+   * 本地可能已无运行态(切项目时回收),靠该集合补上「错过结束信号」的未读判定。
+   */
+  busySessions: Record<string, true>;
+  /**
+   * 观察会话的服务端 busy 状态(is_busy):
+   * - true:记入 busySessions;
+   * - false:若此前记为 busy(状态发生转变)且用户当前未在查看该会话,
+   *   标记为未读并移出集合;正在查看则视为已读,仅移出集合。
+   * - undefined/null:忽略。
+   */
+  observeSessionBusy: (sessionId: string, busy: boolean | null | undefined) => void;
 }
 
 const emptyRuntime = (): SessionRuntime => ({ messages: [], run: null, queued: false });
@@ -116,13 +152,17 @@ export const useAgentStore = create<AgentState>()(
     (set) => ({
   activeWorkspaceId: null,
   lastWorkspacePath: null,
+  workspaceSwitchSeq: 0,
+  autoOpenDecidedKey: null,
   setActiveWorkspace: (id) =>
     set((st) => {
       if (id === st.activeWorkspaceId) return { activeWorkspaceId: id };
       // 切换项目时清空会话,避免把上一个项目的会话带到新项目;
       // 同时回收全部会话运行态与任务清单(SSE 只订阅当前项目,旧项目的
       // 运行态不会再更新;消息已持久化在服务端,切回时由 busy 快照 +
-      // 历史拉取恢复),防止内存随浏览的项目/会话只增不减
+      // 历史拉取恢复),防止内存随浏览的项目/会话只增不减。
+      // unreadSessions / busySessions 特意保留:切走项目的会话在后台
+      // 结束后,切回时仍要能展示未读角标。
       return {
         activeWorkspaceId: id,
         activeSessionId: null,
@@ -130,6 +170,7 @@ export const useAgentStore = create<AgentState>()(
         todos: {},
         subagents: {},
         apiCallsBySession: {},
+        workspaceSwitchSeq: st.workspaceSwitchSeq + 1,
       };
     }),
   setLastWorkspacePath: (path) => set({ lastWorkspacePath: path }),
@@ -163,15 +204,19 @@ export const useAgentStore = create<AgentState>()(
     set((st) => {
       const prev = st.activeSessionId;
       if (prev === id) return st;
+      // 打开会话即视为已读:清掉未读角标
+      const { [id as string]: _u, ...unreadSessions } = st.unreadSessions;
+      const unreadPatch =
+        id != null && st.unreadSessions[id] ? { unreadSessions } : {};
       // 切走会话:已结束(且未排队)的运行态就地回收,防止多会话
       // 并发/浏览时消息只增不减;running 中的保留(继续接收 SSE 更新,
       // 结束后由 markRun 的回收路径处理)
       const prevRt = prev ? st.bySession[prev] : undefined;
       if (prev && prevRt && prevRt.run?.status !== 'running' && !prevRt.queued) {
         const { [prev]: _drop, ...bySession } = st.bySession;
-        return { activeSessionId: id, bySession };
+        return { activeSessionId: id, bySession, ...unreadPatch };
       }
-      return { activeSessionId: id };
+      return { activeSessionId: id, ...unreadPatch };
     }),
 
   bySession: {},
@@ -180,6 +225,32 @@ export const useAgentStore = create<AgentState>()(
   todos: {},
   subagents: {},
   apiCallsBySession: {},
+  unreadSessions: {},
+  busySessions: {},
+
+  clearSessionUnread: (sessionId) =>
+    set((st) => {
+      if (!st.unreadSessions[sessionId]) return st;
+      const { [sessionId]: _drop, ...rest } = st.unreadSessions;
+      return { unreadSessions: rest };
+    }),
+
+  observeSessionBusy: (sessionId, busy) =>
+    set((st) => {
+      if (busy === true) {
+        if (st.busySessions[sessionId]) return st;
+        return { busySessions: { ...st.busySessions, [sessionId]: true } };
+      }
+      if (busy !== false) return st;
+      if (!st.busySessions[sessionId]) return st;
+      // busy → 空闲的状态转变:用户没在看这个会话 → 标记未读
+      const { [sessionId]: _drop, ...busySessions } = st.busySessions;
+      if (st.activeSessionId === sessionId) return { busySessions };
+      return {
+        busySessions,
+        unreadSessions: { ...st.unreadSessions, [sessionId]: true },
+      };
+    }),
 
   upsertMessage: (sessionId, m) =>
     set((st) => {
@@ -288,11 +359,18 @@ export const useAgentStore = create<AgentState>()(
         `[${ts}][store] markRun status="${status}" prev="${cur.run?.status ?? 'none'}" session="${sessionId}" msgCount=${cur.messages.length}`
       );
       // 非当前会话的 run 结束:回收其运行态与任务清单(消息已持久化在
-      // 服务端,切回时按需重新拉取),防止多会话并发时内存只增不减
+      // 服务端,切回时按需重新拉取),防止多会话并发时内存只增不减;
+      // 同时移出 busy 集合并标记未读 —— 状态变了但用户还没看过这次结果
       if (status === 'done' && st.activeSessionId !== sessionId) {
         const { [sessionId]: _drop, ...bySession } = st.bySession;
         const { [sessionId]: _td, ...todos } = st.todos;
-        return { bySession, todos };
+        const { [sessionId]: _bs, ...busySessions } = st.busySessions;
+        return {
+          bySession,
+          todos,
+          busySessions,
+          unreadSessions: { ...st.unreadSessions, [sessionId]: true },
+        };
       }
       const messages =
         status === 'done'
@@ -302,7 +380,17 @@ export const useAgentStore = create<AgentState>()(
       // 收尾为 done 时保留原起点,便于需要时回看本轮耗时
       const startedAt =
         status === 'running' ? Date.now() : cur.run?.startedAt;
+      // busy 集合维护:run 启动时记入(供切走后检测「错过结束信号」);
+      // 当前会话的 run 结束视为已读,仅移出集合、不打未读标
+      let busySessions = st.busySessions;
+      if (status === 'running' && !st.busySessions[sessionId]) {
+        busySessions = { ...st.busySessions, [sessionId]: true };
+      } else if (status === 'done' && st.busySessions[sessionId]) {
+        const { [sessionId]: _bs, ...rest } = st.busySessions;
+        busySessions = rest;
+      }
       return {
+        busySessions,
         bySession: {
           ...st.bySession,
           [sessionId]: {
@@ -377,7 +465,10 @@ export const useAgentStore = create<AgentState>()(
   clearSessionRuntime: (sessionId) =>
     set((st) => {
       const { [sessionId]: _drop, ...rest } = st.bySession;
-      return { bySession: rest };
+      // /clear、删除会话等路径复用:未读角标与 busy 跟踪一并清理
+      const { [sessionId]: _u, ...unread } = st.unreadSessions;
+      const { [sessionId]: _b, ...busy } = st.busySessions;
+      return { bySession: rest, unreadSessions: unread, busySessions: busy };
     }),
     }),
     {
