@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CheckCircle, Clock, FileText, Terminal, Wrench, XCircle } from 'lucide-react';
+import { CheckCircle, Clock, FileText, XCircle } from 'lucide-react';
 import { openFileInEditor } from '../../lib/openFile';
 import { langFromPath } from '../../lib/codeLang';
 import type { Api } from '../../lib/api/types';
@@ -8,6 +8,7 @@ import { BashCode } from './BashCode';
 import { CodeView } from './CodeView';
 import { ToolResultBody } from './ToolResultCard';
 import { BASH_TOOLS, commandFromInput, formatDurationMs } from './bashTools';
+import { toolIcon } from './toolIcons';
 
 export interface ToolCallInfo {
   id: string;
@@ -81,6 +82,8 @@ export function ToolCallCard({
       ? formatDurationMs(resultMeta.duration_ms)
       : null;
   const [expanded, setExpanded] = useState(false);
+  // 按工具名取专属图标(read/write/grep/搜索/LSP… 各不相同,未知回退扳手)
+  const ToolGlyph = toolIcon(call.name);
 
   return (
     <details
@@ -89,11 +92,7 @@ export function ToolCallCard({
     >
       <summary className="flex cursor-pointer items-center gap-2 px-3 py-2">
         {call.finished ? (
-          isBash ? (
-            <Terminal className="h-3.5 w-3.5 shrink-0 text-brand" />
-          ) : (
-            <Wrench className="h-3.5 w-3.5 shrink-0 text-brand" />
-          )
+          <ToolGlyph className="h-3.5 w-3.5 shrink-0 text-brand" />
         ) : (
           <span className="font-mono text-xs">⚙</span>
         )}

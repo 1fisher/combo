@@ -64,10 +64,38 @@ describe('ToolCallCard', () => {
         }}
       />
     );
-    expect(document.querySelector('svg.lucide-wrench')).toBeTruthy();
+    expect(document.querySelector('svg.lucide-file-pen-line')).toBeTruthy();
     expect(document.querySelector('code.language-bash')).toBeNull();
     // write 的文件内容按 .ts → typescript 高亮
     expect(document.querySelector('code.language-typescript .hljs-keyword')).toBeTruthy();
+  });
+
+  it('不同工具显示不同图标(read/grep/search/write 各有专属,未知回退扳手)', () => {
+    const cases: Array<[string, string]> = [
+      ['read', 'lucide-file-text'],
+      ['write', 'lucide-file-pen-line'],
+      ['replace', 'lucide-replace'],
+      ['search', 'lucide-search'],
+      ['grep', 'lucide-text-search'],
+      ['web_search', 'lucide-globe'],
+      ['current_datetime', 'lucide-clock-3'],
+      ['question', 'lucide-circle-question-mark'],
+      ['todo_write', 'lucide-list-todo'],
+      ['compact', 'lucide-archive'],
+      ['agent', 'lucide-bot'],
+      ['diagnostics', 'lucide-stethoscope'],
+      ['definition', 'lucide-locate-fixed'],
+      ['references', 'lucide-link-2'],
+      ['hover', 'lucide-message-square-text'],
+      ['mcp_unknown_tool', 'lucide-wrench'],
+    ];
+    for (const [name, cls] of cases) {
+      const { unmount } = render(
+        <ToolCallCard call={{ id: 'tc-i', name, input: '{}', finished: true }} />
+      );
+      expect(document.querySelector(`svg.${cls}`), `${name} 应显示 ${cls}`).toBeTruthy();
+      unmount();
+    }
   });
 
   it('write 输入无 content 字段时回退 JsonView', () => {
@@ -93,7 +121,8 @@ describe('ToolCallCard', () => {
       />
     );
     expect(screen.getByText('⚙')).toBeTruthy();
-    expect(document.querySelector('svg.lucide-wrench')).toBeNull();
+    // 运行中不显示任何工具图标(状态未知,专属图标仅在完成后展示)
+    expect(document.querySelector('summary svg.lucide-terminal')).toBeNull();
   });
 
   it('配对 bash 结果:命令与输出合并进同一折叠卡片,状态/耗时标在摘要上', async () => {
