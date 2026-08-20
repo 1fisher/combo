@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeLspIssues, langLabel, suggestedCommand } from './lspStatus';
+import { computeLspIssues, computeLspReady, langLabel, suggestedCommand } from './lspStatus';
 import type { Api } from './api/types';
 
 function lang(l: string, files: number): Api.WorkspaceLanguageStat {
@@ -81,5 +81,50 @@ describe('computeLspIssues', () => {
       [],
     );
     expect(issues).toHaveLength(4);
+  });
+});
+
+describe('computeLspReady', () => {
+  it('空语言列表返回空', () => {
+    expect(computeLspReady([], [server('rust', true)])).toEqual([]);
+  });
+
+  it('已配置且可执行的语言进入就绪列表,带展示名与命令', () => {
+    const ready = computeLspReady(
+      [lang('rust', 100), lang('typescript', 50)],
+      [server('rust', true), server('typescript', true)],
+    );
+    expect(ready).toEqual([
+      { lang: 'rust', label: 'Rust', files: 100, command: 'rust-server' },
+      { lang: 'typescript', label: 'TypeScript', files: 50, command: 'typescript-server' },
+    ]);
+  });
+
+  it('可执行缺失或未配置的语言不计入就绪', () => {
+    const ready = computeLspReady(
+      [lang('rust', 100), lang('python', 20)],
+      [server('rust', false)], // python 未配置
+    );
+    expect(ready).toEqual([]);
+  });
+
+  it('executable 未回传(旧后端)时视为就绪', () => {
+    const ready = computeLspReady([lang('rust', 10)], [server('rust', undefined)]);
+    expect(ready).toHaveLength(1);
+    expect(ready[0]).toMatchObject({ lang: 'rust', command: 'rust-server' });
+  });
+
+  it('与问题列表共用主要语言过滤(零散语言不展示)', () => {
+    const languages = [lang('rust', 200), lang('bash', 4)];
+    const servers = [server('rust', true), server('bash', true)];
+    expect(computeLspReady(languages, servers).map((r) => r.lang)).toEqual(['rust']);
+  });
+
+  it('按文件数降序,最多 4 条', () => {
+    const ready = computeLspReady(
+      [lang('rust', 100), lang('typescript', 90), lang('python', 80), lang('go', 70), lang('java', 60)],
+      [server('rust', true), server('typescript', true), server('python', true), server('go', true), server('java', true)],
+    );
+    expect(ready.map((r) => r.lang)).toEqual(['rust', 'typescript', 'python', 'go']);
   });
 });

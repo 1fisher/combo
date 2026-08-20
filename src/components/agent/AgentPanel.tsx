@@ -67,12 +67,15 @@ export function AgentPanel({
   const [wsMenuOpen, setWsMenuOpen] = useState(false);
   const [showChanges, setShowChanges] = useState(false);
   const [changeStatuses, setChangeStatuses] = useState<Record<string, ChangeStatus>>({});
-  // 项目 LSP 检测:主要语言未配置 server / 可执行文件缺失时在会话区顶部提示;
-  // 「忽略」为内存态,切换项目后自动复位(切换即重检)
-  const { issues: lspIssues } = useWorkspaceLspStatus(workspaceId);
+  // 项目 LSP 状态:主要语言未配置 server / 可执行文件缺失时在会话区顶部警示;
+  // 全部就绪时正向展示「语言服务已就绪」(可用语言 + server)。
+  // 「忽略」为内存态,切换项目后自动复位(切换即重检);两条横幅的忽略态互相独立。
+  const { issues: lspIssues, ready: lspReady } = useWorkspaceLspStatus(workspaceId);
   const [lspDismissed, setLspDismissed] = useState(false);
+  const [lspReadyDismissed, setLspReadyDismissed] = useState(false);
   useEffect(() => {
     setLspDismissed(false);
+    setLspReadyDismissed(false);
   }, [workspaceId]);
   // 连击(combo)计数:连续快速回复时累加,超时/切会话归零;
   // 流式期间每条内容更新也 +1(叠加,不封顶)。
@@ -384,12 +387,21 @@ export function AgentPanel({
           {postError}
         </div>
       )}
-      {/* LSP 检测横幅:项目主要语言的 LSP 未就绪时提示(如 rust 未找到 rust-analyzer) */}
+      {/* LSP 状态横幅:主要语言未就绪时警示(如 rust 未找到 rust-analyzer);
+          全部就绪时正向展示「语言服务已就绪」确认诊断/导航工具可用(问题优先,只显示其一) */}
       {workspaceId && lspIssues.length > 0 && !lspDismissed && (
         <LspStatusBanner
           issues={lspIssues}
           onOpenLsp={onOpenLspView}
           onDismiss={() => setLspDismissed(true)}
+        />
+      )}
+      {workspaceId && lspIssues.length === 0 && lspReady.length > 0 && !lspReadyDismissed && (
+        <LspStatusBanner
+          issues={[]}
+          ready={lspReady}
+          onOpenLsp={onOpenLspView}
+          onDismiss={() => setLspReadyDismissed(true)}
         />
       )}
       {/* 时间线 / 变更面板 */}
