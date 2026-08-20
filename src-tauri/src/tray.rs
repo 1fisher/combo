@@ -2,9 +2,11 @@
 //! - 右键托盘图标弹出菜单,提供主要功能:新建任务、退出
 //! - 左键点击托盘图标切换主窗口显隐(不弹菜单)
 //! - 关闭主窗口改为「隐藏到托盘」,真正退出走托盘菜单「退出 Combo」
-//! - 忙碌动画:任一项目有任务在执行时,图标切换为无背景的「combo」字母
-//!   弹跳动画(五个黑色像素字母边弹跳边从右往左穿行,中间大边缘小),
-//!   任务全部结束后恢复静态图标
+//! - 忙碌动画:任一项目有任务在执行时,图标在静态底图(黑色圆角方块,
+//!   与空闲图标完全一致)上叠加**白色**「combo」字母逐个展示动画——
+//!   字母从右缘幕后滑入中心(减速),落定后果冻般压扁/回弹(squash &
+//!   stretch 衰减振荡),静止停顿一会儿,再加速滑出左缘,轮到下一个
+//!   字母;任务全部结束后恢复静态图标
 
 use combo_cli::serve::AppState;
 use std::time::Duration;
@@ -177,28 +179,38 @@ pub fn init(app: &AppHandle) -> tauri::Result<()> {
 
 // ---------- 忙碌动画 ----------
 
-/// 一次完整穿行的帧数(单词从画布左缘外滑入到右缘外滑出)
-const BUSY_FRAMES: usize = 24;
-/// 忙碌时帧间隔(≈12.5fps,「combo」穿行一轮约 1.9s)
+/// 单个字母一个完整展示周期的阶段帧数:
+/// 进入(从右缘幕后减速滑入中心)→ 果冻(中心 squash & stretch 衰减振荡)
+/// → 停顿(静止展示)→ 移出(从静止加速滑出左缘)
+const ENTER_FRAMES: usize = 9;
+const JELLY_FRAMES: usize = 12;
+const HOLD_FRAMES: usize = 5;
+const EXIT_FRAMES: usize = 8;
+/// 每字母完整周期(帧)
+const LETTER_FRAMES: usize = ENTER_FRAMES + JELLY_FRAMES + HOLD_FRAMES + EXIT_FRAMES;
+/// 一次完整循环的总帧数(「combo」五个字母依次展示,末字母出场后
+/// 无缝衔接首字母入场——两帧都是纯底图,接缝平滑)
+const BUSY_FRAMES: usize = LETTER_FRAMES * COMBO_GLYPHS.len();
+/// 忙碌时帧间隔(≈12.5fps;每字母约 2.7s,整轮「combo」约 13.6s)
 const BUSY_FRAME_MS: u64 = 80;
 /// 空闲时轮询 run 状态的间隔
 const IDLE_POLL_MS: u64 = 400;
 
 /// 「combo」五个字母的像素字模:每字形 5 行高,行内比特 MSB 为最左列
-/// (m 为 5 列宽,其余 3 列宽;字母间以 1 列字模间隔)
+/// (m 为 5 列宽,其余 3 列宽)
 const COMBO_GLYPHS: [(u32, [u8; 5]); 5] = [
-    (3, [0b111, 0b100, 0b100, 0b100, 0b111]),          // c
-    (3, [0b111, 0b101, 0b101, 0b101, 0b111]),          // o
+    (3, [0b111, 0b100, 0b100, 0b100, 0b111]),           // c
+    (3, [0b111, 0b101, 0b101, 0b101, 0b111]),           // o
     (5, [0b10001, 0b11011, 0b10101, 0b10001, 0b10001]), // m
-    (3, [0b100, 0b100, 0b110, 0b101, 0b110]),          // b
-    (3, [0b111, 0b101, 0b101, 0b101, 0b111]),          // o
+    (3, [0b100, 0b100, 0b110, 0b101, 0b110]),           // b
+    (3, [0b111, 0b101, 0b101, 0b101, 0b111]),           // o
 ];
 
-/// 字母颜色:黑色。
-/// macOS 下忙碌帧以 template 模式渲染(RGB 被忽略,系统自动用菜单栏
-/// 前景色——浅色栏黑、深色栏白);此颜色仅在 Windows/Linux 回退路径
-/// (set_icon 直接渲染 RGB)下生效。
-const LETTER_RGB: [u8; 3] = [0, 0, 0];
+/// 字母颜色:白色。忙碌帧以静态原图(黑色圆角方块)为底,白色字母
+/// 绘制在方块内——与空闲图标配色统一(黑底白字),浅色/深色菜单栏
+/// 下都自带对比、清晰可见;因此忙碌帧与空闲帧同为**非 template**
+/// 彩色图直接渲染。
+const LETTER_RGB: [u8; 3] = [255, 255, 255];
 
 /// 预生成的托盘图标:空闲(原图)+ 忙碌动画帧序列。
 struct TrayIcons {
@@ -207,99 +219,160 @@ struct TrayIcons {
 }
 
 /// 程序化生成忙碌动画帧:
-/// **无背景**(整帧透明),「combo」五个黑色像素字母从画布右缘外滑入、
-/// 弹跳着向左前进、左缘外滑出,循环往复;相邻字母相位逐个错开,弹跳波
-/// 自左向右传播。字母字号随水平位置缩放:画布中间为满字号(两个 3 列
-/// 字母 + 字间隔占满画布宽、高 ≈ 5/7 画布高),越靠边缘越小(边缘及
-/// 画布外为满字号的 0.5 倍),以字母中心为锚线性过渡、始终垂直居中。
-/// 弹跳为抛物线(静止为 0、峰值 amp)。24 帧与弹跳周期 6 帧整除,
-/// 循环无缝衔接。(几何参数以 44px 基准图调校,按实际宽度等比缩放)
+/// **每帧底图 = 静态图去掉白色 C 字形**(白色连同抗锯齿灰边一并涂黑,
+/// 只留黑色圆角方块)——动画字母经过中心时不与静态字形叠加成杂乱的
+/// 复合形状,黑底白字配色仍与空闲图标完全统一。白色「combo」字母
+/// **逐个**展示:从方块右缘「幕后」滑入(绘制裁剪在方块内,缘外部分
+/// 不画,呈现从幕后走出),减速停在中心;落定瞬间起果冻式 squash &
+/// stretch(先压扁变宽变矮,再回弹拉高变窄,振幅指数衰减,以字母中心
+/// 为锚);静止停顿一会儿;再从静止加速滑出左缘,轮到下一个字母。
+/// 字母字号随水平位置缩放:中心为满字号(高 ≈ 画布高一半),越靠边缘
+/// 越小(缩至 0.6 倍),形成「滑入渐大、滑出渐小」的景深。
+/// (几何参数以 44px 基准图调校,按实际宽度等比缩放)
 fn build_tray_icons() -> Option<TrayIcons> {
     use image::GenericImageView;
 
     let base = image::load_from_memory(include_bytes!("../icons/tray-icon.png")).ok()?;
     let (w, h) = base.dimensions();
-    let idle = tauri::image::Image::new_owned(base.to_rgba8().into_raw(), w, h);
+    let idle_rgba = base.to_rgba8();
+    let idle = tauri::image::Image::new_owned(idle_rgba.as_raw().clone(), w, h);
 
-    // 几何/节奏参数(44px 基准,按实际宽度等比缩放)
-    let scale = w as f32 / 44.0;
-    // 满字号:两个 3 列字母 + 1 列字间隔 = 7 单元恰好占满画布宽;
-    // 满字高 5 单元 ≈ 画布高的 71%(画布中间的字母用满字号,
-    // 越靠边缘越小,边缘及画布外缩至 0.5 倍)
-    let cell = w as f32 / 7.0;
-    let word_cells: f32 = COMBO_GLYPHS.iter().map(|&(gw, _)| gw as f32 + 1.0).sum(); // 22(含间隔)
-    let word_w = word_cells * cell;        // ≈ 138px,远大于画布宽,同屏约可见 2~3 个字母
-    let travel = word_w + w as f32;        // 从完全滑入到完全滑出的总行程
-    let speed = travel / BUSY_FRAMES as f32;
-    let amp = 5.5 * scale;                 // 弹跳高度(顶部留 ~1px 余量,不裁剪)
-    let hop_period = 6.0;                  // 单字母弹跳周期(帧)
-    let stagger = 1.0;                     // 相邻字母相位错开(帧)→ 弹跳波自左向右传播
-    // 初始相位微调:让主字母 m(单词正中)在循环中点(k = BUSY_FRAMES/2)
-    // 恰好经过画布中心——离散帧上呈现完整的「边缘小 → 中心满字号 →
-    // 边缘小」对称缩放周期(不调相位时字母过心时刻落在两帧之间,
-    // 峰值字号只能达到约 0.93 倍)
-    let lead_off: f32 = COMBO_GLYPHS.iter().take(2).map(|&(gw, _)| gw as f32 + 1.0).sum();
-    let lead_center = (lead_off + COMBO_GLYPHS[2].0 as f32 * 0.5) * cell;
-    let phase0 = speed * (BUSY_FRAMES as f32 * 0.5) - w as f32 * 0.5 - lead_center;
-
-    let mut busy = Vec::with_capacity(BUSY_FRAMES);
-    let half_w = w as f32 * 0.5;
-    for k in 0..BUSY_FRAMES {
-        let kf = k as f32;
-        let mut frame = vec![0u8; w as usize * h as usize * 4];
-        // 反向穿行:单词左缘随帧左移;k=0 完全在画布右外(接缝空白帧)
-        let mut x = w as f32 + phase0 - speed * kf;
-        for (i, &(gw, rows)) in COMBO_GLYPHS.iter().enumerate() {
-            let f = ((kf - i as f32 * stagger) % hop_period).rem_euclid(hop_period) / hop_period;
-            let dy = -amp * 4.0 * f * (1.0 - f); // 抛物线弹跳
-            // 字号随水平位置缩放:字母中心在画布中间为 1.0、边缘(及
-            // 画布外)线性收窄到 0.5;以字母中心为锚、宽高同步缩放,
-            // 垂直始终居中——形成「边缘滑入的小字母边左移边放大,
-            // 过中心后再缩小滑出」的景深效果
-            let gw_f = gw as f32;
-            let cx = x + gw_f * cell * 0.5; // 字母中心(未缩放排布)
-            let t = ((cx - half_w) / half_w).abs().min(1.0); // 中间 0 → 边缘 1
-            let s = 1.0 - 0.5 * t;
-            let left = cx - gw_f * cell * s * 0.5;
-            let top = h as f32 * 0.5 - 5.0 * cell * s * 0.5 + dy;
-            draw_glyph(&mut frame, w, h, gw, &rows, left, top, cell * s);
-            x += (gw_f + 1.0) * cell;
+    // 忙碌帧底图:静态图中的白色 C 字形连同抗锯齿灰边涂黑(亮度阈值
+    // 60 只命中字形区域,黑色方块内部本就是近黑像素不受影响)
+    let mut busy_base = idle_rgba.clone();
+    for p in busy_base.pixels_mut() {
+        if p[3] != 0 && u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2]) > 60 {
+            *p = image::Rgba([0, 0, 0, 255]);
         }
-        busy.push(tauri::image::Image::new_owned(frame, w, h));
     }
+    let busy = render_busy_frames(busy_base.as_raw(), w, h);
     Some(TrayIcons { idle, busy })
 }
 
-/// 把一个字模画到 RGBA 缓冲的 (x, y_top) 处:每个字模单元映射为 cell×cell
-/// 像素块,相邻单元边界取整衔接(列间无缝、重叠无害);越界像素裁剪,
-/// 完全在画布外的单元直接跳过(避免 clamp 在边缘产生幻影像素)。
+/// 渲染忙碌动画帧(几何/节奏见 `letter_pose`):`base` 为帧底 RGBA
+/// (静态图去掉字形后的纯黑圆角方块)。
+fn render_busy_frames(base: &[u8], w: u32, h: u32) -> Vec<tauri::image::Image<'static>> {
+    // 几何/节奏参数(44px 基准,按实际宽度等比缩放)
+    let scale = w as f32 / 44.0;
+    let center = w as f32 * 0.5;
+    // 满字号单元:m 宽 5 格 ≈ 画布宽一半,字母高 5 格 = 画布高一半
+    let cell = w as f32 / 10.0;
+    // 画布边缘字号(相对满字号)
+    let min_scale = 0.6;
+    // 字母可见裁剪区(黑色方块内侧;圆角在四角,字母垂直居中不会触角)
+    let pad = 3.0 * scale;
+    let clip_x0 = pad;
+    let clip_x1 = w as f32 - pad;
+
+    let mut frames = Vec::with_capacity(BUSY_FRAMES);
+    for &(gw, rows) in COMBO_GLYPHS.iter() {
+        let glyph_w = gw as f32 * cell;
+        for k in 0..LETTER_FRAMES {
+            // 每帧从底图出发,叠加当前字母姿态
+            let mut frame = base.to_vec();
+            let (cx, (jx, jy)) = letter_pose(k, glyph_w, center, clip_x0, clip_x1);
+            // 字号随水平位置缩放:字母中心越靠画布边缘越小(景深),
+            // 与位置插值同步,滑入自然渐大、滑出自然渐小
+            let t = ((cx - center) / center).abs().min(1.0);
+            let s = 1.0 - (1.0 - min_scale) * t;
+            draw_glyph(
+                &mut frame,
+                w,
+                h,
+                gw,
+                &rows,
+                cx,
+                h as f32 * 0.5,
+                cell * s * jx,
+                cell * s * jy,
+                clip_x0,
+                clip_x1,
+            );
+            frames.push(tauri::image::Image::new_owned(frame, w, h));
+        }
+    }
+    frames
+}
+
+/// 计算展示周期第 k 帧的字母姿态:中心 x 与果冻形变 (jx, jy)。
+/// - 进入:从裁剪区右缘外 ease-out 减速滑向中心,末速为零——与果冻
+///   落地的压扁帧无缝衔接(字母「落定」触发果冻);
+/// - 果冻:中心处衰减振荡 `osc = e^(−λt)·cos(2π·1.5t)`,jx = 1+0.32·osc
+///   (先压扁变宽)、jy = 1−0.26·osc(变矮),12 帧内 1.5 个来回,
+///   振幅收敛到 ±3% 以内过渡到停顿;
+/// - 停顿:满字号静止居中;
+/// - 移出:从静止 ease-in 加速滑出裁剪区左缘(初速为零,与停顿衔接平滑)。
+fn letter_pose(
+    k: usize,
+    glyph_w: f32,
+    center: f32,
+    clip_x0: f32,
+    clip_x1: f32,
+) -> (f32, (f32, f32)) {
+    let start = clip_x1 + glyph_w * 0.5 + 1.0; // 完全在裁剪区外(不可见)
+    let end = clip_x0 - glyph_w * 0.5 - 1.0;
+    if k < ENTER_FRAMES {
+        let u = k as f32 / ENTER_FRAMES as f32;
+        let e = 1.0 - (1.0 - u) * (1.0 - u); // ease-out
+        (start + (center - start) * e, (1.0, 1.0))
+    } else if k < ENTER_FRAMES + JELLY_FRAMES {
+        let t = (k - ENTER_FRAMES) as f32 / JELLY_FRAMES as f32;
+        let osc = (-2.5 * t).exp() * (std::f32::consts::TAU * 1.5 * t).cos();
+        (center, (1.0 + 0.32 * osc, 1.0 - 0.26 * osc))
+    } else if k < ENTER_FRAMES + JELLY_FRAMES + HOLD_FRAMES {
+        (center, (1.0, 1.0))
+    } else {
+        // +1 使末帧恰好完全移出裁剪区(纯底图,与下一字母首帧平滑衔接);
+        // 首帧 e ≈ 0.016,从静止微启,与停顿结尾速度为零衔接平滑
+        let u = (k - ENTER_FRAMES - JELLY_FRAMES - HOLD_FRAMES + 1) as f32 / EXIT_FRAMES as f32;
+        let e = u * u; // ease-in
+        (center + (end - center) * e, (1.0, 1.0))
+    }
+}
+
+/// 把一个字模以 (cx, cy) 为中心画到 RGBA 缓冲:每列单元宽 cell_w、每行
+/// 单元高 cell_h(宽高独立缩放,实现果冻的压扁/拉伸,以字母中心为锚);
+/// x 方向限制在 [clip_x0, clip_x1](黑色方块内)——字母从缘外滑入/滑出
+/// 时超出部分不绘制,呈现「从幕后走出/走入」效果。相邻单元边界取整
+/// 衔接(列间无缝、重叠无害);越界像素裁剪,完全在裁剪区外的单元直接
+/// 跳过(避免 clamp 在边缘产生幻影像素)。
+#[allow(clippy::too_many_arguments)]
 fn draw_glyph(
     buf: &mut [u8],
     w: u32,
     h: u32,
     gw: u32,
     rows: &[u8; 5],
-    x: f32,
-    y_top: f32,
-    cell: f32,
+    cx: f32,
+    cy: f32,
+    cell_w: f32,
+    cell_h: f32,
+    clip_x0: f32,
+    clip_x1: f32,
 ) {
     let (wi, hi) = (w as i32, h as i32);
+    let (cx0, cx1) = (clip_x0 as i32, clip_x1 as i32);
+    let left = cx - gw as f32 * cell_w * 0.5;
+    let top = cy - 5.0 * cell_h * 0.5;
     for (r, row) in rows.iter().enumerate() {
         for c in 0..gw {
             if row & (1 << (gw - 1 - c)) == 0 {
                 continue;
             }
-            let rx0 = (x + c as f32 * cell).round() as i32;
-            let rx1 = (x + (c as f32 + 1.0) * cell).round() as i32;
-            let ry0 = (y_top + r as f32 * cell).round() as i32;
-            let ry1 = (y_top + (r as f32 + 1.0) * cell).round() as i32;
-            if rx1 <= 0 || ry1 <= 0 || rx0 >= wi || ry0 >= hi {
+            let rx0 = (left + c as f32 * cell_w).round() as i32;
+            let rx1 = (left + (c as f32 + 1.0) * cell_w).round() as i32;
+            let ry0 = (top + r as f32 * cell_h).round() as i32;
+            let ry1 = (top + (r as f32 + 1.0) * cell_h).round() as i32;
+            if rx1 <= cx0 || rx0 >= cx1 {
                 continue;
             }
-            let x0 = rx0.max(0);
-            let x1 = rx1.clamp(x0 + 1, wi);
+            let x0 = rx0.max(cx0).max(0);
+            let x1 = rx1.min(cx1).min(wi);
             let y0 = ry0.max(0);
-            let y1 = ry1.clamp(y0 + 1, hi);
+            let y1 = ry1.min(hi);
+            if x1 <= x0 || y1 <= y0 {
+                continue;
+            }
             for yy in y0..y1 {
                 for xx in x0..x1 {
                     let i = (yy as usize * w as usize + xx as usize) * 4;
@@ -318,11 +391,10 @@ fn draw_glyph(
 /// 全部结束后恢复静态图标。图标更新经 tauri/tray-icon 内部派发到
 /// 主线程执行,可在后台任务中安全调用。
 ///
-/// 忙碌帧以 **template 模式**设置(macOS 忽略 RGB、按 alpha 剪影渲染为
-/// 菜单栏前景色):浅色菜单栏下自动为黑色字母、深色菜单栏下自动为白色
-/// 字母;`set_icon_with_as_template` 原子设置图标与标记,避免分两次
-/// 调用造成图标渲染两遍的可见闪烁。恢复静态原图时切回非 template
-/// (原图是黑色方块+白色 C 的彩色图,template 会把它压成单色剪影)。
+/// 忙碌帧与空闲帧同为**非 template** 彩色图直接渲染:忙碌帧底图就是
+/// 原静态图(黑色圆角方块),白色字母叠绘其上——配色与空闲图标统一,
+/// 浅色/深色菜单栏下黑底白字都自带对比。`set_icon_with_as_template`
+/// 原子设置图标与标记,避免分两次调用造成图标渲染两遍的可见闪烁。
 pub async fn watch_busy(app: AppHandle, state: AppState) {
     let Some(tray) = app.tray_by_id("main") else {
         return; // 托盘不可用(初始化失败或无托盘环境)
@@ -339,10 +411,8 @@ pub async fn watch_busy(app: AppHandle, state: AppState) {
                 showing_busy = true;
                 let _ = tray.set_tooltip(Some("Combo — 任务执行中"));
             }
-            let _ = tray.set_icon_with_as_template(
-                Some(icons.busy[frame % BUSY_FRAMES].clone()),
-                true,
-            );
+            let _ = tray
+                .set_icon_with_as_template(Some(icons.busy[frame % BUSY_FRAMES].clone()), false);
             frame = frame.wrapping_add(1);
             tokio::time::sleep(Duration::from_millis(BUSY_FRAME_MS)).await;
         } else {
@@ -367,127 +437,194 @@ mod tests {
         [d[i], d[i + 1], d[i + 2], d[i + 3]]
     }
 
-    /// 帧生成正确性:无背景(整帧要么透明要么黑色字母)、中间满字号
-    /// (两字母占满画布宽)、边缘缩至 0.5 倍、单词自右向左穿行、
-    /// 字母上下弹跳、循环接缝处为空白帧。
+    fn is_letter(p: [u8; 4]) -> bool {
+        p[3] == 255 && p[..3] == LETTER_RGB[..]
+    }
+
+    /// 白色字母像素的包围盒(None = 帧内无字母,纯底图)
+    fn white_span(f: &tauri::image::Image) -> Option<(u32, u32, u32, u32)> {
+        let (mut x0, mut x1, mut y0, mut y1) = (u32::MAX, 0u32, u32::MAX, 0u32);
+        let mut found = false;
+        for y in 0..f.height() {
+            for x in 0..f.width() {
+                if is_letter(px(f, x, y)) {
+                    found = true;
+                    x0 = x0.min(x);
+                    x1 = x1.max(x);
+                    y0 = y0.min(y);
+                    y1 = y1.max(y);
+                }
+            }
+        }
+        found.then(|| (x0, x1, y0, y1))
+    }
+
+    /// 白色像素的 x 方向质心
+    fn white_centroid_x(f: &tauri::image::Image) -> Option<f32> {
+        let (mut sum, mut n) = (0u64, 0u64);
+        for y in 0..f.height() {
+            for x in 0..f.width() {
+                if is_letter(px(f, x, y)) {
+                    sum += x as u64;
+                    n += 1;
+                }
+            }
+        }
+        (n > 0).then(|| sum as f32 / n as f32)
+    }
+
+    /// 帧生成正确性:正式帧底图与静态图一致(黑色圆角方块 + 白色字母,
+    /// 配色统一);透明底参考帧验证字母几何——每字母周期「纯底图入场 →
+    /// 左移滑入 → 中心果冻压扁/回弹 → 满字号居中停顿 → 左移滑出 →
+    /// 纯底图收尾」。
     #[test]
     fn busy_frames_generated_correctly() {
         let icons = build_tray_icons().expect("build_tray_icons");
         assert_eq!(icons.busy.len(), BUSY_FRAMES);
+        assert_eq!(icons.busy.len(), LETTER_FRAMES * COMBO_GLYPHS.len());
         assert_eq!(icons.idle.width(), 44);
         assert_eq!(icons.idle.height(), 44);
 
-        // 无背景:所有像素要么完全透明,要么为不透明字母色
+        // 字母为白色(绘制在黑色方块上,与静态图标配色统一)
+        assert_eq!(LETTER_RGB, [255, 255, 255]);
+
+        // 底图与静态图统一:每帧在字母活动区外的采样点(顶部中央)
+        // 与空闲帧像素一致——黑色圆角方块、不透明;静态图中的白色 C
+        // 字形连同灰边已涂黑(首帧 = 纯底图,无任何白色像素)
         for f in &icons.busy {
-            for px in f.rgba().chunks_exact(4) {
-                if px[3] == 0 {
-                    assert!(px[0] == 0 && px[1] == 0 && px[2] == 0, "透明像素不应带颜色");
-                } else {
-                    assert_eq!(px[3], 255);
-                    assert_eq!(&px[..3], &LETTER_RGB[..], "非透明像素应为字母色");
-                }
-            }
+            let p = px(f, 22, 3);
+            assert_eq!(p, px(&icons.idle, 22, 3), "底图方块应与静态图一致");
+            assert_eq!(p[3], 255, "方块背景应不透明");
+            assert_eq!(&p[..3], &[0u8, 0, 0][..], "方块背景应为黑色");
         }
-
-        // 字母为黑色(用户要求:文字黑色)
-        assert_eq!(LETTER_RGB, [0, 0, 0]);
-
-        // 字号:两个 3 列字母 + 字间隔 = 7 单元占满画布宽,字母高 ≈ 5/7 画布高
-        let span = |f: &tauri::image::Image| -> (u32, u32, u32, u32) {
-            let (mut x0, mut x1, mut y0, mut y1) = (u32::MAX, 0u32, u32::MAX, 0u32);
-            for y in 0..f.height() {
-                for x in 0..f.width() {
-                    if px(f, x, y)[3] != 0 {
-                        x0 = x0.min(x);
-                        x1 = x1.max(x);
-                        y0 = y0.min(y);
-                        y1 = y1.max(y);
-                    }
-                }
-            }
-            (x0, x1, y0, y1)
-        };
-        // 字号随水平位置缩放:帧 12 时 m 恰好在画布正中,应为满字号
-        // (高 ≈ 5/7 画布高 = 31px);帧 2 时字母刚从右缘滑入,应缩至
-        // 满字号的约 0.5 倍(高 ≈16px)
-        let (_, _, y0, y1) = span(&icons.busy[12]);
         assert!(
-            y1 - y0 + 1 >= 30,
-            "画布中间的字母应保持满字号(高 ≈31px,实测 {y0}..{y1})"
-        );
-        let (x0, x1, ey0, ey1) = span(&icons.busy[2]);
-        assert!(x1 >= x0, "帧 2 应有字母刚滑入画布");
-        assert!(
-            ey1 - ey0 + 1 <= 20,
-            "画布边缘的字母应缩至满字号的约 0.5 倍(高 ≈16px,实测 {ey0}..{ey1})"
+            white_span(&icons.busy[0]).is_none(),
+            "首帧应为纯黑底图(静态 C 字形已涂黑)"
         );
 
-        // k=0 单词完全在画布右缘外 → 空白帧(穿行循环的接缝)
-        assert!(icons.busy[0].rgba().iter().all(|&b| b == 0));
+        // 字母几何断言(正式帧已无静态字形干扰,白色像素即字母本体)
+        let frames = &icons.busy[..];
+        assert_eq!(frames.len(), BUSY_FRAMES);
 
-        // 自右向左:相邻帧的列轮廓最佳对齐位移应为负(单词持续左移)。
-        // 不用可见质心——单词远宽于画布时,字母间隙会使可见质心非单调回摆。
-        let column_profile = |f: &tauri::image::Image| -> Vec<u32> {
-            let mut p = vec![0u32; f.width() as usize];
-            for (i, px) in f.rgba().chunks_exact(4).enumerate() {
-                if px[3] != 0 {
-                    p[i % f.width() as usize] += 1;
-                }
-            }
-            p
-        };
-        let dot_at = |a: &[u32], b: &[u32], s: i32| -> u64 {
-            (0..a.len() as i32)
-                .map(|x| {
-                    let t = x + s;
-                    if t >= 0 && (t as usize) < b.len() {
-                        a[x as usize] as u64 * b[t as usize] as u64
-                    } else {
-                        0
-                    }
-                })
-                .sum()
-        };
-        for k in [6usize, 12, 18] {
-            let a = column_profile(&icons.busy[k]);
-            let b = column_profile(&icons.busy[k + 1]);
-            let best_neg = (-14..=-1).map(|s| dot_at(&a, &b, s)).max().unwrap();
-            let best_nonneg = (0..=6).map(|s| dot_at(&a, &b, s)).max().unwrap();
+        // 每字母周期首帧:字母完全在裁剪区右缘外 → 无字母像素;
+        // 入场第 1 帧字母已从右缘显露一截
+        for li in 0..COMBO_GLYPHS.len() {
             assert!(
-                best_neg > best_nonneg,
-                "帧 {k}→{} 的最佳对齐应为负位移(左移),负 {best_neg} vs 非负 {best_nonneg}",
-                k + 1
+                white_span(&frames[li * LETTER_FRAMES]).is_none(),
+                "字母 {li} 周期首帧应无字母(纯底图)"
             );
         }
+        assert!(
+            white_span(&frames[1]).is_some(),
+            "入场第 1 帧应有字母从右缘显露"
+        );
 
-        // 弹跳:字母最高点在帧间明显起伏(抛物线弹跳叠加字号缩放;
-        // 跳过空白接缝帧)
-        let topmost = |f: &tauri::image::Image| -> u32 {
-            (0..f.height())
-                .find(|&y| (0..f.width()).any(|x| px(f, x, y)[3] != 0))
-                .unwrap_or(f.height())
-        };
-        let tops: Vec<u32> = icons.busy.iter().skip(1).map(|f| topmost(f)).collect();
-        let (mn, mx) = (tops.iter().min().unwrap(), tops.iter().max().unwrap());
-        assert!(mx - mn >= 4, "字母弹跳应有明显幅度({mn}..{mx})");
+        // 字母只在方块内绘制(bbox 限制在裁剪区内)
+        for f in frames {
+            if let Some((x0, x1, _, _)) = white_span(f) {
+                assert!(x0 >= 3 && x1 <= 41, "字母应绘制在方块内({x0}..{x1})");
+            }
+        }
+
+        // 以 m(最宽字母,索引 2)检验展示几何
+        let m_off = 2 * LETTER_FRAMES;
+        let hold_k = m_off + ENTER_FRAMES + JELLY_FRAMES + HOLD_FRAMES / 2;
+        let (hx0, hx1, hy0, hy1) = white_span(&frames[hold_k]).expect("停顿帧应有字母");
+        // 停顿:满字号(高 ≈ 5·cell = 画布高一半)且水平居中
+        assert_eq!(hy1 - hy0 + 1, 22, "停顿帧满字高应 ≈ 22px");
+        assert_eq!(hy0, 11, "字母应垂直居中");
+        assert!(
+            (hx0 as i32 - 11).abs() <= 1 && (hx1 as i32 - 32).abs() <= 1,
+            "停顿帧应水平居中({hx0}..{hx1})"
+        );
+
+        // 果冻:落定首帧明显压扁(更宽更矮),回弹中段拉高变窄
+        let (jx0, jx1, jy0, jy1) =
+            white_span(&frames[m_off + ENTER_FRAMES]).expect("果冻首帧应有字母");
+        let (hw, hh) = (hx1 - hx0 + 1, hy1 - hy0 + 1);
+        assert!(
+            jx1 - jx0 + 1 >= hw + 4,
+            "果冻首帧应压扁变宽({} vs {hw})",
+            jx1 - jx0 + 1
+        );
+        assert!(
+            jy1 - jy0 + 1 + 4 <= hh,
+            "果冻首帧应压扁变矮({} vs {hh})",
+            jy1 - jy0 + 1
+        );
+        let (_, _, my0, my1) =
+            white_span(&frames[m_off + ENTER_FRAMES + 4]).expect("果冻回弹帧应有字母");
+        assert!(
+            my1 - my0 + 1 > hh,
+            "果冻回弹帧应拉高({} vs {hh})",
+            my1 - my0 + 1
+        );
+
+        // 进入阶段:白色质心持续左移(裁剪窗口固定,裁剪不影响单调性)
+        let mut prev = white_centroid_x(&frames[1]).expect("入场第 1 帧质心");
+        for k in 2..ENTER_FRAMES {
+            let cur = white_centroid_x(&frames[k]).expect("入场帧质心");
+            assert!(cur < prev, "入场阶段字母应持续左移(k={k})");
+            prev = cur;
+        }
+        // 出场阶段:同样持续左移,末帧完全移出(无字母像素)
+        let off = ENTER_FRAMES + JELLY_FRAMES + HOLD_FRAMES;
+        let mut prev = white_centroid_x(&frames[off]).expect("出场首帧质心");
+        for k in off + 1..LETTER_FRAMES - 1 {
+            let cur = white_centroid_x(&frames[k]).expect("出场帧质心");
+            assert!(cur < prev, "出场阶段字母应持续左移(k={k})");
+            prev = cur;
+        }
+        assert!(
+            white_span(&frames[LETTER_FRAMES - 1]).is_none(),
+            "出场末帧应无字母(纯底图,与下一字母首帧平滑衔接)"
+        );
+    }
+
+    fn off_frames() -> usize {
+        ENTER_FRAMES + JELLY_FRAMES + HOLD_FRAMES
     }
 
     /// 调试用:ASCII 目检动画帧(`cargo test dump_busy -- --nocapture` 查看),
-    /// 采样入场/中段/出场的 7 帧,确认字模形状与弹跳波形。
+    /// 采样首字母的入场与 m 字母的果冻/停顿/出场,确认字模形状、
+    /// 果冻压扁/回弹波形与黑底白字配色。
     #[test]
     fn dump_busy_frames_ascii() {
         let icons = build_tray_icons().expect("build_tray_icons");
-        for k in [3usize, 6, 9, 12, 15, 18, 21] {
+        let m_off = 2 * LETTER_FRAMES;
+        let samples = [
+            (0usize, "字母c 周期首帧(纯底图)"),
+            (1, "入场 1"),
+            (4, "入场中"),
+            (8, "入场末(减速)"),
+            (9, "果冻落定(压扁)"),
+            (11, "果冻回正"),
+            (13, "果冻回弹(拉高)"),
+            (17, "果冻尾"),
+            (23, "停顿(满字号居中)"),
+            (m_off + ENTER_FRAMES, "m 果冻落定(压扁)"),
+            (m_off + ENTER_FRAMES + 4, "m 果冻回弹(拉高)"),
+            (m_off + ENTER_FRAMES + JELLY_FRAMES + 2, "m 停顿"),
+            (m_off + off_frames(), "m 出场首帧"),
+            (m_off + LETTER_FRAMES - 1, "m 出场末帧(纯底图)"),
+        ];
+        for (k, label) in samples {
             let f = &icons.busy[k];
-            println!("--- frame {k} ---");
+            println!("--- frame {k}({label}) ---");
             for y in 0..f.height() {
                 let mut line = String::new();
                 for x in 0..f.width() {
-                    line.push_str(if px(f, x, y)[3] != 0 { "██" } else { "  " });
+                    let p = px(f, x, y);
+                    if is_letter(p) {
+                        line.push_str("██");
+                    } else if p[3] > 200 {
+                        line.push_str("··"); // 黑色方块
+                    } else {
+                        line.push_str("  ");
+                    }
                 }
                 println!("{line}");
             }
         }
     }
 }
-

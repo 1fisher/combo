@@ -43,20 +43,20 @@ Three components, three languages/dirs:
   托盘菜单(macOS 另处理 `RunEvent::Reopen`,Dock 图标点击可重新显示窗口)。
   **托盘忙碌动画**:`init_backend` 构造 `AppState` 后 spawn `tray::watch_busy`
   轮询 `RunState::any_busy()`(空闲 400ms/动画帧 80ms)——任一项目(含自动化
-  任务)的 run 进行中时,托盘图标切换为**无背景**的「combo」字母弹跳动画
-  (24 帧程序化生成:五个**黑色**像素字模字母(3/5 列宽、5 行高)从图标右缘外
-  滑入、抛物线弹跳着**向左**前进、左缘外滑出循环穿行,相邻字母相位错开 1 帧形成
-  自左向右的弹跳波;**字号随水平位置缩放**——画布中间为满字号(「两个 3 列
-  字母+字间间隔 = 7 单元恰好占满画布宽」,cell = w/7,字母高 ≈ 5/7 画布高),
-  越靠边缘越小、边缘及画布外缩至 0.5 倍,以字母中心为锚线性过渡、始终垂直居中
-  (同屏约可见 2~3 个字母);
-  24 与弹跳周期 6 整除保证循环无缝;几何参数按 44px 基准
-  等比缩放,`image` crate 仅开 png 特性),tooltip 提示「任务执行中」;
-  忙碌帧经 `set_icon_with_as_template(_, true)` 以 **template 模式**设置——
-  macOS 忽略 RGB、按 alpha 剪影自动渲染为菜单栏前景色(浅色栏黑/深色栏白),
-  原子设置避免分两次调用的渲染闪烁;恢复静态原图时切回非 template
-  (原图为彩色,template 会压成单色剪影);全部结束后恢复静态原图。图标更新经 tauri `TrayIcon::set_icon` 内部派发主线程,
-  后台任务调用安全。
+  任务)的 run 进行中时,托盘图标播放「combo」字母**逐个展示**动画(共
+  `LETTER_FRAMES×5 = 170` 帧程序化生成):每帧底图 = 静态图**去掉白色 C
+  字形**(白色连同抗锯齿灰边涂黑,只留黑色圆角方块——避免动画字母与静态
+  字形叠成杂乱复合形状),**白色**像素字模字母(3/5 列宽、5 行高)在方块内
+  逐个表演「从右缘幕后 ease-out 减速滑入中心(裁剪在方块内,缘外不画)→
+  落定果冻 squash & stretch(`osc = e^(−2.5t)·cos(2π·1.5t)` 衰减振荡:先
+  压扁变宽变矮 32%/26%,再回弹拉高变窄,12 帧收敛)→ 静止停顿 5 帧 →
+  ease-in 加速滑出左缘」的循环,每字母 34 帧 ≈ 2.7s;字母字号随水平位置
+  缩放(中心满字号 cell = w/10、字母高 = 画布高一半,边缘缩至 0.6 倍,
+  滑入渐大/滑出渐小),tooltip 提示「任务执行中」;忙碌帧与空闲帧同为
+  **非 template** 彩色图直接渲染(`set_icon_with_as_template(_, false)`,
+  黑底白字与静态图标配色统一,浅色/深色菜单栏均自带对比;原子设置避免
+  分两次调用的渲染闪烁);全部结束后恢复静态原图。图标更新经 tauri
+  `TrayIcon::set_icon` 内部派发主线程,后台任务调用安全。
 - **`src/`** (React 19 + Vite + TS, shadcn/ui) — the frontend. TanStack Query
   for REST data, **Zustand** (`stores/agentStore.ts`) for SSE-driven live state,
   keyed by `sessionId`.
