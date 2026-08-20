@@ -292,7 +292,7 @@ impl RunState {
 
     /// 结束运行:仅当 run_id 匹配当前活跃 run 时移除,避免旧任务的收尾
     /// 清掉取消后立刻重启的新 run。
-    fn finish_run(&self, session_id: &str, run_id: &str) {
+    pub(crate) fn finish_run(&self, session_id: &str, run_id: &str) {
         let mut m = self.active.lock().unwrap();
         if m.get(session_id).map(|r| r.run_id.as_str()) == Some(run_id) {
             m.remove(session_id);
@@ -300,8 +300,8 @@ impl RunState {
     }
 
     /// 该 workspace 下正在运行的 run 列表(session_id, run 信息);
-    /// 供 SSE 订阅快照与会话列表 is_busy 使用。
-    fn workspace_active_runs(&self, ws_id: &str) -> Vec<(String, ActiveRun)> {
+    /// 供 SSE 订阅快照、会话列表 is_busy 与项目汇总 busy_sessions 使用。
+    pub(crate) fn workspace_active_runs(&self, ws_id: &str) -> Vec<(String, ActiveRun)> {
         self.active
             .lock()
             .unwrap()
@@ -1034,6 +1034,12 @@ fn build_router(
         .route(
             "/v1/workspaces/:id/sessions",
             get(session::list).post(session::create),
+        )
+        // 分页会话列表与项目级汇总(侧边栏任务分页加载;静态段优先于 :sid 匹配)
+        .route("/v1/workspaces/:id/sessions/page", get(session::list_page))
+        .route(
+            "/v1/workspaces/:id/sessions/summary",
+            get(session::summary),
         )
         .route(
             "/v1/workspaces/:id/sessions/:sid",
@@ -3870,8 +3876,8 @@ mod tests {
             Ok(_) => panic!("冲突/无方案场景不应成功"),
         }
 
-        // 取消:发送信号 + 无任务时 409
-        cancel_lsp_install(State(state.clone())).await.unwrap();
+        // 取消:发送信号 + 无任务时 409(返回值 Json 仅作占位,消费掉避免 must_use 警告)
+        let _ = cancel_lsp_install(State(state.clone())).await.unwrap();
         assert!(rx.changed().await.is_ok());
         state.lsp_install.lock().unwrap().job = None;
         let err = cancel_lsp_install(State(state)).await.unwrap_err();

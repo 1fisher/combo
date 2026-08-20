@@ -1887,6 +1887,25 @@ export namespace Api {
     attached_clients?: number;
   };
 
+  /** GET /v1/workspaces/:id/sessions/page 的分页信封(侧边栏任务分页加载)。
+   *  后端按 created_at 倒序返回当前页,total 为该项目全部会话数。 */
+  export type SessionPage = {
+    sessions: Session[];
+    total: number;
+    limit: number;
+    offset: number;
+  };
+
+  /** GET /v1/workspaces/:id/sessions/summary 的项目级汇总:
+   *  任务列表分页后,项目徽章/费用栏不能再遍历全量列表求和,改用本汇总。 */
+  export type SessionSummary = {
+    prompt_tokens: number;
+    completion_tokens: number;
+    cost: number;
+    busy_sessions: number;
+    total_sessions: number;
+  };
+
   export type MessageRole = 'assistant' | 'user' | 'system' | 'tool';
 
   export type ReasoningContent = {

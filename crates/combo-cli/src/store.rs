@@ -550,6 +550,81 @@ impl ComboDb {
         Ok(out)
     }
 
+    /// 分页会话列表(侧边栏任务分页加载,`/sessions/page` 端点)。
+    /// 按 `created_at` 倒序(与前端「最近优先」展示排序一致);created_at 为
+    /// 秒级时间戳,同秒创建的会话靠 `id` 倒序 tiebreak 保证跨页顺序稳定,
+    /// 否则翻页时同秒会话会在两页间漂移(漏读/重读)。
+    /// 返回 `(当前页, 全部会话数)`;total 只数 conversations 行(与消息 join
+    /// 无关),供前端判断是否还有下一页。
+    pub fn list_conversations_paged(
+        &self,
+        workspace_ids: &[String],
+        limit: i64,
+        offset: i64,
+    ) -> anyhow::Result<(Vec<ConversationMeta>, i64)> {
+        if workspace_ids.is_empty() {
+            return Ok((Vec::new(), 0));
+        }
+        let conn = self.conn.lock().unwrap();
+        let placeholders = workspace_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let total: i64 = conn.query_row(
+            &format!("SELECT COUNT(*) FROM conversations WHERE workspace_id IN ({placeholders})"),
+            rusqlite::params_from_iter(workspace_ids),
+            |r| r.get(0),
+        )?;
+        let sql = format!(
+            "SELECT c.id, c.workspace_id, c.title, COUNT(m.id), c.created_at, c.updated_at,
+                    c.prompt_tokens, c.completion_tokens, c.cost, c.context_tokens, c.context_window, c.api_calls
+             FROM conversations c
+             LEFT JOIN messages m ON m.session_id = c.id
+             WHERE c.workspace_id IN ({placeholders})
+             GROUP BY c.id
+             ORDER BY c.created_at DESC, c.id DESC
+             LIMIT ? OFFSET ?"
+        );
+        let mut params: Vec<&dyn rusqlite::ToSql> = workspace_ids
+            .iter()
+            .map(|s| s as &dyn rusqlite::ToSql)
+            .collect();
+        params.push(&limit);
+        params.push(&offset);
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(params.as_slice(), row_to_conv)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok((out, total))
+    }
+
+    /// 会话用量汇总(`/sessions/summary` 端点):token 与花费 SUM + 会话总数。
+    /// 任务列表分页加载后,前端项目徽章/费用栏不能再遍历全量列表求和,
+    /// 改由本方法提供准确的整项目口径。
+    pub fn conversation_totals(
+        &self,
+        workspace_ids: &[String],
+    ) -> anyhow::Result<(i64, i64, f64, i64)> {
+        if workspace_ids.is_empty() {
+            return Ok((0, 0, 0.0, 0));
+        }
+        let conn = self.conn.lock().unwrap();
+        let placeholders = workspace_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0),
+                    COALESCE(SUM(cost), 0.0), COUNT(*)
+             FROM conversations WHERE workspace_id IN ({placeholders})"
+        );
+        let params: Vec<&dyn rusqlite::ToSql> = workspace_ids
+            .iter()
+            .map(|s| s as &dyn rusqlite::ToSql)
+            .collect();
+        let (prompt, completion, cost, total) =
+            conn.query_row(&sql, params.as_slice(), |r| {
+                Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?, r.get::<_, f64>(2)?, r.get::<_, i64>(3)?))
+            })?;
+        Ok((prompt, completion, cost, total))
+    }
+
     pub fn delete_conversation(&self, id: &str) -> anyhow::Result<()> {
         self.conn
             .lock()
@@ -1358,6 +1433,72 @@ mod tests {
         let ids = vec!["ws-new".to_string(), "ws-old".to_string()];
         let convs = db.list_conversations_multi(&ids).unwrap();
         assert_eq!(convs.len(), 3);
+    }
+
+    #[test]
+    fn list_conversations_paged_orders_and_paginates() {
+        // 分页按 created_at 倒序(前端「最近优先」),同秒会话按 id 倒序 tiebreak;
+        // total 恒为全部会话数,与 limit/offset 无关。
+        let db = ComboDb::in_memory();
+        for i in 0..5 {
+            let mut c = conv(&format!("c{i}"), "w1");
+            c.created_at = 100 + i; // c0 最旧 → c4 最新
+            db.upsert_conversation(&c).unwrap();
+        }
+        // 同秒两条:created_at 相同,id 倒序(z9 在 z1 前)
+        let mut z1 = conv("z1", "w1");
+        z1.created_at = 104; // 与 c4 同秒
+        db.upsert_conversation(&z1).unwrap();
+        let mut z9 = conv("z9", "w1");
+        z9.created_at = 104;
+        db.upsert_conversation(&z9).unwrap();
+
+        let ids = vec!["w1".to_string()];
+        let (page, total) = db.list_conversations_paged(&ids, 2, 0).unwrap();
+        assert_eq!(total, 7);
+        let ids_of = |v: &[ConversationMeta]| v.iter().map(|c| c.id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids_of(&page), ["z9", "z1"]);
+        let (page, _) = db.list_conversations_paged(&ids, 2, 2).unwrap();
+        assert_eq!(ids_of(&page), ["c4", "c3"]);
+        let (page, _) = db.list_conversations_paged(&ids, 2, 4).unwrap();
+        assert_eq!(ids_of(&page), ["c2", "c1"]);
+        let (page, _) = db.list_conversations_paged(&ids, 2, 6).unwrap();
+        assert_eq!(ids_of(&page), ["c0"]);
+        // 越界 offset → 空页,total 不变
+        let (page, total) = db.list_conversations_paged(&ids, 2, 8).unwrap();
+        assert!(page.is_empty());
+        assert_eq!(total, 7);
+        // 别名 ID 合并分页
+        let alias = vec!["w1".to_string(), "w-alias".to_string()];
+        let (page, total) = db.list_conversations_paged(&alias, 3, 0).unwrap();
+        assert_eq!(total, 7);
+        assert_eq!(page.len(), 3);
+        // 空 workspace 列表 → (空, 0)
+        let (page, total) = db.list_conversations_paged(&[], 80, 0).unwrap();
+        assert!(page.is_empty());
+        assert_eq!(total, 0);
+    }
+
+    #[test]
+    fn conversation_totals_sums_usage() {
+        let db = ComboDb::in_memory();
+        let mut a = conv("c1", "w1");
+        a.prompt_tokens = 1200;
+        a.completion_tokens = 300;
+        a.cost = 0.012;
+        let mut b = conv("c2", "w1");
+        b.prompt_tokens = 400;
+        b.completion_tokens = 100;
+        b.cost = 0.004;
+        db.upsert_conversation(&a).unwrap();
+        db.upsert_conversation(&b).unwrap();
+        db.upsert_conversation(&conv("other", "w2")).unwrap();
+
+        let (p, c, cost, total) = db.conversation_totals(&["w1".to_string()]).unwrap();
+        assert_eq!((p, c, total), (1600, 400, 2));
+        assert!((cost - 0.016).abs() < 1e-9);
+        // 空列表 → 全零
+        assert_eq!(db.conversation_totals(&[]).unwrap(), (0, 0, 0.0, 0));
     }
 
     #[test]

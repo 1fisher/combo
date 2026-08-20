@@ -13,19 +13,7 @@ use serde_json::{json, Value};
 /// 同一 path 可能有多个别名 ID,会话可能挂在任一别名下,
 /// 因此按 path 解析全部别名 ID 后合并查询。
 pub async fn list(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    let ws_ids: Vec<String> = match state.meta.get(&id) {
-        Some(meta) => {
-            let target_path = meta.path.to_string_lossy().to_string();
-            state
-                .meta
-                .list()
-                .into_iter()
-                .filter(|w| w.path.to_string_lossy() == target_path)
-                .map(|w| w.id)
-                .collect()
-        }
-        None => vec![id.clone()],
-    };
+    let ws_ids = alias_ws_ids(&state, &id);
     match state.meta.db().list_conversations_multi(&ws_ids) {
         Ok(convs) => {
             let arr: Vec<Value> = convs
@@ -37,6 +25,95 @@ pub async fn list(State(state): State<AppState>, Path(id): Path<String>) -> Resp
         Err(e) => json_err(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("读取会话列表失败: {e}"),
+        ),
+    }
+}
+
+/// 解析 workspace 的全部别名 ID(同一 path 在后端重启后可能产生多个
+/// workspace ID,会话可能挂在任一别名下):按 path 反查所有同路径 ID,
+/// 找不到 workspace 时退回传入 ID 本身。
+fn alias_ws_ids(state: &AppState, id: &str) -> Vec<String> {
+    match state.meta.get(id) {
+        Some(meta) => {
+            let target_path = meta.path.to_string_lossy().to_string();
+            state
+                .meta
+                .list()
+                .into_iter()
+                .filter(|w| w.path.to_string_lossy() == target_path)
+                .map(|w| w.id)
+                .collect()
+        }
+        None => vec![id.to_string()],
+    }
+}
+
+/// `/sessions/page` 与 `/sessions/summary` 的查询参数。
+#[derive(serde::Deserialize, Default)]
+pub struct PageQuery {
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+/// GET /v1/workspaces/{id}/sessions/page?limit=&offset= — 分页会话列表
+/// (侧边栏任务分页加载,每页 80)。按 created_at 倒序返回当前页,
+/// `total` 为该项目全部会话数,前端据此判断是否还有下一页。
+pub async fn list_page(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<PageQuery>,
+) -> Response {
+    let Some(limit) = q.limit else {
+        return json_err(StatusCode::BAD_REQUEST, "缺少 limit 参数");
+    };
+    if !(1..=500).contains(&limit) {
+        return json_err(StatusCode::BAD_REQUEST, "limit 需在 1..=500 之间");
+    }
+    let offset = q.offset.unwrap_or(0);
+    if offset < 0 {
+        return json_err(StatusCode::BAD_REQUEST, "offset 不能为负数");
+    }
+    let ws_ids = alias_ws_ids(&state, &id);
+    match state.meta.db().list_conversations_paged(&ws_ids, limit, offset) {
+        Ok((convs, total)) => {
+            let arr: Vec<Value> = convs
+                .iter()
+                .map(|c| session_json(c, state.runs.is_busy(&c.id)))
+                .collect();
+            json_ok(&json!({
+                "sessions": arr,
+                "total": total,
+                "limit": limit,
+                "offset": offset,
+            }))
+        }
+        Err(e) => json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("读取会话列表失败: {e}"),
+        ),
+    }
+}
+
+/// GET /v1/workspaces/{id}/sessions/summary — 项目级会话汇总:
+/// token/花费 SUM、busy 会话数与总数。任务列表分页加载后,前端项目
+/// 徽章/费用栏不能再遍历全量列表求和,由该端点提供准确口径。
+pub async fn summary(State(state): State<AppState>, Path(id): Path<String>) -> Response {
+    let ws_ids = alias_ws_ids(&state, &id);
+    let busy = ws_ids
+        .iter()
+        .map(|w| state.runs.workspace_active_runs(w).len())
+        .sum::<usize>();
+    match state.meta.db().conversation_totals(&ws_ids) {
+        Ok((prompt, completion, cost, total)) => json_ok(&json!({
+            "prompt_tokens": prompt,
+            "completion_tokens": completion,
+            "cost": cost,
+            "busy_sessions": busy,
+            "total_sessions": total,
+        })),
+        Err(e) => json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("读取会话汇总失败: {e}"),
         ),
     }
 }
@@ -358,5 +435,121 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::CONFLICT);
         // 消息未被删除
         assert_eq!(db.list_messages("ws_s", "s1").unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn list_page_paginates_by_created_at_desc() {
+        let state = session_test_state();
+        let db = state.meta.db();
+        for i in 0..3 {
+            let mut c = crate::store::ConversationMeta {
+                id: format!("s{i}"),
+                workspace_id: "ws_s".into(),
+                title: format!("任务{i}"),
+                message_count: 0,
+                created_at: 100 + i,
+                updated_at: 100 + i,
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                cost: 0.0,
+                context_tokens: 0,
+                context_window: 0,
+                api_calls: 0,
+            };
+            c.created_at = 100 + i;
+            db.upsert_conversation(&c).unwrap();
+        }
+
+        let page = |limit: i64, offset: i64| {
+            list_page(
+                State(state.clone()),
+                Path("ws_s".to_string()),
+                axum::extract::Query(PageQuery {
+                    limit: Some(limit),
+                    offset: Some(offset),
+                }),
+            )
+        };
+
+        // 第一页:最新两条 + total=3
+        let v = body_json(page(2, 0).await).await;
+        assert_eq!(v["total"], json!(3));
+        assert_eq!(
+            v["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["s2", "s1"]
+        );
+        // 第二页:最旧一条
+        let v = body_json(page(2, 2).await).await;
+        assert_eq!(
+            v["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["s0"]
+        );
+        // 缺 limit → 400;越界 limit → 400
+        let resp = list_page(
+            State(state.clone()),
+            Path("ws_s".to_string()),
+            axum::extract::Query(PageQuery::default()),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let resp = list_page(
+            State(state.clone()),
+            Path("ws_s".to_string()),
+            axum::extract::Query(PageQuery {
+                limit: Some(0),
+                offset: None,
+            }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn summary_reports_totals_and_busy() {
+        let state = session_test_state();
+        seed_conv(&state); // prompt 3000 / completion 800 / cost 0.42
+        let mut other = crate::store::ConversationMeta {
+            id: "s2".into(),
+            workspace_id: "ws_s".into(),
+            title: "t".into(),
+            message_count: 0,
+            created_at: 2,
+            updated_at: 2,
+            prompt_tokens: 1_000,
+            completion_tokens: 200,
+            cost: 0.08,
+            context_tokens: 0,
+            context_window: 0,
+            api_calls: 0,
+        };
+        other.created_at = 2;
+        state.meta.db().upsert_conversation(&other).unwrap();
+        // s1 正在运行 → busy_sessions=1
+        assert!(state.runs.start_run("ws_s", "s1", "run-1").is_some());
+
+        let v = body_json(
+            summary(State(state.clone()), Path("ws_s".to_string())).await,
+        )
+        .await;
+        assert_eq!(v["prompt_tokens"], json!(4_000));
+        assert_eq!(v["completion_tokens"], json!(1_000));
+        assert_eq!(v["cost"], json!(0.5));
+        assert_eq!(v["busy_sessions"], json!(1));
+        assert_eq!(v["total_sessions"], json!(2));
+
+        // run 结束后 busy 归零
+        state.runs.finish_run("s1", "run-1");
+        let v = body_json(summary(State(state), Path("ws_s".to_string())).await).await;
+        assert_eq!(v["busy_sessions"], json!(0));
     }
 }

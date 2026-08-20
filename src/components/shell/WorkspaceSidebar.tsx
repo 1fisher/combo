@@ -36,7 +36,7 @@ import {
   DialogTitle,
 } from '../ui/dialog';
 import { cn } from '../../lib/utils';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQueryClient } from '@tanstack/react-query';
 import { useWorkspaces } from '../../hooks/useWorkspaces';
 import { useDirPermission } from '../../hooks/useDirPermission';
 import { useSessions, markCreated } from '../../hooks/useSessions';
@@ -51,8 +51,9 @@ import {
   type ShortcutAction,
 } from '../../lib/shortcuts';
 import { useShortcutStore } from '../../stores/shortcutStore';
-import { createSession as createSessionApi, listSessions } from '../../lib/api';
+import { createSession as createSessionApi } from '../../lib/api';
 import type { Api } from '../../lib/api/types';
+import { useSessionSummary } from '../../hooks/useSessionSummary';
 import { ConversationList } from './ConversationList';
 import { DirectoryPicker } from './DirectoryPicker';
 import { SettingsDialog } from './SettingsDialog';
@@ -106,71 +107,60 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
-/** 汇总一组会话的 token 消耗(输入+输出)与花费。 */
-function sumSessionUsage(sessions: Api.Session[] | undefined) {
-  return (sessions ?? []).reduce(
-    (acc, s) => ({
-      tokens: acc.tokens + (s.prompt_tokens ?? 0) + (s.completion_tokens ?? 0),
-      prompt: acc.prompt + (s.prompt_tokens ?? 0),
-      completion: acc.completion + (s.completion_tokens ?? 0),
-      cost: acc.cost + (s.cost ?? 0),
-    }),
-    { tokens: 0, prompt: 0, completion: 0, cost: 0 },
-  );
-}
+/** 汇总数据的空值兜底(汇总未加载完成时按 0 处理)。 */
+const EMPTY_SUMMARY: Api.SessionSummary = {
+  prompt_tokens: 0,
+  completion_tokens: 0,
+  cost: 0,
+  busy_sessions: 0,
+  total_sessions: 0,
+};
 
 /**
  * 项目 token 消耗徽章:该项目全部任务的 输入+输出 token 总和,
  * 样式与任务行(SessionRow)上的 tokens 徽章一致;无消耗时不渲染。
+ * 数据来自 /sessions/summary(任务列表分页加载后不能再遍历列表求和,
+ * 否则只统计到已加载页)。
  */
-function WorkspaceTokenBadge({ sessions }: { sessions: Api.Session[] | undefined }) {
-  const totals = sumSessionUsage(sessions);
-  if (totals.tokens === 0) return null;
+function WorkspaceTokenBadge({ summary }: { summary?: Api.SessionSummary }) {
+  const s = summary ?? EMPTY_SUMMARY;
+  const tokens = s.prompt_tokens + s.completion_tokens;
+  if (tokens === 0) return null;
   return (
     <span
       className="shrink-0 rounded bg-surface-hover px-1 text-[10px] tabular-nums text-foreground-subtlest"
-      title={`该项目任务 token 消耗:输入 ${formatTokens(totals.prompt)} / 输出 ${formatTokens(totals.completion)}${totals.cost > 0 ? ` · 花费 $${totals.cost < 0.01 ? totals.cost.toFixed(4) : totals.cost.toFixed(2)}` : ''}`}
+      title={`该项目任务 token 消耗:输入 ${formatTokens(s.prompt_tokens)} / 输出 ${formatTokens(s.completion_tokens)}${s.cost > 0 ? ` · 花费 $${s.cost < 0.01 ? s.cost.toFixed(4) : s.cost.toFixed(2)}` : ''}`}
     >
-      {formatTokens(totals.tokens)}
+      {formatTokens(tokens)}
     </span>
   );
 }
 
 /**
- * 「项目」视图行的 token 徽章:按 workspace 拉会话列表求和。
- * 直接用 useQuery 复用 useSessions 的 ['sessions', wsId] 缓存(同 key 去重,
- * 不产生额外请求),但**不用** useSessions —— 它附带的
- * 「activeSessionId 不属于该项目时清除」副作用对徽章实例是误伤。
+ * 「项目」视图行的 token 徽章:读项目级会话汇总。
+ * useSessionSummary 的 key 挂在 ['sessions', wsId, 'summary'],
+ * 凡是 invalidate ['sessions', wsId] 的地方都会连带刷新(不产生额外
+ * 失效逻辑),也不用 useSessions —— 它附带的全局副作用对徽章实例是误伤。
  */
 function ProjectTokenBadge({ wsId }: { wsId: string }) {
-  const q = useQuery({
-    queryKey: ['sessions', wsId],
-    queryFn: () => listSessions(wsId),
-  });
-  return <WorkspaceTokenBadge sessions={q.data} />;
+  const { data: summary } = useSessionSummary(wsId);
+  return <WorkspaceTokenBadge summary={summary} />;
 }
 
 /**
  * 「项目」视图行的运行中标记:该项目下有任务正在处理时显示旋转图标。
- * - 服务端 is_busy 为准(会话列表查询);非当前项目收不到 SSE 事件,
+ * - 以 /sessions/summary 的 busy_sessions 为准(服务端 RunState 口径,
+ *   覆盖未加载页里的 busy 会话);非当前项目收不到 SSE 事件,
  *   存在 busy 会话时短间隔轮询,让后台结束的 run 在几秒内熄灭标记。
- * - 当前项目叠加本地 SSE 运行态:run 启动后会话列表尚未 refetch,
- *   本地 runs 先行点亮,无额外延迟。
+ * - 当前项目的 run 启动广播(session 事件)会 invalidate
+ *   ['sessions', wsId] 前缀,汇总随之刷新点亮标记。
  */
 function ProjectBusyIndicator({ wsId }: { wsId: string }) {
-  const q = useQuery({
-    queryKey: ['sessions', wsId],
-    queryFn: () => listSessions(wsId),
+  const { data } = useSessionSummary(wsId, {
     refetchInterval: (query) =>
-      (query.state.data ?? []).some((s) => s.is_busy === true) ? 5000 : false,
+      (query.state.data?.busy_sessions ?? 0) > 0 ? 5000 : false,
   });
-  const sessions = q.data;
-  const serverBusy = (sessions ?? []).some((s) => s.is_busy === true);
-  // selector 返回布尔:仅当该项目任一会话的本地 running 翻转时重渲染
-  const localRunning = useAgentStore((st) =>
-    (sessions ?? []).some((s) => st.bySession[s.id]?.run?.status === 'running'),
-  );
-  if (!serverBusy && !localRunning) return null;
+  if ((data?.busy_sessions ?? 0) === 0) return null;
   return (
     <Loader2
       className="size-3 shrink-0 animate-spin text-brand"
@@ -265,9 +255,13 @@ export function WorkspaceSidebar({
   const connTransport = useConnectionStore((s) => s.transport);
   const {
     sessions: activeSessions,
+    /** 项目全部会话数(服务端 total;分页加载后 loaded 长度 ≠ 总数,新建任务命名用它避免撞名) */
+    total: activeTotal,
     create: createSessionIn,
     activate: activateSession,
   } = useSessions(active);
+  // 底部「累计花费」:项目级汇总(分页后不能只对已加载页求和)
+  const { data: activeSummary } = useSessionSummary(active);
 
   const [tab, setTab] = useState<'tasks' | 'project'>('project');
   const [projOpen, setProjOpen] = useState(true);
@@ -410,7 +404,7 @@ export function WorkspaceSidebar({
       setSidebarError('请先在「项目」分区添加一个项目');
       return;
     }
-    const base = `会话 ${(activeSessions?.length ?? 0) + 1}`;
+    const base = `会话 ${(activeTotal ?? activeSessions?.length ?? 0) + 1}`;
     try {
       if (wsId === active) {
         const s = await createSessionIn(base);
@@ -816,13 +810,14 @@ export function WorkspaceSidebar({
           )}
         </div>
       </div>
-      {/* 花费统计(右侧;token 用量不再在此显示,任务行/项目徽章/Composer 用量环仍保留) */}
+      {/* 花费统计(右侧;token 用量不再在此显示,任务行/项目徽章/Composer 用量环仍保留)。
+          数据来自 /sessions/summary:任务列表分页加载后,只对已加载页求和会漏掉未加载页的花费。 */}
       {(() => {
-        const totals = sumSessionUsage(activeSessions);
-        if (totals.cost <= 0) return null;
-        const fmtCost = totals.cost < 0.01
-          ? `$${totals.cost.toFixed(4)}`
-          : `$${totals.cost.toFixed(2)}`;
+        const cost = activeSummary?.cost ?? 0;
+        if (cost <= 0) return null;
+        const fmtCost = cost < 0.01
+          ? `$${cost.toFixed(4)}`
+          : `$${cost.toFixed(2)}`;
         return (
           <div className="flex items-center justify-end px-4 pb-1 text-[10px] tabular-nums text-foreground-subtlest">
             <span title="累计花费(USD)">

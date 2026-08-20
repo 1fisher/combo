@@ -35,6 +35,10 @@ fn reasoning_additional_params(effort: &str) -> serde_json::Value {
             "enable_thinking": false,
             "thinking": {"type": "disabled"}
         }),
+        "low" => serde_json::json!({
+            "enable_thinking": true,
+            "reasoning_effort": "low"
+        }),
         "high" => serde_json::json!({
             "enable_thinking": true,
             "reasoning_effort": "high"
@@ -88,7 +92,7 @@ where
         .name("Combo")
         .preamble(preamble)
         .tool_server_handle(handle)
-        .default_max_turns(200);
+        .default_max_turns(1000);
     let agent = match reasoning_effort {
         Some(effort) if !effort.is_empty() => {
             builder.additional_params(reasoning_additional_params(effort)).build()

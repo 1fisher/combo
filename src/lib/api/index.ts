@@ -70,6 +70,24 @@ export function listSessions(workspaceId: string): Promise<Api.Session[]> {
   return apiRequest(`/v1/workspaces/${workspaceId}/sessions`);
 }
 
+/** 分页读取会话列表(侧边栏任务分页加载):按 created_at 倒序,
+ *  每页 limit 条、从第 offset 条开始;total 为该项目全部会话数。 */
+export function listSessionsPage(
+  workspaceId: string,
+  limit: number,
+  offset: number,
+): Promise<Api.SessionPage> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/sessions/page`, {
+    query: { limit: String(limit), offset: String(offset) },
+  });
+}
+
+/** 项目级会话汇总(token/花费总和、busy 会话数、会话总数):
+ *  任务列表分页加载后,项目徽章/费用栏改用本汇总获取准确口径。 */
+export function getSessionSummary(workspaceId: string): Promise<Api.SessionSummary> {
+  return apiRequest(`/v1/workspaces/${workspaceId}/sessions/summary`);
+}
+
 export function createSession(workspaceId: string, title: string): Promise<Api.Session> {
   return apiRequest(`/v1/workspaces/${workspaceId}/sessions`, {
     method: 'POST',

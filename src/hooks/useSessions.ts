@@ -1,14 +1,17 @@
-import { useEffect } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useMemo } from 'react';
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   createSession,
   deleteSession,
   getSessionHistory,
-  listSessions,
+  listSessionsPage,
   renameSession,
   setCurrentSession,
 } from '../lib/api';
 import { useAgentStore } from '../stores/agentStore';
+
+/** 任务列表分页大小:每页 80 条,滚动接近列表尾部时自动加载下一页。 */
+export const SESSION_PAGE_SIZE = 80;
 
 /**
  * 模块级集合:记录最近创建的会话 ID。
@@ -97,11 +100,27 @@ export function useSessions(workspaceId: string | null) {
   const qc = useQueryClient();
   const setActiveSessionId = useAgentStore((s) => s.setActiveSessionId);
   const activeSessionId = useAgentStore((s) => s.activeSessionId);
-  const q = useQuery({
+  // 分页加载(useInfiniteQuery):pageParam = offset,首页 0,下一页为
+  // 已加载条数(total 减小时会提前判定加载完毕)。invalidate
+  // ['sessions', wsId] 时 TanStack 会顺序 refetch 已加载的全部页,
+  // 保证 is_busy / token / api_calls 等字段跨页收敛。
+  const q = useInfiniteQuery({
     queryKey: ['sessions', workspaceId],
-    queryFn: () => listSessions(workspaceId!),
+    queryFn: ({ pageParam }) =>
+      listSessionsPage(workspaceId!, SESSION_PAGE_SIZE, pageParam),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((n, p) => n + p.sessions.length, 0);
+      return loaded < lastPage.total ? loaded : undefined;
+    },
     enabled: !!workspaceId,
   });
+  const sessions = useMemo(
+    () => (q.data ? q.data.pages.flatMap((p) => p.sessions) : undefined),
+    [q.data],
+  );
+  /** 该项目全部会话数(与已加载条数区分,供「会话 N」命名等使用)。 */
+  const total = q.data?.pages.at(-1)?.total;
   const create = useMutation({
     mutationFn: (title: string) => createSession(workspaceId!, title),
     onSuccess: (s) => {
@@ -138,52 +157,69 @@ export function useSessions(workspaceId: string | null) {
   });
   // 持久化恢复的会话不属于当前项目(或已被删除)时清除,不主动选第一个。
   // 跳过最近创建的会话(列表 refetch 可能尚未完成)。
+  // 分页未加载完时跳过:activeSessionId 可能在尚未拉取的页里,
+  // 只有确认没有下一页(全量加载)才允许清除。
   useEffect(() => {
-    if (!workspaceId || !q.data || activeSessionId == null) return;
+    if (!workspaceId || !sessions || activeSessionId == null) return;
+    if (q.hasNextPage) return;
     if (recentlyCreated.has(activeSessionId)) return;
-    if (!q.data.some((s) => s.id === activeSessionId)) {
+    if (!sessions.some((s) => s.id === activeSessionId)) {
       setActiveSessionId(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceId, q.data, activeSessionId]);
+  }, [workspaceId, sessions, activeSessionId, q.hasNextPage]);
   // 服务端 is_busy 对账:切回项目/列表刷新时收敛错过的 run 结束信号。
   useEffect(() => {
-    if (!q.data) return;
+    if (!sessions) return;
     const st = useAgentStore.getState();
-    reconcileRunsFromSessions(st, st.markRun, q.data);
+    reconcileRunsFromSessions(st, st.markRun, sessions);
     // 观察 busy 状态:run 在切走会话/项目期间结束(本地已无运行态)时,
     // 由 store 的 busy 集合检测「busy → 空闲」转变并标记未读。
     // 刚发起 run 的会话跳过(列表可能带回旧的 is_busy=false)。
-    for (const s of q.data) {
+    for (const s of sessions) {
       if (s.is_busy === true) st.observeSessionBusy(s.id, true);
       else if (s.is_busy === false && !isRecentlyRan(s.id)) st.observeSessionBusy(s.id, false);
     }
     // 播种各会话的累计 API 调用次数(rig turns 计数,后端 sqlite 持久)。
     // setApiCalls 取单调较大值,run 进行中列表 refetch 带回的旧基数
     // 不会覆盖实时 usage 事件已推送的新值。
-    for (const s of q.data) {
+    for (const s of sessions) {
       if (typeof s.api_calls === 'number') st.setApiCalls(s.id, s.api_calls);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [q.data]);
+  }, [sessions]);
   // 切回项目时:若有正在处理的会话则直接打开它,否则保持不选中
   // (切换项目时 activeSessionId 已清空)。每次项目切换只决策一次,
   // 且等列表拉取 settle(避免缓存的旧 is_busy 误判)。
   useEffect(() => {
-    if (!workspaceId || !q.data || q.isFetching) return;
+    if (!workspaceId || !sessions || q.isFetching) return;
     const st = useAgentStore.getState();
     const key = `${workspaceId}#${st.workspaceSwitchSeq}`;
     if (st.autoOpenDecidedKey === key) return;
     useAgentStore.setState({ autoOpenDecidedKey: key });
-    const target = pickAutoOpenSession(q.data, st.activeSessionId);
+    const target = pickAutoOpenSession(sessions, st.activeSessionId);
     if (target) {
       const ts = new Date().toISOString().slice(11, 23);
       console.debug(`[${ts}][sessions] 切回项目自动打开处理中的会话 session="${target}"`);
       void activate(target);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workspaceId, q.data, q.isFetching]);
-  return { sessions: q.data, isLoading: q.isLoading, create: create.mutateAsync, activate, remove: remove.mutateAsync, rename: rename.mutateAsync };
+  }, [workspaceId, sessions, q.isFetching]);
+  return {
+    sessions,
+    /** 项目全部会话数(服务端 total,与已加载条数区分) */
+    total,
+    isLoading: q.isLoading,
+    /** 无限滚动:是否还有下一页 / 正在加载下一页 / 加载下一页 */
+    hasNextPage: q.hasNextPage,
+    isFetchingNextPage: q.isFetchingNextPage,
+    isFetchNextPageError: q.isFetchNextPageError,
+    fetchNextPage: q.fetchNextPage,
+    create: create.mutateAsync,
+    activate,
+    remove: remove.mutateAsync,
+    rename: rename.mutateAsync,
+  };
 }
 
 export function useSessionHistory(workspaceId: string | null, sessionId: string | null) {

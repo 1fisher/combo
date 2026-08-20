@@ -16,6 +16,22 @@ const sessionsByWs = new Map<string, unknown[]>();
 vi.mock('../../lib/api', () => ({
   listWorkspaces: vi.fn(async () => [...workspaces]),
   listSessions: vi.fn(async (wsId: string) => [...(sessionsByWs.get(wsId) ?? [])]),
+  listSessionsPage: vi.fn(async (wsId: string, limit: number, offset: number) => {
+    const all = sessionsByWs.get(wsId) ?? [];
+    return { sessions: all.slice(offset, offset + limit), total: all.length, limit, offset };
+  }),
+  getSessionSummary: vi.fn(async (wsId: string) => {
+    const all = (sessionsByWs.get(wsId) ?? []) as {
+      prompt_tokens?: number; completion_tokens?: number; cost?: number; is_busy?: boolean;
+    }[];
+    return {
+      prompt_tokens: all.reduce((n, s) => n + (s.prompt_tokens ?? 0), 0),
+      completion_tokens: all.reduce((n, s) => n + (s.completion_tokens ?? 0), 0),
+      cost: all.reduce((n, s) => n + (s.cost ?? 0), 0),
+      busy_sessions: all.filter((s) => s.is_busy === true).length,
+      total_sessions: all.length,
+    };
+  }),
   createWorkspace: vi.fn(async (path: string) => {
     const w = { id: `w${workspaces.length + 1}`, path };
     workspaces.push(w);

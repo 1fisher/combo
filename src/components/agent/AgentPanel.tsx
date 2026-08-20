@@ -55,7 +55,7 @@ export function AgentPanel({
   const sessionId = useAgentStore((s) => s.activeSessionId);
   const setActiveWorkspace = useAgentStore((s) => s.setActiveWorkspace);
   const { workspaces } = useWorkspaces();
-  const { sessions, create: createSessionIn, activate: activateSession, remove: removeSession, rename: renameSessionIn } = useSessions(workspaceId);
+  const { sessions, total, create: createSessionIn, activate: activateSession, remove: removeSession, rename: renameSessionIn } = useSessions(workspaceId);
 
   const rt = useAgentStore((s) => (sessionId ? s.bySession[sessionId] : undefined));
   const todos = useAgentStore((s) => (sessionId ? s.todos[sessionId] : undefined) ?? EMPTY_TODOS);
@@ -394,7 +394,8 @@ export function AgentPanel({
         return;
       }
       try {
-        const s = await createSessionIn(`会话 ${(sessions?.length ?? 0) + 1}`);
+        // 分页加载后 sessions.length 只是已加载条数,用服务端 total 命名避免与未加载页撞名
+        const s = await createSessionIn(`会话 ${(total ?? sessions?.length ?? 0) + 1}`);
         void activateSession(s.id);
       } catch (e) {
         setPostError(e instanceof Error ? e.message : String(e));

@@ -10,6 +10,19 @@ import { useShortcutStore } from '../../stores/shortcutStore';
 vi.mock('../../lib/api', () => ({
   listWorkspaces: vi.fn(async () => []),
   listSessions: vi.fn(async () => []),
+  listSessionsPage: vi.fn(async (_w: string, limit: number, offset: number) => ({
+    sessions: [],
+    total: 0,
+    limit,
+    offset,
+  })),
+  getSessionSummary: vi.fn(async () => ({
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    cost: 0,
+    busy_sessions: 0,
+    total_sessions: 0,
+  })),
   createSession: vi.fn(async () => ({ id: 's1', name: '新会话' })),
 }));
 

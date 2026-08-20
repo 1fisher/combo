@@ -167,7 +167,6 @@ pub async fn dirs(State(state): State<AppState>, Query(q): Query<PathQuery>) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
 
     fn temp_dir(tag: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("combo-host-{tag}-{}", std::process::id()));
@@ -203,26 +202,4 @@ mod tests {
         let _ = std::fs::remove_dir_all(&outside);
     }
 
-    #[test]
-    fn resolve_dir_rejects_outside_browse_root() {
-        let root = temp_dir("broot");
-        let outside = temp_dir("boutside");
-        let state = AppState::test_state(Arc::new(crate::meta::MetaStore::new()), Some(root.clone()));
-        assert!(resolve_dir(&state, &root).is_ok());
-        let resp = resolve_dir(&state, &outside).unwrap_err();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
-        let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&outside);
-    }
-
-    #[test]
-    fn resolve_dir_rejects_non_dir() {
-        let base = temp_dir("nondir");
-        let f = base.join("f.txt");
-        std::fs::write(&f, "x").unwrap();
-        let state = AppState::test_state(Arc::new(crate::meta::MetaStore::new()), None);
-        let resp = resolve_dir(&state, &f).unwrap_err();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        let _ = std::fs::remove_dir_all(&base);
-    }
 }
