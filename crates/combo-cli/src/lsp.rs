@@ -319,6 +319,19 @@ pub fn ext_to_lang(ext: &str) -> Option<&'static str> {
     Some(m)
 }
 
+/// didOpen 发给 server 的 **LSP languageId** 与配置键(`ext_to_lang`)
+/// 是两个口径:tsx/jsx 在 LSP 协议里是独立语言标识(VS Code 约定),
+/// typescript-language-server 等按它选择语法解析模式——把 .tsx 报成
+/// `typescript` 会用纯 TS 语法解析 JSX,报出大量虚假语法错误
+/// (`';' expected / '>' expected`)。因此必须按扩展名精确映射。
+pub fn lsp_language_id(ext: &str) -> &'static str {
+    match ext {
+        "tsx" => "typescriptreact",
+        "jsx" => "javascriptreact",
+        _ => ext_to_lang(ext).unwrap_or("plaintext"),
+    }
+}
+
 // =========================== workspace 语言统计 ===========================
 
 /// 语言统计扫描文件数上限(超过截断;只遍历文件名不读内容,速度远快于图谱扫描)。
@@ -610,15 +623,17 @@ impl LspClient {
         let diagnostics: Arc<Mutex<HashMap<String, Vec<Value>>>> =
             Arc::new(Mutex::new(HashMap::new()));
 
+        let stdin_arc = Arc::new(Mutex::new(stdin));
         // 启动 stdout 读循环
         tokio::spawn(read_loop(
             BufReader::new(stdout),
+            stdin_arc.clone(),
             pending.clone(),
             diagnostics.clone(),
         ));
 
         let mut client = Self {
-            stdin: Arc::new(Mutex::new(stdin)),
+            stdin: stdin_arc,
             _child: child,
             next_id: AtomicU64::new(1),
             pending,
@@ -771,6 +786,7 @@ impl LspClient {
 /// stdout 读循环:逐帧解析 JSON,按 id 分发 response,通知存入 diagnostics。
 async fn read_loop(
     mut reader: BufReader<ChildStdout>,
+    stdin: Arc<Mutex<ChildStdin>>,
     pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Value>>>>,
     diagnostics: Arc<Mutex<HashMap<String, Vec<Value>>>>,
 ) {
@@ -802,15 +818,23 @@ async fn read_loop(
             continue;
         };
 
-        // response(id 匹配)
-        if let Some(id) = msg.get("id").and_then(Value::as_u64) {
-            if let Some(tx) = pending.lock().await.remove(&id) {
-                let _ = tx.send(msg);
-            }
-            continue;
-        }
-        // notification
+        // server→client 消息(通知与请求)。注意 server 请求也带 id,
+        // 必须先于下方 response 分支判断——否则被当成响应丢弃。
         if let Some(method) = msg.get("method").and_then(Value::as_str) {
+            // server 请求(如 workspace/configuration、client/registerCapability):
+            // 回 null result 让 server 落回默认配置。不回复的话
+            // typescript-language-server 等会在等响应处挂起,
+            // publishDiagnostics 永远不来(表现为诊断一直为空)。
+            if let Some(id) = msg.get("id").and_then(Value::as_u64) {
+                let reply = json!({ "jsonrpc": "2.0", "id": id, "result": null });
+                if let Ok(body) = serde_json::to_vec(&reply) {
+                    let header = format!("Content-Length: {}\r\n\r\n", body.len());
+                    let mut w = stdin.lock().await;
+                    let _ = w.write_all(header.as_bytes()).await;
+                    let _ = w.write_all(&body).await;
+                    let _ = w.flush().await;
+                }
+            }
             if method == "textDocument/publishDiagnostics" {
                 if let Some(params) = msg.get("params") {
                     let uri = params.get("uri").and_then(Value::as_str).map(String::from);
@@ -826,6 +850,13 @@ async fn read_loop(
                         diagnostics.lock().await.insert(uri, arr);
                     }
                 }
+            }
+            continue;
+        }
+        // response(id 匹配)
+        if let Some(id) = msg.get("id").and_then(Value::as_u64) {
+            if let Some(tx) = pending.lock().await.remove(&id) {
+                let _ = tx.send(msg);
             }
         }
     }
@@ -1036,7 +1067,11 @@ impl LspManager {
             r
         };
         if first {
-            client.did_open(abs_path, text, &lang).await?;
+            // languageId 按扩展名精确映射(tsx → typescriptreact),
+            // 不能用配置键 lang——见 `lsp_language_id` 文档
+            client
+                .did_open(abs_path, text, lsp_language_id(ext))
+                .await?;
         } else {
             client.did_change(abs_path, text, version).await?;
         }
@@ -1266,6 +1301,19 @@ mod tests {
         assert_eq!(ext_to_lang("ts"), Some("typescript"));
         assert_eq!(ext_to_lang("tsx"), Some("typescript"));
         assert_eq!(ext_to_lang("unknown"), None);
+    }
+
+    /// languageId 必须与配置键分离:tsx/jsx 是 LSP 协议的独立语言标识,
+    /// 报错成 typescript/javascript 会导致 JSX 被纯 TS/JS 语法解析而报错。
+    #[test]
+    fn language_id_distinguishes_react_extensions() {
+        assert_eq!(lsp_language_id("ts"), "typescript");
+        assert_eq!(lsp_language_id("tsx"), "typescriptreact");
+        assert_eq!(lsp_language_id("mts"), "typescript");
+        assert_eq!(lsp_language_id("js"), "javascript");
+        assert_eq!(lsp_language_id("jsx"), "javascriptreact");
+        assert_eq!(lsp_language_id("rs"), "rust");
+        assert_eq!(lsp_language_id("unknown"), "plaintext");
     }
 
     /// spawn 前的裸命令解析:路径原样、查不到的裸命令原样返回。
