@@ -88,6 +88,16 @@ interface AgentState {
    * 推送、会话列表 api_calls 播种;内存态,切项目时回收) */
   apiCallsBySession: Record<string, number>;
 
+  /**
+   * 每个 session 当前 run 的起点记忆({runId, startedAt}):跨项目切换保留
+   * (与 busySessions 同理)并随 localStorage 持久化。忙碌快照恢复(切回
+   * 项目/SSE 重连/刷新页面)会以服务端广播的同一 runId 重放 markRun running,
+   * 此时复用最初记录的起点,保证「正在执行」耗时在**一次 run 内不重置**。
+   * runId 为全局唯一 UUID(客户端生成或服务端自动化生成),匹配即同一 run。
+   * run 结束(done,含无本地运行态的迟到收尾)与会话清空时移除条目。
+   */
+  runStarts: Record<string, { runId: string; startedAt: number }>;
+
   upsertMessage: (sessionId: string, m: Api.Message) => void;
   removeOptimisticMessages: (sessionId: string) => void;
   hydrateMessages: (sessionId: string, msgs: Api.Message[]) => void;
@@ -161,8 +171,9 @@ export const useAgentStore = create<AgentState>()(
       // 同时回收全部会话运行态与任务清单(SSE 只订阅当前项目,旧项目的
       // 运行态不会再更新;消息已持久化在服务端,切回时由 busy 快照 +
       // 历史拉取恢复),防止内存随浏览的项目/会话只增不减。
-      // unreadSessions / busySessions 特意保留:切走项目的会话在后台
-      // 结束后,切回时仍要能展示未读角标。
+      // unreadSessions / busySessions / runStarts 特意保留:切走项目的会话
+      // 在后台结束后,切回时仍要能展示未读角标;仍在跑的会话切回时,
+      // busy 快照以同一 runId 恢复运行态并复用原计时起点(不重置)。
       return {
         activeWorkspaceId: id,
         activeSessionId: null,
@@ -225,6 +236,7 @@ export const useAgentStore = create<AgentState>()(
   todos: {},
   subagents: {},
   apiCallsBySession: {},
+  runStarts: {},
   unreadSessions: {},
   busySessions: {},
 
@@ -351,9 +363,20 @@ export const useAgentStore = create<AgentState>()(
     set((st) => {
       const rt = st.bySession[sessionId];
       const ts = new Date().toISOString().slice(11, 23);
+      // run 结束时移除起点记忆:条目只在 run 进行中有意义(同 runId 的
+      // busy 快照重放才复用),结束后留着只会让 map 随会话数只增不减
+      const dropRunStart = (map: Record<string, { runId: string; startedAt: number }>) => {
+        if (!map[sessionId]) return map;
+        const { [sessionId]: _rs, ...rest } = map;
+        return rest;
+      };
       // 仅有收尾事件而无本地运行态(如重连后的过期收尾):不再新建条目,
       // 避免会话 map 只增不减
-      if (!rt && status === 'done') return st;
+      if (!rt && status === 'done') {
+        const runStarts = dropRunStart(st.runStarts);
+        if (runStarts === st.runStarts) return st;
+        return { runStarts };
+      }
       const cur = rt ?? emptyRuntime();
       console.debug(
         `[${ts}][store] markRun status="${status}" prev="${cur.run?.status ?? 'none'}" session="${sessionId}" msgCount=${cur.messages.length}`
@@ -369,6 +392,7 @@ export const useAgentStore = create<AgentState>()(
           bySession,
           todos,
           busySessions,
+          runStarts: dropRunStart(st.runStarts),
           unreadSessions: { ...st.unreadSessions, [sessionId]: true },
         };
       }
@@ -376,10 +400,21 @@ export const useAgentStore = create<AgentState>()(
         status === 'done'
           ? cur.messages.map((m) => ({ ...m, streaming: false }))
           : cur.messages;
-      // 进入 running 记录起点(输入坞上方「正在执行」耗时展示);
-      // 收尾为 done 时保留原起点,便于需要时回看本轮耗时
-      const startedAt =
-        status === 'running' ? Date.now() : cur.run?.startedAt;
+      // 进入 running 记录起点(输入坞上方「正在执行」耗时展示);收尾为
+      // done 时保留原起点,便于需要时回看本轮耗时。
+      // 同一 runId 的重复标记(切换项目/会话后 busy 快照恢复、SSE 重连、
+      // 刷新页面重放)复用最初记录的起点 —— runId 全局唯一,匹配即同一次
+      // run,保证一次 run 的计时不因切换而重置;不同 runId 记新起点。
+      const prevStart = st.runStarts[sessionId];
+      let startedAt: number | undefined;
+      let runStarts = st.runStarts;
+      if (status === 'running') {
+        startedAt = prevStart?.runId === runId ? prevStart.startedAt : Date.now();
+        runStarts = { ...st.runStarts, [sessionId]: { runId, startedAt } };
+      } else {
+        startedAt = cur.run?.startedAt;
+        runStarts = dropRunStart(st.runStarts);
+      }
       // busy 集合维护:run 启动时记入(供切走后检测「错过结束信号」);
       // 当前会话的 run 结束视为已读,仅移出集合、不打未读标
       let busySessions = st.busySessions;
@@ -391,6 +426,7 @@ export const useAgentStore = create<AgentState>()(
       }
       return {
         busySessions,
+        runStarts,
         bySession: {
           ...st.bySession,
           [sessionId]: {
@@ -465,21 +501,25 @@ export const useAgentStore = create<AgentState>()(
   clearSessionRuntime: (sessionId) =>
     set((st) => {
       const { [sessionId]: _drop, ...rest } = st.bySession;
-      // /clear、删除会话等路径复用:未读角标与 busy 跟踪一并清理
+      // /clear、删除会话等路径复用:未读角标、busy 跟踪与 run 起点记忆一并清理
       const { [sessionId]: _u, ...unread } = st.unreadSessions;
       const { [sessionId]: _b, ...busy } = st.busySessions;
-      return { bySession: rest, unreadSessions: unread, busySessions: busy };
+      const { [sessionId]: _rs, ...runStarts } = st.runStarts;
+      return { bySession: rest, unreadSessions: unread, busySessions: busy, runStarts };
     }),
     }),
     {
       name: 'combo.agent',
-      // 只持久化选中态,SSE 实时状态(消息/队列)不入库
+      // 只持久化选中态与 run 起点记忆,SSE 实时状态(消息/队列)不入库。
+      // runStarts 持久化是为了刷新页面后同一 run 的 busy 快照恢复仍能续上
+      // 真实起点(runId 匹配才会复用,条目极小且随 run 结束清理,无泄漏)。
       partialize: (s) => ({
         activeWorkspaceId: s.activeWorkspaceId,
         lastWorkspacePath: s.lastWorkspacePath,
         activeSessionId: s.activeSessionId,
         modelSelections: s.modelSelections,
         recentModels: s.recentModels,
+        runStarts: s.runStarts,
       }),
     }
   )

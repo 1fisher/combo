@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useAgentStore } from './agentStore';
 import type { Api } from '../lib/api/types';
 
@@ -433,5 +433,117 @@ describe('agentStore 会话未读标记与 busy 观察', () => {
     expect(saved.state.unreadSessions).toBeUndefined();
     expect(saved.state.busySessions).toBeUndefined();
     expect(saved.state.workspaceSwitchSeq).toBeUndefined();
+  });
+});
+
+describe('agentStore run 起点记忆(一次 run 计时不重置)', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    useAgentStore.setState({
+      activeWorkspaceId: 'w1',
+      lastWorkspacePath: null,
+      activeSessionId: 's1',
+      bySession: {},
+      permissionQueue: [],
+      questionQueue: [],
+      modelSelections: {},
+      todos: {},
+      unreadSessions: {},
+      busySessions: {},
+      runStarts: {},
+      workspaceSwitchSeq: 0,
+    });
+  });
+
+  it('同一 runId 的 running 重放(切换项目后 busy 快照恢复)复用最初起点', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    const st = useAgentStore.getState();
+    st.markRun('s1', 'r1', 'running');
+    const t0 = useAgentStore.getState().bySession['s1'].run!.startedAt;
+    expect(t0).toBe(1_000_000);
+    // 模拟切换项目(bySession 被整体回收)再切回:SSE 忙碌快照重放 running
+    vi.setSystemTime(1_000_000 + 90_000);
+    useAgentStore.setState({ bySession: {}, activeSessionId: null });
+    st.markRun('s1', 'r1', 'running');
+    const restored = useAgentStore.getState().bySession['s1'].run!;
+    expect(restored.status).toBe('running');
+    // 计时不重置:仍从最初起点累计(90s 前),而非快照恢复时刻
+    expect(restored.startedAt).toBe(t0);
+    vi.useRealTimers();
+  });
+
+  it('同一 runId 在同项目内切走会话再恢复也不重置起点', () => {
+    vi.useFakeTimers();
+    const st = useAgentStore.getState();
+    st.markRun('s1', 'r1', 'running');
+    const t0 = useAgentStore.getState().bySession['s1'].run!.startedAt!;
+    // 切到 s2 再切回 s1(运行态虽保留,但即便被回收重建也应续上原起点)
+    vi.setSystemTime(Date.now() + 30_000);
+    st.setActiveSessionId('s2');
+    st.markRun('s1', 'r1', 'running');
+    expect(useAgentStore.getState().bySession['s1'].run!.startedAt).toBe(t0);
+    vi.useRealTimers();
+  });
+
+  it('不同 runId(新一轮 run)记录新起点,不误用旧起点', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    const st = useAgentStore.getState();
+    st.markRun('s1', 'r1', 'running');
+    const t0 = useAgentStore.getState().runStarts['s1'].startedAt;
+    // 上一轮结束、下一轮发起:新起点
+    vi.setSystemTime(1_000_000 + 60_000);
+    st.markRun('s1', 'r1', 'done');
+    st.markRun('s1', 'r2', 'running');
+    const after = useAgentStore.getState();
+    expect(after.runStarts['s1']).toEqual({ runId: 'r2', startedAt: t0 + 60_000 });
+    expect(after.bySession['s1'].run!.startedAt).toBe(t0 + 60_000);
+    vi.useRealTimers();
+  });
+
+  it('run 结束(当前会话/非当前会话/迟到收尾)移除起点记忆', () => {
+    const st = useAgentStore.getState();
+    // 当前会话收尾
+    st.markRun('s1', 'r1', 'running');
+    expect(useAgentStore.getState().runStarts['s1']).toBeDefined();
+    st.markRun('s1', 'r1', 'done');
+    expect(useAgentStore.getState().runStarts['s1']).toBeUndefined();
+    // 非当前会话收尾(运行态整体回收)
+    st.markRun('s2', 'r2', 'running');
+    st.markRun('s2', 'r2', 'done');
+    expect(useAgentStore.getState().runStarts['s2']).toBeUndefined();
+    // 无本地运行态的迟到收尾(切换项目后 run 在后台结束)
+    st.markRun('s3', 'r3', 'running');
+    useAgentStore.setState({ bySession: {} });
+    st.markRun('s3', 'r3', 'done');
+    expect(useAgentStore.getState().runStarts['s3']).toBeUndefined();
+  });
+
+  it('切换项目保留起点记忆(切回后续时);clearSessionRuntime 一并清理', () => {
+    const st = useAgentStore.getState();
+    st.markRun('s1', 'r1', 'running');
+    st.setActiveWorkspace('w2');
+    // bySession 已被回收,但起点记忆跨项目保留
+    expect(useAgentStore.getState().bySession).toEqual({});
+    expect(useAgentStore.getState().runStarts['s1']).toEqual({
+      runId: 'r1',
+      startedAt: expect.any(Number),
+    });
+    // /clear、删除会话:起点记忆随运行态一并清理
+    st.clearSessionRuntime('s1');
+    expect(useAgentStore.getState().runStarts['s1']).toBeUndefined();
+  });
+
+  it('起点记忆持久化到 localStorage(刷新页面后恢复计时不重置)', () => {
+    const st = useAgentStore.getState();
+    st.markRun('s1', 'r1', 'running');
+    const saved = JSON.parse(localStorage.getItem('combo.agent')!) as {
+      state: { runStarts: Record<string, { runId: string; startedAt: number }> };
+    };
+    expect(saved.state.runStarts['s1']).toEqual({
+      runId: 'r1',
+      startedAt: expect.any(Number),
+    });
   });
 });
