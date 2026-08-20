@@ -108,9 +108,8 @@ cargo tauri dev
 Tauri 壳会直接内嵌启动 combo-cli serve(combo 完整后端),无需手动配置。
 启动后通过 UI「添加项目」创建工作区即可开始对话。
 
-> ⚠️ 注意:仓库内**没有** `tauri` npm 脚本,也未安装 `@tauri-apps/cli`,
-> 请使用 `cargo tauri dev`(Rust 工具链)。`bundle.active` 当前为 `false`,
-> 打包流程尚未配置。
+> 💡 打包 macOS 安装镜像用 `make dmg`:仅前端有变更时自动跳过 Rust 编译
+> (复用已编译二进制重新打包),Rust 有变更时才走完整 `tauri build`。
 
 ### 方式二:纯浏览器开发模式(推荐日常调试)
 

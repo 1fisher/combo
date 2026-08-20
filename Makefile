@@ -36,8 +36,8 @@ build-desktop: ## 编译桌面端,内嵌前端资源 (target/release/combo-app)
 bundle: ## 打包桌面端安装包 (macOS: .app + .dmg)
 	npx tauri build
 
-dmg: ## 打包 macOS DMG 安装镜像 (仅 DMG, 跳过 .app 独立包)
-	npx tauri build --bundles dmg
+dmg: ## 打包 macOS DMG (Rust 无变化时自动跳过后端编译,仅重建前端)
+	bash scripts/build-dmg.sh
 	@echo ""
 	@echo "✓ DMG 打包完成:"
 	@find target/release/bundle/dmg -name '*.dmg' -exec ls -lh {} \;

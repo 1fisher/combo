@@ -125,9 +125,9 @@ The Tauri shell launches the embedded combo-cli serve (combo's full backend)
 automatically — no manual setup needed. Once it starts, use the UI's
 "添加项目" (Add Project) to create a workspace and start chatting.
 
-> ⚠️ Note: the repo has **no** `tauri` npm script and `@tauri-apps/cli` is
-> not installed — use `cargo tauri dev` (Rust toolchain). `bundle.active` is
-> currently `false`, so packaging is not set up.
+> 💡 Package the macOS installer with `make dmg`: when only the frontend has
+> changed it automatically skips the Rust build (re-bundles from the previously
+> compiled binary); a full `tauri build` only runs when Rust inputs changed.
 
 ### Option 2: Plain browser dev mode (recommended for daily development)
 

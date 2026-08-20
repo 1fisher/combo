@@ -106,11 +106,32 @@ terminal 2 `bash scripts/dev-backend.sh`(一步编译 combo-cli 并以 serve 模
 :18236,等价于 `cargo build -p combo-cli` 后运行 `target/debug/combo serve
 --port 18236`),then open http://localhost:5173.
 
-**Tauri desktop mode:** the README says `npm run tauri dev`, but **that does not
-work out of the box** — there is no `tauri` npm script and `@tauri-apps/cli` is not
-installed. You need the Tauri CLI from the Rust toolchain (`cargo tauri dev`) or to
-install `@tauri-apps/cli` first. `bundle.active` is `false` in
-`src-tauri/tauri.conf.json`, so packaging is not set up.
+**Tauri desktop mode:** use `cargo tauri dev` (Rust toolchain Tauri CLI) or
+`npx tauri dev` (`@tauri-apps/cli` is a devDependency, and package.json has a
+`tauri` script). `bundle.active` is `true` — `make bundle` / `make dmg` produce
+`.app` + `.dmg`.
+
+**DMG 智能打包(`make dmg` → `scripts/build-dmg.sh`)**:对 Rust 输入
+(`crates/`、`src-tauri/{src,capabilities,icons,fallback-frontend}`、根与
+src-tauri 的 `Cargo.toml`/`tauri.conf.json`/`build.rs`/`Info.plist`/
+`entitlements.plist`、`Cargo.lock`、`vendor/`)做内容指纹(存
+`target/.dmg-rust-inputs.sha256`):未变化且 `target/release/combo-app` 存在时
+仅 `npm run build` + **`npx tauri bundle --bundles dmg`**(只打包、不跑
+cargo),前端变更不再牵连 Rust 编译;有变化则走完整 `npx tauri build`。
+配套机制(让「复用旧二进制 + 新 dist」成为完整新版本):
+① `tauri.conf.json` 的 `frontendDist` 指向稳定兜底页
+`src-tauri/fallback-frontend/`——tauri-codegen 原本会把 frontendDist 下所有
+文件 `include_bytes!` 内嵌进二进制,前端任何改动都会重编译+重链接 `combo`
+crate;真实前端只经 `bundle.resources`(`{"../dist/": "dist/"}`)随包分发,
+打包阶段现读现拷。② `src-tauri/src/lib.rs` 的 `ResourceFirstAssets` 在
+`generate_context!()` 之后替换 `Context.assets`,webview 的
+`tauri://localhost` 请求优先读磁盘 `Resources/dist`(解析逻辑与
+`resolve_static_dir` 一致:env → resource_dir → exe/cwd 探测),磁盘缺失才
+回退内嵌兜底页;磁盘模式「全有或全无」,单文件缺失不与内嵌混搭。注意:
+直接改 dist 内容仍会经 tauri-build 对 `bundle.resources` 的 rerun-if-changed
+触发一次 combo crate 重编译(仅在真正跑 cargo 的路径上,如
+`make build-desktop`);`make dmg` 快速路径完全不跑 cargo,不受影响。
+
 
 ### Env vars
 

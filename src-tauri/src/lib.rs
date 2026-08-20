@@ -1,5 +1,8 @@
 use serde::Serialize;
-use std::sync::Mutex;
+use std::borrow::Cow;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use tauri::utils::assets::{AssetKey, CspHash};
 use tauri::{Emitter, Manager};
 
 mod tray;
@@ -76,6 +79,13 @@ pub fn run() {
     // npm/rustup 等命令无法 spawn;从登录 shell 解析补全(终端/dev 模式
     // PATH 已完整,直接跳过)。须在任何后台线程 spawn 之前执行。
     combo_cli::paths::ensure_gui_path();
+    // 前端资源改为「磁盘优先」:真实前端(dist/)作为 bundle resources 随包分发,
+    // 编译期内嵌的只是稳定兜底页(fallback-frontend/)。这样前端内容不再进入
+    // cargo 指纹,`make dmg` 在只有前端变更时 cargo 是 no-op(不重编译/重链接)。
+    // 详见 `ResourceFirstAssets` 的文档说明。
+    let mut context = tauri::generate_context!();
+    let embedded = context.assets;
+    context.assets = Box::new(ResourceFirstAssets::new(embedded));
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -295,6 +305,97 @@ fn resolve_static_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
     }
 
     None
+}
+
+/// 前端资源 provider:webview 的 `tauri://localhost/*` 请求**优先读取磁盘上
+/// 随包分发的 dist**(Tauri Resources 目录 / COMBO_STATIC_DIR / 开发目录探测,
+/// 复用 `resolve_static_dir` 的解析规则),磁盘没有才回退到编译期内嵌资源
+/// (`src-tauri/fallback-frontend/` 兜底页)。
+///
+/// ## 为什么需要它
+///
+/// tauri-codegen 会把 `frontendDist` 下所有文件经 `include_bytes!` 内嵌进
+/// 二进制——前端任何改动都会使 `combo` crate 重编译 + 重链接(分钟级)。
+/// 把 `frontendDist` 指向稳定的兜底页目录后,前端内容完全脱离 cargo 指纹:
+/// - 仅前端变更:`tauri build` 里 cargo 是 no-op,只需重建前端 + 重新打包;
+/// - Rust 变更:照常重编译;
+/// - `cargo build -p combo` 也不要求先 `npm run build` 才能过编译。
+///
+/// 真实前端依旧经 `bundle.resources`(`{"../dist/": "dist/"}`)随包分发,
+/// tunnel-all 模式的静态服务(`resolve_static_dir`)与 webview 由此共用
+/// 同一份 dist,不再出现「内嵌旧版 / 资源新版」的漂移。
+struct ResourceFirstAssets {
+    /// 磁盘 dist 目录(首次解析后缓存);None = 无磁盘资源,全部走内嵌。
+    dist_dir: OnceLock<Option<PathBuf>>,
+    embedded: Box<dyn tauri::Assets<tauri::Wry>>,
+}
+
+impl ResourceFirstAssets {
+    fn new(embedded: Box<dyn tauri::Assets<tauri::Wry>>) -> Self {
+        Self {
+            dist_dir: OnceLock::new(),
+            embedded,
+        }
+    }
+
+    fn dist(&self) -> Option<&Path> {
+        // setup() 尚未执行时(极早期请求)的兜底探测;setup 会先以更权威的
+        // resolve_static_dir(env → resource_dir → cwd)覆盖初始化。
+        self.dist_dir.get_or_init(find_disk_dist_dir).as_deref()
+    }
+}
+
+/// 无 AppHandle 时的磁盘 dist 探测(按可执行文件位置 + 当前目录猜测)。
+fn find_disk_dist_dir() -> Option<PathBuf> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            // macOS .app bundle:Contents/MacOS/<bin> → Contents/Resources/dist
+            candidates.push(dir.join("../Resources/dist"));
+            // 资源与可执行文件同目录的布局
+            candidates.push(dir.join("dist"));
+            // 仓库内裸跑:target/(debug|release)/<bin> → 仓库根 dist
+            candidates.push(dir.join("../..").join("dist"));
+            candidates.push(dir.join("../../..").join("dist"));
+        }
+    }
+    for cwd in ["./dist", "../dist", "../../dist"] {
+        candidates.push(PathBuf::from(cwd));
+    }
+    candidates
+        .into_iter()
+        .find(|p| p.join("index.html").is_file())
+}
+
+impl tauri::Assets<tauri::Wry> for ResourceFirstAssets {
+    fn setup(&self, app: &tauri::App<tauri::Wry>) {
+        // setup 在事件循环开始前同步调用,先到先得;比 exe 相对路径探测更权威
+        // (resource_dir API 兼容 macOS/Windows 各自的 bundle 布局)。
+        let _ = self.dist_dir.set(resolve_static_dir(app.handle()));
+    }
+
+    fn get(&self, key: &AssetKey) -> Option<Cow<'_, [u8]>> {
+        if let Some(dir) = self.dist() {
+            // key 来自 webview URL(已去首斜杠、percent 解码),按路径分量拒绝
+            // `..` 防穿越;磁盘模式为「全有或全无」:单个文件缺失不回退内嵌,
+            // 避免新旧两套前端混搭(index.html 引用不到对应 hash 的资源)。
+            if key.as_ref().split(['/', '\\']).any(|seg| seg == "..") {
+                return None;
+            }
+            return std::fs::read(dir.join(key.as_ref()))
+                .ok()
+                .map(Cow::Owned);
+        }
+        self.embedded.get(key)
+    }
+
+    fn iter(&self) -> Box<tauri::utils::assets::AssetsIter<'_>> {
+        self.embedded.iter()
+    }
+
+    fn csp_hashes(&self, html_path: &AssetKey) -> Box<dyn Iterator<Item = CspHash<'_>> + '_> {
+        self.embedded.csp_hashes(html_path)
+    }
 }
 
 /// 初始化 tracing 日志:打包后写文件到 combo 统一数据目录的 logs/ 下,
