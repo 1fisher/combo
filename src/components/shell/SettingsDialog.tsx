@@ -49,6 +49,7 @@ import { confirmDialog } from '../../lib/confirm';
 import { listDirGrants, revokeDirGrant, getTranscribeStatus, setTranscribeModel, getSpeechStatus, setSpeechEnabled, setSpeechModel, setSpeechSpeed, prepareSpeech, streamSpeech } from '../../lib/api';
 import { waitSpeechModelReady } from '../../lib/speech';
 import { pcm16ToAudioBuffer } from '../../lib/pcm';
+import { getSharedAudioContext } from '../../lib/sfx';
 import type { Api } from '../../lib/api/types';
 import { cn } from '../../lib/utils';
 
@@ -1427,8 +1428,13 @@ function TtsSection({ open }: { open: boolean }) {
     try {
       await waitSpeechModelReady();
       void qc.invalidateQueries({ queryKey: ['tts-status'] });
-      const ctx = new AudioContext();
-      if (ctx.state === 'suspended') await ctx.resume().catch(() => {});
+      // 复用共享 AudioContext:点击本就在手势内可直接出声,且不新增
+      // WebKit 并发上下文名额(多次试听自建+关闭上下文有数量上限风险)
+      const ctx = getSharedAudioContext();
+      if (!ctx) {
+        setError('当前环境不支持音频播放');
+        return;
+      }
       let nextAt = 0;
       const sources = new Set<AudioBufferSourceNode>();
       await streamSpeech(
@@ -1449,12 +1455,11 @@ function TtsSection({ open }: { open: boolean }) {
           },
         }
       );
-      // 等全部片段播完再关闭 AudioContext
+      // 等全部片段播完再结束试听(共享上下文不关闭,音效/通知仍在用)
       await new Promise<void>((resolve) => {
         const check = () => (sources.size === 0 ? resolve() : setTimeout(check, 80));
         check();
       });
-      void ctx.close().catch(() => {});
     } catch (e) {
       setError(e instanceof Error ? e.message : '试听失败');
     } finally {

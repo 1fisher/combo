@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 /**
  * sfx 模块会缓存模块级 AudioContext,各用例用 vi.resetModules + 动态 import
@@ -135,5 +135,85 @@ describe('sfx', () => {
     expect(oscs.map((o) => o.type)).toEqual(['triangle', 'triangle']);
     expect(oscs[0].frequency.setValueAtTime).toHaveBeenCalledWith(739.99, 0);
     expect(oscs[1].frequency.setValueAtTime).toHaveBeenCalledWith(987.77, 0.15);
+  });
+});
+
+/**
+ * 共享 AudioContext 的两个关键行为:
+ * 1. 手势解锁 —— WebKit 自动播放策略要求 AudioContext 在用户手势内启动,
+ *    SSE 触发的音效(combo/任务完成)不在手势内,必须由首个 pointerdown/
+ *    keydown 手势同步 resume 解锁;
+ * 2. 自愈重建 —— 上下文 closed/中断卡死后,下次调用必须能拿到新实例。
+ * 用独立的 Fake(state 起始 suspended、resume 异步兑现翻转状态)模拟真实 WebKit。
+ */
+
+class SuspendedAudioContext {
+  static instances: SuspendedAudioContext[] = [];
+  state: AudioContextState = 'suspended';
+  // 与真实 WebKit 行为一致:状态在 promise 异步兑现时才翻转
+  resume: Mock<() => Promise<void>> = vi.fn(() =>
+    Promise.resolve().then(() => {
+      this.state = 'running';
+    })
+  );
+  close = vi.fn(async () => {
+    this.state = 'closed';
+  });
+  constructor() {
+    SuspendedAudioContext.instances.push(this);
+  }
+}
+
+async function loadSfxSuspended() {
+  vi.resetModules();
+  SuspendedAudioContext.instances = [];
+  vi.stubGlobal('AudioContext', SuspendedAudioContext);
+  return await import('./sfx');
+}
+
+describe('sfx 共享 AudioContext', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('手势解锁:首个 pointerdown 手势内 resume,成功后摘除监听不再重复解锁', async () => {
+    const { getSharedAudioContext } = await loadSfxSuspended();
+    // 任意时刻取用都拿到同一实例(全应用唯一播放上下文)
+    window.dispatchEvent(new Event('pointerdown'));
+    const c = getSharedAudioContext();
+    expect(c).toBeInstanceOf(SuspendedAudioContext);
+    await vi.waitFor(() => expect(c?.state).toBe('running'));
+    // 解锁成功后监听已摘除:后续手势与取用不再触发 resume
+    const fake = c as unknown as SuspendedAudioContext;
+    fake.resume.mockClear();
+    window.dispatchEvent(new Event('pointerdown'));
+    window.dispatchEvent(new Event('keydown'));
+    expect(getSharedAudioContext()).toBe(c);
+    expect(fake.resume).not.toHaveBeenCalled();
+  });
+
+  it('未解锁前调用也安全:suspended 上下文上照常调度,不抛错', async () => {
+    const { getSharedAudioContext, playNotifyDone } = await loadSfxSuspended();
+    const c = getSharedAudioContext();
+    expect(c?.state).toBe('suspended');
+    expect(() => playNotifyDone()).not.toThrow();
+  });
+
+  it('自愈重建:上下文 closed 后丢弃缓存,下次调用拿到新实例', async () => {
+    const { getSharedAudioContext } = await loadSfxSuspended();
+    const c1 = getSharedAudioContext();
+    (c1 as unknown as { state: AudioContextState }).state = 'closed';
+    const c2 = getSharedAudioContext();
+    expect(c2).not.toBe(c1);
+    expect(SuspendedAudioContext.instances).toHaveLength(2);
+  });
+
+  it('自愈重建:interrupted(WebKit 输出中断)同样重建', async () => {
+    const { getSharedAudioContext } = await loadSfxSuspended();
+    const c1 = getSharedAudioContext();
+    // Safari 系专属状态,TS 类型未收录,按运行时字符串写入
+    (c1 as unknown as { state: string }).state = 'interrupted';
+    const c2 = getSharedAudioContext();
+    expect(c2).not.toBe(c1);
   });
 });

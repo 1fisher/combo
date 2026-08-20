@@ -99,7 +99,8 @@ class FakeAudioContext {
       exponentialRampToValueAtTime: ReturnType<typeof vi.fn>;
     };
   }> = [];
-  resume = vi.fn();
+  // 真实 AudioContext.resume 返回 Promise(共享上下文会 .catch 挂起态恢复)
+  resume = vi.fn(() => Promise.resolve());
 
   constructor() {
     FakeAudioContext.instances.push(this);

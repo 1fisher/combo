@@ -1,4 +1,6 @@
 /** 录音音频处理:Float32 采样 → 16kHz 单声道 PCM16(供本地流式 ASR 推流)。 */
+import { getSharedAudioContext } from './sfx';
+
 
 /** Float32 采样 → PCM16 小端(削波 clamp 到 [-1, 1])。 */
 export function float32ToPcm16(input: Float32Array): Int16Array {
@@ -53,20 +55,6 @@ export function mergeDictationTail(
   return { confirmed: finalized, partial: stale };
 }
 
-/** 听写提示音共用的 AudioContext(懒创建,零资源文件依赖)。 */
-let chimeCtx: AudioContext | null = null;
-
-function chimeContext(): AudioContext | null {
-  try {
-    if (!chimeCtx) chimeCtx = new AudioContext();
-    // 首次需在用户手势内 resume,否则浏览器 autoplay 策略会保持挂起
-    if (chimeCtx.state === 'suspended') void chimeCtx.resume();
-    return chimeCtx;
-  } catch {
-    return null; // 环境不支持时静默降级
-  }
-}
-
 /**
  * 合成一个轻盈的气泡音:短促正弦 + 指数频率滑动,模拟水泡「啵」。
  * 上滑(气泡上浮腔体变紧 → 升调)、下滑(收尾降调)由 slide 控制;
@@ -91,10 +79,11 @@ function playBubbleTone(ctx: AudioContext, freq: number, startAt: number, slide:
  * 语音输入开启/关闭提示音(Web Audio 合成,无音频资源):
  * 轻盈的气泡声 —— 高频短促正弦 + 频率指数滑动模拟水泡「啵」。
  * 开启 = 两颗依次升调的上浮气泡,关闭 = 两颗依次降调的下沉气泡,
- * 方向感清晰;环境不支持时静默。
+ * 方向感清晰;复用 sfx 的共享 AudioContext(调用点本就在用户手势内,
+ * 天然满足自动播放策略),环境不支持时静默。
  */
 export function playDictationChime(kind: 'start' | 'stop'): void {
-  const ctx = chimeContext();
+  const ctx = getSharedAudioContext();
   if (!ctx) return;
   const t = ctx.currentTime + 0.02;
   const notes = kind === 'start' ? [620, 840] : [840, 620];

@@ -5,6 +5,7 @@ import { useAgentStore } from '../stores/agentStore';
 import { splitSentences } from '../lib/ttsSplit';
 import { waitSpeechModelReady } from '../lib/speech';
 import { pcm16ToAudioBuffer } from '../lib/pcm';
+import { getSharedAudioContext } from '../lib/sfx';
 
 /** 待处理缓冲上限(字符):防止超长未成句内容(如大段代码块)无限累积。 */
 const MAX_PENDING_CHARS = 4000;
@@ -56,7 +57,6 @@ export function useSpeechOutput() {
     s.activeSessionId ? s.bySession[s.activeSessionId]?.run : undefined
   );
 
-  const ctxRef = useRef<AudioContext | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   /** 已排期/播放中的音频源(打断时全部停止)。 */
   const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
@@ -93,12 +93,14 @@ export function useSpeechOutput() {
     setModelProgress(null);
   }, []);
 
-  /** 收到流式片段:立即解码并按播放时间轴无缝排期(不等上一段播完)。 */
+  /** 收到流式片段:立即解码并按播放时间轴无缝排期(不等上一段播完)。
+   * 播放走 sfx 的共享 AudioContext(手势解锁后 SSE 触发的播放同样可用,
+   * 且全应用只有一个播放上下文,不占 WebKit 的并发名额)。 */
   const scheduleChunk = useCallback(
     (pcm: ArrayBuffer, sampleRate: number, hard: boolean) => {
       if (pcm.byteLength === 0 || sampleRate <= 0) return;
-      const ctx = ctxRef.current ?? (ctxRef.current = new AudioContext());
-      if (ctx.state === 'suspended') void ctx.resume().catch(() => {});
+      const ctx = getSharedAudioContext();
+      if (!ctx) return;
       const buffer = pcm16ToAudioBuffer(ctx, pcm, sampleRate);
       const src = ctx.createBufferSource();
       src.buffer = buffer;
@@ -254,12 +256,10 @@ export function useSpeechOutput() {
     for (const s of sentences) speak(s);
   }, [run, enabled, messages, speak, stop]);
 
-  // 卸载:清理
+  // 卸载:清理(共享 AudioContext 不在此关闭 —— 音效/通知仍要用它)
   useEffect(() => {
     return () => {
       stop();
-      void ctxRef.current?.close().catch(() => {});
-      ctxRef.current = null;
     };
   }, [stop]);
 

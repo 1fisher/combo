@@ -6,8 +6,9 @@
  * - playNotifyDone:任务完成提示音(双音上行,轻快);
  * - playNotifyAttention:需要交互的提醒音(双短音,略急促)。
  *
- * AudioContext 惰性创建并在调用时 resume(浏览器自动播放策略:
- * 用户发送消息等手势之后 ctx 已解锁);环境不支持(jsdom/旧内核)时静默跳过。
+ * AudioContext 惰性创建并在调用时 resume(浏览器自动播放策略:见下方
+ * armGestureUnlock,由首个用户手势统一解锁);上下文 closed/interrupted
+ * 时自愈重建。环境不支持(jsdom/旧内核)时静默跳过。
  * 播放与否由调用方按 uiPreferencesStore 的开关判定,本模块不读 store,便于测试。
  */
 
@@ -16,8 +17,10 @@ let ctx: AudioContext | null = null;
 let noiseBuf: AudioBuffer | null = null;
 
 /**
- * 共享 AudioContext:音效与通知语音播报复用同一个(惰性创建、调用时 resume),
- * 一次用户手势解锁后两边的播放都不再受自动播放策略限制。
+ * 共享 AudioContext:音效、听写提示音与 TTS 语音播报/朗读复用同一个
+ * (惰性创建、调用时 resume)。**全应用只保留这一个播放上下文**——
+ * WebKit 对同页同时运行的 AudioContext 有数量上限,各处自建会互相挤占,
+ * 超限的上下文会被静默拒绝启动(表现为「特效/提示音全部无声」)。
  * 环境不支持(jsdom/旧内核)时返回 null,调用方各自静默跳过。
  */
 export function getSharedAudioContext(): AudioContext | null {
@@ -27,13 +30,54 @@ export function getSharedAudioContext(): AudioContext | null {
     (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!AC) return null;
   try {
-    if (!ctx) ctx = new AC();
+    // 自愈重建:close 只会来自异常路径;WebKit 在音频输出中断(切换蓝牙
+    // 设备/系统睡眠唤醒)后可能把上下文永久卡在 interrupted —— 两者都
+    // 无法再出声,直接丢弃重建。
+    if (!ctx || ctx.state === 'closed' || (ctx.state as string) === 'interrupted') {
+      ctx = new AC();
+    }
     if (ctx.state === 'suspended') void ctx.resume().catch(() => {});
     return ctx;
   } catch {
+    // 构造失败(并发上限等):丢弃缓存,下次调用再试
+    ctx = null;
     return null;
   }
 }
+
+/** 手势解锁是否已挂监听(幂等守卫) */
+let gestureUnlockArmed = false;
+
+/**
+ * 首个用户手势内解锁共享 AudioContext。WebKit(WKWebView/Safari)的自动
+ * 播放策略要求 AudioContext 在用户手势内启动:combo/任务完成等音效由
+ * SSE 事件触发(不在手势内),上下文会被锁在 suspended 态、resume 被
+ * 无声拒绝。这里挂一次性捕获监听,在首个 pointerdown/keydown 手势里
+ * 同步发起 resume(resume 必须在手势回调内调用),成功转 running 后
+ * 摘除监听 —— 之后整个应用生命周期的程序化播放都不再受限。
+ */
+function armGestureUnlock(): void {
+  if (typeof window === 'undefined' || gestureUnlockArmed) return;
+  gestureUnlockArmed = true;
+  const events = ['pointerdown', 'keydown'] as const;
+  const detach = () => events.forEach((ev) => window.removeEventListener(ev, onGesture, true));
+  const onGesture = () => {
+    const c = getSharedAudioContext();
+    if (!c) return detach(); // 环境不支持音频,无需再等手势
+    if (c.state === 'running') return detach();
+    void c.resume()
+      .then(() => {
+        if (c.state === 'running') detach();
+      })
+      .catch(() => {
+        /* 本次手势未能解锁:保留监听,下一个手势再试 */
+      });
+  };
+  events.forEach((ev) => window.addEventListener(ev, onGesture, true));
+}
+
+// 模块加载即挂手势监听:本模块随应用入口链引入,首个用户交互即可解锁
+armGestureUnlock();
 
 /** 所有音效共用的总音量,避免突兀 */
 const MASTER_GAIN = 0.5;
