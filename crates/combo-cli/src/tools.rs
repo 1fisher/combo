@@ -777,7 +777,7 @@ fn fallback_search(
 fn bash_tool(ws: PathBuf) -> DynamicTool {
     DynamicTool::new(
         "bash",
-        "在 workspace 根目录执行终端命令(shell 命令),返回标准输出与标准错误。参数:command(要执行的完整命令,支持管道/重定向/多命令),timeout(超时秒数,默认30,超时后进程会被终止)。注意:命令在 workspace 目录下运行,每次调用都是独立的新 shell,不保留上次的 cd 或环境变量。",
+        "在 workspace 根目录执行终端命令(shell 命令),返回标准输出与标准错误。参数:command(要执行的完整命令,支持管道/重定向/多命令),timeout(超时秒数,默认30,超时后进程会被终止)。注意:命令在 workspace 目录下运行,每次调用都是独立的新 shell,不保留上次的 cd 或环境变量。搜索优先用 rg 而非 grep/find:rg 速度极快、默认递归并遵循 .gitignore(rg -n 'pattern' path;rg --files | rg name),rg 未安装时才回退 grep -rn / find。",
         json!({
             "type": "object",
             "properties": {
