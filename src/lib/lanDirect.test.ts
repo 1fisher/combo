@@ -48,6 +48,36 @@ describe('lanDirect', () => {
     expect(getLanUrl()).toBeNull();
   });
 
+  it('rejects public hosts (open redirect guard)', () => {
+    // 公网/域名地址即使协议合法也拒绝:?lan= 参数可被伪造,
+    // 放行任意站点会把扫码用户重定向到钓鱼页
+    setLanUrl('https://evil.example.com');
+    expect(getLanUrl()).toBeNull();
+    setLanUrl('http://8.8.8.8:18236');
+    expect(getLanUrl()).toBeNull();
+    setLanUrl('http://172.32.0.1'); // 172 只允许 16-31 段
+    expect(getLanUrl()).toBeNull();
+  });
+
+  it('accepts private / loopback / CGNAT hosts', () => {
+    setLanUrl('http://10.0.0.2:18236');
+    expect(getLanUrl()).toBe('http://10.0.0.2:18236');
+    clearLanUrl();
+    setLanUrl('http://127.0.0.1:18236');
+    expect(getLanUrl()).toBe('http://127.0.0.1:18236');
+    clearLanUrl();
+    setLanUrl('http://100.64.0.5:18236'); // Tailscale CGNAT 段
+    expect(getLanUrl()).toBe('http://100.64.0.5:18236');
+  });
+
+  it('does not redirect to a public lan url', () => {
+    stubLocation({});
+    localStorage.setItem('combo.lanUrl', 'https://evil.example.com'); // 绕过写入校验模拟旧数据
+    const redirected = maybeRedirectToLan('tok123');
+    expect(redirected).toBe(false);
+    expect(window.location.replace).not.toHaveBeenCalled();
+  });
+
   it('does not redirect to a javascript: lan url', () => {
     stubLocation({});
     setLanUrl('javascript:alert(document.cookie)');

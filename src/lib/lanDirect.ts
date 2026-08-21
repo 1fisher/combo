@@ -15,18 +15,38 @@ const LAN_URL_KEY = 'combo.lanUrl';
 const LAN_TRIED_KEY = 'combo.lanTried';
 
 /**
- * 局域网直连地址必须为 http/https。
- * 该值来自二维码 `?lan=` 参数(敌人可伪造扫码页),若放任 `javascript:` 等
- * 协议进入 `window.location.replace`,会直接执行任意脚本(XSS),故写入与
- * 跳转两处都做协议白名单校验。
+ * 局域网直连地址白名单:必须为 http/https,且主机为私有网段/本机地址。
+ * 该值来自二维码 `?lan=` 参数(攻击者可伪造扫码页),若放任任意 http/https
+ * 地址进入 `window.location.replace`,会把扫码用户重定向到任意站点
+ * (开放重定向);`javascript:` 等可执行协议则直接 XSS。故写入与跳转两处
+ * 都做双重校验:协议白名单 + 主机限定 RFC1918 私有网段 / loopback /
+ * 链路本地 / CGNAT(Tailscale 等 100.64.0.0/10)/ mDNS 域名。
  */
-function isHttpUrl(value: string): boolean {
+function isAllowedLanUrl(value: string): boolean {
+  let host: string;
   try {
-    const protocol = new URL(value).protocol;
-    return protocol === 'http:' || protocol === 'https:';
+    const u = new URL(value);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return false;
+    host = u.hostname.toLowerCase();
   } catch {
     return false;
   }
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
+  if (host === '::1' || host.startsWith('fe80:')) return true;
+  // 仅接受 IPv4 字面量做私网判断;域名一律拒绝(DNS 可指向公网钓鱼站)
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!m) return false;
+  const octets = m.slice(1).map(Number);
+  if (octets.some((n) => n > 255)) return false;
+  const [a, b] = [octets[0], octets[1]];
+  return (
+    a === 10 ||
+    a === 127 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 169 && b === 254) ||
+    (a === 100 && b >= 64 && b <= 127)
+  );
 }
 
 export function getLanUrl(): string | null {
@@ -40,7 +60,7 @@ export function getLanUrl(): string | null {
 export function setLanUrl(url: string): void {
   try {
     const clean = url.trim().replace(/\/$/, '');
-    if (clean && isHttpUrl(clean)) localStorage.setItem(LAN_URL_KEY, clean);
+    if (clean && isAllowedLanUrl(clean)) localStorage.setItem(LAN_URL_KEY, clean);
   } catch {
     /* 忽略存储不可用 */
   }
@@ -114,8 +134,9 @@ export function maybeRedirectToLan(token: string | null): boolean {
   if (typeof window === 'undefined') return false;
   const lan = getLanUrl();
   if (!lan || !token) return false;
-  // 协议白名单(存储值同样可能是伪造的):拒绝 javascript: 等可执行/钓鱼协议
-  if (!isHttpUrl(lan)) return false;
+  // 协议 + 主机白名单(存储值同样可能是伪造的):仅允许 http(s) 私网地址,
+  // 拒绝 javascript: 等可执行协议与公网站点(防开放重定向)。
+  if (!isAllowedLanUrl(lan)) return false;
   let sameOrigin = false;
   try {
     sameOrigin = window.location.origin === lan;

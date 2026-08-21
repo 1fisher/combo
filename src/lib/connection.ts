@@ -57,12 +57,41 @@ export function clearExternalUrl(): void {
 
 // ---------- 代理地址 ----------
 
+/**
+ * 规范化并校验代理地址:仅接受 http/https(裸 `host[:port]` 默认补 `http://`),
+ * 其他协议(`javascript:`/`data:`/`file:` 等)一律拒绝。代理地址会被拼进
+ * `<img src>`/`<iframe src>`/fetch 等所有后端请求 URL,而它属不可信输入
+ * (设置界面手动输入 → localStorage 持久化),必须在写入边界收敛,
+ * 避免任意 DOM 文本流入 URL 上下文(CodeQL js/xss / xss-through-dom)。
+ *
+ * @returns 规范化后的地址;`''` 表示显式清空;`null` 表示非法(拒绝写入)
+ */
+export function normalizeHttpBaseUrl(url: string): string | null {
+  const trimmed = url.trim().replace(/\/+$/, '');
+  if (!trimmed) return '';
+  let candidate = trimmed;
+  if (!/^https?:\/\//i.test(candidate)) {
+    // 已带其他协议前缀(如 javascript:、data:)直接拒绝;裸 host[:port] 补 http://
+    if (/^[a-z][a-z0-9+.-]*:/i.test(candidate)) return null;
+    candidate = `http://${candidate}`;
+  }
+  try {
+    const u = new URL(candidate);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    return `${u.protocol}//${u.host}${u.pathname.replace(/\/$/, '')}`;
+  } catch {
+    return null;
+  }
+}
+
 export function getProxyBaseUrl(): string {
   return proxyBaseUrl;
 }
 
 export function setProxyBaseUrl(url: string): void {
-  proxyBaseUrl = url.replace(/\/$/, '');
+  const clean = normalizeHttpBaseUrl(url);
+  if (clean === null) return; // 非法协议:拒绝写入,保留现有值
+  proxyBaseUrl = clean;
 }
 
 let resolvingBase: Promise<string> | null = null;
@@ -96,10 +125,10 @@ export function getProxyUrlOverride(): string | null {
   }
 }
 
-/** 保存代理地址覆盖并立即生效。 */
+/** 保存代理地址覆盖并立即生效。非法协议(非 http/https)拒绝写入。 */
 export function setProxyUrlOverride(url: string): void {
-  const clean = url.trim().replace(/\/$/, '');
-  if (!clean) return;
+  const clean = normalizeHttpBaseUrl(url);
+  if (!clean) return; // 空串/非法值都不写入(清空走 clearProxyUrlOverride)
   try {
     localStorage.setItem(PROXY_OVERRIDE_KEY, clean);
   } catch {
@@ -175,7 +204,8 @@ export async function findLocalComboCli(): Promise<string | null> {
 
 export async function resolveProxyBaseUrl(): Promise<string> {
   // 运行时覆盖优先:前后端分离部署时用户可手动指向远端 proxy
-  const override = getProxyUrlOverride();
+  // (历史版本写入的值未经白名单校验,读取时再收敛一次)
+  const override = normalizeHttpBaseUrl(getProxyUrlOverride() ?? '');
   if (override) return override;
   const fromEnv = import.meta.env.VITE_PROXY_URL as string | undefined;
   if (fromEnv) return fromEnv.replace(/\/$/, '');
