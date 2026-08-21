@@ -4,1845 +4,3785 @@
  */
 
 export type paths = {
-  "/config": {
-    get: {
-      responses: {
-        /** OK */
-        200: {
-          schema: { [key: string]: unknown };
+    "/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
+        /** Get server config */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/control": {
-    post: {
-      parameters: {
-        body: {
-          /** Control command (e.g. shutdown) */
-          request: definitions["proto.ServerControl"];
+    "/control": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Bad Request */
-        400: {
-          schema: definitions["proto.Error"];
+        get?: never;
+        put?: never;
+        /** Send server control command */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            /** @description Control command (e.g. shutdown) */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["proto.ServerControl"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/health": {
-    get: {
-      responses: {
-        /** OK */
-        200: unknown;
-      };
+    "/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Health check */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/version": {
-    get: {
-      responses: {
-        /** OK */
-        200: {
-          schema: definitions["proto.VersionInfo"];
+    "/version": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
+        /** Get server version */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.VersionInfo"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces": {
-    get: {
-      responses: {
-        /** OK */
-        200: {
-          schema: definitions["proto.Workspace"][];
+    "/workspaces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
+        /** List workspaces */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Workspace"][];
+                    };
+                };
+            };
+        };
+        put?: never;
+        /** Create workspace */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            /** @description Workspace creation params */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["proto.Workspace"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Workspace"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
+        };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-    post: {
-      parameters: {
-        body: {
-          /** Workspace creation params */
-          request: definitions["proto.Workspace"];
+    "/workspaces/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: definitions["proto.Workspace"];
+        /** Get workspace */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Workspace"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Bad Request */
-        400: {
-          schema: definitions["proto.Error"];
+        put?: never;
+        post?: never;
+        /** Delete workspace */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}": {
-    get: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/agent": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: definitions["proto.Workspace"];
+        /** Get agent info */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.AgentInfo"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
+        put?: never;
+        /** Send message to agent */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            /** @description Agent message */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["proto.AgentMessage"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-    delete: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/agent/default-small-model": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
+        /** Get default small model */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Provider ID */
+                    provider_id?: string;
+                };
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-      };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/agent": {
-    get: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/agent/init": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: definitions["proto.AgentInfo"];
+        get?: never;
+        put?: never;
+        /** Initialize agent */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/agent/sessions/{sid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-        body: {
-          /** Agent message */
-          request: definitions["proto.AgentMessage"];
+        /** Get agent session */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                    /** @description Session ID */
+                    sid: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.AgentSession"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Bad Request */
-        400: {
-          schema: definitions["proto.Error"];
-        };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/agent/default-small-model": {
-    get: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/agent/sessions/{sid}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-        query: {
-          /** Provider ID */
-          provider_id?: string;
+        get?: never;
+        put?: never;
+        /** Cancel agent session */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                    /** @description Session ID */
+                    sid: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: { [key: string]: unknown };
-        };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/agent/init": {
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/agent/sessions/{sid}/prompts/clear": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
+        get?: never;
+        put?: never;
+        /** Clear prompt queue */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                    /** @description Session ID */
+                    sid: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/agent/sessions/{sid}": {
-    get: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
-          /** Session ID */
-          sid: string;
+    "/workspaces/{id}/agent/sessions/{sid}/prompts/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: definitions["proto.AgentSession"];
+        /** List queued prompts */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                    /** @description Session ID */
+                    sid: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": string[];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/agent/sessions/{sid}/cancel": {
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
-          /** Session ID */
-          sid: string;
+    "/workspaces/{id}/agent/sessions/{sid}/prompts/queued": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
+        /** Get queued prompt status */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                    /** @description Session ID */
+                    sid: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/agent/sessions/{sid}/prompts/clear": {
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
-          /** Session ID */
-          sid: string;
+    "/workspaces/{id}/agent/sessions/{sid}/summarize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
+        get?: never;
+        put?: never;
+        /** Summarize session */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                    /** @description Session ID */
+                    sid: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/agent/sessions/{sid}/prompts/list": {
-    get: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
-          /** Session ID */
-          sid: string;
+    "/workspaces/{id}/agent/update": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: string[];
+        get?: never;
+        put?: never;
+        /** Update agent */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/agent/sessions/{sid}/prompts/queued": {
-    get: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
-          /** Session ID */
-          sid: string;
+    "/workspaces/{id}/config": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: { [key: string]: unknown };
+        /** Get workspace config */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/agent/sessions/{sid}/summarize": {
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
-          /** Session ID */
-          sid: string;
+    "/workspaces/{id}/config/compact": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
+        get?: never;
+        put?: never;
+        /** Set compact mode */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            /** @description Config compact request */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["proto.ConfigCompactRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/agent/update": {
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/config/import-copilot": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
+        get?: never;
+        put?: never;
+        /** Import Copilot credentials */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.ImportCopilotResponse"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/config": {
-    get: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/config/model": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: { [key: string]: unknown };
+        get?: never;
+        put?: never;
+        /** Set the preferred model */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            /** @description Config model request */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["proto.ConfigModelRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/config/compact": {
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/config/provider-key": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-        body: {
-          /** Config compact request */
-          request: definitions["proto.ConfigCompactRequest"];
+        get?: never;
+        put?: never;
+        /** Set provider API key */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            /** @description Config provider key request */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["proto.ConfigProviderKeyRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Bad Request */
-        400: {
-          schema: definitions["proto.Error"];
-        };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/config/import-copilot": {
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/config/refresh-oauth": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: definitions["proto.ImportCopilotResponse"];
+        get?: never;
+        put?: never;
+        /** Refresh OAuth token */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            /** @description Refresh OAuth request */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["proto.ConfigRefreshOAuthRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/config/model": {
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/config/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-        body: {
-          /** Config model request */
-          request: definitions["proto.ConfigModelRequest"];
+        get?: never;
+        put?: never;
+        /** Remove a config field */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            /** @description Config remove request */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["proto.ConfigRemoveRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Bad Request */
-        400: {
-          schema: definitions["proto.Error"];
-        };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/config/provider-key": {
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/config/set": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-        body: {
-          /** Config provider key request */
-          request: definitions["proto.ConfigProviderKeyRequest"];
+        get?: never;
+        put?: never;
+        /** Set a config field */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            /** @description Config set request */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["proto.ConfigSetRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Bad Request */
-        400: {
-          schema: definitions["proto.Error"];
-        };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/config/refresh-oauth": {
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-        body: {
-          /** Refresh OAuth request */
-          request: definitions["proto.ConfigRefreshOAuthRequest"];
+        /** Stream workspace events (SSE) */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/event-stream": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "text/event-stream": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Bad Request */
-        400: {
-          schema: definitions["proto.Error"];
-        };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/config/remove": {
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/filetracker/lastread": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-        body: {
-          /** Config remove request */
-          request: definitions["proto.ConfigRemoveRequest"];
+        /** Get last read time for file */
+        get: {
+            parameters: {
+                query: {
+                    /** @description Session ID */
+                    session_id?: string;
+                    /** @description File path */
+                    path: string;
+                };
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Bad Request */
-        400: {
-          schema: definitions["proto.Error"];
-        };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/config/set": {
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/filetracker/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-        body: {
-          /** Config set request */
-          request: definitions["proto.ConfigSetRequest"];
+        get?: never;
+        put?: never;
+        /** Record file read */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            /** @description File tracker read request */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["proto.FileTrackerReadRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Bad Request */
-        400: {
-          schema: definitions["proto.Error"];
-        };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/events": {
-    get: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/lsps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
+        /** List LSP clients */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: components["schemas"]["proto.LSPClientInfo"];
+                        };
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/filetracker/lastread": {
-    get: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/lsps/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-        query: {
-          /** Session ID */
-          session_id?: string;
-          /** File path */
-          path: string;
+        get?: never;
+        put?: never;
+        /** Start LSP server */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            /** @description LSP start request */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["proto.LSPStartRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: { [key: string]: unknown };
-        };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/filetracker/read": {
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/lsps/stop": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-        body: {
-          /** File tracker read request */
-          request: definitions["proto.FileTrackerReadRequest"];
+        get?: never;
+        put?: never;
+        /** Stop all LSP servers */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Bad Request */
-        400: {
-          schema: definitions["proto.Error"];
-        };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/lsps": {
-    get: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/lsps/{lsp}/diagnostics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: { [key: string]: definitions["proto.LSPClientInfo"] };
+        /** Get LSP diagnostics */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                    /** @description LSP client name */
+                    lsp: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/lsps/start": {
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/mcp/docker/disable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-        body: {
-          /** LSP start request */
-          request: definitions["proto.LSPStartRequest"];
+        get?: never;
+        put?: never;
+        /** Disable Docker MCP */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Bad Request */
-        400: {
-          schema: definitions["proto.Error"];
-        };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/lsps/stop": {
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/mcp/docker/enable": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
+        get?: never;
+        put?: never;
+        /** Enable Docker MCP */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/lsps/{lsp}/diagnostics": {
-    get: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
-          /** LSP client name */
-          lsp: string;
+    "/workspaces/{id}/mcp/get-prompt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: { [key: string]: unknown };
+        get?: never;
+        put?: never;
+        /** Get MCP prompt */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            /** @description MCP get prompt request */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["proto.MCPGetPromptRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.MCPGetPromptResponse"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/mcp/docker/disable": {
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/mcp/read-resource": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
+        get?: never;
+        put?: never;
+        /** Read MCP resource */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            /** @description MCP read resource request */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["proto.MCPReadResourceRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/mcp/docker/enable": {
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/mcp/refresh-prompts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
+        get?: never;
+        put?: never;
+        /** Refresh MCP prompts */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: components["requestBodies"]["proto.MCPNameRequest"];
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/mcp/get-prompt": {
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/mcp/refresh-resources": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-        body: {
-          /** MCP get prompt request */
-          request: definitions["proto.MCPGetPromptRequest"];
+        get?: never;
+        put?: never;
+        /** Refresh MCP resources */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: components["requestBodies"]["proto.MCPNameRequest"];
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: definitions["proto.MCPGetPromptResponse"];
-        };
-        /** Bad Request */
-        400: {
-          schema: definitions["proto.Error"];
-        };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/mcp/read-resource": {
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/mcp/refresh-tools": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-        body: {
-          /** MCP read resource request */
-          request: definitions["proto.MCPReadResourceRequest"];
+        get?: never;
+        put?: never;
+        /** Refresh MCP tools */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody: components["requestBodies"]["proto.MCPNameRequest"];
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: { [key: string]: unknown };
-        };
-        /** Bad Request */
-        400: {
-          schema: definitions["proto.Error"];
-        };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/mcp/refresh-prompts": {
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/mcp/states": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-        body: {
-          /** MCP name request */
-          request: definitions["proto.MCPNameRequest"];
+        /** Get MCP client states */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            [key: string]: components["schemas"]["proto.MCPClientInfo"];
+                        };
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Bad Request */
-        400: {
-          schema: definitions["proto.Error"];
-        };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/mcp/refresh-resources": {
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/messages/user": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-        body: {
-          /** MCP name request */
-          request: definitions["proto.MCPNameRequest"];
+        /** Get all user messages for workspace */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["github_com_charmbracelet_crush_internal_proto.Message"][];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Bad Request */
-        400: {
-          schema: definitions["proto.Error"];
-        };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/mcp/refresh-tools": {
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/permissions/grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-        body: {
-          /** MCP name request */
-          request: definitions["proto.MCPNameRequest"];
+        get?: never;
+        put?: never;
+        /** Grant permission */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            /** @description Permission grant */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["proto.PermissionGrant"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Bad Request */
-        400: {
-          schema: definitions["proto.Error"];
-        };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/mcp/states": {
-    get: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/permissions/skip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: { [key: string]: definitions["proto.MCPClientInfo"] };
+        /** Get skip permissions status */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.PermissionSkipRequest"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
+        put?: never;
+        /** Set skip permissions */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            /** @description Permission skip request */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["proto.PermissionSkipRequest"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/messages/user": {
-    get: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/project/init": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: definitions["github_com_charmbracelet_crush_internal_proto.Message"][];
+        get?: never;
+        put?: never;
+        /** Mark project as initialized */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/permissions/grant": {
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/project/init-prompt": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-        body: {
-          /** Permission grant */
-          request: definitions["proto.PermissionGrant"];
+        /** Get project initialization prompt */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.ProjectInitPromptResponse"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Bad Request */
-        400: {
-          schema: definitions["proto.Error"];
-        };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/permissions/skip": {
-    get: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/project/needs-init": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: definitions["proto.PermissionSkipRequest"];
+        /** Check if project needs initialization */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.ProjectNeedsInitResponse"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-        body: {
-          /** Permission skip request */
-          request: definitions["proto.PermissionSkipRequest"];
+        /** Get workspace providers */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": Record<string, never>;
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Bad Request */
-        400: {
-          schema: definitions["proto.Error"];
-        };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/project/init": {
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
+        /** List sessions */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Session"][];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
+        put?: never;
+        /** Create session */
+        post: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                };
+                cookie?: never;
+            };
+            /** @description Session creation params (title) */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["proto.Session"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Session"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-      };
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/project/init-prompt": {
-    get: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/sessions/{sid}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: definitions["proto.ProjectInitPromptResponse"];
+        /** Get session */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                    /** @description Session ID */
+                    sid: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Session"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
+        /** Update session */
+        put: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                    /** @description Session ID */
+                    sid: string;
+                };
+                cookie?: never;
+            };
+            /** @description Updated session */
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["proto.Session"];
+                };
+            };
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Session"];
+                    };
+                };
+                /** @description Bad Request */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
+        post?: never;
+        /** Delete session */
+        delete: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                    /** @description Session ID */
+                    sid: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "*/*": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-      };
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/project/needs-init": {
-    get: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/sessions/{sid}/filetracker/files": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: definitions["proto.ProjectNeedsInitResponse"];
+        /** List tracked files for session */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                    /** @description Session ID */
+                    sid: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": string[];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/providers": {
-    get: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/sessions/{sid}/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: { [key: string]: unknown };
+        /** Get session history */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                    /** @description Session ID */
+                    sid: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.File"][];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/sessions": {
-    get: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/sessions/{sid}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: definitions["proto.Session"][];
+        /** Get session messages */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                    /** @description Session ID */
+                    sid: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["github_com_charmbracelet_crush_internal_proto.Message"][];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-    post: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
+    "/workspaces/{id}/sessions/{sid}/messages/user": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
         };
-        body: {
-          /** Session creation params (title) */
-          request: definitions["proto.Session"];
+        /** Get user messages for session */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    /** @description Workspace ID */
+                    id: string;
+                    /** @description Session ID */
+                    sid: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["github_com_charmbracelet_crush_internal_proto.Message"][];
+                    };
+                };
+                /** @description Not Found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+                /** @description Internal Server Error */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["proto.Error"];
+                    };
+                };
+            };
         };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: definitions["proto.Session"];
-        };
-        /** Bad Request */
-        400: {
-          schema: definitions["proto.Error"];
-        };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
     };
-  };
-  "/workspaces/{id}/sessions/{sid}": {
-    get: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
-          /** Session ID */
-          sid: string;
-        };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: definitions["proto.Session"];
-        };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
-    };
-    put: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
-          /** Session ID */
-          sid: string;
-        };
-        body: {
-          /** Updated session */
-          request: definitions["proto.Session"];
-        };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: definitions["proto.Session"];
-        };
-        /** Bad Request */
-        400: {
-          schema: definitions["proto.Error"];
-        };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
-    };
-    delete: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
-          /** Session ID */
-          sid: string;
-        };
-      };
-      responses: {
-        /** OK */
-        200: unknown;
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
-    };
-  };
-  "/workspaces/{id}/sessions/{sid}/filetracker/files": {
-    get: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
-          /** Session ID */
-          sid: string;
-        };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: string[];
-        };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
-    };
-  };
-  "/workspaces/{id}/sessions/{sid}/history": {
-    get: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
-          /** Session ID */
-          sid: string;
-        };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: definitions["proto.File"][];
-        };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
-    };
-  };
-  "/workspaces/{id}/sessions/{sid}/messages": {
-    get: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
-          /** Session ID */
-          sid: string;
-        };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: definitions["github_com_charmbracelet_crush_internal_proto.Message"][];
-        };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
-    };
-  };
-  "/workspaces/{id}/sessions/{sid}/messages/user": {
-    get: {
-      parameters: {
-        path: {
-          /** Workspace ID */
-          id: string;
-          /** Session ID */
-          sid: string;
-        };
-      };
-      responses: {
-        /** OK */
-        200: {
-          schema: definitions["github_com_charmbracelet_crush_internal_proto.Message"][];
-        };
-        /** Not Found */
-        404: {
-          schema: definitions["proto.Error"];
-        };
-        /** Internal Server Error */
-        500: {
-          schema: definitions["proto.Error"];
-        };
-      };
-    };
-  };
 };
-
-export type definitions = {
-  "catwalk.Model": {
-    can_reason?: boolean;
-    context_window?: number;
-    cost_per_1m_in?: number;
-    cost_per_1m_in_cached?: number;
-    cost_per_1m_out?: number;
-    cost_per_1m_out_cached?: number;
-    default_max_tokens?: number;
-    default_reasoning_effort?: string;
-    id?: string;
-    name?: string;
-    options?: definitions["catwalk.ModelOptions"];
-    reasoning_levels?: string[];
-    supports_attachments?: boolean;
-  };
-  "catwalk.ModelOptions": {
-    frequency_penalty?: number;
-    presence_penalty?: number;
-    provider_options?: { [key: string]: unknown };
-    temperature?: number;
-    top_k?: number;
-    top_p?: number;
-  };
-  "config.Attribution": {
-    co_authored_by?: boolean;
-    generated_with?: boolean;
-    trailer_style?: definitions["config.TrailerStyle"];
-  };
-  "config.Completions": {
-    max_depth?: number;
-    max_items?: number;
-  };
-  "config.HookConfig": {
-    /** @description Shell command to execute. */
-    command?: string;
-    /** @description Regex pattern tested against the tool name. Empty means match all. */
-    matcher?: string;
-    /** @description Timeout in seconds. Default 30. */
-    timeout?: number;
-  };
-  "config.LSPConfig": {
-    args?: string[];
-    command?: string;
-    disabled?: boolean;
-    env?: { [key: string]: string };
-    filetypes?: string[];
-    init_options?: { [key: string]: unknown };
-    options?: { [key: string]: unknown };
-    root_markers?: string[];
-    timeout?: number;
-  };
-  "config.LSPs": { [key: string]: definitions["config.LSPConfig"] };
-  "config.MCPConfig": {
-    args?: string[];
-    command?: string;
-    disabled?: boolean;
-    disabled_tools?: string[];
-    enabled_tools?: string[];
-    env?: { [key: string]: string };
-    /**
-     * @description Headers are HTTP headers for HTTP/SSE MCP servers. Values run
-     * through shell expansion at MCP startup, so $VAR and $(cmd)
-     * work. A header whose value resolves to the empty string (unset
-     * bare $VAR under lenient nounset, $(echo), or literal "") is
-     * omitted from the outgoing request rather than sent as
-     * "Header:".
-     */
-    headers?: { [key: string]: string };
-    timeout?: number;
-    type?: definitions["config.MCPType"];
-    url?: string;
-  };
-  /** @enum {string} */
-  "config.MCPType": "stdio" | "sse" | "http";
-  "config.MCPs": { [key: string]: definitions["config.MCPConfig"] };
-  "config.Permissions": {
-    allowed_tools?: string[];
-  };
-  /** @enum {integer} */
-  "config.Scope": 0 | 1;
-  "config.SelectedModel": {
-    frequency_penalty?: number;
-    /** @description Overrides the default model configuration. */
-    max_tokens?: number;
-    /**
-     * @description The model id as used by the provider API.
-     * Required.
-     */
-    model?: string;
-    presence_penalty?: number;
-    /**
-     * @description The model provider, same as the key/id used in the providers config.
-     * Required.
-     */
-    provider?: string;
-    /** @description Override provider specific options. */
-    provider_options?: { [key: string]: unknown };
-    /** @description Only used by models that use the openai provider and need this set. */
-    reasoning_effort?: string;
-    temperature?: number;
-    /** @description Used by anthropic models that can reason to indicate if the model should think. */
-    think?: boolean;
-    top_k?: number;
-    top_p?: number;
-  };
-  /** @enum {string} */
-  "config.SelectedModelType": "large" | "small";
-  "config.TUIOptions": {
-    compact_mode?: boolean;
-    completions?: definitions["config.Completions"];
-    diff_mode?: string;
-    transparent?: boolean;
-  };
-  "config.ToolGrep": {
-    timeout?: definitions["time.Duration"];
-  };
-  "config.ToolLs": {
-    max_depth?: number;
-    max_items?: number;
-  };
-  "config.Tools": {
-    grep?: definitions["config.ToolGrep"];
-    ls?: definitions["config.ToolLs"];
-  };
-  /** @enum {string} */
-  "config.TrailerStyle": "none" | "co-authored-by" | "assisted-by";
-  "csync.Map-string-config_ProviderConfig": { [key: string]: unknown };
-  "github_com_charmbracelet_crush_internal_config.Config": {
-    $schema?: string;
-    hooks?: { [key: string]: definitions["config.HookConfig"][] };
-    lsp?: definitions["config.LSPs"];
-    mcp?: definitions["config.MCPs"];
-    /** @description We currently only support large/small as values here. */
-    models?: { [key: string]: definitions["config.SelectedModel"] };
-    options?: definitions["github_com_charmbracelet_crush_internal_config.Options"];
-    permissions?: definitions["config.Permissions"];
-    /** @description The providers that are configured */
-    providers?: definitions["csync.Map-string-config_ProviderConfig"];
-    /** @description Recently used models stored in the data directory config. */
-    recent_models?: { [key: string]: definitions["config.SelectedModel"][] };
-    tools?: definitions["config.Tools"];
-  };
-  "github_com_charmbracelet_crush_internal_config.Options": {
-    attribution?: definitions["config.Attribution"];
-    auto_lsp?: boolean;
-    context_paths?: string[];
-    /**
-     * @description DataDirectory is where Crush keeps per-project state such as
-     * the SQLite database and workspace overrides. Relative paths are
-     * resolved against the working directory; absolute paths are used
-     * verbatim. After defaulting the stored value is always absolute.
-     */
-    data_directory?: string;
-    debug?: boolean;
-    debug_lsp?: boolean;
-    disable_auto_summarize?: boolean;
-    disable_default_providers?: boolean;
-    disable_metrics?: boolean;
-    disable_notifications?: boolean;
-    disable_provider_auto_update?: boolean;
-    disabled_skills?: string[];
-    disabled_tools?: string[];
-    initialize_as?: string;
-    progress?: boolean;
-    skills_paths?: string[];
-    tui?: definitions["config.TUIOptions"];
-  };
-  "github_com_charmbracelet_crush_internal_proto.Message": {
-    created_at?: number;
-    id?: string;
-    model?: string;
-    parts?: unknown[];
-    provider?: string;
-    role?: definitions["proto.MessageRole"];
-    session_id?: string;
-    updated_at?: number;
-  };
-  /** @enum {integer} */
-  "lsp.ServerState": 0 | 1 | 2 | 3 | 4 | 5;
-  /** @enum {string} */
-  "proto.APIKeyKind": "string" | "oauth";
-  "proto.AgentInfo": {
-    is_busy?: boolean;
-    is_ready?: boolean;
-    model?: definitions["catwalk.Model"];
-    model_cfg?: definitions["config.SelectedModel"];
-  };
-  "proto.AgentMessage": {
-    attachments?: definitions["proto.Attachment"][];
-    prompt?: string;
-    session_id?: string;
-  };
-  "proto.AgentSession": {
-    completion_tokens?: number;
-    cost?: number;
-    created_at?: number;
-    id?: string;
-    is_busy?: boolean;
-    message_count?: number;
-    parent_session_id?: string;
-    prompt_tokens?: number;
-    summary_message_id?: string;
-    title?: string;
-    updated_at?: number;
-  };
-  "proto.Attachment": {
-    content?: number[];
-    file_name?: string;
-    file_path?: string;
-    mime_type?: string;
-  };
-  "proto.ConfigCompactRequest": {
-    enabled?: boolean;
-    scope?: definitions["config.Scope"];
-  };
-  "proto.ConfigModelRequest": {
-    model?: definitions["config.SelectedModel"];
-    model_type?: definitions["config.SelectedModelType"];
-    scope?: definitions["config.Scope"];
-  };
-  "proto.ConfigProviderKeyRequest": {
-    api_key?: number[];
-    kind?: definitions["proto.APIKeyKind"];
-    provider_id?: string;
-    scope?: definitions["config.Scope"];
-  };
-  "proto.ConfigRefreshOAuthRequest": {
-    provider_id?: string;
-    scope?: definitions["config.Scope"];
-  };
-  "proto.ConfigRemoveRequest": {
-    key?: string;
-    scope?: definitions["config.Scope"];
-  };
-  "proto.ConfigSetRequest": {
-    key?: string;
-    scope?: definitions["config.Scope"];
-    value?: unknown;
-  };
-  "proto.Error": {
-    message?: string;
-  };
-  "proto.File": {
-    content?: string;
-    created_at?: number;
-    id?: string;
-    path?: string;
-    session_id?: string;
-    updated_at?: number;
-    version?: number;
-  };
-  "proto.FileTrackerReadRequest": {
-    path?: string;
-    session_id?: string;
-  };
-  "proto.ImportCopilotResponse": {
-    success?: boolean;
-    token?: unknown;
-  };
-  "proto.LSPClientInfo": {
-    connected_at?: string;
-    diagnostic_count?: number;
-    error?: unknown;
-    name?: string;
-    state?: definitions["lsp.ServerState"];
-  };
-  "proto.LSPStartRequest": {
-    path?: string;
-  };
-  "proto.MCPClientInfo": {
-    connected_at?: string;
-    error?: unknown;
-    name?: string;
-    prompt_count?: number;
-    resource_count?: number;
-    state?: definitions["proto.MCPState"];
-    tool_count?: number;
-  };
-  "proto.MCPGetPromptRequest": {
-    args?: { [key: string]: string };
-    client_id?: string;
-    prompt_id?: string;
-  };
-  "proto.MCPGetPromptResponse": {
-    prompt?: string;
-  };
-  "proto.MCPNameRequest": {
-    name?: string;
-  };
-  "proto.MCPReadResourceRequest": {
-    name?: string;
-    uri?: string;
-  };
-  /** @enum {integer} */
-  "proto.MCPState": 0 | 1 | 2 | 3;
-  /** @enum {string} */
-  "proto.MessageRole": "assistant" | "user" | "system" | "tool";
-  /** @enum {string} */
-  "proto.PermissionAction": "allow" | "allow_session" | "deny";
-  "proto.PermissionGrant": {
-    action?: definitions["proto.PermissionAction"];
-    permission?: definitions["proto.PermissionRequest"];
-  };
-  "proto.PermissionRequest": {
-    action?: string;
-    description?: string;
-    id?: string;
-    params?: unknown;
-    path?: string;
-    session_id?: string;
-    tool_call_id?: string;
-    tool_name?: string;
-  };
-  "proto.PermissionSkipRequest": {
-    skip?: boolean;
-  };
-  "proto.ProjectInitPromptResponse": {
-    prompt?: string;
-  };
-  "proto.ProjectNeedsInitResponse": {
-    needs_init?: boolean;
-  };
-  "proto.ServerControl": {
-    command?: string;
-  };
-  "proto.Session": {
-    completion_tokens?: number;
-    cost?: number;
-    created_at?: number;
-    id?: string;
-    message_count?: number;
-    parent_session_id?: string;
-    prompt_tokens?: number;
-    summary_message_id?: string;
-    title?: string;
-    updated_at?: number;
-  };
-  "proto.VersionInfo": {
-    build_id?: string;
-    commit?: string;
-    go_version?: string;
-    platform?: string;
-    version?: string;
-  };
-  "proto.Workspace": {
-    config?: definitions["github_com_charmbracelet_crush_internal_config.Config"];
-    data_dir?: string;
-    debug?: boolean;
-    env?: string[];
-    id?: string;
-    path?: string;
-    version?: string;
-    yolo?: boolean;
-  };
-  /**
-   * Format: int64
-   * @enum {integer}
-   */
-  "time.Duration":
-    | -9223372036854776000
-    | 9223372036854776000
-    | 1
-    | 1000
-    | 1000000
-    | 1000000000
-    | 60000000000
-    | 3600000000000;
+export type webhooks = Record<string, never>;
+export type components = {
+    schemas: {
+        "catwalk.Model": {
+            can_reason?: boolean;
+            context_window?: number;
+            cost_per_1m_in?: number;
+            cost_per_1m_in_cached?: number;
+            cost_per_1m_out?: number;
+            cost_per_1m_out_cached?: number;
+            default_max_tokens?: number;
+            default_reasoning_effort?: string;
+            id?: string;
+            name?: string;
+            options?: components["schemas"]["catwalk.ModelOptions"];
+            reasoning_levels?: string[];
+            supports_attachments?: boolean;
+        };
+        "catwalk.ModelOptions": {
+            frequency_penalty?: number;
+            presence_penalty?: number;
+            provider_options?: {
+                [key: string]: unknown;
+            };
+            temperature?: number;
+            top_k?: number;
+            top_p?: number;
+        };
+        "config.Attribution": {
+            co_authored_by?: boolean;
+            generated_with?: boolean;
+            trailer_style?: components["schemas"]["config.TrailerStyle"];
+        };
+        "config.Completions": {
+            max_depth?: number;
+            max_items?: number;
+        };
+        "config.HookConfig": {
+            /** @description Shell command to execute. */
+            command?: string;
+            /** @description Regex pattern tested against the tool name. Empty means match all. */
+            matcher?: string;
+            /** @description Timeout in seconds. Default 30. */
+            timeout?: number;
+        };
+        "config.LSPConfig": {
+            args?: string[];
+            command?: string;
+            disabled?: boolean;
+            env?: {
+                [key: string]: string;
+            };
+            filetypes?: string[];
+            init_options?: {
+                [key: string]: unknown;
+            };
+            options?: {
+                [key: string]: unknown;
+            };
+            root_markers?: string[];
+            timeout?: number;
+        };
+        "config.LSPs": {
+            [key: string]: components["schemas"]["config.LSPConfig"];
+        };
+        "config.MCPConfig": {
+            args?: string[];
+            command?: string;
+            disabled?: boolean;
+            disabled_tools?: string[];
+            enabled_tools?: string[];
+            env?: {
+                [key: string]: string;
+            };
+            /**
+             * @description Headers are HTTP headers for HTTP/SSE MCP servers. Values run
+             *     through shell expansion at MCP startup, so $VAR and $(cmd)
+             *     work. A header whose value resolves to the empty string (unset
+             *     bare $VAR under lenient nounset, $(echo), or literal "") is
+             *     omitted from the outgoing request rather than sent as
+             *     "Header:".
+             */
+            headers?: {
+                [key: string]: string;
+            };
+            timeout?: number;
+            type?: components["schemas"]["config.MCPType"];
+            url?: string;
+        };
+        /** @enum {string} */
+        "config.MCPType": "stdio" | "sse" | "http";
+        "config.MCPs": {
+            [key: string]: components["schemas"]["config.MCPConfig"];
+        };
+        "config.Permissions": {
+            allowed_tools?: string[];
+        };
+        /** @enum {integer} */
+        "config.Scope": 0 | 1;
+        "config.SelectedModel": {
+            frequency_penalty?: number;
+            /** @description Overrides the default model configuration. */
+            max_tokens?: number;
+            /**
+             * @description The model id as used by the provider API.
+             *     Required.
+             */
+            model?: string;
+            presence_penalty?: number;
+            /**
+             * @description The model provider, same as the key/id used in the providers config.
+             *     Required.
+             */
+            provider?: string;
+            /** @description Override provider specific options. */
+            provider_options?: {
+                [key: string]: unknown;
+            };
+            /** @description Only used by models that use the openai provider and need this set. */
+            reasoning_effort?: string;
+            temperature?: number;
+            /** @description Used by anthropic models that can reason to indicate if the model should think. */
+            think?: boolean;
+            top_k?: number;
+            top_p?: number;
+        };
+        /** @enum {string} */
+        "config.SelectedModelType": "large" | "small";
+        "config.TUIOptions": {
+            compact_mode?: boolean;
+            completions?: components["schemas"]["config.Completions"];
+            diff_mode?: string;
+            transparent?: boolean;
+        };
+        "config.ToolGrep": {
+            timeout?: components["schemas"]["time.Duration"];
+        };
+        "config.ToolLs": {
+            max_depth?: number;
+            max_items?: number;
+        };
+        "config.Tools": {
+            grep?: components["schemas"]["config.ToolGrep"];
+            ls?: components["schemas"]["config.ToolLs"];
+        };
+        /** @enum {string} */
+        "config.TrailerStyle": "none" | "co-authored-by" | "assisted-by";
+        "csync.Map-string-config_ProviderConfig": Record<string, never>;
+        "github_com_charmbracelet_crush_internal_config.Config": {
+            $schema?: string;
+            hooks?: {
+                [key: string]: components["schemas"]["config.HookConfig"][];
+            };
+            lsp?: components["schemas"]["config.LSPs"];
+            mcp?: components["schemas"]["config.MCPs"];
+            /** @description We currently only support large/small as values here. */
+            models?: {
+                [key: string]: components["schemas"]["config.SelectedModel"];
+            };
+            options?: components["schemas"]["github_com_charmbracelet_crush_internal_config.Options"];
+            permissions?: components["schemas"]["config.Permissions"];
+            /** @description The providers that are configured */
+            providers?: components["schemas"]["csync.Map-string-config_ProviderConfig"];
+            /** @description Recently used models stored in the data directory config. */
+            recent_models?: {
+                [key: string]: components["schemas"]["config.SelectedModel"][];
+            };
+            tools?: components["schemas"]["config.Tools"];
+        };
+        "github_com_charmbracelet_crush_internal_config.Options": {
+            attribution?: components["schemas"]["config.Attribution"];
+            auto_lsp?: boolean;
+            context_paths?: string[];
+            /**
+             * @description DataDirectory is where Crush keeps per-project state such as
+             *     the SQLite database and workspace overrides. Relative paths are
+             *     resolved against the working directory; absolute paths are used
+             *     verbatim. After defaulting the stored value is always absolute.
+             */
+            data_directory?: string;
+            debug?: boolean;
+            debug_lsp?: boolean;
+            disable_auto_summarize?: boolean;
+            disable_default_providers?: boolean;
+            disable_metrics?: boolean;
+            disable_notifications?: boolean;
+            disable_provider_auto_update?: boolean;
+            disabled_skills?: string[];
+            disabled_tools?: string[];
+            initialize_as?: string;
+            progress?: boolean;
+            skills_paths?: string[];
+            tui?: components["schemas"]["config.TUIOptions"];
+        };
+        "github_com_charmbracelet_crush_internal_proto.Message": {
+            created_at?: number;
+            id?: string;
+            model?: string;
+            parts?: unknown[];
+            provider?: string;
+            role?: components["schemas"]["proto.MessageRole"];
+            session_id?: string;
+            updated_at?: number;
+        };
+        /** @enum {integer} */
+        "lsp.ServerState": 0 | 1 | 2 | 3 | 4 | 5;
+        /** @enum {string} */
+        "proto.APIKeyKind": "string" | "oauth";
+        "proto.AgentInfo": {
+            is_busy?: boolean;
+            is_ready?: boolean;
+            model?: components["schemas"]["catwalk.Model"];
+            model_cfg?: components["schemas"]["config.SelectedModel"];
+        };
+        "proto.AgentMessage": {
+            attachments?: components["schemas"]["proto.Attachment"][];
+            prompt?: string;
+            session_id?: string;
+        };
+        "proto.AgentSession": {
+            completion_tokens?: number;
+            cost?: number;
+            created_at?: number;
+            id?: string;
+            is_busy?: boolean;
+            message_count?: number;
+            parent_session_id?: string;
+            prompt_tokens?: number;
+            summary_message_id?: string;
+            title?: string;
+            updated_at?: number;
+        };
+        "proto.Attachment": {
+            content?: number[];
+            file_name?: string;
+            file_path?: string;
+            mime_type?: string;
+        };
+        "proto.ConfigCompactRequest": {
+            enabled?: boolean;
+            scope?: components["schemas"]["config.Scope"];
+        };
+        "proto.ConfigModelRequest": {
+            model?: components["schemas"]["config.SelectedModel"];
+            model_type?: components["schemas"]["config.SelectedModelType"];
+            scope?: components["schemas"]["config.Scope"];
+        };
+        "proto.ConfigProviderKeyRequest": {
+            api_key?: number[];
+            kind?: components["schemas"]["proto.APIKeyKind"];
+            provider_id?: string;
+            scope?: components["schemas"]["config.Scope"];
+        };
+        "proto.ConfigRefreshOAuthRequest": {
+            provider_id?: string;
+            scope?: components["schemas"]["config.Scope"];
+        };
+        "proto.ConfigRemoveRequest": {
+            key?: string;
+            scope?: components["schemas"]["config.Scope"];
+        };
+        "proto.ConfigSetRequest": {
+            key?: string;
+            scope?: components["schemas"]["config.Scope"];
+            value?: unknown;
+        };
+        "proto.Error": {
+            message?: string;
+        };
+        "proto.File": {
+            content?: string;
+            created_at?: number;
+            id?: string;
+            path?: string;
+            session_id?: string;
+            updated_at?: number;
+            version?: number;
+        };
+        "proto.FileTrackerReadRequest": {
+            path?: string;
+            session_id?: string;
+        };
+        "proto.ImportCopilotResponse": {
+            success?: boolean;
+            token?: unknown;
+        };
+        "proto.LSPClientInfo": {
+            connected_at?: string;
+            diagnostic_count?: number;
+            error?: unknown;
+            name?: string;
+            state?: components["schemas"]["lsp.ServerState"];
+        };
+        "proto.LSPStartRequest": {
+            path?: string;
+        };
+        "proto.MCPClientInfo": {
+            connected_at?: string;
+            error?: unknown;
+            name?: string;
+            prompt_count?: number;
+            resource_count?: number;
+            state?: components["schemas"]["proto.MCPState"];
+            tool_count?: number;
+        };
+        "proto.MCPGetPromptRequest": {
+            args?: {
+                [key: string]: string;
+            };
+            client_id?: string;
+            prompt_id?: string;
+        };
+        "proto.MCPGetPromptResponse": {
+            prompt?: string;
+        };
+        "proto.MCPNameRequest": {
+            name?: string;
+        };
+        "proto.MCPReadResourceRequest": {
+            name?: string;
+            uri?: string;
+        };
+        /** @enum {integer} */
+        "proto.MCPState": 0 | 1 | 2 | 3;
+        /** @enum {string} */
+        "proto.MessageRole": "assistant" | "user" | "system" | "tool";
+        /** @enum {string} */
+        "proto.PermissionAction": "allow" | "allow_session" | "deny";
+        "proto.PermissionGrant": {
+            action?: components["schemas"]["proto.PermissionAction"];
+            permission?: components["schemas"]["proto.PermissionRequest"];
+        };
+        "proto.PermissionRequest": {
+            action?: string;
+            description?: string;
+            id?: string;
+            params?: unknown;
+            path?: string;
+            session_id?: string;
+            tool_call_id?: string;
+            tool_name?: string;
+        };
+        "proto.PermissionSkipRequest": {
+            skip?: boolean;
+        };
+        "proto.ProjectInitPromptResponse": {
+            prompt?: string;
+        };
+        "proto.ProjectNeedsInitResponse": {
+            needs_init?: boolean;
+        };
+        "proto.ServerControl": {
+            command?: string;
+        };
+        "proto.Session": {
+            completion_tokens?: number;
+            cost?: number;
+            created_at?: number;
+            id?: string;
+            message_count?: number;
+            parent_session_id?: string;
+            prompt_tokens?: number;
+            summary_message_id?: string;
+            title?: string;
+            updated_at?: number;
+        };
+        "proto.VersionInfo": {
+            build_id?: string;
+            commit?: string;
+            go_version?: string;
+            platform?: string;
+            version?: string;
+        };
+        "proto.Workspace": {
+            config?: components["schemas"]["github_com_charmbracelet_crush_internal_config.Config"];
+            data_dir?: string;
+            debug?: boolean;
+            env?: string[];
+            id?: string;
+            path?: string;
+            version?: string;
+            yolo?: boolean;
+        };
+        /**
+         * Format: int64
+         * @enum {integer}
+         */
+        "time.Duration": -9223372036854776000 | 9223372036854776000 | 1 | 1000 | 1000000 | 1000000000 | 60000000000 | 3600000000000;
+    };
+    responses: never;
+    parameters: never;
+    requestBodies: {
+        /** @description MCP name request */
+        "proto.MCPNameRequest": {
+            content: {
+                "application/json": components["schemas"]["proto.MCPNameRequest"];
+            };
+        };
+    };
+    headers: never;
+    pathItems: never;
 };
-
-export type operations = {};
-
-export type external = {};
+export type $defs = Record<string, never>;
+export type operations = Record<string, never>;
 
 /**
  * Api namespace: accurate aliases for the rune-compatible wire types used by

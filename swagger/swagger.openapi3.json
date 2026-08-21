@@ -1,0 +1,4335 @@
+{
+    "openapi": "3.0.0",
+    "info": {
+        "description": "Crush is a terminal-based AI coding assistant. This API is served over a Unix socket (or Windows named pipe) and provides programmatic access to workspaces, sessions, agents, LSP, MCP, and more.",
+        "title": "Crush API",
+        "contact": {
+            "name": "Charm",
+            "url": "https://charm.sh"
+        },
+        "license": {
+            "name": "MIT",
+            "url": "https://github.com/charmbracelet/crush/blob/main/LICENSE"
+        },
+        "version": "1.0"
+    },
+    "paths": {
+        "/config": {
+            "get": {
+                "tags": [
+                    "system"
+                ],
+                "summary": "Get server config",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/control": {
+            "post": {
+                "tags": [
+                    "system"
+                ],
+                "summary": "Send server control command",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/proto.ServerControl"
+                            }
+                        }
+                    },
+                    "description": "Control command (e.g. shutdown)",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/health": {
+            "get": {
+                "tags": [
+                    "system"
+                ],
+                "summary": "Health check",
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    }
+                }
+            }
+        },
+        "/version": {
+            "get": {
+                "tags": [
+                    "system"
+                ],
+                "summary": "Get server version",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.VersionInfo"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces": {
+            "get": {
+                "tags": [
+                    "workspaces"
+                ],
+                "summary": "List workspaces",
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/proto.Workspace"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "tags": [
+                    "workspaces"
+                ],
+                "summary": "Create workspace",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/proto.Workspace"
+                            }
+                        }
+                    },
+                    "description": "Workspace creation params",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Workspace"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}": {
+            "get": {
+                "tags": [
+                    "workspaces"
+                ],
+                "summary": "Get workspace",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Workspace"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "tags": [
+                    "workspaces"
+                ],
+                "summary": "Delete workspace",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/agent": {
+            "get": {
+                "tags": [
+                    "agent"
+                ],
+                "summary": "Get agent info",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.AgentInfo"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "tags": [
+                    "agent"
+                ],
+                "summary": "Send message to agent",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/proto.AgentMessage"
+                            }
+                        }
+                    },
+                    "description": "Agent message",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/agent/default-small-model": {
+            "get": {
+                "tags": [
+                    "agent"
+                ],
+                "summary": "Get default small model",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Provider ID",
+                        "name": "provider_id",
+                        "in": "query",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/agent/init": {
+            "post": {
+                "tags": [
+                    "agent"
+                ],
+                "summary": "Initialize agent",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/agent/sessions/{sid}": {
+            "get": {
+                "tags": [
+                    "agent"
+                ],
+                "summary": "Get agent session",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Session ID",
+                        "name": "sid",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.AgentSession"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/agent/sessions/{sid}/cancel": {
+            "post": {
+                "tags": [
+                    "agent"
+                ],
+                "summary": "Cancel agent session",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Session ID",
+                        "name": "sid",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/agent/sessions/{sid}/prompts/clear": {
+            "post": {
+                "tags": [
+                    "agent"
+                ],
+                "summary": "Clear prompt queue",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Session ID",
+                        "name": "sid",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/agent/sessions/{sid}/prompts/list": {
+            "get": {
+                "tags": [
+                    "agent"
+                ],
+                "summary": "List queued prompts",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Session ID",
+                        "name": "sid",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/agent/sessions/{sid}/prompts/queued": {
+            "get": {
+                "tags": [
+                    "agent"
+                ],
+                "summary": "Get queued prompt status",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Session ID",
+                        "name": "sid",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/agent/sessions/{sid}/summarize": {
+            "post": {
+                "tags": [
+                    "agent"
+                ],
+                "summary": "Summarize session",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Session ID",
+                        "name": "sid",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/agent/update": {
+            "post": {
+                "tags": [
+                    "agent"
+                ],
+                "summary": "Update agent",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/config": {
+            "get": {
+                "tags": [
+                    "workspaces"
+                ],
+                "summary": "Get workspace config",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/config/compact": {
+            "post": {
+                "tags": [
+                    "config"
+                ],
+                "summary": "Set compact mode",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/proto.ConfigCompactRequest"
+                            }
+                        }
+                    },
+                    "description": "Config compact request",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/config/import-copilot": {
+            "post": {
+                "tags": [
+                    "config"
+                ],
+                "summary": "Import Copilot credentials",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.ImportCopilotResponse"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/config/model": {
+            "post": {
+                "tags": [
+                    "config"
+                ],
+                "summary": "Set the preferred model",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/proto.ConfigModelRequest"
+                            }
+                        }
+                    },
+                    "description": "Config model request",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/config/provider-key": {
+            "post": {
+                "tags": [
+                    "config"
+                ],
+                "summary": "Set provider API key",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/proto.ConfigProviderKeyRequest"
+                            }
+                        }
+                    },
+                    "description": "Config provider key request",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/config/refresh-oauth": {
+            "post": {
+                "tags": [
+                    "config"
+                ],
+                "summary": "Refresh OAuth token",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/proto.ConfigRefreshOAuthRequest"
+                            }
+                        }
+                    },
+                    "description": "Refresh OAuth request",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/config/remove": {
+            "post": {
+                "tags": [
+                    "config"
+                ],
+                "summary": "Remove a config field",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/proto.ConfigRemoveRequest"
+                            }
+                        }
+                    },
+                    "description": "Config remove request",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/config/set": {
+            "post": {
+                "tags": [
+                    "config"
+                ],
+                "summary": "Set a config field",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/proto.ConfigSetRequest"
+                            }
+                        }
+                    },
+                    "description": "Config set request",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/events": {
+            "get": {
+                "tags": [
+                    "workspaces"
+                ],
+                "summary": "Stream workspace events (SSE)",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "text/event-stream": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "text/event-stream": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/filetracker/lastread": {
+            "get": {
+                "tags": [
+                    "filetracker"
+                ],
+                "summary": "Get last read time for file",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "query",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "File path",
+                        "name": "path",
+                        "in": "query",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/filetracker/read": {
+            "post": {
+                "tags": [
+                    "filetracker"
+                ],
+                "summary": "Record file read",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/proto.FileTrackerReadRequest"
+                            }
+                        }
+                    },
+                    "description": "File tracker read request",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/lsps": {
+            "get": {
+                "tags": [
+                    "lsp"
+                ],
+                "summary": "List LSP clients",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "$ref": "#/components/schemas/proto.LSPClientInfo"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/lsps/start": {
+            "post": {
+                "tags": [
+                    "lsp"
+                ],
+                "summary": "Start LSP server",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/proto.LSPStartRequest"
+                            }
+                        }
+                    },
+                    "description": "LSP start request",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/lsps/stop": {
+            "post": {
+                "tags": [
+                    "lsp"
+                ],
+                "summary": "Stop all LSP servers",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/lsps/{lsp}/diagnostics": {
+            "get": {
+                "tags": [
+                    "lsp"
+                ],
+                "summary": "Get LSP diagnostics",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "LSP client name",
+                        "name": "lsp",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/mcp/docker/disable": {
+            "post": {
+                "tags": [
+                    "mcp"
+                ],
+                "summary": "Disable Docker MCP",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/mcp/docker/enable": {
+            "post": {
+                "tags": [
+                    "mcp"
+                ],
+                "summary": "Enable Docker MCP",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/mcp/get-prompt": {
+            "post": {
+                "tags": [
+                    "mcp"
+                ],
+                "summary": "Get MCP prompt",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/proto.MCPGetPromptRequest"
+                            }
+                        }
+                    },
+                    "description": "MCP get prompt request",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.MCPGetPromptResponse"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/mcp/read-resource": {
+            "post": {
+                "tags": [
+                    "mcp"
+                ],
+                "summary": "Read MCP resource",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/proto.MCPReadResourceRequest"
+                            }
+                        }
+                    },
+                    "description": "MCP read resource request",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/mcp/refresh-prompts": {
+            "post": {
+                "tags": [
+                    "mcp"
+                ],
+                "summary": "Refresh MCP prompts",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "$ref": "#/components/requestBodies/proto.MCPNameRequest"
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/mcp/refresh-resources": {
+            "post": {
+                "tags": [
+                    "mcp"
+                ],
+                "summary": "Refresh MCP resources",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "$ref": "#/components/requestBodies/proto.MCPNameRequest"
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/mcp/refresh-tools": {
+            "post": {
+                "tags": [
+                    "mcp"
+                ],
+                "summary": "Refresh MCP tools",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "$ref": "#/components/requestBodies/proto.MCPNameRequest"
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/mcp/states": {
+            "get": {
+                "tags": [
+                    "mcp"
+                ],
+                "summary": "Get MCP client states",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": {
+                                        "$ref": "#/components/schemas/proto.MCPClientInfo"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/messages/user": {
+            "get": {
+                "tags": [
+                    "workspaces"
+                ],
+                "summary": "Get all user messages for workspace",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/github_com_charmbracelet_crush_internal_proto.Message"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/permissions/grant": {
+            "post": {
+                "tags": [
+                    "permissions"
+                ],
+                "summary": "Grant permission",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/proto.PermissionGrant"
+                            }
+                        }
+                    },
+                    "description": "Permission grant",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/permissions/skip": {
+            "get": {
+                "tags": [
+                    "permissions"
+                ],
+                "summary": "Get skip permissions status",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.PermissionSkipRequest"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "tags": [
+                    "permissions"
+                ],
+                "summary": "Set skip permissions",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/proto.PermissionSkipRequest"
+                            }
+                        }
+                    },
+                    "description": "Permission skip request",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/project/init": {
+            "post": {
+                "tags": [
+                    "project"
+                ],
+                "summary": "Mark project as initialized",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/project/init-prompt": {
+            "get": {
+                "tags": [
+                    "project"
+                ],
+                "summary": "Get project initialization prompt",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.ProjectInitPromptResponse"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/project/needs-init": {
+            "get": {
+                "tags": [
+                    "project"
+                ],
+                "summary": "Check if project needs initialization",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.ProjectNeedsInitResponse"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/providers": {
+            "get": {
+                "tags": [
+                    "workspaces"
+                ],
+                "summary": "Get workspace providers",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/sessions": {
+            "get": {
+                "tags": [
+                    "sessions"
+                ],
+                "summary": "List sessions",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/proto.Session"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "post": {
+                "tags": [
+                    "sessions"
+                ],
+                "summary": "Create session",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/proto.Session"
+                            }
+                        }
+                    },
+                    "description": "Session creation params (title)",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Session"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/sessions/{sid}": {
+            "get": {
+                "tags": [
+                    "sessions"
+                ],
+                "summary": "Get session",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Session ID",
+                        "name": "sid",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Session"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "put": {
+                "tags": [
+                    "sessions"
+                ],
+                "summary": "Update session",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Session ID",
+                        "name": "sid",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/proto.Session"
+                            }
+                        }
+                    },
+                    "description": "Updated session",
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Session"
+                                }
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "tags": [
+                    "sessions"
+                ],
+                "summary": "Delete session",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Session ID",
+                        "name": "sid",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK"
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "*/*": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/sessions/{sid}/filetracker/files": {
+            "get": {
+                "tags": [
+                    "filetracker"
+                ],
+                "summary": "List tracked files for session",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Session ID",
+                        "name": "sid",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/sessions/{sid}/history": {
+            "get": {
+                "tags": [
+                    "sessions"
+                ],
+                "summary": "Get session history",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Session ID",
+                        "name": "sid",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/proto.File"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/sessions/{sid}/messages": {
+            "get": {
+                "tags": [
+                    "sessions"
+                ],
+                "summary": "Get session messages",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Session ID",
+                        "name": "sid",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/github_com_charmbracelet_crush_internal_proto.Message"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/workspaces/{id}/sessions/{sid}/messages/user": {
+            "get": {
+                "tags": [
+                    "sessions"
+                ],
+                "summary": "Get user messages for session",
+                "parameters": [
+                    {
+                        "description": "Workspace ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    {
+                        "description": "Session ID",
+                        "name": "sid",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/github_com_charmbracelet_crush_internal_proto.Message"
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/proto.Error"
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "servers": [
+        {
+            "url": "/v1"
+        }
+    ],
+    "components": {
+        "requestBodies": {
+            "proto.MCPNameRequest": {
+                "content": {
+                    "application/json": {
+                        "schema": {
+                            "$ref": "#/components/schemas/proto.MCPNameRequest"
+                        }
+                    }
+                },
+                "description": "MCP name request",
+                "required": true
+            }
+        },
+        "schemas": {
+            "catwalk.Model": {
+                "type": "object",
+                "properties": {
+                    "can_reason": {
+                        "type": "boolean"
+                    },
+                    "context_window": {
+                        "type": "integer"
+                    },
+                    "cost_per_1m_in": {
+                        "type": "number"
+                    },
+                    "cost_per_1m_in_cached": {
+                        "type": "number"
+                    },
+                    "cost_per_1m_out": {
+                        "type": "number"
+                    },
+                    "cost_per_1m_out_cached": {
+                        "type": "number"
+                    },
+                    "default_max_tokens": {
+                        "type": "integer"
+                    },
+                    "default_reasoning_effort": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "name": {
+                        "type": "string"
+                    },
+                    "options": {
+                        "$ref": "#/components/schemas/catwalk.ModelOptions"
+                    },
+                    "reasoning_levels": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "supports_attachments": {
+                        "type": "boolean"
+                    }
+                }
+            },
+            "catwalk.ModelOptions": {
+                "type": "object",
+                "properties": {
+                    "frequency_penalty": {
+                        "type": "number"
+                    },
+                    "presence_penalty": {
+                        "type": "number"
+                    },
+                    "provider_options": {
+                        "type": "object",
+                        "additionalProperties": {}
+                    },
+                    "temperature": {
+                        "type": "number"
+                    },
+                    "top_k": {
+                        "type": "integer"
+                    },
+                    "top_p": {
+                        "type": "number"
+                    }
+                }
+            },
+            "config.Attribution": {
+                "type": "object",
+                "properties": {
+                    "co_authored_by": {
+                        "type": "boolean"
+                    },
+                    "generated_with": {
+                        "type": "boolean"
+                    },
+                    "trailer_style": {
+                        "$ref": "#/components/schemas/config.TrailerStyle"
+                    }
+                }
+            },
+            "config.Completions": {
+                "type": "object",
+                "properties": {
+                    "max_depth": {
+                        "type": "integer"
+                    },
+                    "max_items": {
+                        "type": "integer"
+                    }
+                }
+            },
+            "config.HookConfig": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "description": "Shell command to execute.",
+                        "type": "string"
+                    },
+                    "matcher": {
+                        "description": "Regex pattern tested against the tool name. Empty means match all.",
+                        "type": "string"
+                    },
+                    "timeout": {
+                        "description": "Timeout in seconds. Default 30.",
+                        "type": "integer"
+                    }
+                }
+            },
+            "config.LSPConfig": {
+                "type": "object",
+                "properties": {
+                    "args": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "command": {
+                        "type": "string"
+                    },
+                    "disabled": {
+                        "type": "boolean"
+                    },
+                    "env": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "string"
+                        }
+                    },
+                    "filetypes": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "init_options": {
+                        "type": "object",
+                        "additionalProperties": {}
+                    },
+                    "options": {
+                        "type": "object",
+                        "additionalProperties": {}
+                    },
+                    "root_markers": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "timeout": {
+                        "type": "integer"
+                    }
+                }
+            },
+            "config.LSPs": {
+                "type": "object",
+                "additionalProperties": {
+                    "$ref": "#/components/schemas/config.LSPConfig"
+                }
+            },
+            "config.MCPConfig": {
+                "type": "object",
+                "properties": {
+                    "args": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "command": {
+                        "type": "string"
+                    },
+                    "disabled": {
+                        "type": "boolean"
+                    },
+                    "disabled_tools": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "enabled_tools": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "env": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "string"
+                        }
+                    },
+                    "headers": {
+                        "description": "Headers are HTTP headers for HTTP/SSE MCP servers. Values run\nthrough shell expansion at MCP startup, so $VAR and $(cmd)\nwork. A header whose value resolves to the empty string (unset\nbare $VAR under lenient nounset, $(echo), or literal \"\") is\nomitted from the outgoing request rather than sent as\n\"Header:\".",
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "string"
+                        }
+                    },
+                    "timeout": {
+                        "type": "integer"
+                    },
+                    "type": {
+                        "$ref": "#/components/schemas/config.MCPType"
+                    },
+                    "url": {
+                        "type": "string"
+                    }
+                }
+            },
+            "config.MCPType": {
+                "type": "string",
+                "enum": [
+                    "stdio",
+                    "sse",
+                    "http"
+                ],
+                "x-enum-varnames": [
+                    "MCPStdio",
+                    "MCPSSE",
+                    "MCPHttp"
+                ]
+            },
+            "config.MCPs": {
+                "type": "object",
+                "additionalProperties": {
+                    "$ref": "#/components/schemas/config.MCPConfig"
+                }
+            },
+            "config.Permissions": {
+                "type": "object",
+                "properties": {
+                    "allowed_tools": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "config.Scope": {
+                "type": "integer",
+                "enum": [
+                    0,
+                    1
+                ],
+                "x-enum-varnames": [
+                    "ScopeGlobal",
+                    "ScopeWorkspace"
+                ]
+            },
+            "config.SelectedModel": {
+                "type": "object",
+                "properties": {
+                    "frequency_penalty": {
+                        "type": "number"
+                    },
+                    "max_tokens": {
+                        "description": "Overrides the default model configuration.",
+                        "type": "integer"
+                    },
+                    "model": {
+                        "description": "The model id as used by the provider API.\nRequired.",
+                        "type": "string"
+                    },
+                    "presence_penalty": {
+                        "type": "number"
+                    },
+                    "provider": {
+                        "description": "The model provider, same as the key/id used in the providers config.\nRequired.",
+                        "type": "string"
+                    },
+                    "provider_options": {
+                        "description": "Override provider specific options.",
+                        "type": "object",
+                        "additionalProperties": {}
+                    },
+                    "reasoning_effort": {
+                        "description": "Only used by models that use the openai provider and need this set.",
+                        "type": "string"
+                    },
+                    "temperature": {
+                        "type": "number"
+                    },
+                    "think": {
+                        "description": "Used by anthropic models that can reason to indicate if the model should think.",
+                        "type": "boolean"
+                    },
+                    "top_k": {
+                        "type": "integer"
+                    },
+                    "top_p": {
+                        "type": "number"
+                    }
+                }
+            },
+            "config.SelectedModelType": {
+                "type": "string",
+                "enum": [
+                    "large",
+                    "small"
+                ],
+                "x-enum-varnames": [
+                    "SelectedModelTypeLarge",
+                    "SelectedModelTypeSmall"
+                ]
+            },
+            "config.TUIOptions": {
+                "type": "object",
+                "properties": {
+                    "compact_mode": {
+                        "type": "boolean"
+                    },
+                    "completions": {
+                        "$ref": "#/components/schemas/config.Completions"
+                    },
+                    "diff_mode": {
+                        "type": "string"
+                    },
+                    "transparent": {
+                        "type": "boolean"
+                    }
+                }
+            },
+            "config.ToolGrep": {
+                "type": "object",
+                "properties": {
+                    "timeout": {
+                        "$ref": "#/components/schemas/time.Duration"
+                    }
+                }
+            },
+            "config.ToolLs": {
+                "type": "object",
+                "properties": {
+                    "max_depth": {
+                        "type": "integer"
+                    },
+                    "max_items": {
+                        "type": "integer"
+                    }
+                }
+            },
+            "config.Tools": {
+                "type": "object",
+                "properties": {
+                    "grep": {
+                        "$ref": "#/components/schemas/config.ToolGrep"
+                    },
+                    "ls": {
+                        "$ref": "#/components/schemas/config.ToolLs"
+                    }
+                }
+            },
+            "config.TrailerStyle": {
+                "type": "string",
+                "enum": [
+                    "none",
+                    "co-authored-by",
+                    "assisted-by"
+                ],
+                "x-enum-varnames": [
+                    "TrailerStyleNone",
+                    "TrailerStyleCoAuthoredBy",
+                    "TrailerStyleAssistedBy"
+                ]
+            },
+            "csync.Map-string-config_ProviderConfig": {
+                "type": "object"
+            },
+            "github_com_charmbracelet_crush_internal_config.Config": {
+                "type": "object",
+                "properties": {
+                    "$schema": {
+                        "type": "string"
+                    },
+                    "hooks": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/components/schemas/config.HookConfig"
+                            }
+                        }
+                    },
+                    "lsp": {
+                        "$ref": "#/components/schemas/config.LSPs"
+                    },
+                    "mcp": {
+                        "$ref": "#/components/schemas/config.MCPs"
+                    },
+                    "models": {
+                        "description": "We currently only support large/small as values here.",
+                        "type": "object",
+                        "additionalProperties": {
+                            "$ref": "#/components/schemas/config.SelectedModel"
+                        }
+                    },
+                    "options": {
+                        "$ref": "#/components/schemas/github_com_charmbracelet_crush_internal_config.Options"
+                    },
+                    "permissions": {
+                        "$ref": "#/components/schemas/config.Permissions"
+                    },
+                    "providers": {
+                        "description": "The providers that are configured",
+                        "allOf": [
+                            {
+                                "$ref": "#/components/schemas/csync.Map-string-config_ProviderConfig"
+                            }
+                        ]
+                    },
+                    "recent_models": {
+                        "description": "Recently used models stored in the data directory config.",
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/components/schemas/config.SelectedModel"
+                            }
+                        }
+                    },
+                    "tools": {
+                        "$ref": "#/components/schemas/config.Tools"
+                    }
+                }
+            },
+            "github_com_charmbracelet_crush_internal_config.Options": {
+                "type": "object",
+                "properties": {
+                    "attribution": {
+                        "$ref": "#/components/schemas/config.Attribution"
+                    },
+                    "auto_lsp": {
+                        "type": "boolean"
+                    },
+                    "context_paths": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "data_directory": {
+                        "description": "DataDirectory is where Crush keeps per-project state such as\nthe SQLite database and workspace overrides. Relative paths are\nresolved against the working directory; absolute paths are used\nverbatim. After defaulting the stored value is always absolute.",
+                        "type": "string"
+                    },
+                    "debug": {
+                        "type": "boolean"
+                    },
+                    "debug_lsp": {
+                        "type": "boolean"
+                    },
+                    "disable_auto_summarize": {
+                        "type": "boolean"
+                    },
+                    "disable_default_providers": {
+                        "type": "boolean"
+                    },
+                    "disable_metrics": {
+                        "type": "boolean"
+                    },
+                    "disable_notifications": {
+                        "type": "boolean"
+                    },
+                    "disable_provider_auto_update": {
+                        "type": "boolean"
+                    },
+                    "disabled_skills": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "disabled_tools": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "initialize_as": {
+                        "type": "string"
+                    },
+                    "progress": {
+                        "type": "boolean"
+                    },
+                    "skills_paths": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "tui": {
+                        "$ref": "#/components/schemas/config.TUIOptions"
+                    }
+                }
+            },
+            "github_com_charmbracelet_crush_internal_proto.Message": {
+                "type": "object",
+                "properties": {
+                    "created_at": {
+                        "type": "integer"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "model": {
+                        "type": "string"
+                    },
+                    "parts": {
+                        "type": "array",
+                        "items": {}
+                    },
+                    "provider": {
+                        "type": "string"
+                    },
+                    "role": {
+                        "$ref": "#/components/schemas/proto.MessageRole"
+                    },
+                    "session_id": {
+                        "type": "string"
+                    },
+                    "updated_at": {
+                        "type": "integer"
+                    }
+                }
+            },
+            "lsp.ServerState": {
+                "type": "integer",
+                "enum": [
+                    0,
+                    1,
+                    2,
+                    3,
+                    4,
+                    5
+                ],
+                "x-enum-varnames": [
+                    "StateUnstarted",
+                    "StateStarting",
+                    "StateReady",
+                    "StateError",
+                    "StateStopped",
+                    "StateDisabled"
+                ]
+            },
+            "proto.APIKeyKind": {
+                "type": "string",
+                "enum": [
+                    "string",
+                    "oauth"
+                ],
+                "x-enum-varnames": [
+                    "APIKeyKindString",
+                    "APIKeyKindOAuth"
+                ]
+            },
+            "proto.AgentInfo": {
+                "type": "object",
+                "properties": {
+                    "is_busy": {
+                        "type": "boolean"
+                    },
+                    "is_ready": {
+                        "type": "boolean"
+                    },
+                    "model": {
+                        "$ref": "#/components/schemas/catwalk.Model"
+                    },
+                    "model_cfg": {
+                        "$ref": "#/components/schemas/config.SelectedModel"
+                    }
+                }
+            },
+            "proto.AgentMessage": {
+                "type": "object",
+                "properties": {
+                    "attachments": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/proto.Attachment"
+                        }
+                    },
+                    "prompt": {
+                        "type": "string"
+                    },
+                    "session_id": {
+                        "type": "string"
+                    }
+                }
+            },
+            "proto.AgentSession": {
+                "type": "object",
+                "properties": {
+                    "completion_tokens": {
+                        "type": "integer"
+                    },
+                    "cost": {
+                        "type": "number"
+                    },
+                    "created_at": {
+                        "type": "integer"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "is_busy": {
+                        "type": "boolean"
+                    },
+                    "message_count": {
+                        "type": "integer"
+                    },
+                    "parent_session_id": {
+                        "type": "string"
+                    },
+                    "prompt_tokens": {
+                        "type": "integer"
+                    },
+                    "summary_message_id": {
+                        "type": "string"
+                    },
+                    "title": {
+                        "type": "string"
+                    },
+                    "updated_at": {
+                        "type": "integer"
+                    }
+                }
+            },
+            "proto.Attachment": {
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer"
+                        }
+                    },
+                    "file_name": {
+                        "type": "string"
+                    },
+                    "file_path": {
+                        "type": "string"
+                    },
+                    "mime_type": {
+                        "type": "string"
+                    }
+                }
+            },
+            "proto.ConfigCompactRequest": {
+                "type": "object",
+                "properties": {
+                    "enabled": {
+                        "type": "boolean"
+                    },
+                    "scope": {
+                        "$ref": "#/components/schemas/config.Scope"
+                    }
+                }
+            },
+            "proto.ConfigModelRequest": {
+                "type": "object",
+                "properties": {
+                    "model": {
+                        "$ref": "#/components/schemas/config.SelectedModel"
+                    },
+                    "model_type": {
+                        "$ref": "#/components/schemas/config.SelectedModelType"
+                    },
+                    "scope": {
+                        "$ref": "#/components/schemas/config.Scope"
+                    }
+                }
+            },
+            "proto.ConfigProviderKeyRequest": {
+                "type": "object",
+                "properties": {
+                    "api_key": {
+                        "type": "array",
+                        "items": {
+                            "type": "integer"
+                        }
+                    },
+                    "kind": {
+                        "$ref": "#/components/schemas/proto.APIKeyKind"
+                    },
+                    "provider_id": {
+                        "type": "string"
+                    },
+                    "scope": {
+                        "$ref": "#/components/schemas/config.Scope"
+                    }
+                }
+            },
+            "proto.ConfigRefreshOAuthRequest": {
+                "type": "object",
+                "properties": {
+                    "provider_id": {
+                        "type": "string"
+                    },
+                    "scope": {
+                        "$ref": "#/components/schemas/config.Scope"
+                    }
+                }
+            },
+            "proto.ConfigRemoveRequest": {
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "string"
+                    },
+                    "scope": {
+                        "$ref": "#/components/schemas/config.Scope"
+                    }
+                }
+            },
+            "proto.ConfigSetRequest": {
+                "type": "object",
+                "properties": {
+                    "key": {
+                        "type": "string"
+                    },
+                    "scope": {
+                        "$ref": "#/components/schemas/config.Scope"
+                    },
+                    "value": {}
+                }
+            },
+            "proto.Error": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string"
+                    }
+                }
+            },
+            "proto.File": {
+                "type": "object",
+                "properties": {
+                    "content": {
+                        "type": "string"
+                    },
+                    "created_at": {
+                        "type": "integer"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "path": {
+                        "type": "string"
+                    },
+                    "session_id": {
+                        "type": "string"
+                    },
+                    "updated_at": {
+                        "type": "integer"
+                    },
+                    "version": {
+                        "type": "integer"
+                    }
+                }
+            },
+            "proto.FileTrackerReadRequest": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    },
+                    "session_id": {
+                        "type": "string"
+                    }
+                }
+            },
+            "proto.ImportCopilotResponse": {
+                "type": "object",
+                "properties": {
+                    "success": {
+                        "type": "boolean"
+                    },
+                    "token": {}
+                }
+            },
+            "proto.LSPClientInfo": {
+                "type": "object",
+                "properties": {
+                    "connected_at": {
+                        "type": "string"
+                    },
+                    "diagnostic_count": {
+                        "type": "integer"
+                    },
+                    "error": {},
+                    "name": {
+                        "type": "string"
+                    },
+                    "state": {
+                        "$ref": "#/components/schemas/lsp.ServerState"
+                    }
+                }
+            },
+            "proto.LSPStartRequest": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string"
+                    }
+                }
+            },
+            "proto.MCPClientInfo": {
+                "type": "object",
+                "properties": {
+                    "connected_at": {
+                        "type": "string"
+                    },
+                    "error": {},
+                    "name": {
+                        "type": "string"
+                    },
+                    "prompt_count": {
+                        "type": "integer"
+                    },
+                    "resource_count": {
+                        "type": "integer"
+                    },
+                    "state": {
+                        "$ref": "#/components/schemas/proto.MCPState"
+                    },
+                    "tool_count": {
+                        "type": "integer"
+                    }
+                }
+            },
+            "proto.MCPGetPromptRequest": {
+                "type": "object",
+                "properties": {
+                    "args": {
+                        "type": "object",
+                        "additionalProperties": {
+                            "type": "string"
+                        }
+                    },
+                    "client_id": {
+                        "type": "string"
+                    },
+                    "prompt_id": {
+                        "type": "string"
+                    }
+                }
+            },
+            "proto.MCPGetPromptResponse": {
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string"
+                    }
+                }
+            },
+            "proto.MCPNameRequest": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    }
+                }
+            },
+            "proto.MCPReadResourceRequest": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string"
+                    },
+                    "uri": {
+                        "type": "string"
+                    }
+                }
+            },
+            "proto.MCPState": {
+                "type": "integer",
+                "enum": [
+                    0,
+                    1,
+                    2,
+                    3
+                ],
+                "x-enum-varnames": [
+                    "MCPStateDisabled",
+                    "MCPStateStarting",
+                    "MCPStateConnected",
+                    "MCPStateError"
+                ]
+            },
+            "proto.MessageRole": {
+                "type": "string",
+                "enum": [
+                    "assistant",
+                    "user",
+                    "system",
+                    "tool"
+                ],
+                "x-enum-varnames": [
+                    "Assistant",
+                    "User",
+                    "System",
+                    "Tool"
+                ]
+            },
+            "proto.PermissionAction": {
+                "type": "string",
+                "enum": [
+                    "allow",
+                    "allow_session",
+                    "deny"
+                ],
+                "x-enum-varnames": [
+                    "PermissionAllow",
+                    "PermissionAllowForSession",
+                    "PermissionDeny"
+                ]
+            },
+            "proto.PermissionGrant": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "$ref": "#/components/schemas/proto.PermissionAction"
+                    },
+                    "permission": {
+                        "$ref": "#/components/schemas/proto.PermissionRequest"
+                    }
+                }
+            },
+            "proto.PermissionRequest": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string"
+                    },
+                    "description": {
+                        "type": "string"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "params": {},
+                    "path": {
+                        "type": "string"
+                    },
+                    "session_id": {
+                        "type": "string"
+                    },
+                    "tool_call_id": {
+                        "type": "string"
+                    },
+                    "tool_name": {
+                        "type": "string"
+                    }
+                }
+            },
+            "proto.PermissionSkipRequest": {
+                "type": "object",
+                "properties": {
+                    "skip": {
+                        "type": "boolean"
+                    }
+                }
+            },
+            "proto.ProjectInitPromptResponse": {
+                "type": "object",
+                "properties": {
+                    "prompt": {
+                        "type": "string"
+                    }
+                }
+            },
+            "proto.ProjectNeedsInitResponse": {
+                "type": "object",
+                "properties": {
+                    "needs_init": {
+                        "type": "boolean"
+                    }
+                }
+            },
+            "proto.ServerControl": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string"
+                    }
+                }
+            },
+            "proto.Session": {
+                "type": "object",
+                "properties": {
+                    "completion_tokens": {
+                        "type": "integer"
+                    },
+                    "cost": {
+                        "type": "number"
+                    },
+                    "created_at": {
+                        "type": "integer"
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "message_count": {
+                        "type": "integer"
+                    },
+                    "parent_session_id": {
+                        "type": "string"
+                    },
+                    "prompt_tokens": {
+                        "type": "integer"
+                    },
+                    "summary_message_id": {
+                        "type": "string"
+                    },
+                    "title": {
+                        "type": "string"
+                    },
+                    "updated_at": {
+                        "type": "integer"
+                    }
+                }
+            },
+            "proto.VersionInfo": {
+                "type": "object",
+                "properties": {
+                    "build_id": {
+                        "type": "string"
+                    },
+                    "commit": {
+                        "type": "string"
+                    },
+                    "go_version": {
+                        "type": "string"
+                    },
+                    "platform": {
+                        "type": "string"
+                    },
+                    "version": {
+                        "type": "string"
+                    }
+                }
+            },
+            "proto.Workspace": {
+                "type": "object",
+                "properties": {
+                    "config": {
+                        "$ref": "#/components/schemas/github_com_charmbracelet_crush_internal_config.Config"
+                    },
+                    "data_dir": {
+                        "type": "string"
+                    },
+                    "debug": {
+                        "type": "boolean"
+                    },
+                    "env": {
+                        "type": "array",
+                        "items": {
+                            "type": "string"
+                        }
+                    },
+                    "id": {
+                        "type": "string"
+                    },
+                    "path": {
+                        "type": "string"
+                    },
+                    "version": {
+                        "type": "string"
+                    },
+                    "yolo": {
+                        "type": "boolean"
+                    }
+                }
+            },
+            "time.Duration": {
+                "type": "integer",
+                "format": "int64",
+                "enum": [
+                    -9223372036854776000,
+                    9223372036854776000,
+                    1,
+                    1000,
+                    1000000,
+                    1000000000,
+                    60000000000,
+                    3600000000000
+                ],
+                "x-enum-varnames": [
+                    "minDuration",
+                    "maxDuration",
+                    "Nanosecond",
+                    "Microsecond",
+                    "Millisecond",
+                    "Second",
+                    "Minute",
+                    "Hour"
+                ]
+            }
+        }
+    }
+}

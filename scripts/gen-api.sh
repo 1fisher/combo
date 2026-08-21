@@ -2,7 +2,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-npx openapi-typescript swagger/swagger.json \
+# swagger.json 为 Swagger 2.0(vendored from rune);openapi-typescript 7.x
+# 仅支持 OpenAPI 3.x,故使用 swagger2openapi 转换后的 swagger.openapi3.json
+npx openapi-typescript swagger/swagger.openapi3.json \
   --output src/lib/api/types.ts \
   --export-type
 
@@ -20,6 +22,8 @@ export namespace Api {
   export type Workspace = {
     id: string;
     path: string;
+    name?: string;
+    backend?: string;
     yolo?: boolean;
     debug?: boolean;
     data_dir?: string;
@@ -35,6 +39,11 @@ export namespace Api {
     message_count: number;
     prompt_tokens: number;
     completion_tokens: number;
+    /** 最近一次 run 的上下文占用(rig usage 上报,最后一次调用的 input+output) */
+    context_tokens?: number;
+    /** 会话累计的 API 调用次数(rig 多轮循环 completion 调用数,run 结束累加;
+     *  Composer 底部「调用次数」取用) */
+    api_calls?: number;
     summary_message_id?: string;
     cost: number;
     todos?: { content: string; status: string; active_form: string }[];
@@ -42,6 +51,25 @@ export namespace Api {
     updated_at: number;
     is_busy?: boolean;
     attached_clients?: number;
+  };
+
+  /** GET /v1/workspaces/:id/sessions/page 的分页信封(侧边栏任务分页加载)。
+   *  后端按 created_at 倒序返回当前页,total 为该项目全部会话数。 */
+  export type SessionPage = {
+    sessions: Session[];
+    total: number;
+    limit: number;
+    offset: number;
+  };
+
+  /** GET /v1/workspaces/:id/sessions/summary 的项目级汇总:
+   *  任务列表分页后,项目徽章/费用栏不能再遍历全量列表求和,改用本汇总。 */
+  export type SessionSummary = {
+    prompt_tokens: number;
+    completion_tokens: number;
+    cost: number;
+    busy_sessions: number;
+    total_sessions: number;
   };
 
   export type MessageRole = 'assistant' | 'user' | 'system' | 'tool';
@@ -75,6 +103,16 @@ export namespace Api {
     time?: number;
     message?: string;
     details?: string;
+    /** 本次 run 的真实 token 用量(rig 原生 Usage 上报)。
+     * input/output 为最后一次 completion 调用(input 含全部历史,≈ 上下文占用);
+     * total_* 为本次 run 全部调用累计(agent 实际消耗)。 */
+    usage?: {
+      input_tokens: number;
+      output_tokens: number;
+      total_input_tokens?: number;
+      total_output_tokens?: number;
+      cached_input_tokens?: number;
+    };
   };
 
   export type ContentPart =
@@ -91,7 +129,8 @@ export namespace Api {
     id: string;
     role: MessageRole;
     session_id: string;
-    parts: ContentPart[];
+    /** rune 返回的消息可能缺少 parts 字段(见生成类型 parts?: unknown[]) */
+    parts?: ContentPart[];
     model: string;
     provider: string;
     created_at: number;
@@ -102,7 +141,14 @@ export namespace Api {
     session_id: string;
     run_id?: string;
     prompt: string;
-    attachments?: unknown[];
+    attachments?: Attachment[];
+  };
+
+  // 附件(随消息一起发送给 agent;工作区附件走 file_path,不作额外上传)
+  export type Attachment = {
+    file_path: string;
+    file_name: string;
+    mime_type?: string;
   };
 
   export type PermissionRequest = {
@@ -119,6 +165,13 @@ export namespace Api {
   export type PermissionGrant = {
     permission: PermissionRequest;
     action: 'allow' | 'allow_session' | 'deny';
+  };
+
+  // 已授权的敏感目录(桌面/文稿/下载、外置卷等;允许一次后持久记住)
+  export type DirGrant = {
+    id: number;
+    path: string;
+    created_at: number;
   };
 
   export type QuestionChoice = { id: string; label: string; description?: string };
@@ -148,6 +201,32 @@ export namespace Api {
   export type QuestionAnswer = {
     batch_request_id: string;
     responses: QuestionResponse[];
+    /** 用户选择"让 agent 自行决定"时为 true */
+    skipped?: boolean;
+  };
+
+  // Todo 工具(agent 管理的任务列表,经 todo_update SSE 事件推送)
+  export type TodoStatus = 'pending' | 'in_progress' | 'completed';
+  export type TodoItem = {
+    content: string;
+    status: TodoStatus;
+    active_form?: string;
+  };
+
+  // 多 agent 协作(agent 工具派发的子任务,经 subagent_update SSE 事件推送)
+  export type SubAgentStatus = 'running' | 'done' | 'error' | 'cancelled';
+  export type SubAgentTask = {
+    task_id: string;
+    agent: string;
+    task: string;
+    status: SubAgentStatus;
+    /** 最新输出预览(尾部截断) */
+    preview?: string;
+    tool_calls?: number;
+    turns?: number;
+    model?: string;
+    provider?: string;
+    error?: string;
   };
 
   // 文件服务(combo-cli serve 本地端点,swagger 无此定义)
@@ -184,6 +263,17 @@ export namespace Api {
     files: GitStatusFile[];
   };
 
+  export type GitRepoStatus = {
+    /** 相对 workspace 根目录的路径;空串表示根目录本身 */
+    path: string;
+    branch: string;
+    files: GitStatusFile[];
+  };
+
+  export type GitRepos = {
+    repos: GitRepoStatus[];
+  };
+
   export type GitDiff = { diff: string };
 
   export type GitFileAtHead = { content: string };
@@ -209,10 +299,37 @@ export namespace Api {
     behind: number;
   };
 
+  export type GitBranch = {
+    name: string;
+    current: boolean;
+  };
+
+  export type GitBranchList = {
+    current: string;
+    branches: GitBranch[];
+  };
+
   export type GitCommitFile = {
     path: string;
     oldPath?: string;
     status: string;
+  };
+
+  /** GET/POST /v1/settings/commit-model — AI 生成提交信息的全局模型配置。 */
+  export type CommitModelConfig = {
+    enabled: boolean;
+    provider?: string | null;
+    model?: string | null;
+  };
+
+  /** POST /v1/workspaces/{id}/git/commit-message 返回(AI 生成的提交信息)。 */
+  export type CommitMessageResult = {
+    message: string;
+    /** 实际使用的 provider id 与模型名。 */
+    provider: string;
+    model: string;
+    /** 是否使用了设置中开启的全局提交模型(false = 会话模型)。 */
+    global_model: boolean;
   };
 
   // 技能(combo-cli serve 本地端点,扫描技能目录)
@@ -223,7 +340,113 @@ export namespace Api {
     path: string;
   };
 
-  // 配置(透传)
+  // MCP server(combo-cli serve 本地端点,读写配置文件 [mcp.<name>])
+  export type McpServer = {
+    name: string;
+    type: string; // stdio | http
+    command?: string | null;
+    args?: string[] | null;
+    url?: string | null;
+  };
+
+  // MCP 连接测试结果。
+  export type McpTestResult = {
+    ok: boolean;
+    tool_count?: number;
+    tools?: string[];
+  };
+
+  // LSP server(combo-cli serve 本地端点,读写配置文件 [lsp.<lang>])
+  export type LspServer = {
+    /** 语言标识(配置段名 [lsp.<lang>],如 rust/typescript/python)。 */
+    name: string;
+    /** 可执行文件(不含参数)。 */
+    command: string;
+    args?: string[] | null;
+    env?: Record<string, string> | null;
+    /** 命令是否能在 PATH / 绝对路径中找到(GET 时实时检测)。 */
+    executable?: boolean;
+    /** 找到的可执行文件完整路径。 */
+    path?: string | null;
+  };
+
+  // 编辑器 LSP 文档同步与实时诊断(combo-cli serve 本地端点)。
+  // 位置为 LSP 0-based 行列(UTF-16 code unit),severity 1=error 2=warning 3=info 4=hint。
+  export type LspDiagnostic = {
+    line: number;
+    character: number;
+    endLine: number;
+    endCharacter: number;
+    severity: 1 | 2 | 3 | 4;
+    message: string;
+    source?: string | null;
+  };
+
+  // POST /v1/workspaces/:id/lsp/document 的响应;扩展名无对应 server 时 language 为 null。
+  export type LspDocumentSyncResult = {
+    language: string | null;
+  };
+
+  // GET /v1/workspaces/:id/lsp/diagnostics?path= 的响应。
+  export type LspDocumentDiagnostics = {
+    language: string | null;
+    diagnostics: LspDiagnostic[];
+  };
+
+  // GET /v1/workspaces/:id/lsp/diagnostics/all 的响应:聚合所有已推送诊断的
+  // 文件(编辑器打开过的 + server 顺带推送的相关文件),只含 error/warning,
+  // line/character 0-based,按 severity→path→line 排序。
+  export type LspDiagEntry = LspDiagnostic & {
+    /** 相对 workspace 根的路径(根外文件为绝对路径)。 */
+    path: string;
+  };
+
+  export type LspAllDiagnostics = {
+    items: LspDiagEntry[];
+  };
+
+  // workspace 语言统计(GET /v1/workspaces/:id/languages,按扩展名聚合;
+  // 语言标识与 [lsp.<lang>] 配置键一致,供会话界面展示 LSP 检测提示)。
+  export type WorkspaceLanguageStat = {
+    /** 语言标识,如 rust/typescript/python。 */
+    lang: string;
+    /** 该语言源文件数(按扩展名统计)。 */
+    files: number;
+  };
+
+  export type WorkspaceLanguages = {
+    /** 按文件数降序。 */
+    languages: WorkspaceLanguageStat[];
+    /** 是否因超过扫描上限被截断。 */
+    truncated: boolean;
+  };
+
+  // LSP 命令检测结果。
+  export type LspCheckResult = {
+    found: boolean;
+    path?: string | null;
+  };
+
+  // LSP 一键安装方案(install_command 已按本机可用包管理器解析)。
+  export type LspInstallPlan = {
+    name: string;
+    command: string;
+    args?: string[] | null;
+    /** 实际执行的安装命令;null 表示本机缺少包管理器,需手动安装。 */
+    install_command: string | null;
+  };
+
+  // LSP 安装任务状态(GET /v1/lsp/install/status 轮询)。
+  export type LspInstallStatus = {
+    running: boolean;
+    name?: string;
+    command?: string;
+    status?: 'running' | 'success' | 'failed' | 'cancelled';
+    message?: string;
+    log?: string[];
+  };
+
+  // 配置(rune 透传)
   export type ConfigScope = 0 | 1; // 0=global, 1=workspace
   export type ConfigSetRequest = {
     key: string;
@@ -236,7 +459,253 @@ export namespace Api {
       skills_paths?: string[];
       [key: string]: unknown;
     };
+    /** 配置的大/小模型(combo config 中的 models 字段)。 */
+    models?: { [key: string]: SelectedModel };
+    /** 最近使用的模型。 */
+    recent_models?: { [key: string]: SelectedModel[] };
     [key: string]: unknown;
+  };
+
+  // ---------- agent / model 选择 ----------
+
+  export type SelectedModel = {
+    model?: string;
+    provider?: string;
+    max_tokens?: number;
+    temperature?: number;
+    think?: boolean;
+    reasoning_effort?: string;
+    [key: string]: unknown;
+  };
+
+  export type ModelType = 'large' | 'small';
+
+  export type ConfigModelRequest = {
+    model?: SelectedModel;
+    model_type?: ModelType;
+    scope?: ConfigScope;
+  };
+
+  /** GET /v1/workspaces/{id}/agent 返回的 agent 信息。 */
+  export type AgentInfo = {
+    is_busy?: boolean;
+    is_ready?: boolean;
+    model?: { id?: string; name?: string; [k: string]: unknown };
+    model_cfg?: SelectedModel;
+    [key: string]: unknown;
+  };
+
+  /** provider 列表中的一个 provider 条目。 */
+  export type ProviderEntry = {
+    id: string;
+    name?: string;
+    type?: string;
+    models?: {
+      id?: string;
+      name?: string;
+      context_window?: number;
+      /** 手动覆盖的原始上下文窗口(设置界面写入;null = 未覆盖)。 */
+      context_window_override?: number | null;
+      [k: string]: unknown;
+    }[];
+    /** 是否已配置 API Key(后端不回传明文,只给脱敏结果)。 */
+    has_api_key?: boolean;
+    /** 当前激活 API Key 的脱敏展示,如 `sk-a****1234`。 */
+    api_key_masked?: string;
+    /** 已保存的全部 API Key 脱敏列表(按保存顺序)。元素含脱敏 key 与可选名称。 */
+    api_keys_masked?: { masked: string; name?: string | null }[];
+    /** 当前激活 key 在 api_keys_masked 中的下标;未在列表中(如环境变量)时为 null。 */
+    active_key_index?: number | null;
+    /** provider 默认大模型 id(切换 provider 时自动选用)。 */
+    default_large_model_id?: string;
+    /** provider 默认小模型 id。 */
+    default_small_model_id?: string;
+    /** 自定义 provider(配置文件新增、非内置,前端据此显示删除按钮)。 */
+    custom?: boolean;
+    [key: string]: unknown;
+  };
+
+  // ---------- 自动化(定时任务) ----------
+
+  /** 调度类型:once 一次性 / interval 间隔 / daily 每天 / weekly 每周 / monthly 每月 / quarterly 每季度 / yearly 每年。 */
+  export type AutomationScheduleType =
+    | 'once'
+    | 'interval'
+    | 'daily'
+    | 'weekly'
+    | 'monthly'
+    | 'quarterly'
+    | 'yearly';
+
+  /** 调度配置(与后端 automation.rs::Schedule 对应)。 */
+  export type AutomationSchedule = {
+    type: AutomationScheduleType;
+    /** once:触发时间(unix 秒)。 */
+    run_at?: number | null;
+    /** interval:间隔秒数。 */
+    every_seconds?: number | null;
+    /** daily / weekly / monthly / quarterly / yearly:触发时刻 "HH:MM"。 */
+    time?: string | null;
+    /** weekly:星期几列表(1=周一 .. 7=周日,升序;可多选,如 [1, 3] = 周一与周三)。 */
+    weekdays?: number[] | null;
+    /** weekly(旧格式):单值星期几,1=周一 .. 7=周日;仅兼容历史数据,新数据统一用 weekdays。 */
+    weekday?: number | null;
+    /** monthly / quarterly / yearly:每月几号(1..31;超过当月天数时取当月最后一天)。 */
+    day?: number | null;
+    /** quarterly:季度内第几个月(1..3);yearly:几月(1..12)。 */
+    month?: number | null;
+    [key: string]: unknown;
+  };
+
+  /** 自动化任务单独使用的模型(与 WorkspaceModel 同构;null = 跟随项目默认)。 */
+  export type AutomationModel = {
+    provider: string;
+    model: string;
+    reasoning_effort?: string | null;
+  };
+
+  /** 一条自动化(定时)任务。 */
+  export type Automation = {
+    id: string;
+    workspace_id: string;
+    workspace_name?: string;
+    name: string;
+    prompt: string;
+    schedule: AutomationSchedule;
+    /** 单独指定的模型;null = 未设置,跟随目标项目默认。 */
+    model?: AutomationModel | null;
+    enabled: boolean;
+    next_run_at: number | null;
+    last_run_at: number | null;
+    /** success | error | cancelled | skipped */
+    last_status: 'success' | 'error' | 'cancelled' | 'skipped' | null;
+    last_error: string | null;
+    created_at: number;
+    updated_at: number;
+  };
+
+  /** 一次自动化运行记录。 */
+  export type AutomationRun = {
+    id: string;
+    automation_id: string;
+    workspace_id: string;
+    session_id: string;
+    run_id: string;
+    /** running | success | error | cancelled */
+    status: 'running' | 'success' | 'error' | 'cancelled';
+    started_at: number;
+    finished_at: number | null;
+    error: string | null;
+  };
+
+  // ---------- 知识图谱(项目代码依赖图) ----------
+
+  /** 图谱节点:一个源码文件。id 为 workspace 相对路径('/' 分隔)。 */
+  export type GraphNode = {
+    id: string;
+    /** 文件名。 */
+    name: string;
+    /** 所在目录(相对路径,根为 '.')。 */
+    dir: string;
+    /** 语言标识:ts/tsx/js/jsx/py/rs/go/vue/svelte/java/… */
+    lang: string;
+    /** 函数/类/接口等定义数(启发式计数)。 */
+    defs: number;
+    /** 代码行数。 */
+    loc: number;
+    /** 该文件引用的项目内文件数(出度)。 */
+    out: number;
+    /** 被项目内文件引用数(入度)。 */
+    in: number;
+    /** 该文件引用的外部依赖包名列表。 */
+    external: string[];
+  };
+
+  /** 图谱边:source 文件 import 了 target 文件。 */
+  export type GraphEdge = { source: string; target: string };
+
+  /** GET /v1/workspaces/{id}/graph 响应。 */
+  export type WorkspaceGraph = {
+    nodes: GraphNode[];
+    edges: GraphEdge[];
+    stats: {
+      files: number;
+      edges: number;
+      total_loc: number;
+      /** 语言 → 文件数。 */
+      langs: Record<string, number>;
+      /** 被引用最多的外部依赖(取前 100)。 */
+      external: { name: string; count: number }[];
+      /** 文件数超上限被截断时为 true。 */
+      truncated: boolean;
+    };
+    generated_at: number;
+  };
+
+  // ---------- 本地语音识别(ASR,Moonshine 英文离线分段) ----------
+
+  /** 模型阶段:not_ready 未下载 / downloading 下载中 / loading 加载中 / ready 就绪 / failed 失败。 */
+  export type TranscribePhase = 'not_ready' | 'downloading' | 'loading' | 'ready' | 'failed';
+
+  /** GET /v1/transcribe/status 响应。 */
+  export type TranscribeStatus = {
+    ready: boolean;
+    phase: TranscribePhase;
+    /** downloading 阶段 0~1。 */
+    progress?: number | null;
+    error?: string | null;
+    /** 当前 ASR 模型 id:sense-voice(中文)/ moonshine-zh(中文)/ moonshine-en(英文)。 */
+    model?: string;
+    model_dir?: string;
+  };
+
+  /** POST /v1/transcribe/model 响应。 */
+  export type TranscribeModelResult = {
+    ok: boolean;
+    model: string;
+    phase: TranscribePhase;
+  };
+
+  /** POST /v1/transcribe 响应。 */
+  export type TranscribeResult = {
+    text: string;
+    lang?: string;
+  };
+
+  // ---------- 本地语音合成(TTS,piper 中文 / HF 高质量) ----------
+
+  /** TTS 开关+模型状态:GET /v1/speech/status 响应。 */
+  export type SpeechStatus = {
+    enabled: boolean;
+    ready: boolean;
+    phase: TranscribePhase;
+    /** downloading 阶段 0~1。 */
+    progress?: number | null;
+    error?: string | null;
+    /** 当前 TTS 模型 id:piper-zh-xiaoya / piper-zh-chaowen / vits-zh-fanchen-c / vits-zh-en-melo(中英双语)。 */
+    model?: string;
+    model_dir?: string;
+    /** 朗读语速倍率(0.5~2.0,1.0 为正常语速)。 */
+    speed?: number;
+  };
+
+  /** POST /v1/speech/speed 响应。 */
+  export type SpeechSpeedResult = {
+    ok: boolean;
+    speed: number;
+  };
+
+  /** POST /v1/speech/config 响应。 */
+  export type SpeechConfigResult = {
+    ok: boolean;
+    enabled: boolean;
+  };
+
+  /** POST /v1/speech/model 响应。 */
+  export type SpeechModelResult = {
+    ok: boolean;
+    model: string;
+    phase: TranscribePhase;
   };
 }
 EOF
