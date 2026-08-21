@@ -127,25 +127,6 @@ export function getProxyUrlOverride(): string | null {
 
 /** 保存代理地址覆盖并立即生效。非法协议(非 http/https)拒绝写入。 */
 export function setProxyUrlOverride(url: string): void {
-  const input = url.trim();
-  if (!input) {
-    clearProxyUrlOverride();
-    return;
-  }
-
-  let clean = '';
-  try {
-    const parsed = new URL(input);
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      clearProxyUrlOverride();
-      return;
-    }
-    clean = parsed.toString().replace(/\/$/, '');
-  } catch {
-    clearProxyUrlOverride();
-    return;
-  }
-
   const clean = normalizeHttpBaseUrl(url);
   if (!clean) return; // 空串/非法值都不写入(清空走 clearProxyUrlOverride)
   try {
