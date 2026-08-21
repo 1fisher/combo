@@ -57,7 +57,7 @@ pub struct SubAgentDef {
     pub model: Option<String>,
     /// 推理强度覆盖(nothink / high / max)。
     pub reasoning_effort: Option<String>,
-    /// 只读角色:true 时子 agent 仅获得 read/search/grep/web_search/LSP 工具。
+    /// 只读角色:true 时子 agent 仅获得 read/search/grep/web_search/ocr/LSP 工具。
     pub readonly: bool,
 }
 
@@ -69,7 +69,7 @@ pub fn builtin_defs() -> Vec<SubAgentDef> {
             description: "调研员(只读):搜索/阅读代码与网页,产出事实与结论,不改动任何文件"
                 .into(),
             preamble: "你是调研员(researcher),在 supervisor 的指派下完成调研子任务。\n\
-                你只有只读工具(read/search/grep/web_search/LSP),不能写文件、不能执行命令。\n\
+                你只有只读工具(read/search/grep/web_search/ocr/LSP),不能写文件、不能执行命令。\n\
                 工作方式:先明确子任务的目标与范围,系统地检索与阅读,交叉验证后输出结论。\n\
                 最终输出一份自包含的调研报告:关键事实、证据位置(文件路径/行号/链接)、\
                 结论与建议。不要臆测,查不到就明说。"

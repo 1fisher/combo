@@ -262,7 +262,7 @@ pub struct AppConfig {
     pub model: Option<String>,
     /// 系统提示词
     pub preamble: Option<String>,
-    /// 是否启用内置工具
+    /// 是否启用内置工具(read/write/search/bash/web_search/ocr/时间日期等)
     pub tools: Option<bool>,
     /// MCP server 命令(stdio,兼容旧版单 server)
     pub mcp_command: Option<String>,
@@ -1028,7 +1028,7 @@ pub fn write_default(path: &PathBuf, overwrite: bool) -> Result<()> {
 # 系统提示词
 # preamble = "你是 combo 内置的智能助手。"
 
-# 是否启用内置工具(当前时间/日期),默认 true
+# 是否启用内置工具(read/write/search/bash/web_search/ocr/时间日期等),默认 true
 # tools = true
 
 # git 提交时是否自动追加 "Generated with Combo vX.Y.Z" 署名,默认 true

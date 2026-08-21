@@ -375,6 +375,17 @@ crate;真实前端只经 `bundle.resources`(`{"../dist/": "dist/"}`)随包分发
   共用)。`on_finish: Option<AgentFinishCallback>` 在后台 run 真正结束时调用
   (reason: end_turn|cancelled|error + 友好错误文案),自动化任务据此落运行结果;
   普通对话传 None。
+- **本地图片 OCR(`ocr.rs` + tools.rs 的 `ocr` 工具)**:macOS 系统 Vision 框架
+  (`VNRecognizeTextRequest`,经 `objc2`/`objc2-vision` 绑定,仅
+  `[target.'cfg(target_os = "macos")'.dependencies]` 引入,其他平台编译零影响)
+  的本地离线文字识别,无需联网/API key。工具参数:path(workspace 内相对
+  路径,PNG/JPEG/HEIC/TIFF/BMP/GIF/WEBP,PDF 不支持,≤50MB)、languages
+  (默认 `["zh-Hans","en-US"]`,zh 需 macOS 13+)、level(fast/accurate,默认
+  accurate)、correct(语言纠错,默认关——会改写 URL/编号字面量)。注册进
+  `builtin_tools` 与 `builtin_tools_readonly`(只读无副作用,调研/审查子
+  agent 也可用);`performRequests` 阻塞,工具内 `spawn_blocking` 执行;
+  结果按 Vision 阅读顺序逐行返回。非 macOS 调用返回友好错误文案。单元测试
+  内嵌 base64 PNG fixture(`HELLO 42`)锁定真实识别回归。
 - **本地语音识别(`asr.rs`,Composer 语音输入)**:输入框话筒按钮的听写服务
   (快捷键 ⌘/Ctrl+I 与按钮同路径 `dictation` `toggle`,`Composer.tsx` 全局
   keydown,Shift/Alt 变体让位浏览器开发者工具 ⌘⇧I),完全本地离线。**模型可选**(`AsrModel`,配置 `[asr] model` 或设置界面

@@ -1,7 +1,8 @@
-//! 内置工具:read / write / search / bash / web_search + current_time / current_date。
+//! 内置工具:read / write / search / bash / web_search / ocr + current_time / current_date。
 //!
 //! read/write/search/bash 需要 workspace 根目录(由 `builtin_tools` 传入);
-//! web_search 支持多搜索引擎(bing/ddg,默认 bing),无需 API key。
+//! web_search 支持多搜索引擎(bing/ddg,默认 bing),无需 API key;
+//! ocr 调用 macOS 系统 Vision 框架做本地图片文字识别(ocr.rs,仅 macOS)。
 
 use regex::Regex;
 use rig::tool::{DynamicTool, ToolOutput};
@@ -30,6 +31,7 @@ pub fn builtin_tools(
         grep_tool(ws.clone()),
         bash_tool(ws.clone()),
         web_search_tool(),
+        ocr_tool(ws.clone()),
         current_datetime_tool(),
     ];
     // 配置了 LSP server 时注册代码导航工具,共享同一 LspManager(lazy 启动)。
@@ -44,8 +46,8 @@ pub fn builtin_tools(
 }
 
 /// 返回只读内置工具集(multi-agent 只读角色用):read / search / grep /
-/// web_search / current_time + LSP 工具,不含 write / replace / bash——
-/// 调研/审查类子 agent 不应产生任何写副作用。
+/// web_search / ocr + current_time + LSP 工具,不含 write / replace / bash——
+/// 调研/审查类子 agent 不应产生任何写副作用(ocr 只读图片,无副作用)。
 pub fn builtin_tools_readonly(
     workspace_dir: Option<PathBuf>,
     lsp: BTreeMap<String, LspServerConfig>,
@@ -56,6 +58,7 @@ pub fn builtin_tools_readonly(
         search_tool(ws.clone()),
         grep_tool(ws.clone()),
         web_search_tool(),
+        ocr_tool(ws.clone()),
         current_datetime_tool(),
     ];
     let manager = Arc::new(LspManager::new(ws.clone(), lsp));
@@ -1253,6 +1256,109 @@ fn should_skip_dir(name: &str) -> bool {
             | ".idea"
             | "vendor"
             | "Pods"
+    )
+}
+
+// ============================= ocr =============================
+
+/// 图片大小上限:Vision 解码超大会明显拖慢(accurate 模式可达数十秒),
+/// 50MB 足以覆盖常见截图/照片/扫描件。
+const OCR_MAX_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
+
+/// `ocr`:本地 OCR 识别图片中的文字(macOS Vision 框架,离线执行)。
+fn ocr_tool(ws: PathBuf) -> DynamicTool {
+    DynamicTool::new(
+        "ocr",
+        "识别图片中的文字,返回按阅读顺序排列的文本行。基于 macOS 系统 Vision 框架,完全本地离线、无需联网,支持中文/英文等多语言。read 工具读取图片会报二进制错误,识别图片内容(截图/照片/扫描件)时必须用本工具。参数:path(图片在 workspace 内的相对路径,支持 PNG/JPEG/HEIC/TIFF/BMP/GIF/WEBP),languages(识别语言代码数组,默认 [\"zh-Hans\",\"en-US\"],如 [\"ja-JP\",\"en-US\"]),level(识别精度 fast/accurate,默认 accurate,大图粗扫可用 fast),correct(语言纠错,默认 false;开启可能改写 URL/编号等字面内容,自然语言场景可开)。注意:仅 macOS 可用;PDF 不支持。",
+        json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "图片文件路径(workspace 内相对路径)" },
+                "languages": { "type": "array", "items": { "type": "string" }, "description": "识别语言(BCP-47 代码),按优先级排序,默认 [\"zh-Hans\",\"en-US\"]" },
+                "level": { "type": "string", "enum": ["fast", "accurate"], "description": "识别精度,默认 accurate" },
+                "correct": { "type": "boolean", "description": "语言纠错,默认 false" }
+            },
+            "required": ["path"]
+        }),
+        move |_ctx, args| {
+            let ws = ws.clone();
+            Box::pin(async move {
+                let path = args.get("path").and_then(Value::as_str).unwrap_or("");
+                if path.is_empty() {
+                    return Ok(ToolOutput::text("错误: path 不能为空"));
+                }
+
+                let full = match safe_join(&ws, path) {
+                    Ok(p) => p,
+                    Err(e) => return Ok(ToolOutput::text(format!("路径错误: {e}"))),
+                };
+                if !full.exists() {
+                    return Ok(ToolOutput::text(format!("图片不存在: {path}")));
+                }
+                if full.is_dir() {
+                    return Ok(ToolOutput::text(format!("路径是目录,不是图片: {path}")));
+                }
+                if !crate::ocr::is_supported_image(&full) {
+                    return Ok(ToolOutput::text(format!(
+                        "不支持的图片格式: {path}(支持 PNG/JPEG/HEIC/TIFF/BMP/GIF/WEBP;PDF 不支持)"
+                    )));
+                }
+                if let Ok(meta) = std::fs::metadata(&full) {
+                    if meta.len() > OCR_MAX_IMAGE_BYTES {
+                        return Ok(ToolOutput::text(format!(
+                            "图片过大({} 字节,上限 50MB),请先压缩或裁剪",
+                            meta.len()
+                        )));
+                    }
+                }
+
+                let mut opts = crate::ocr::OcrOptions::default();
+                if let Some(langs) = args.get("languages").and_then(Value::as_array) {
+                    let langs: Vec<String> = langs
+                        .iter()
+                        .filter_map(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .collect();
+                    if !langs.is_empty() {
+                        opts.languages = langs;
+                    }
+                }
+                match args.get("level").and_then(Value::as_str) {
+                    Some("fast") => opts.fast = true,
+                    _ => {}
+                }
+                if let Some(correct) = args.get("correct").and_then(Value::as_bool) {
+                    opts.language_correction = correct;
+                }
+
+                // Vision 的 performRequests 是同步阻塞调用,放 spawn_blocking
+                let img = full.clone();
+                let started = std::time::Instant::now();
+                let recognized = tokio::task::spawn_blocking(move || {
+                    crate::ocr::recognize_image_file(&img, &opts)
+                })
+                .await;
+
+                let lines = match recognized {
+                    Ok(Ok(lines)) => lines,
+                    Ok(Err(e)) => return Ok(ToolOutput::text(format!("OCR 失败: {e}"))),
+                    Err(e) => return Ok(ToolOutput::text(format!("OCR 任务执行失败: {e}"))),
+                };
+
+                if lines.is_empty() {
+                    return Ok(ToolOutput::text(
+                        "未识别到文字(图片中可能没有文本,或分辨率/对比度过低)",
+                    ));
+                }
+                let elapsed = started.elapsed().as_millis();
+                Ok(ToolOutput::text(format!(
+                    "识别到 {} 行文字(耗时 {}ms):\n\n{}",
+                    lines.len(),
+                    elapsed,
+                    lines.join("\n")
+                )))
+            })
+        },
     )
 }
 

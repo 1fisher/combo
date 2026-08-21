@@ -21,6 +21,7 @@ pub mod lsp;
 pub mod mcp;
 pub mod meta;
 pub mod multiagent;
+pub mod ocr;
 pub mod p2p;
 pub mod paths;
 pub mod providers;

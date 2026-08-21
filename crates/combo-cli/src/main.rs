@@ -25,7 +25,7 @@ struct Cli {
     #[arg(long, global = true)]
     preamble: Option<String>,
 
-    /// 内置工具开关(当前时间/日期等),默认开启
+    /// 内置工具开关(read/write/search/bash/web_search/ocr/时间日期等),默认开启
     #[arg(long, global = true)]
     tools: Option<bool>,
 
