@@ -24,7 +24,7 @@ bytes = "1"
 uuid = { version = "1", features = ["v4"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-axum = { version = "0.7", features = ["ws"] }
+axum = { version = "0.8", features = ["ws"] }
 async-trait = "0.1"
 chrono = "0.4"
 toml = "0.8"
