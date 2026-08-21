@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { SettingsDialog } from './SettingsDialog';
@@ -353,16 +353,32 @@ describe('SettingsDialog', () => {
     );
   });
 
-  it('上下文窗口:可搜索组件跨 Provider 选模型后保存到新 provider 的模型', async () => {
+  it('上下文窗口:可搜索 Provider/模型选择后保存到新 provider 的模型', async () => {
     renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
-    // 默认选中第一个有模型的 provider(opencode)的默认模型
-    const trigger = screen.getByRole('button', { name: '选择上下文窗口模型' });
-    expect(trigger.textContent).toContain('deepseek-v4-flash-free');
-    // 打开可搜索弹层,按关键词过滤后直接选中 DeepSeek 分组下的模型
-    await userEvent.click(trigger);
-    await userEvent.type(screen.getByPlaceholderText('搜索模型'), 'flash');
-    await userEvent.click(screen.getByRole('button', { name: 'DeepSeek V4 Flash' }));
-    // 仅切换不修改输入不应写入(保存走后端配置,不再本地存覆盖)
+    // 默认选中第一个有模型的 provider(opencode)及其默认模型
+    expect(screen.getByRole('button', { name: '选择上下文窗口 Provider' }).textContent).toContain(
+      'OpenCode Zen',
+    );
+    expect(screen.getByRole('button', { name: '选择上下文窗口模型' }).textContent).toContain(
+      'deepseek-v4-flash-free',
+    );
+    // 可搜索 Provider 弹层:按关键词过滤后切到 DeepSeek(菜单列表内查询,
+    // 避免与设置区 Provider 分组按钮「DeepSeek2 个模型」重名)
+    await userEvent.click(screen.getByRole('button', { name: '选择上下文窗口 Provider' }));
+    await userEvent.type(screen.getByPlaceholderText('搜索 Provider'), 'deep');
+    const providerMenu = screen.getByTestId('provider-menu-list');
+    await userEvent.click(within(providerMenu).getByRole('button', { name: /DeepSeek/ }));
+    // 切 Provider 后模型联动为该 provider 的默认模型
+    expect(screen.getByRole('button', { name: '选择上下文窗口模型' }).textContent).toContain(
+      'DeepSeek V4 Flash',
+    );
+    // 模型弹层经 providerFilter 只列出该 provider 的模型
+    await userEvent.click(screen.getByRole('button', { name: '选择上下文窗口模型' }));
+    const modelMenu = screen.getByTestId('model-menu-list');
+    expect(within(modelMenu).getByRole('button', { name: 'DeepSeek V4 Flash' })).toBeTruthy();
+    expect(within(modelMenu).queryByRole('button', { name: /GLM/ })).toBeNull();
+    // 点遮罩关闭弹层;仅切换不修改输入不应写入(保存走后端配置)
+    await userEvent.click(document.querySelector('div.z-40.fixed')!);
     await userEvent.click(screen.getByRole('button', { name: '保存' }));
     expect(contextWindowMutate).not.toHaveBeenCalled();
     // 设置 1M 并保存:同步写入 combo-cli 配置(新 provider + 当前模型)

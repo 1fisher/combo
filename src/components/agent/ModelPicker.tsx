@@ -13,6 +13,31 @@ import { ProviderLogo } from './ProviderLogo';
  * 沿用 absolute 定位。默认右对齐锚点右边缘(与 right-0 语义一致),align='left'
  * 时左对齐锚点左边缘,空间不足时钳制进视口。
  */
+/**
+ * 向上查找会让后代 fixed 定位失效的祖先(CSS 包含块):带 transform /
+ * perspective / filter / backdrop-filter / contain / will-change 的元素。
+ * 典型场景:Radix DialogContent 用 `-translate-x/y-1/2` 居中——其内部的
+ * fixed 弹层以它为包含块,直接用视口坐标会整体错位,必须换成相对它的偏移。
+ */
+function containingBlockOf(el: HTMLElement): HTMLElement | null {
+  let n: HTMLElement | null = el.parentElement;
+  while (n) {
+    const cs = window.getComputedStyle(n);
+    if (
+      cs.transform !== 'none' ||
+      cs.perspective !== 'none' ||
+      cs.filter !== 'none' ||
+      (cs.backdropFilter && cs.backdropFilter !== 'none') ||
+      (cs.contain && cs.contain !== 'none') ||
+      /(transform|perspective)/.test(cs.willChange)
+    ) {
+      return n;
+    }
+    n = n.parentElement;
+  }
+  return null;
+}
+
 export function useAnchorPopover(
   open: boolean,
   anchorRef: RefObject<HTMLElement | null>,
@@ -37,15 +62,24 @@ export function useAnchorPopover(
       const anchor = anchorRef.current;
       if (!anchor) return;
       const rect = anchor.getBoundingClientRect();
-      const vw = window.innerWidth;
-      const rawLeft = opts.align === 'left' ? rect.left : rect.right - opts.width;
+      // fixed 定位落在 transformed 祖先内时坐标相对该祖先而非视口,
+      // 统一换算成「相对实际包含块原点」的偏移(无则即视口,原点 0,0)
+      const cb = containingBlockOf(anchor);
+      const base = cb ? cb.getBoundingClientRect() : null;
+      const originX = base ? base.left : 0;
+      const originY = base ? base.top : 0;
+      const vw = base ? base.width : window.innerWidth;
+      const vh = base ? base.height : window.innerHeight;
+      const rawLeft =
+        opts.align === 'left' ? rect.left - originX : rect.right - originX - opts.width;
       const left = Math.min(Math.max(rawLeft, 8), Math.max(8, vw - opts.width - 8));
       // 弹层按 max-h-80(320px)+ 边距预留 ~356px;下方放不下且开启 flip 时翻到上方
+      const anchorBottom = rect.bottom - originY;
       const openUp =
-        opts.placement === 'top' || (opts.flip === true && window.innerHeight - rect.bottom < 356);
+        opts.placement === 'top' || (opts.flip === true && vh - anchorBottom < 356);
       const pos = openUp
-        ? { left, bottom: window.innerHeight - rect.top + 8 }
-        : { left, top: rect.bottom + 8 };
+        ? { left, bottom: vh - (rect.top - originY) + 8 }
+        : { left, top: anchorBottom + 8 };
       setPos(pos);
     }
     update();
@@ -87,6 +121,7 @@ export function ModelPicker({
   warn = false,
   placeholder,
   ariaLabel = '切换模型',
+  providerFilter,
 }: {
   /** provider 列表(含 models);未加载时触发器仍可展示已保存的选中值 */
   providers?: Api.ProviderEntry[];
@@ -113,6 +148,8 @@ export function ModelPicker({
   placeholder?: string;
   /** 触发器的无障碍标签(不同表单场景区分用途,默认「切换模型」) */
   ariaLabel?: string;
+  /** 仅展示该 provider 下的模型(设置里与独立的 Provider 选择器搭配使用) */
+  providerFilter?: string;
 }) {
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const isOpen = openProp ?? uncontrolledOpen;
@@ -152,6 +189,8 @@ export function ModelPicker({
       contextWindow?: number;
     }[] = [];
     for (const p of providers) {
+      // 与独立的 Provider 选择器搭配时,只列出该 provider 的模型
+      if (providerFilter && p.id !== providerFilter) continue;
       const pName = p.name ?? p.id;
       const models = Array.isArray(p.models) ? p.models : [];
       for (const m of models) {
@@ -174,7 +213,7 @@ export function ModelPicker({
       return v >= 0 ? v : versionOf(m.name);
     };
     return out.sort((a, b) => modelVersion(b) - modelVersion(a));
-  }, [providers]);
+  }, [providers, providerFilter]);
 
   // 全部 provider 的模型,按 provider 分组(可跨 provider 直接选模型)
   const modelGroups = useMemo(() => {

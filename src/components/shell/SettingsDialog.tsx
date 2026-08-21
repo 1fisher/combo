@@ -44,6 +44,7 @@ import { pickVoicePhrase, speakNotifyVoice, VOICE_RUN_DONE } from '../../lib/not
 import { useFetchModels, useProviderCrud, useProviderKeys, useProviders, useSaveProviderKey, useSetModelContextWindow } from '../../hooks/useAgentModel';
 import { useUIPreferences } from '../../stores/uiPreferencesStore';
 import { ModelPicker } from '../agent/ModelPicker';
+import { ProviderPicker } from '../agent/ProviderPicker';
 import { formatTokenCount } from '../../lib/tokens';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { confirmDialog } from '../../lib/confirm';
@@ -1703,19 +1704,32 @@ const ContextWindowSection = forwardRef<
   return (
     <div className="flex flex-col gap-2">
       <label className="text-[13px] font-medium text-foreground">上下文窗口(手动)</label>
-      {/* Provider + 模型:复用统一的可搜索选择组件(搜索/最近使用/按 Provider
-          分组跨选,与 Composer、自动化表单一致),替代原先两个原生 select */}
-      <ModelPicker
-        variant="form"
-        providers={providers}
-        selected={providerId && modelId ? { provider: providerId, model: modelId } : null}
-        onSelect={(pid, mid) => {
-          setProviderId(pid);
-          setModelId(mid);
-        }}
-        placeholder="选择模型"
-        ariaLabel="选择上下文窗口模型"
-      />
+      {/* Provider + 模型:两个可搜索选择组件并排——ProviderPicker 选供应商,
+          ModelPicker 经 providerFilter 只列出该 Provider 的模型(仍支持搜索/
+          最近使用);切 Provider 时模型联动重置为该 Provider 的默认/首个模型 */}
+      <div className="grid grid-cols-2 gap-1.5">
+        <ProviderPicker
+          providers={providers}
+          value={providerId}
+          onChange={(pid) => {
+            setProviderId(pid);
+            setModelId(defaultModelOf(providers?.find((p) => p.id === pid)));
+          }}
+          ariaLabel="选择上下文窗口 Provider"
+        />
+        <ModelPicker
+          variant="form"
+          providers={providers}
+          providerFilter={providerId}
+          selected={providerId && modelId ? { provider: providerId, model: modelId } : null}
+          onSelect={(pid, mid) => {
+            setProviderId(pid);
+            setModelId(mid);
+          }}
+          placeholder="选择模型"
+          ariaLabel="选择上下文窗口模型"
+        />
+      </div>
       <div className="flex items-center gap-1.5">
         <input
           type="number"

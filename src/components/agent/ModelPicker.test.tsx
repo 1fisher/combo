@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ModelPicker } from './ModelPicker';
 import { useAgentStore } from '../../stores/agentStore';
@@ -156,6 +156,25 @@ describe('ModelPicker 表单形态(variant="form")', () => {
     const label = screen.getByRole('button', { name: '切换模型' }).textContent ?? '';
     expect(label).toContain('gone-model');
     expect(label).toContain('gone-provider');
+  });
+
+  it('providerFilter 只列出该 provider 的模型(与独立 Provider 选择器搭配)', async () => {
+    const user = userEvent.setup();
+    render(
+      <ModelPicker
+        variant="form"
+        providers={PROVIDERS}
+        providerFilter="deepseek"
+        selected={{ provider: 'deepseek', model: 'deepseek-chat' }}
+        onSelect={() => {}}
+      />
+    );
+    await user.click(screen.getByRole('button', { name: '切换模型' }));
+    // 菜单列表内只有 DeepSeek 分组;其它 provider 的分组与模型被过滤掉
+    const menu = screen.getByTestId('model-menu-list');
+    expect(within(menu).getByText('DeepSeek')).toBeTruthy();
+    expect(within(menu).queryByText('OpenCode Zen')).toBeNull();
+    expect(within(menu).queryByRole('button', { name: 'GLM-5.2' })).toBeNull();
   });
 
   it('composer 形态:未选中显示「默认模型」,选中显示模型 id', () => {
