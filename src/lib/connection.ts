@@ -98,8 +98,25 @@ export function getProxyUrlOverride(): string | null {
 
 /** 保存代理地址覆盖并立即生效。 */
 export function setProxyUrlOverride(url: string): void {
-  const clean = url.trim().replace(/\/$/, '');
-  if (!clean) return;
+  const input = url.trim();
+  if (!input) {
+    clearProxyUrlOverride();
+    return;
+  }
+
+  let clean = '';
+  try {
+    const parsed = new URL(input);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      clearProxyUrlOverride();
+      return;
+    }
+    clean = parsed.toString().replace(/\/$/, '');
+  } catch {
+    clearProxyUrlOverride();
+    return;
+  }
+
   try {
     localStorage.setItem(PROXY_OVERRIDE_KEY, clean);
   } catch {
