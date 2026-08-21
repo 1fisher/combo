@@ -1,15 +1,19 @@
 /**
  * 音效:Web Audio 程序化合成,不依赖任何音频资源文件。
- * - playComboHit:连击气泡音——模拟水泡上浮的「啵」(正弦频率指数上滑,
- *   Minnaert 气泡共振的经典配方)+ 二次谐波的水润感 + 极短带通噪声的
- *   破裂瞬态;气泡随 combo 数值(1→100)变大变饱满,与特效的绿→红渐变呼应;
+ * - playComboHit:连击气泡音——轻量的气泡「啵」爆破音(单振荡器正弦快上滑,
+ *   Minnaert 气泡共振配方的轻量版)+ 极短带通噪声的破裂瞬态;气泡随
+ *   combo 数值(1→100)略变大,整体保持轻短不沉,与特效的绿→红渐变呼应;
  * - playNotifyDone:任务完成提示音(双音上行,轻快);
  * - playNotifyAttention:需要交互的提醒音(双短音,略急促)。
  *
  * AudioContext 惰性创建并在调用时 resume(浏览器自动播放策略:见下方
- * armGestureUnlock,由首个用户手势统一解锁);上下文 closed/interrupted
- * 时自愈重建。环境不支持(jsdom/旧内核)时静默跳过。
- * 播放与否由调用方按 uiPreferencesStore 的开关判定,本模块不读 store,便于测试。
+ * armGestureUnlock,手势监听**常驻**、任意手势内都能重新解锁);上下文
+ * closed/interrupted 时自愈重建,并 close 被弃实例释放配额(WebKit 对同页
+ * 打开的 AudioContext 有数量上限,泄漏耗尽后 new 直接抛错、永久无声)。
+ * 播放函数只在上下文 running 时调度 —— 挂起时 currentTime 冻结,排队的
+ * 声音会在解锁后迟到爆出,不如直接跳过。环境不支持(jsdom/旧内核)时
+ * 静默跳过。播放与否由调用方按 uiPreferencesStore 的开关判定,本模块不读
+ * store,便于测试。
  */
 
 let ctx: AudioContext | null = null;
@@ -31,10 +35,13 @@ export function getSharedAudioContext(): AudioContext | null {
   if (!AC) return null;
   try {
     // 自愈重建:close 只会来自异常路径;WebKit 在音频输出中断(切换蓝牙
-    // 设备/系统睡眠唤醒)后可能把上下文永久卡在 interrupted —— 两者都
-    // 无法再出声,直接丢弃重建。
+    // 设备/系统睡眠唤醒/窗口隐藏到托盘)后可能把上下文永久卡在
+    // interrupted —— 两者都无法再出声,丢弃重建,并 close 被弃实例释放
+    // WebKit 的上下文数量配额(泄漏耗尽后 new 直接抛错,永久无声)。
     if (!ctx || ctx.state === 'closed' || (ctx.state as string) === 'interrupted') {
+      const dead = ctx;
       ctx = new AC();
+      if (dead && dead.state !== 'closed') void dead.close().catch(() => {});
     }
     if (ctx.state === 'suspended') void ctx.resume().catch(() => {});
     return ctx;
@@ -49,34 +56,26 @@ export function getSharedAudioContext(): AudioContext | null {
 let gestureUnlockArmed = false;
 
 /**
- * 首个用户手势内解锁共享 AudioContext。WebKit(WKWebView/Safari)的自动
- * 播放策略要求 AudioContext 在用户手势内启动:combo/任务完成等音效由
- * SSE 事件触发(不在手势内),上下文会被锁在 suspended 态、resume 被
- * 无声拒绝。这里挂一次性捕获监听,在首个 pointerdown/keydown 手势里
- * 同步发起 resume(resume 必须在手势回调内调用),成功转 running 后
- * 摘除监听 —— 之后整个应用生命周期的程序化播放都不再受限。
+ * 用户手势内解锁共享 AudioContext。WebKit(WKWebView/Safari)的自动
+ * 播放策略要求 AudioContext 在用户手势内启动/恢复:combo/任务完成等音效
+ * 由 SSE 事件触发(不在手势内),挂起的上下文在手势外 resume 会被无声
+ * 拒绝。监听**常驻整个应用生命周期、不摘除**:上下文在运行中也可能被
+ * 系统再次挂起(窗口隐藏到托盘、系统休眠唤醒、切换蓝牙音频设备),首次
+ * 解锁成功就摘除监听的话,再挂起后没有任何手势能救回,表现为「用一段
+ * 时间后所有音效永久无声」。运行中回调只是一次 state 读取,空转无感。
  */
 function armGestureUnlock(): void {
   if (typeof window === 'undefined' || gestureUnlockArmed) return;
   gestureUnlockArmed = true;
   const events = ['pointerdown', 'keydown'] as const;
-  const detach = () => events.forEach((ev) => window.removeEventListener(ev, onGesture, true));
   const onGesture = () => {
-    const c = getSharedAudioContext();
-    if (!c) return detach(); // 环境不支持音频,无需再等手势
-    if (c.state === 'running') return detach();
-    void c.resume()
-      .then(() => {
-        if (c.state === 'running') detach();
-      })
-      .catch(() => {
-        /* 本次手势未能解锁:保留监听,下一个手势再试 */
-      });
+    // 取用即自愈:interrupted 重建、suspended 在手势内同步发起 resume
+    getSharedAudioContext();
   };
   events.forEach((ev) => window.addEventListener(ev, onGesture, true));
 }
 
-// 模块加载即挂手势监听:本模块随应用入口链引入,首个用户交互即可解锁
+// 模块加载即挂手势监听(常驻):任意用户交互都能(重新)解锁共享上下文
 armGestureUnlock();
 
 /** 所有音效共用的总音量,避免突兀 */
@@ -124,62 +123,48 @@ function tone(
   o.stop(at + dur + 0.02);
 }
 
-/** 连击气泡音:combo 越高气泡越大(起始更低)、越饱满,不刺耳 */
+/** 连击气泡音:轻量的气泡「啵」爆破音,combo 越高气泡略大(起始略低) */
 export function playComboHit(combo: number): void {
   const c = getSharedAudioContext();
-  if (!c) return;
+  if (!c || c.state !== 'running') return;
   try {
     const t = c.currentTime;
     const out = masterOut(c, t);
     const k = Math.max(0, Math.min(100, combo)) / 100;
-    // 气泡越大(combo 越高)起始频率越低、上滑终点越高、余韵略长
-    const f0 = 420 - k * 180; // combo=1 → ~418Hz 小气泡;100 → 240Hz 大气泡
-    const f1 = 780 + k * 260; // 上滑终点 ~783Hz → 1040Hz
-    const dur = 0.16 + k * 0.08;
+    // 轻量小气泡:起始与终点都偏高、时长极短,听感是「啵」而不是「咚」
+    const f0 = 950 - k * 260; // combo=1 → ~947Hz 小气泡;100 → 690Hz 略大
+    const f1 = 1500 + k * 340; // 上滑终点 ~1503Hz → 1840Hz
+    const dur = 0.055 + k * 0.03; // 55ms → 85ms,轻短
 
-    // 主音(blub):正弦指数上滑——气泡上浮时体积胀大、共振频率升高,即「啵」
+    // 主音(blub):正弦指数快上滑 —— 气泡上浮时体积胀大、共振频率升高
     const blip = c.createOscillator();
     const bg = c.createGain();
     blip.type = 'sine';
     blip.frequency.setValueAtTime(f0, t);
-    blip.frequency.exponentialRampToValueAtTime(f1, t + dur * 0.55);
+    blip.frequency.exponentialRampToValueAtTime(f1, t + dur * 0.6);
     bg.gain.setValueAtTime(0.0001, t);
-    bg.gain.exponentialRampToValueAtTime(0.42 + 0.18 * k, t + 0.008);
+    bg.gain.exponentialRampToValueAtTime(0.3 + 0.1 * k, t + 0.003);
     bg.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     blip.connect(bg);
     bg.connect(out);
     blip.start(t);
-    blip.stop(t + dur + 0.02);
+    blip.stop(t + dur + 0.01);
 
-    // 二次谐波:同步上滑但衰减更快,给气泡加「水润」质感
-    const harm = c.createOscillator();
-    const hg = c.createGain();
-    harm.type = 'sine';
-    harm.frequency.setValueAtTime(f0 * 2, t);
-    harm.frequency.exponentialRampToValueAtTime(f1 * 2, t + dur * 0.55);
-    hg.gain.setValueAtTime(0.0001, t);
-    hg.gain.exponentialRampToValueAtTime(0.14 + 0.07 * k, t + 0.006);
-    hg.gain.exponentialRampToValueAtTime(0.0001, t + dur * 0.6);
-    harm.connect(hg);
-    hg.connect(out);
-    harm.start(t);
-    harm.stop(t + dur * 0.6 + 0.02);
-
-    // 破裂瞬态(pop):极短带通噪声,模拟气泡冒出水面的一瞬
+    // 破裂瞬态(pop):极短带通噪声,给「爆破」感,轻到不抢戏
     const noise = noiseSource(c);
     const bp = c.createBiquadFilter();
     bp.type = 'bandpass';
-    bp.frequency.value = f1 * 1.5;
-    bp.Q.value = 2;
+    bp.frequency.value = f1 * 1.4;
+    bp.Q.value = 1.5;
     const ng = c.createGain();
     ng.gain.setValueAtTime(0.0001, t);
-    ng.gain.exponentialRampToValueAtTime(0.1 + 0.08 * k, t + 0.004);
-    ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
+    ng.gain.exponentialRampToValueAtTime(0.07 + 0.05 * k, t + 0.002);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.03);
     noise.connect(bp);
     bp.connect(ng);
     ng.connect(out);
     noise.start(t);
-    noise.stop(t + 0.06);
+    noise.stop(t + 0.035);
   } catch {
     /* 音频失败不影响主流程 */
   }
@@ -188,7 +173,7 @@ export function playComboHit(combo: number): void {
 /** 任务完成:双音上行(A5 → E6,纯五度),轻快不刺耳 */
 export function playNotifyDone(): void {
   const c = getSharedAudioContext();
-  if (!c) return;
+  if (!c || c.state !== 'running') return;
   try {
     const t = c.currentTime;
     const out = masterOut(c, t);
@@ -202,7 +187,7 @@ export function playNotifyDone(): void {
 /** 需要交互(确认/提问):双短音上行(F#5 → B5),比完成音略急促 */
 export function playNotifyAttention(): void {
   const c = getSharedAudioContext();
-  if (!c) return;
+  if (!c || c.state !== 'running') return;
   try {
     const t = c.currentTime;
     const out = masterOut(c, t);

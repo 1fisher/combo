@@ -85,20 +85,18 @@ describe('sfx', () => {
     }).not.toThrow();
   });
 
-  it('playComboHit 合成气泡音(主音上滑 + 二次谐波 + 破裂瞬态),combo 越高气泡越大越饱满', async () => {
+  it('playComboHit 合成轻量气泡爆破音(单振荡器快上滑 + 极短破裂瞬态),combo 越高气泡略大', async () => {
     const { mod, ctx } = await loadSfxWithStub();
     mod.playComboHit(1);
     let c = ctx();
-    expect(c.createOscillator).toHaveBeenCalledTimes(2);
+    // 轻量版只留主音 + 破裂瞬态,不再叠加二次谐波(那是旧版「饱满/偏重」的来源)
+    expect(c.createOscillator).toHaveBeenCalledTimes(1);
     expect(c.createBufferSource).toHaveBeenCalledTimes(1);
     const blip = c.createOscillator.mock.results[0].value as FakeOscillatorNode;
     expect(blip.type).toBe('sine');
-    // combo=1:小气泡,起始 ~418Hz,指数上滑到 ~783Hz(气泡上浮的「啵」)
-    expect(blip.frequency.setValueAtTime.mock.calls[0][0]).toBeCloseTo(418.2, 3);
-    expect(blip.frequency.exponentialRampToValueAtTime.mock.calls[0][0]).toBeCloseTo(782.6, 3);
-    // 二次谐波同步上滑(2 倍频),提供水润质感
-    const harm = c.createOscillator.mock.results[1].value as FakeOscillatorNode;
-    expect(harm.frequency.setValueAtTime.mock.calls[0][0]).toBeCloseTo(836.4, 3);
+    // combo=1:小气泡,起始 ~947Hz,指数上滑到 ~1503Hz(轻短的「啵」)
+    expect(blip.frequency.setValueAtTime.mock.calls[0][0]).toBeCloseTo(947.4, 3);
+    expect(blip.frequency.exponentialRampToValueAtTime.mock.calls[0][0]).toBeCloseTo(1503.4, 3);
     // 破裂瞬态:白噪声过带通
     expect(c.createBiquadFilter).toHaveBeenCalledTimes(1);
     const bp = c.createBiquadFilter.mock.results[0].value as FakeBiquadFilterNode;
@@ -106,12 +104,25 @@ describe('sfx', () => {
 
     mod.playComboHit(100);
     c = ctx();
-    const blip100 = c.createOscillator.mock.results[2].value as FakeOscillatorNode;
-    // 100 连击:大气泡,起始降至 240Hz、上滑终点升至 1040Hz,更饱满
-    expect(blip100.frequency.setValueAtTime).toHaveBeenCalledWith(240, 0);
-    expect(blip100.frequency.exponentialRampToValueAtTime.mock.calls[0][0]).toBeCloseTo(1040, 3);
+    const blip100 = c.createOscillator.mock.results[1].value as FakeOscillatorNode;
+    // 100 连击:气泡略大,起始降至 690Hz、上滑终点 1840Hz,仍轻短
+    expect(blip100.frequency.setValueAtTime).toHaveBeenCalledWith(690, 0);
+    expect(blip100.frequency.exponentialRampToValueAtTime.mock.calls[0][0]).toBeCloseTo(1840, 3);
     expect(blip100.start).toHaveBeenCalled();
     expect(blip100.stop).toHaveBeenCalled();
+  });
+
+  it('上下文未 running(suspended)时跳过播放:不调度,避免解锁后积压的声音迟到爆出', async () => {
+    const { mod, ctx } = await loadSfxWithStub();
+    // 先取用一次让上下文创建出来,再模拟系统挂起
+    const created = mod.getSharedAudioContext();
+    (created as unknown as { state: AudioContextState }).state = 'suspended';
+    mod.playComboHit(5);
+    mod.playNotifyDone();
+    mod.playNotifyAttention();
+    const c = ctx();
+    expect(c.createOscillator).not.toHaveBeenCalled();
+    expect(c.createGain).not.toHaveBeenCalled();
   });
 
   it('playNotifyDone 是双音上行(A5 → E6)', async () => {
@@ -139,11 +150,13 @@ describe('sfx', () => {
 });
 
 /**
- * 共享 AudioContext 的两个关键行为:
- * 1. 手势解锁 —— WebKit 自动播放策略要求 AudioContext 在用户手势内启动,
- *    SSE 触发的音效(combo/任务完成)不在手势内,必须由首个 pointerdown/
- *    keydown 手势同步 resume 解锁;
- * 2. 自愈重建 —— 上下文 closed/中断卡死后,下次调用必须能拿到新实例。
+ * 共享 AudioContext 的关键行为:
+ * 1. 手势解锁(常驻)—— WebKit 自动播放策略要求 AudioContext 在用户手势内
+ *    启动/恢复,SSE 触发的音效(combo/任务完成)不在手势内,必须由手势内
+ *    同步 resume 解锁;监听不捕除,上下文运行中被系统再挂起(隐藏到托盘/
+ *    休眠唤醒/切换音频设备)后,下一个手势仍能重新解锁,否则永久无声;
+ * 2. 自愈重建 —— 上下文 closed/中断卡死后,下次调用必须能拿到新实例,
+ * 且被弃实例要 close 释放 WebKit 的上下文数量配额。
  * 用独立的 Fake(state 起始 suspended、resume 异步兑现翻转状态)模拟真实 WebKit。
  */
 
@@ -159,6 +172,9 @@ class SuspendedAudioContext {
   close = vi.fn(async () => {
     this.state = 'closed';
   });
+  // 供「挂起时不调度」断言用
+  createGain = vi.fn();
+  createOscillator = vi.fn();
   constructor() {
     SuspendedAudioContext.instances.push(this);
   }
@@ -176,14 +192,14 @@ describe('sfx 共享 AudioContext', () => {
     vi.unstubAllGlobals();
   });
 
-  it('手势解锁:首个 pointerdown 手势内 resume,成功后摘除监听不再重复解锁', async () => {
+  it('手势解锁:手势内发起 resume;运行中常驻监听空转不重复 resume', async () => {
     const { getSharedAudioContext } = await loadSfxSuspended();
     // 任意时刻取用都拿到同一实例(全应用唯一播放上下文)
     window.dispatchEvent(new Event('pointerdown'));
     const c = getSharedAudioContext();
     expect(c).toBeInstanceOf(SuspendedAudioContext);
     await vi.waitFor(() => expect(c?.state).toBe('running'));
-    // 解锁成功后监听已摘除:后续手势与取用不再触发 resume
+    // 运行中:后续手势与取用都不会重复 resume(监听保留但空转)
     const fake = c as unknown as SuspendedAudioContext;
     fake.resume.mockClear();
     window.dispatchEvent(new Event('pointerdown'));
@@ -192,11 +208,31 @@ describe('sfx 共享 AudioContext', () => {
     expect(fake.resume).not.toHaveBeenCalled();
   });
 
-  it('未解锁前调用也安全:suspended 上下文上照常调度,不抛错', async () => {
-    const { getSharedAudioContext, playNotifyDone } = await loadSfxSuspended();
+  it('运行中被再次挂起(隐藏到托盘/休眠唤醒):常驻手势监听在下一个手势重新解锁', async () => {
+    const { getSharedAudioContext } = await loadSfxSuspended();
+    window.dispatchEvent(new Event('pointerdown'));
+    const c = getSharedAudioContext();
+    await vi.waitFor(() => expect(c?.state).toBe('running'));
+    // 系统把上下文重新挂起
+    (c as unknown as { state: AudioContextState }).state = 'suspended';
+    const fake = c as unknown as SuspendedAudioContext;
+    fake.resume.mockClear();
+    window.dispatchEvent(new Event('keydown'));
+    await vi.waitFor(() => expect(fake.resume).toHaveBeenCalled());
+    await vi.waitFor(() => expect(c?.state).toBe('running'));
+  });
+
+  it('未解锁前调用也安全:suspended 时跳过本次播放,不抛错也不排队迟播', async () => {
+    const { getSharedAudioContext, playNotifyDone, playComboHit } = await loadSfxSuspended();
     const c = getSharedAudioContext();
     expect(c?.state).toBe('suspended');
-    expect(() => playNotifyDone()).not.toThrow();
+    expect(() => {
+      playNotifyDone();
+      playComboHit(3);
+    }).not.toThrow();
+    const fake = c as unknown as SuspendedAudioContext;
+    expect(fake.createGain).not.toHaveBeenCalled();
+    expect(fake.createOscillator).not.toHaveBeenCalled();
   });
 
   it('自愈重建:上下文 closed 后丢弃缓存,下次调用拿到新实例', async () => {
@@ -208,12 +244,16 @@ describe('sfx 共享 AudioContext', () => {
     expect(SuspendedAudioContext.instances).toHaveLength(2);
   });
 
-  it('自愈重建:interrupted(WebKit 输出中断)同样重建', async () => {
+  it('自愈重建:interrupted(WebKit 输出中断)同样重建,且 close 被弃实例释放配额', async () => {
     const { getSharedAudioContext } = await loadSfxSuspended();
     const c1 = getSharedAudioContext();
     // Safari 系专属状态,TS 类型未收录,按运行时字符串写入
     (c1 as unknown as { state: string }).state = 'interrupted';
     const c2 = getSharedAudioContext();
     expect(c2).not.toBe(c1);
+    expect((c1 as unknown as SuspendedAudioContext).close).toHaveBeenCalled();
+    // 新实例在后续手势内可正常解锁(监听常驻)
+    window.dispatchEvent(new Event('pointerdown'));
+    await vi.waitFor(() => expect(c2?.state).toBe('running'));
   });
 });

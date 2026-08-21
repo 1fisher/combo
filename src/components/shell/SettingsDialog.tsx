@@ -407,7 +407,7 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
                   <div className="flex flex-col gap-0.5">
                     <label className="text-[13px] font-medium text-foreground">Combo 特效音效</label>
                     <span className="text-[12px] text-foreground-subtle">
-                      连击特效弹出与增长时播放气泡音,连击越高气泡越大越饱满
+                      连击特效弹出与增长时播放轻量气泡爆破音,连击越高气泡略大
                     </span>
                   </div>
                   <Switch
