@@ -33,10 +33,14 @@ const StatsView = lazy(() => import('./StatsView').then((m) => ({ default: m.Sta
 const GraphView = lazy(() => import('./GraphView').then((m) => ({ default: m.GraphView })));
 import { ModalQueue } from '../agent/ModalQueue';
 import { useEditorStore } from '../../stores/editorStore';
+import { useNavStore, type AppView, type SideView } from '../../stores/navStore';
 import { useActiveWorkspaceId } from '../../hooks/useActiveWorkspaceId';
 import { Button } from '../ui/button';
 import { cn } from '../../lib/utils';
 import { HelpDialog } from './HelpDialog';
+
+// AppView/SideView 定义已迁至 navStore(路由历史需要连同视图一起记录),此处 re-export 保持既有导入路径
+export type { AppView, SideView };
 
 const qc = new QueryClient();
 
@@ -51,26 +55,6 @@ function PanelLoading() {
 
 const SIDEBAR_MIN = 264;
 const SIDEBAR_DEFAULT = 372;
-
-/** 主内容区视图;automation/search/skills/mcp/lsp/stats/graph/shortcuts 为全页独立视图(侧边栏可导航) */
-export type AppView =
-  | 'agent'
-  | 'terminal'
-  | 'editor'
-  | 'automation'
-  | 'search'
-  | 'skills'
-  | 'mcp'
-  | 'lsp'
-  | 'stats'
-  | 'graph'
-  | 'shortcuts';
-
-/** 侧边栏导航按钮对应的全页视图 */
-export type SideView = Extract<
-  AppView,
-  'automation' | 'search' | 'skills' | 'mcp' | 'lsp' | 'stats' | 'graph' | 'shortcuts'
->;
 
 export function AppShell() {
   useEffect(() => {
@@ -99,7 +83,15 @@ function AppShellInner() {
   const [collapsed, setCollapsed] = useState(
     () => typeof window === 'undefined' || window.innerWidth < 768
   );
-  const [view, setView] = useState<AppView>('agent');
+  // 视图状态放在 navStore:与项目/会话一起构成路由历史,驱动顶栏「后退/前进」
+  const view = useNavStore((s) => s.view);
+  const setView = useNavStore((s) => s.setView);
+  const navBack = useNavStore((s) => s.back);
+  const navForward = useNavStore((s) => s.forward);
+  const navIndex = useNavStore((s) => s.index);
+  const navCount = useNavStore((s) => s.entries.length);
+  const canBack = navIndex > 0;
+  const canForward = navIndex < navCount - 1;
   // 面板首次切换过去才挂载(lazy 按需拉取 + 查询延迟发起),挂载后保持不卸载以保留状态
   const [paneMounted, setPaneMounted] = useState<
     Record<'terminal' | 'editor' | SideView, boolean>
@@ -235,10 +227,24 @@ function AppShellInner() {
             </Button>
             {!isMobile && !collapsed && (
               <>
-                <Button variant="ghost" size="icon-sm" disabled aria-label="后退" title="后退">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={navBack}
+                  disabled={!canBack}
+                  aria-label="后退"
+                  title="后退"
+                >
                   <ArrowLeft className="size-4" />
                 </Button>
-                <Button variant="ghost" size="icon-sm" disabled aria-label="前进" title="前进">
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  onClick={navForward}
+                  disabled={!canForward}
+                  aria-label="前进"
+                  title="前进"
+                >
                   <ArrowRight className="size-4" />
                 </Button>
               </>
@@ -271,13 +277,13 @@ function AppShellInner() {
                 <CalendarClock className="size-4" />
               </Button>
               <Button variant="ghost" size="icon-sm" aria-label="切换终端" title="切换终端"
-                onClick={() => setView((v) => (v === 'terminal' ? 'agent' : 'terminal'))}
+                onClick={() => setView(view === 'terminal' ? 'agent' : 'terminal')}
                 className={cn(view === 'terminal' && 'bg-surface-hover text-brand')}
               >
                 <SquareTerminal className="size-4" />
               </Button>
               <Button variant="ghost" size="icon-sm" aria-label="切换文件编辑器" title="切换文件编辑器"
-                onClick={() => setView((v) => (v === 'editor' ? 'agent' : 'editor'))}
+                onClick={() => setView(view === 'editor' ? 'agent' : 'editor')}
                 className={cn(view === 'editor' && 'bg-surface-hover text-brand')}
               >
                 <PanelRight className="size-4" />

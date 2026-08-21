@@ -270,6 +270,18 @@ crate;真实前端只经 `bundle.resources`(`{"../dist/": "dist/"}`)随包分发
   存量旧项目不受影响(无启动期回溯检查);`src-tauri/Info.plist` 提供
   NSDocuments/RemovableVolumes 等 macOS 隐私用途声明文案(打包时与 Tauri
   自动生成的 Info.plist 合并)。
+- **路由历史(顶栏后退/前进)**(`stores/navStore.ts`):AppShell 顶栏左上角的
+  后退/前进箭头走浏览器式历史栈,条目 = `{view, workspaceId, sessionId}` 三元组。
+  `AppView`/`SideView` 类型定义在 navStore(AppShell re-export 保持旧导入路径),
+  `view` 状态本体也从 AppShell 本地 useState 迁入 navStore(否则 back/forward 无法
+  驱动它)。记录来源两条:`setView`(视图切换)与 `useAgentStore.subscribe` 订阅
+  (项目/会话变化,含自动选中)。合并/防噪规则:① 首次变化先把「变化前」状态落为
+  历史第一步(后退才可用),但启动期项目还是 null 时不落——避免刚开应用就能
+  「后退回空首页」;② 同视图同项目下会话从 null → 非 null 原位升级(切项目清空
+  会话后列表加载自动选中首个/busy 会话,不合并会多一条无意义中间态);③ push 截断
+  游标之后的条目(浏览器语义);④ back/forward 恢复期间 `applying` 计数器抑制订阅
+  再次记录。恢复顺序必须「先项目后会话」(`setActiveWorkspace` 会清空会话)。
+  历史栈内存态不持久化,上限 100 条。
 - **Selection persistence**: `agentStore` uses `zustand/persist`
   (`localStorage` key `combo.agent`) storing only `activeWorkspaceId` +
   `activeSessionId`; SSE state stays in-memory. `setActiveWorkspace` clears the
