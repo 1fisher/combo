@@ -39,7 +39,7 @@ tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 rustls = { version = "0.23", features = ["ring"] }
 base64 = "0.22"
 hex = "0.4"
-which = "7"
+which = "8"
 webrtc = "0.20.3"
 sherpa-onnx = "1.13.5"
 tar = "0.4"
