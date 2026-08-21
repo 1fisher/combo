@@ -739,6 +739,16 @@ pub(crate) async fn start_agent_run(
                     run_turns = n as i64;
                     let _ = tx_ev.send(api_calls_env(&session_id, api_calls_base + run_turns));
                 }
+                RunEvent::Retrying(text) => {
+                    // provider 流被截断自动重试:记日志 + 广播前端提示条
+                    crate::request_log::log_event(
+                        &run_id_for_task,
+                        &session_id,
+                        "retry",
+                        json!({ "text": text }),
+                    );
+                    let _ = tx_ev.send(retry_notice_env(&session_id, &text));
+                }
             }
             let upd = assistant_message_json(
                 &session_id,
@@ -1592,6 +1602,11 @@ fn friendly_error(e: &anyhow::Error) -> String {
         "内容触发服务商风控:服务商判定请求内容(含历史消息、文件内容或工具结果)存在风险,已拒绝本次请求。可切换 Provider/模型后重试,或新建会话(当前会话历史已含被拦截内容,原样重发大概率仍失败)。"
     } else if low.contains("maxturnserror") || low.contains("reached max turns limit") {
         "已达单次任务最大轮数上限:任务较为复杂,agent 在本轮工具调用次数过多。可在新会话中继续,或拆分为更小的子任务。"
+    } else if low.contains("terminal record") || low.contains("stream ended") || low.contains("truncated") {
+        // provider 流被截断(无终止记录提前 EOF):combo 已自动重试一次,
+        // 仍失败说明服务商/网关不稳定(长上下文或长输出时常见)。换模型或
+        // 新建会话(清掉超长历史)可显著降低再次触发的概率。
+        "Provider 流被截断:模型输出过程中连接被服务商/网关中断(已自动重试一次仍失败),常见于超长上下文或超长输出。建议切换模型,或新建会话后重试。"
     } else {
         return raw;
     };
@@ -1688,6 +1703,18 @@ fn api_calls_env(session_id: &str, api_calls: i64) -> Value {
         "payload": {
             "type": "updated",
             "payload": { "session_id": session_id, "api_calls": api_calls }
+        }
+    })
+}
+
+/// 截断自动重试提示事件(双层信封):provider 流被截断、combo 自动重试时广播,
+/// 前端在输入区上方展示一条临时提示条。
+fn retry_notice_env(session_id: &str, text: &str) -> Value {
+    json!({
+        "type": "retry_notice",
+        "payload": {
+            "type": "created",
+            "payload": { "session_id": session_id, "text": text }
         }
     })
 }
@@ -3568,6 +3595,12 @@ mod tests {
                 "限流",
                 None,
             ),
+            // provider 流被截断(无终止记录提前 EOF):combo 已自动重试一次
+            (
+                "CompletionError: ResponseError: provider stream ended without a terminal record; treating the turn as truncated",
+                "流被截断",
+                None,
+            ),
             ("Connection refused (os error 61)", "Connection refused", None),
         ];
         for (raw, expect, parsed) in cases {
@@ -3832,6 +3865,15 @@ mod tests {
         assert_eq!(env["payload"]["type"], "updated");
         assert_eq!(env["payload"]["payload"]["session_id"], "s1");
         assert_eq!(env["payload"]["payload"]["api_calls"], 46);
+    }
+
+    #[test]
+    fn retry_notice_env_uses_double_envelope() {
+        let env = retry_notice_env("s1", "检测到 provider 流被截断,已自动重试一次…");
+        assert_eq!(env["type"], "retry_notice");
+        assert_eq!(env["payload"]["type"], "created");
+        assert_eq!(env["payload"]["payload"]["session_id"], "s1");
+        assert_eq!(env["payload"]["payload"]["text"], "检测到 provider 流被截断,已自动重试一次…");
     }
 
     #[test]

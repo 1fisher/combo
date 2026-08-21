@@ -593,6 +593,11 @@ pub fn agent_tool(
                                                 t.turns = *n;
                                                 false
                                             }
+                                            // 子 agent 内部截断自动重试:提示并入预览,便于观察
+                                            RunEvent::Retrying(text) => {
+                                                t.preview = truncate_tail(text, PREVIEW_CHARS);
+                                                false
+                                            }
                                         }
                                     };
                                     broadcast_board(&tx_ev, &sid_ev, &mut b, force);

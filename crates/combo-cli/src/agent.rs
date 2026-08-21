@@ -11,7 +11,7 @@ use anyhow::Result;
 use futures::StreamExt;
 use rig::agent::{Agent, MultiTurnStreamItem};
 use rig::client::ProviderClient;
-use rig::completion::message::ToolResultContent;
+use rig::completion::message::{AssistantContent, ToolResultContent};
 use rig::completion::{CompletionModel, Message};
 use rig::prelude::AgentClientExt;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingChat, StreamingPrompt};
@@ -438,6 +438,8 @@ pub enum RunEvent {
     /// 与 rig 日志 "Current conversation Turns: N/max" 的 N 同源,
     /// 供前端实时累计「API 调用次数」。
     Turns(u64),
+    /// provider 流被截断时自动重试的提示(serve 转发为 retry_notice SSE 事件)。
+    Retrying(String),
 }
 
 /// 根据 bash 结构化字段判断工具结果是否为失败态:非 0 退出码或超时。
@@ -534,14 +536,35 @@ async fn idle_future(d: Option<Duration>) {
     }
 }
 
-/// 泛型流式执行:逐条消费 stream,文本增量与工具调用经 `on_event` 上报。
-async fn stream_one<F>(
+/// 一次流式尝试的产出。截断重试时,已完成的工具调用历史会被拼进下次请求,
+/// 让模型从断点继续,避免重复执行已有副作用的工具。
+struct StreamAttempt {
+    out: String,
+    turns: u64,
+    last_usage: rig::completion::Usage,
+    total_usage: rig::completion::Usage,
+}
+
+/// 判断是否为「provider 流被截断」类错误:SSE 流在没有任何终止记录
+/// (带 finish_reason 的 chunk / `[DONE]` 哨兵)的情况下提前 EOF。这类错误
+/// 多为网络/网关偶发断流(长上下文 prefill、超长输出时尤甚),combo 会
+/// 自动重试一次;429/401/余额不足等服务商明确拒绝的错误不重试。
+fn is_truncation_error(e: &anyhow::Error) -> bool {
+    let low = e.to_string().to_ascii_lowercase();
+    low.contains("terminal record") || low.contains("stream ended") || low.contains("truncated")
+}
+
+/// 消费一个多轮流:逐条上报事件,并把**已完成的工具调用循环**(assistant
+/// tool_call + user tool_result 配对消息)收集进 `tool_history`,供截断重试时
+/// 拼接续跑。流级错误(含截断)直接返回 Err;用户取消返回 Ok(None)。
+async fn consume_stream<F>(
     agent: &Agent,
     question: &str,
     history: &[Message],
+    tool_history: &mut Vec<Message>,
     cancel: &mut tokio::sync::watch::Receiver<bool>,
     on_event: &mut F,
-) -> Result<Option<String>>
+) -> Result<Option<StreamAttempt>>
 where
     F: FnMut(RunEvent),
 {
@@ -560,6 +583,9 @@ where
     // 已发出 ToolCall、尚未收到 ToolResult 的 call id:非空说明工具在执行
     // (question 等用户回答、长命令),此阶段不施加空闲超时。
     let mut running_tools: HashSet<String> = HashSet::new();
+    // 已发出 ToolCall、等待配对 ToolResult 的完整参数(call id → name+arguments),
+    // 配对成功后构造重试历史消息。
+    let mut pending_calls: HashMap<String, (String, serde_json::Value)> = HashMap::new();
     loop {
         // 空闲超时兜底:仅在等待模型响应时启用。rig 的 openai 兼容流对
         // `data: [DONE]` 只跳过不终结,turn 要等 HTTP 连接真正关闭才结束;
@@ -616,6 +642,10 @@ where
                 let input = tool_call.function.arguments.to_string();
                 let call_id = tool_call.id.to_string();
                 tool_names.insert(call_id.clone(), tool_call.function.name.clone());
+                pending_calls.insert(
+                    call_id.clone(),
+                    (tool_call.function.name.clone(), tool_call.function.arguments.clone()),
+                );
                 running_tools.insert(call_id.clone());
                 on_event(RunEvent::ToolCall {
                     id: call_id,
@@ -673,6 +703,20 @@ where
                 if tool_result_is_error(exit_code, timed_out) {
                     is_error = true;
                 }
+                // 已完成的工具调用循环(assistant tool_call + user tool_result)
+                // 收集进重试历史:截断重试时拼接,模型直接看到结果继续工作,
+                // 不会重新执行已有副作用的工具。
+                if let Some((call_name, arguments)) = pending_calls.remove(&result_id) {
+                    tool_history.push(Message::Assistant {
+                        id: None,
+                        content: vec![AssistantContent::tool_call(
+                            result_id.clone(),
+                            call_name,
+                            arguments,
+                        )],
+                    });
+                    tool_history.push(Message::tool_result(result_id.clone(), name.clone(), content.clone()));
+                }
                 running_tools.remove(&result_id);
                 on_event(RunEvent::ToolResult {
                     id: result_id,
@@ -698,11 +742,68 @@ where
             _ => {}
         }
     }
-    // turns > 0 也视为有效 run(provider 不上报 usage 时仍需播报调用次数)
-    if total_usage.has_values() || turns > 0 {
-        on_event(RunEvent::Usage(RunUsage::new(last_usage, total_usage, turns)));
+    Ok(Some(StreamAttempt {
+        out,
+        turns,
+        last_usage,
+        total_usage,
+    }))
+}
+
+/// 泛型流式执行:逐条消费 stream,文本增量与工具调用经 `on_event` 上报。
+///
+/// **截断自动重试**:provider 流在无终止记录的情况下提前 EOF(openai 兼容
+/// 网关偶发断流,长上下文/长输出时常见)时,自动重试一次。已执行的工具调用
+/// 循环会被拼进重试请求的历史,模型从断点继续而非重新执行工具;纯文本对话
+/// 直接重发。重试前经 `RunEvent::Retrying` 通知调用方(serve 转发前端)。
+async fn stream_one<F>(
+    agent: &Agent,
+    question: &str,
+    history: &[Message],
+    cancel: &mut tokio::sync::watch::Receiver<bool>,
+    on_event: &mut F,
+) -> Result<Option<String>>
+where
+    F: FnMut(RunEvent),
+{
+    // 已执行的工具调用历史:首次尝试为空;截断重试时拼接(见 consume_stream)。
+    let mut extra_history: Vec<Message> = Vec::new();
+    let mut retried = false;
+    loop {
+        let mut tool_history: Vec<Message> = Vec::new();
+        let mut attempt_history = history.to_vec();
+        attempt_history.extend(extra_history.iter().cloned());
+        let result =
+            consume_stream(agent, question, &attempt_history, &mut tool_history, cancel, on_event)
+                .await;
+        match result {
+            Ok(Some(attempt)) => {
+                // turns > 0 也视为有效 run(provider 不上报 usage 时仍需播报调用次数)
+                if attempt.total_usage.has_values() || attempt.turns > 0 {
+                    on_event(RunEvent::Usage(RunUsage::new(
+                        attempt.last_usage,
+                        attempt.total_usage,
+                        attempt.turns,
+                    )));
+                }
+                return Ok(Some(attempt.out));
+            }
+            // 用户取消:原样透传(不重试)
+            Ok(None) => return Ok(None),
+            Err(e) => {
+                // 仅对「流被截断」类错误重试一次,且用户未取消;其余错误原样上抛
+                if retried || *cancel.borrow() || !is_truncation_error(&e) {
+                    return Err(e);
+                }
+                retried = true;
+                extra_history = tool_history;
+                on_event(RunEvent::Retrying(
+                    "检测到 provider 流被截断(输出未正常结束),已自动重试一次…".into(),
+                ));
+                // 继续循环:第二次尝试携带已执行的工具历史
+            }
+        }
     }
-    Ok(Some(out))
 }
 
 /// 交互式多轮会话:读取 stdin,流式输出,消息持久化到 sqlite。
@@ -881,5 +982,32 @@ mod tests {
         assert!(tool_result_is_error(Some(7), false));
         assert!(tool_result_is_error(None, true));
         assert!(tool_result_is_error(Some(0), true));
+    }
+
+    #[test]
+    fn truncation_error_classification() {
+        // 流被截断(无终止记录提前 EOF):匹配,触发自动重试
+        assert!(is_truncation_error(&anyhow::anyhow!(
+            "CompletionError: ResponseError: provider stream ended without a terminal record; treating the turn as truncated"
+        )));
+        assert!(is_truncation_error(&anyhow::anyhow!(
+            "CompletionError: StreamError: stream ended before a terminal chunk arrived"
+        )));
+        assert!(is_truncation_error(&anyhow::anyhow!(
+            "openai: the stream was truncated before completion"
+        )));
+        // 服务商明确拒绝 / 网络层错误:不匹配,不自动重试
+        assert!(!is_truncation_error(&anyhow::anyhow!(
+            "CompletionError: HttpError: Invalid status code 429 Too Many Requests with message: rate limit exceeded"
+        )));
+        assert!(!is_truncation_error(&anyhow::anyhow!(
+            "CompletionError: HttpError: Invalid status code 401 Unauthorized with message: invalid api key"
+        )));
+        assert!(!is_truncation_error(&anyhow::anyhow!(
+            "Connection refused (os error 61)"
+        )));
+        assert!(!is_truncation_error(&anyhow::anyhow!(
+            "模型响应空闲超过 300 秒仍未返回"
+        )));
     }
 }

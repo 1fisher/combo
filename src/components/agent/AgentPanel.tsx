@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FileEdit, Folder, Loader2, CircleAlert } from 'lucide-react';
+import { FileEdit, Folder, Loader2, CircleAlert, RotateCw } from 'lucide-react';
 import { randomUUID } from '../../lib/clientId';
 import { useAgentStore } from '../../stores/agentStore';
 import { useEditorStore } from '../../stores/editorStore';
@@ -508,6 +508,12 @@ export function AgentPanel({
       <ComboOverlay combo={combo} />
       {/* 输入区 */}
       <div className="z-20 relative w-full shrink-0">
+        {rt?.run?.status === 'running' && rt?.retryNotice && (
+          <div className="flex items-start gap-2 bg-amber-500/10 mx-4 mb-2 px-3 py-2 border border-amber-500/30 rounded-xl text-amber-500 text-xs">
+            <RotateCw className="mt-0.5 size-3.5 shrink-0 animate-spin" />
+            <div className="min-w-0 break-all whitespace-pre-wrap">{rt.retryNotice}</div>
+          </div>
+        )}
         {rt?.run?.status === 'done' && rt?.run?.error && (
           <div className="flex items-start gap-2 bg-destructive/10 mx-4 mb-2 px-3 py-2 border border-destructive/30 rounded-xl text-destructive text-xs">
             <CircleAlert className="mt-0.5 size-3.5 shrink-0" />

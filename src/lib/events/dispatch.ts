@@ -143,6 +143,15 @@ export function applyEvent(s: Store, env: EventEnvelope): void {
       }
       break;
     }
+    case 'retry_notice': {
+      // provider 流被截断自动重试提示:输入区上方展示一条临时提示条
+      const p = unwrap<{ session_id: string; text: string }>(env);
+      console.debug(
+        `[${ts()}][dispatch] retry_notice session="${p.session_id}" text="${p.text}"`
+      );
+      s.setRetryNotice(p.session_id, p.text);
+      break;
+    }
     default:
       console.debug(
         `[${ts()}][dispatch] 未处理事件 type="${env.type}"`

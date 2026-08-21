@@ -16,6 +16,7 @@ export const PAYLOAD_TYPES = [
   'question_batch_notification',
   'todo_update',
   'subagent_update',
+  'retry_notice',
 ] as const;
 export type PayloadType = (typeof PAYLOAD_TYPES)[number];
 

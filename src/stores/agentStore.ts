@@ -28,6 +28,8 @@ export interface SessionRuntime {
     startedAt?: number;
   } | null;
   queued: boolean;
+  /** provider 流被截断自动重试的提示(retry_notice SSE 事件写入,run 期间展示) */
+  retryNotice?: string;
 }
 
 /** 用户选中的模型(workspaceId → { model, provider }),持久化到 localStorage */
@@ -109,6 +111,8 @@ interface AgentState {
     error?: string
   ) => void;
   setQueued: (sessionId: string, queued: boolean) => void;
+  /** 记录「provider 流被截断自动重试」提示(run 期间显示,下次 run 启动时清空) */
+  setRetryNotice: (sessionId: string, text: string) => void;
   enqueuePermission: (p: Api.PermissionRequest) => void;
   resolvePermission: (toolCallId: string) => void;
   enqueueQuestionBatch: (b: Api.QuestionRequest) => void;
@@ -438,6 +442,8 @@ export const useAgentStore = create<AgentState>()(
               ...(error ? { error } : {}),
             },
             messages,
+            // 新 run 启动时清掉上一次的截断重试提示(done 时保留,便于用户看到)
+            ...(status === 'running' ? { retryNotice: undefined } : {}),
           },
         },
       };
@@ -447,6 +453,14 @@ export const useAgentStore = create<AgentState>()(
     set((st) => {
       const rt = st.bySession[sessionId] ?? emptyRuntime();
       return { bySession: { ...st.bySession, [sessionId]: { ...rt, queued } } };
+    }),
+
+  setRetryNotice: (sessionId, text) =>
+    set((st) => {
+      const rt = st.bySession[sessionId] ?? emptyRuntime();
+      return {
+        bySession: { ...st.bySession, [sessionId]: { ...rt, retryNotice: text } },
+      };
     }),
 
   enqueuePermission: (p) => set((st) => ({ permissionQueue: [...st.permissionQueue, p] })),

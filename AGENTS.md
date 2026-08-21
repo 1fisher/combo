@@ -375,6 +375,20 @@ crate;真实前端只经 `bundle.resources`(`{"../dist/": "dist/"}`)随包分发
   共用)。`on_finish: Option<AgentFinishCallback>` 在后台 run 真正结束时调用
   (reason: end_turn|cancelled|error + 友好错误文案),自动化任务据此落运行结果;
   普通对话传 None。
+- **provider 流截断自动重试(`agent.rs::stream_one`)**:rig 在 provider 的 SSE 流
+  **没有任何终止记录**(无带 finish_reason 的 chunk、无 `[DONE]`)时判定为截断并抛
+  `CompletionError: ResponseError: provider stream ended without a terminal record;
+  treating the turn as truncated`——常见于 openai 兼容网关(如 opencode-go)在
+  长上下文/超长输出时主动掐断连接。combo 对该类错误(`is_truncation_error`
+  匹配 terminal record/stream ended/truncated)**自动重试一次**:`consume_stream`
+  在消费流时把已完成的工具调用循环(assistant tool_call + user tool_result
+  配对消息)收集进 `tool_history`,重试时拼接进历史让模型从断点继续,**不会
+  重复执行已有副作用的工具**;纯文本对话直接重发。重试前广播 `RunEvent::Retrying`
+  → serve 转发 `retry_notice` SSE 事件(双层信封,`{session_id, text}`)→ 前端
+  `agentStore.setRetryNotice` 写入 `SessionRuntime.retryNotice`,输入区上方显示
+  琥珀提示条(run running 期间显示,下次 run 启动清空)。429/401/余额不足等
+  服务商明确拒绝的错误、空闲超时错误不重试。重试仍失败时 `friendly_error`
+  给出「Provider 流被截断」中文提示(建议切换模型/新建会话)。
 - **本地图片 OCR(`ocr.rs` + tools.rs 的 `ocr` 工具)**:macOS 系统 Vision 框架
   (`VNRecognizeTextRequest`,经 `objc2`/`objc2-vision` 绑定,仅
   `[target.'cfg(target_os = "macos")'.dependencies]` 引入,其他平台编译零影响)

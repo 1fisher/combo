@@ -448,3 +448,31 @@ describe('applyEvent', () => {
     expect(notifyRunComplete).toHaveBeenCalledWith('s1', undefined, '', 'cancelled');
   });
 });
+
+describe('applyEvent retry_notice', () => {
+  beforeEach(() => {
+    useAgentStore.setState({ activeSessionId: 's1', bySession: {} });
+  });
+
+  it('writes retry notice into session runtime', () => {
+    applyEvent(useAgentStore.getState(), {
+      type: 'retry_notice',
+      payload: {
+        type: 'created',
+        payload: { session_id: 's1', text: '检测到 provider 流被截断,已自动重试一次…' },
+      },
+    });
+    const after = useAgentStore.getState();
+    expect(after.bySession['s1'].retryNotice).toBe('检测到 provider 流被截断,已自动重试一次…');
+  });
+
+  it('clears retry notice when a new run starts', () => {
+    applyEvent(useAgentStore.getState(), {
+      type: 'retry_notice',
+      payload: { type: 'created', payload: { session_id: 's1', text: 'x' } },
+    });
+    useAgentStore.getState().markRun('s1', 'r2', 'running');
+    const after = useAgentStore.getState();
+    expect(after.bySession['s1'].retryNotice).toBeUndefined();
+  });
+});
