@@ -1,0 +1,46 @@
+#!/bin/sh
+# combo 主分支保护 hook(pre-commit):
+# 禁止直接在 main 分支上提交代码,强制走 worktree + feat 分支流程(见 AGENTS.md「Git 开发流程」)。
+#
+# 放行条件:
+#   - 当前分支不是 main;
+#   - 合并提交(存在 MERGE_HEAD,即 `git merge` 产生的收尾提交);
+#   - 暂存的改动全部是 *.md 文档(文档类改动允许直接进 main);
+#   - 紧急情况可用 `git commit --no-verify` 显式跳过。
+#
+# 安装位置:全局 core.hooksPath 目录(combo 署名功能接管为
+# ~/.config/combo/git-hooks/,repo 内 .git/hooks 在 hooksPath 存在时会被忽略)。
+# 本脚本自带仓库范围守卫:仅在 combo 主仓及其 worktree(目录名 combo / combo-*)
+# 中生效,不影响其他仓库。
+
+# 守卫:只对 combo 仓库生效(主仓目录名 combo,worktree 为 combo-*)。
+top=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+case "$(basename "$top")" in
+  combo|combo-*) ;;
+  *) exit 0 ;;
+esac
+
+branch=$(git symbolic-ref --short HEAD 2>/dev/null) || exit 0
+[ "$branch" = "main" ] || exit 0
+
+gitdir=$(git rev-parse --git-dir)
+[ -f "$gitdir/MERGE_HEAD" ] && exit 0
+
+staged=$(git diff --cached --name-only)
+[ -z "$staged" ] && exit 0
+
+code_files=$(echo "$staged" | grep -v '\.md$')
+if [ -n "$code_files" ]; then
+  echo ""
+  echo "⛔ 禁止直接在 main 分支上提交代码(AGENTS.md「Git 开发流程」)。"
+  echo "   请改用 worktree + feat 分支:"
+  echo "     git worktree add ../combo-feat-xxx -b feat/xxx"
+  echo ""
+  echo "   本次暂存中包含非文档文件:"
+  echo "$code_files" | sed 's/^/     - /'
+  echo ""
+  echo "   文档(*.md)改动可直接提交;确需绕过请用 git commit --no-verify。"
+  exit 1
+fi
+
+exit 0

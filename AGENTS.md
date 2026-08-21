@@ -67,7 +67,11 @@ plain browser. M1 directory picking is a path input, not a native dialog.
 
 ## Git 开发流程(worktree + feat 分支)
 
-所有功能开发一律采用 **git worktree + feat 分支** 工作流,不直接在主分支上改代码:
+所有功能开发一律采用 **git worktree + feat 分支** 工作流,不直接在主分支上改代码。
+
+> **动手前先自检**:任何代码改动前先 `git branch --show-current`,若当前在
+> `main` 上,必须先建 worktree + feat 分支再改(pre-commit hook 会直接拒绝
+> 在 main 上提交代码,见本节末尾)。文档(*.md)改动可直接提交。
 
 1. **建 worktree + 分支**:每个功能/修复在独立的 worktree 中开发,分支命名
    `feat/<简短描述>`(修复类可用 `fix/<描述>`)。主仓在 `main` 分支时:
@@ -96,6 +100,21 @@ plain browser. M1 directory picking is a path input, not a native dialog.
 
 注意:多个 worktree 共享同一仓库,`cargo` 的 `target/` 不共享,各 worktree
 首次构建需全量编译;Rust 依赖变更(`Cargo.lock`)合并时留意冲突。
+
+**强制机制(pre-commit hook)**:`scripts/git-hooks/pre-commit` 安装到全局
+`core.hooksPath` 目录(combo 署名功能接管的 `~/.config/combo/git-hooks/`,
+repo 内 `.git/hooks` 在 hooksPath 存在时会被忽略),在 main 上暂存非文档文件时
+直接拒绝提交;合并提交与纯 `*.md` 改动放行,确需绕过用 `git commit --no-verify`。
+脚本自带仓库守卫,仅对 combo 主仓及 worktree(目录名 `combo` / `combo-*`)生效。
+新 clone 需手动安装一次:
+
+```bash
+cp scripts/git-hooks/pre-commit ~/.config/combo/git-hooks/
+chmod +x ~/.config/combo/git-hooks/pre-commit
+```
+
+远端仓库建议同时开启 GitHub 分支保护(Settings → Branches → 禁止 push 到
+main、走 PR),把约定升级为服务端硬约束。
 
 ## Commands
 
