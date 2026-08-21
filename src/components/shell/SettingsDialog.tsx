@@ -43,6 +43,7 @@ import { requestNotifyPermission } from '../../lib/notify';
 import { pickVoicePhrase, speakNotifyVoice, VOICE_RUN_DONE } from '../../lib/notifyVoice';
 import { useFetchModels, useProviderCrud, useProviderKeys, useProviders, useSaveProviderKey, useSetModelContextWindow } from '../../hooks/useAgentModel';
 import { useUIPreferences } from '../../stores/uiPreferencesStore';
+import { ModelPicker } from '../agent/ModelPicker';
 import { formatTokenCount } from '../../lib/tokens';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { confirmDialog } from '../../lib/confirm';
@@ -1630,11 +1631,12 @@ const ContextWindowSection = forwardRef<
   // 用户是否改动过输入(区分「没改」与「主动清空」,避免误清除已有配置)
   const dirtyRef = useRef(false);
 
-  // 打开时初始化:默认选中第一个 provider 及其默认/首个模型。
+  // 打开时初始化:默认选中第一个有模型的 provider 及其默认/首个模型
+  // (可搜索选择组件只列出有模型的 provider,无模型 provider 无法设置窗口值)。
   // providerId 非空说明已初始化过(providers 异步加载完成后),不再覆盖用户选择。
   useEffect(() => {
     if (!open || providerId) return;
-    const p = (providers ?? [])[0];
+    const p = (providers ?? []).find((pp) => (pp.models?.length ?? 0) > 0);
     if (!p) return;
     setProviderId(p.id);
     setModelId(defaultModelOf(p));
@@ -1698,46 +1700,22 @@ const ContextWindowSection = forwardRef<
 
   if (!providers?.length) return null;
 
-  const selectCls =
-    'h-9 w-full rounded-lg border border-input-border bg-background px-2.5 text-[13px] text-foreground outline-none [color-scheme:dark] focus-visible:border-input-border-focused';
-
   return (
     <div className="flex flex-col gap-2">
       <label className="text-[13px] font-medium text-foreground">上下文窗口(手动)</label>
-      <div className="grid grid-cols-2 gap-1.5">
-        <select
-          value={providerId}
-          onChange={(e) => {
-            const pid = e.target.value;
-            setProviderId(pid);
-            // 切换 Provider 时同步重置模型为新 provider 的默认/首个模型,
-            // 否则 modelId 残留旧值,模型下拉显示与实际保存的模型不一致(覆盖错模型)
-            setModelId(defaultModelOf(providers?.find((p) => p.id === pid)));
-          }}
-          className={selectCls}
-          aria-label="选择 Provider"
-        >
-          {providers.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name ?? p.id}
-            </option>
-          ))}
-        </select>
-        <select
-          value={modelId}
-          onChange={(e) => {
-            setModelId(e.target.value);
-          }}
-          className={selectCls}
-          aria-label="选择模型"
-        >
-          {models.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.name ?? m.id}
-            </option>
-          ))}
-        </select>
-      </div>
+      {/* Provider + 模型:复用统一的可搜索选择组件(搜索/最近使用/按 Provider
+          分组跨选,与 Composer、自动化表单一致),替代原先两个原生 select */}
+      <ModelPicker
+        variant="form"
+        providers={providers}
+        selected={providerId && modelId ? { provider: providerId, model: modelId } : null}
+        onSelect={(pid, mid) => {
+          setProviderId(pid);
+          setModelId(mid);
+        }}
+        placeholder="选择模型"
+        ariaLabel="选择上下文窗口模型"
+      />
       <div className="flex items-center gap-1.5">
         <input
           type="number"

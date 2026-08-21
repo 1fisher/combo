@@ -86,6 +86,7 @@ export function ModelPicker({
   pending = false,
   warn = false,
   placeholder,
+  ariaLabel = '切换模型',
 }: {
   /** provider 列表(含 models);未加载时触发器仍可展示已保存的选中值 */
   providers?: Api.ProviderEntry[];
@@ -108,8 +109,10 @@ export function ModelPicker({
   pending?: boolean;
   /** composer 触发器:当前 provider 缺 API Key 时告警色 */
   warn?: boolean;
-  /** 未选中时 composer 触发器文案(默认「默认模型」) */
+  /** 未选中时触发器文案(composer 默认「默认模型」,form 默认显示 clearLabel) */
   placeholder?: string;
+  /** 触发器的无障碍标签(不同表单场景区分用途,默认「切换模型」) */
+  ariaLabel?: string;
 }) {
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const isOpen = openProp ?? uncontrolledOpen;
@@ -242,14 +245,15 @@ export function ModelPicker({
     onSelect(provider, model);
   }
 
-  // 触发器文案:composer 显示模型 id;form 显示「模型名 · provider」或「跟随项目默认」
+  // 触发器文案:composer 显示模型 id;form 显示「模型名 · provider」,
+  // 未选中时优先 placeholder(如「选择模型」),未传则回落 clearLabel
   const triggerLabel =
     variant === 'form'
       ? selected
         ? selectedEntry
           ? selectedEntry.name || selectedEntry.id
           : selected.model
-        : clearLabel
+        : (placeholder ?? clearLabel)
       : selected?.model || placeholder || '默认模型';
 
   return (
@@ -263,7 +267,7 @@ export function ModelPicker({
             'flex justify-between items-center gap-1 hover:bg-surface-hover px-1.5 py-1.5 rounded-lg w-fit h-7 text-[13px] whitespace-nowrap transition-colors',
             warn ? 'text-warning hover:text-warning' : 'text-foreground-subtle hover:text-foreground'
           )}
-          aria-label="切换模型"
+          aria-label={ariaLabel}
           title="切换模型"
         >
           {pending ? (
@@ -284,7 +288,7 @@ export function ModelPicker({
           ref={btnRef}
           onClick={() => setOpen(!isOpen)}
           className="flex h-9 w-full items-center justify-between gap-2 rounded-lg border border-border bg-surface-hover px-3 text-sm text-foreground outline-none transition-colors focus:border-ring/60 focus:ring-1 focus:ring-ring/40"
-          aria-label="切换模型"
+          aria-label={ariaLabel}
           title="切换模型"
         >
           <span className="flex min-w-0 flex-1 items-center gap-2">

@@ -353,16 +353,15 @@ describe('SettingsDialog', () => {
     );
   });
 
-  it('切换 Provider 后上下文窗口保存到新 provider 的模型,不残留旧模型', async () => {
+  it('上下文窗口:可搜索组件跨 Provider 选模型后保存到新 provider 的模型', async () => {
     renderWithProviders(<SettingsDialog open onOpenChange={vi.fn()} />);
-    // 默认选中第一个 provider(opencode)的模型
-    const providerSel = screen.getByLabelText('选择 Provider');
-    const modelSel = screen.getByLabelText('选择模型');
-    expect((providerSel as HTMLSelectElement).value).toBe('opencode');
-    expect((modelSel as HTMLSelectElement).value).toBe('deepseek-v4-flash-free');
-    // 切到 DeepSeek:模型应联动为新 provider 的默认/首个模型
-    await userEvent.selectOptions(providerSel, 'deepseek');
-    expect((modelSel as HTMLSelectElement).value).toBe('deepseek-v4-flash');
+    // 默认选中第一个有模型的 provider(opencode)的默认模型
+    const trigger = screen.getByRole('button', { name: '选择上下文窗口模型' });
+    expect(trigger.textContent).toContain('deepseek-v4-flash-free');
+    // 打开可搜索弹层,按关键词过滤后直接选中 DeepSeek 分组下的模型
+    await userEvent.click(trigger);
+    await userEvent.type(screen.getByPlaceholderText('搜索模型'), 'flash');
+    await userEvent.click(screen.getByRole('button', { name: 'DeepSeek V4 Flash' }));
     // 仅切换不修改输入不应写入(保存走后端配置,不再本地存覆盖)
     await userEvent.click(screen.getByRole('button', { name: '保存' }));
     expect(contextWindowMutate).not.toHaveBeenCalled();
