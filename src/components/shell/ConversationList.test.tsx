@@ -82,6 +82,24 @@ describe('ConversationList', () => {
   beforeEach(() => {
     vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver);
     FakeIntersectionObserver.instances = [];
+    // 清掉模块级 vi.fn 的跨测试调用计数(实现保留),避免累积导致
+    // toHaveBeenCalledTimes 断言在 jsdom 30 下误报。
+    vi.mocked(listSessionsPage).mockClear();
+    // jsdom 30 中 getBoundingClientRect 默认全 0(视为在视口内),会触发
+    // ConversationList 的「哨兵在预取区自动续拉」effect 连拉多页;真实
+    // 浏览器里未滚动时哨兵在视口下方。mock 为视口外位置,让自动续拉只在
+    // 测试手动 intersect 时发生,与旧 jsdom 行为一致。
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      x: 0,
+      y: 10_000,
+      top: 10_000,
+      bottom: 10_020,
+      left: 0,
+      right: 100,
+      width: 100,
+      height: 20,
+      toJSON: () => ({}),
+    } as DOMRect);
   });
   afterEach(() => {
     vi.unstubAllGlobals();

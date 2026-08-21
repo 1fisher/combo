@@ -264,10 +264,16 @@ describe('notify', () => {
   });
 
   it('ensureNotifyPermission:权限已授予时不再弹请求', async () => {
+    NotificationStub.permission = 'granted';
     const req = vi
       .spyOn(NotificationStub, 'requestPermission')
       .mockResolvedValue('granted');
+    // 先清掉前序测试可能残留的异步 fire-and-forget 调用(jsdom 30 下
+    // async 泄漏到本 spy),再验证本测试内 granted 路径不请求。
+    req.mockClear();
     await expect(ensureNotifyPermission()).resolves.toBe(true);
+    // 等待微任务,避免前序异步调用延后触发
+    await Promise.resolve();
     expect(req).not.toHaveBeenCalled();
   });
 });

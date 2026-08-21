@@ -92,7 +92,13 @@ export class AsrStream {
   /** 推送一段 16kHz 单声道 PCM16 音频。 */
   sendPcm(pcm: Int16Array): void {
     if (this.ws.readyState !== WebSocket.OPEN) return;
-    const buffer = pcm.buffer.slice(pcm.byteOffset, pcm.byteOffset + pcm.byteLength);
+    // TS7 中 TypedArray.buffer.slice() 返回 ArrayBuffer | SharedArrayBuffer,
+    // WebSocket.send 只接受 ArrayBuffer;PCM 缓冲由前端采集器独占,不会是
+    // SharedArrayBuffer,显式收窄类型并切片到实际数据范围。
+    const buffer: ArrayBuffer = pcm.buffer.slice(
+      pcm.byteOffset,
+      pcm.byteOffset + pcm.byteLength,
+    ) as ArrayBuffer;
     this.ws.send(buffer);
   }
 

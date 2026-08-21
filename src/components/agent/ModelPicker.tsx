@@ -403,6 +403,7 @@ export function ModelPicker({
                         <button
                           type="button"
                           onClick={() => handleSelect(m.providerId, m.id)}
+                          aria-label={`${m.name || m.id} ${m.providerName}`}
                           className="flex flex-1 items-center gap-2 px-2 py-1.5 rounded-lg min-w-0 text-[13px] text-left transition-colors"
                         >
                           <span className="flex-1 min-w-0 font-medium truncate">
