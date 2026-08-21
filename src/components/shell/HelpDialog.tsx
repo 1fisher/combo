@@ -28,9 +28,9 @@ const TIPS: { icon: string; title: string; desc: string }[] = [
     desc: '输入 / 可调用命令或子智能体',
   },
   {
-    icon: '$',
+    icon: '%',
     title: '使用技能',
-    desc: '输入 $ 可快速调用已安装的技能',
+    desc: '输入 % 可快速调用已安装的技能',
   },
   {
     icon: '#',

@@ -394,7 +394,7 @@ export function Composer({
   // mention popover 定位(基于 textarea 的 fixed 坐标)
   const [popoverPos, setPopoverPos] = useState<{ left: number; bottom: number; width: number } | null>(null);
 
-  // @ 文件提及 / $ 技能提及
+  // @ 文件提及 / % 技能提及
   const { mention, activeIndex, setActiveIndex, select: selectMention, handleKey: handleMentionKey } =
     useMention(value, areaRef, onChange);
   const { files: fileIndex } = useFileIndex(workspaceId);
@@ -689,7 +689,7 @@ export function Composer({
                   placeholder={
                     value || asrPending
                       ? undefined
-                      : '向 combo 提问,@ 提及文件或文件夹,/ 使用命令或子智能体,$ 使用技能,# 关联对话'
+                      : '向 combo 提问,@ 提及文件或文件夹,/ 使用命令或子智能体,% 使用技能,# 关联对话'
                   }
                   disabled={disabled}
                   className={`bg-transparent disabled:opacity-50 shadow-none p-0 border-0 outline-none w-full min-h-10 max-h-40 text-foreground placeholder:text-foreground-subtlest text-sm leading-5 resize-none disabled:cursor-not-allowed${

@@ -15,7 +15,7 @@ function detectTrigger(text: string, cursorPos: number): { type: 'file' | 'skill
       at = i;
       break;
     }
-    if (ch === '$' && (i === 0 || /[\s\n]/.test(slice[i - 1]))) {
+    if (ch === '%' && (i === 0 || /[\s\n]/.test(slice[i - 1]))) {
       triggerChar = 'skill';
       at = i;
       break;
@@ -36,12 +36,12 @@ describe('mention trigger detection', () => {
     expect(detectTrigger('hello @main', 11)).toEqual({ type: 'file', query: 'main', startIndex: 6 });
   });
 
-  it('detects $ trigger for skill', () => {
-    expect(detectTrigger('$brainstor', 10)).toEqual({ type: 'skill', query: 'brainstor', startIndex: 0 });
+  it('detects % trigger for skill', () => {
+    expect(detectTrigger('%brainstor', 10)).toEqual({ type: 'skill', query: 'brainstor', startIndex: 0 });
   });
 
-  it('detects $ trigger after newline', () => {
-    expect(detectTrigger('line1\n$skill', 12)).toEqual({ type: 'skill', query: 'skill', startIndex: 6 });
+  it('detects % trigger after newline', () => {
+    expect(detectTrigger('line1\n%skill', 12)).toEqual({ type: 'skill', query: 'skill', startIndex: 6 });
   });
 
   it('returns null when no trigger char', () => {
@@ -60,7 +60,7 @@ describe('mention trigger detection', () => {
     expect(detectTrigger('@', 1)).toEqual({ type: 'file', query: '', startIndex: 0 });
   });
 
-  it('handles $ at start with empty query', () => {
-    expect(detectTrigger('$', 1)).toEqual({ type: 'skill', query: '', startIndex: 0 });
+  it('handles % at start with empty query', () => {
+    expect(detectTrigger('%', 1)).toEqual({ type: 'skill', query: '', startIndex: 0 });
   });
 });
