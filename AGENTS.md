@@ -65,6 +65,38 @@ The frontend never talks to Tauri APIs for data (`src/lib/connection.ts` detects
 Tauri via `'__TAURI_INTERNALS__' in window`), so the whole app is developable in a
 plain browser. M1 directory picking is a path input, not a native dialog.
 
+## Git 开发流程(worktree + feat 分支)
+
+所有功能开发一律采用 **git worktree + feat 分支** 工作流,不直接在主分支上改代码:
+
+1. **建 worktree + 分支**:每个功能/修复在独立的 worktree 中开发,分支命名
+   `feat/<简短描述>`(修复类可用 `fix/<描述>`)。主仓在 `main` 分支时:
+
+   ```bash
+   git worktree add ../combo-feat-xxx -b feat/xxx   # 从当前 main 创建 worktree + 分支
+   cd ../combo-feat-xxx
+   ```
+
+   worktree 目录与主仓共享同一 `.git`,无需重复 clone;`target/`、`node_modules/`
+   等构建产物在各 worktree 内独立(互不干扰,可并行开发多个功能)。
+
+2. **在 worktree 内开发**:正常编码、`cargo test -p combo-cli`、`npm test`
+   验证,小步提交到 `feat/xxx` 分支。
+
+3. **完成后合并回主分支**:开发完成、测试通过后,回到主仓合并:
+
+   ```bash
+   cd <主仓路径>
+   git merge feat/xxx        # 或 rebase 后 fast-forward,保持历史整洁
+   git branch -d feat/xxx
+   git worktree remove ../combo-feat-xxx
+   ```
+
+   合并后删除 feat 分支与 worktree,保持仓库干净。
+
+注意:多个 worktree 共享同一仓库,`cargo` 的 `target/` 不共享,各 worktree
+首次构建需全量编译;Rust 依赖变更(`Cargo.lock`)合并时留意冲突。
+
 ## Commands
 
 ```bash
