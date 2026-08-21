@@ -140,8 +140,12 @@ describe('P2pTransport', () => {
     expect(p2pApplicable()).toBe(false); // 无 token
     setAccessToken('tok');
     expect(p2pApplicable()).toBe(true);
-    // 局域网直连页面不启用 P2P
-    setLanUrl('https://proxy.apesoft.cn');
+    // 局域网直连页面(origin === lan)不启用 P2P
+    vi.stubGlobal('window', {
+      ...window,
+      location: { ...window.location, origin: 'http://192.168.1.5:18236', hostname: '192.168.1.5' },
+    });
+    setLanUrl('http://192.168.1.5:18236/');
     expect(p2pApplicable()).toBe(false);
   });
 });

@@ -7,6 +7,7 @@ import {
   getProxyBaseUrl,
   getProxyUrlOverride,
   isLocalHostname,
+  normalizeHttpBaseUrl,
   resolveProxyBaseUrl,
   setProxyBaseUrl,
   setProxyUrlOverride,
@@ -28,6 +29,33 @@ describe('connection helpers', () => {
   it('setProxyBaseUrl strips trailing slash', () => {
     setProxyBaseUrl(`${DEFAULT}/`);
     expect(getProxyBaseUrl()).toBe(DEFAULT);
+  });
+
+  it('normalizeHttpBaseUrl accepts http/https and bare hosts', () => {
+    expect(normalizeHttpBaseUrl('http://127.0.0.1:18236/')).toBe('http://127.0.0.1:18236');
+    expect(normalizeHttpBaseUrl('HTTPS://Proxy.Example:8443/base/')).toBe(
+      'https://proxy.example:8443/base'
+    );
+    expect(normalizeHttpBaseUrl('192.168.1.5:18236')).toBe('http://192.168.1.5:18236');
+    expect(normalizeHttpBaseUrl('  http://a.b  ')).toBe('http://a.b');
+    expect(normalizeHttpBaseUrl('')).toBe('');
+  });
+
+  it('normalizeHttpBaseUrl rejects non-http protocols (URL-context XSS guard)', () => {
+    expect(normalizeHttpBaseUrl('javascript:alert(1)')).toBeNull();
+    expect(normalizeHttpBaseUrl('data:text/html,x')).toBeNull();
+    expect(normalizeHttpBaseUrl('file:///etc/passwd')).toBeNull();
+    expect(normalizeHttpBaseUrl('ftp://host')).toBeNull();
+  });
+
+  it('setProxyBaseUrl rejects non-http values', () => {
+    setProxyBaseUrl('javascript:alert(1)');
+    expect(getProxyBaseUrl()).not.toBe('javascript:alert(1)');
+  });
+
+  it('setProxyUrlOverride rejects non-http values', () => {
+    setProxyUrlOverride('javascript:alert(1)');
+    expect(getProxyUrlOverride()).toBeNull();
   });
 
   it('resolveProxyBaseUrl prefers localStorage override over env/local defaults', async () => {
