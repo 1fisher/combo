@@ -370,3 +370,5 @@
 .combo-badge-active {
   animation: combo-badge-pulse 1.4s ease-in-out infinite;
 }
+
+:root{--combo-build-probe-1:1}

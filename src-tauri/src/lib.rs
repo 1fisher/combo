@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, RwLock};
 use tauri::utils::assets::{AssetKey, CspHash};
 use tauri::{Emitter, Manager};
 
@@ -118,7 +118,7 @@ pub fn run() {
             });
             Ok(())
         })
-        .build(tauri::generate_context!())
+        .build(context)
         .expect("error while running tauri application")
         .run(|app, event| {
             // macOS:窗口全部隐藏(关闭到托盘)时,点击 Dock 图标重新显示主窗口
@@ -296,7 +296,15 @@ fn resolve_static_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
         }
     }
 
-    // 3. 开发模式:auto-detect
+    // 3. 可执行文件相对探测(裸跑仓库二进制时 resource_dir 是 cargo 输出
+    //    目录本身、cwd 又可能不在仓库内,两处都 miss;详见 dist_near_executable)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(found) = dist_near_executable(&exe) {
+            return Some(found);
+        }
+    }
+
+    // 4. 开发模式:auto-detect
     for candidate in ["./dist", "../dist", "../../dist"] {
         let path = std::path::PathBuf::from(candidate);
         if path.join("index.html").is_file() {
@@ -325,66 +333,129 @@ fn resolve_static_dir(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
 /// tunnel-all 模式的静态服务(`resolve_static_dir`)与 webview 由此共用
 /// 同一份 dist,不再出现「内嵌旧版 / 资源新版」的漂移。
 struct ResourceFirstAssets {
-    /// 磁盘 dist 目录(首次解析后缓存);None = 无磁盘资源,全部走内嵌。
-    dist_dir: OnceLock<Option<PathBuf>>,
+    /// 磁盘 dist 目录(解析后缓存;None = 无磁盘资源,全部走内嵌)。
+    /// 注意:tauri 创建 webview 窗口**早于** `Assets::setup`(app.rs 中
+    /// `WebviewWindowBuilder::build()` 在 `assets.setup(app)` 之前),首个
+    /// 资源请求会先用较弱的路径探测;因此用 RwLock 而非 OnceLock,setup
+    /// 的权威解析结果(resource_dir 布局)可以无条件覆盖首探测。
+    dist_dir: RwLock<Option<PathBuf>>,
     embedded: Box<dyn tauri::Assets<tauri::Wry>>,
 }
 
 impl ResourceFirstAssets {
     fn new(embedded: Box<dyn tauri::Assets<tauri::Wry>>) -> Self {
         Self {
-            dist_dir: OnceLock::new(),
+            dist_dir: RwLock::new(None),
             embedded,
         }
     }
 
-    fn dist(&self) -> Option<&Path> {
-        // setup() 尚未执行时(极早期请求)的兜底探测;setup 会先以更权威的
-        // resolve_static_dir(env → resource_dir → cwd)覆盖初始化。
-        self.dist_dir.get_or_init(find_disk_dist_dir).as_deref()
+    fn dist(&self) -> Option<PathBuf> {
+        if let Some(dir) = self.dist_dir.read().unwrap().clone() {
+            return Some(dir);
+        }
+        let found = find_disk_dist_dir();
+        match found {
+            Some(dir) => {
+                let mut guard = self.dist_dir.write().unwrap();
+                if guard.is_none() {
+                    *guard = Some(dir.clone());
+                }
+                guard.clone()
+            }
+            None => None,
+        }
     }
 }
 
-/// 无 AppHandle 时的磁盘 dist 探测(按可执行文件位置 + 当前目录猜测)。
+/// 无 AppHandle 时的磁盘 dist 探测(与 resolve_static_dir 的 exe/cwd 部分同口径)。
 fn find_disk_dist_dir() -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            // macOS .app bundle:Contents/MacOS/<bin> → Contents/Resources/dist
-            candidates.push(dir.join("../Resources/dist"));
-            // 资源与可执行文件同目录的布局
-            candidates.push(dir.join("dist"));
-            // 仓库内裸跑:target/(debug|release)/<bin> → 仓库根 dist
-            candidates.push(dir.join("../..").join("dist"));
-            candidates.push(dir.join("../../..").join("dist"));
+        if let Some(found) = dist_near_executable(&exe) {
+            return Some(found);
         }
     }
     for cwd in ["./dist", "../dist", "../../dist"] {
-        candidates.push(PathBuf::from(cwd));
+        let path = PathBuf::from(cwd);
+        if path.join("index.html").is_file() {
+            return Some(path);
+        }
     }
-    candidates
-        .into_iter()
-        .find(|p| p.join("index.html").is_file())
+    None
+}
+
+/// 按可执行文件位置探测磁盘 dist:
+/// 1. macOS .app 布局:`Contents/MacOS/<bin>` → `Contents/Resources/dist`
+///    (resource_dir 解析失败时的兜底);
+/// 2. 从 exe 所在目录向上最多 4 级找 `dist/`(要求 index.html 存在)——
+///    覆盖仓库内裸跑的两种 cargo 布局:`target/release/<bin>`(上 2 级到
+///    仓库根)与 `target/<triple>/release/<bin>`(上 3 级),另含 1 级余量。
+///
+/// 没有这一步时,裸跑二进制的 resource_dir 被 tauri-utils 特判为 cargo 输出
+/// 目录(exe 目录本身),`dist`/`_up_/dist` 探测必 miss;若 cwd 又不在仓库
+/// 内(如在 $HOME 用绝对路径启动),resolve_static_dir 返回 None 且被
+/// OnceLock 锁死,webview 只能显示内嵌兜底页。
+fn dist_near_executable(exe: &Path) -> Option<PathBuf> {
+    let dir = exe.parent()?;
+    // .app 布局:Contents/MacOS/<bin> → Contents/Resources/dist
+    let resources = dir.parent()?.join("Resources/dist");
+    if resources.join("index.html").is_file() {
+        return Some(resources);
+    }
+    find_dist_upward(dir, 4)
+}
+
+/// 从 `from` 目录(含自身)向上最多 `max_levels` 级,逐级探测 `<dir>/dist`。
+fn find_dist_upward(from: &Path, max_levels: usize) -> Option<PathBuf> {
+    let mut dir = from.to_path_buf();
+    for _ in 0..=max_levels {
+        let candidate = dir.join("dist");
+        if candidate.join("index.html").is_file() {
+            return Some(candidate);
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    None
 }
 
 impl tauri::Assets<tauri::Wry> for ResourceFirstAssets {
     fn setup(&self, app: &tauri::App<tauri::Wry>) {
-        // setup 在事件循环开始前同步调用,先到先得;比 exe 相对路径探测更权威
-        // (resource_dir API 兼容 macOS/Windows 各自的 bundle 布局)。
-        let _ = self.dist_dir.set(resolve_static_dir(app.handle()));
+        // 注意:tauri 创建 webview 窗口早于本回调,首个资源请求可能已经用
+        // 弱探测初始化过;resolve_static_dir(resource_dir 兼容各平台 bundle
+        // 布局)更权威,无条件覆盖。
+        let resolved = resolve_static_dir(app.handle());
+        // tracing 尚未初始化(init_tracing 在 init_backend 里,晚于 webview
+        // 首个资源请求),用 eprintln 保证诊断可见。
+        match &resolved {
+            Some(dir) => eprintln!("[assets] webview 前端资源目录: {}", dir.display()),
+            None => eprintln!("[assets] 未找到磁盘 dist,回退内嵌兜底页"),
+        }
+        *self.dist_dir.write().unwrap() = resolved;
     }
 
     fn get(&self, key: &AssetKey) -> Option<Cow<'_, [u8]>> {
         if let Some(dir) = self.dist() {
-            // key 来自 webview URL(已去首斜杠、percent 解码),按路径分量拒绝
+            // tauri protocol 传入的 key 可能带前导斜杠(如 `/index.html`),
+            // 必须去掉:Path::join 遇绝对路径会替换整个 dist 前缀,导致
+            // 读到文件系统根下的路径。key 已 percent 解码,按路径分量拒绝
             // `..` 防穿越;磁盘模式为「全有或全无」:单个文件缺失不回退内嵌,
             // 避免新旧两套前端混搭(index.html 引用不到对应 hash 的资源)。
-            if key.as_ref().split(['/', '\\']).any(|seg| seg == "..") {
+            let rel = key.as_ref().trim_start_matches(['/', '\\']);
+            if rel.split(['/', '\\']).any(|seg| seg == "..") {
                 return None;
             }
-            return std::fs::read(dir.join(key.as_ref()))
-                .ok()
-                .map(Cow::Owned);
+            return match std::fs::read(dir.join(rel)) {
+                Ok(bytes) => Some(Cow::Owned(bytes)),
+                Err(err) => {
+                    eprintln!(
+                        "[assets] 磁盘 dist 读取失败: dir={} key={rel} err={err}",
+                        dir.display()
+                    );
+                    None
+                }
+            };
         }
         self.embedded.get(key)
     }
@@ -433,4 +504,95 @@ fn init_tracing() {
         .with(layers)
         .with(stderr_layer)
         .init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 在临时目录构造假布局后执行 `f`,返回其结果(目录用后即删)。
+    fn with_temp_layout<F>(f: F) -> Option<PathBuf>
+    where
+        F: FnOnce(&Path) -> Option<PathBuf>,
+    {
+        let base = std::env::temp_dir().join(format!(
+            "combo-assets-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        let result = f(&base);
+        let _ = std::fs::remove_dir_all(&base);
+        result
+    }
+
+    fn touch(path: &Path) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"ok").unwrap();
+    }
+
+    #[test]
+    fn dist_near_executable_finds_repo_dist_from_target_release() {
+        // 裸跑 target/release/Combo(cwd 不在仓库内也能找到仓库根 dist)
+        with_temp_layout(|base| {
+            let exe = base.join("target/release/Combo");
+            touch(&exe);
+            touch(&base.join("dist/index.html"));
+            assert_eq!(dist_near_executable(&exe), Some(base.join("dist")));
+            None
+        });
+    }
+
+    #[test]
+    fn dist_near_executable_finds_repo_dist_from_triple_layout() {
+        // 裸跑 target/<triple>/release/Combo(上 3 级到仓库根)
+        with_temp_layout(|base| {
+            let exe = base.join("target/aarch64-apple-darwin/release/Combo");
+            touch(&exe);
+            touch(&base.join("dist/index.html"));
+            assert_eq!(dist_near_executable(&exe), Some(base.join("dist")));
+            None
+        });
+    }
+
+    #[test]
+    fn dist_near_executable_prefers_app_resources_layout() {
+        // .app 布局:Contents/MacOS/<bin> → Contents/Resources/dist
+        with_temp_layout(|base| {
+            let exe = base.join("Combo.app/Contents/MacOS/Combo");
+            touch(&exe);
+            touch(&base.join("Combo.app/Contents/Resources/dist/index.html"));
+            assert_eq!(
+                dist_near_executable(&exe),
+                Some(base.join("Combo.app/Contents/Resources/dist"))
+            );
+            None
+        });
+    }
+
+    #[test]
+    fn dist_near_executable_returns_none_without_dist() {
+        with_temp_layout(|base| {
+            let exe = base.join("target/release/Combo");
+            touch(&exe);
+            assert_eq!(dist_near_executable(&exe), None);
+            None
+        });
+    }
+
+    #[test]
+    fn find_dist_upward_respects_level_limit() {
+        with_temp_layout(|base| {
+            touch(&base.join("dist/index.html"));
+            // 上 4 级:target/<triple>/<profile>/<bin-dir> → 仓库根可达
+            let from = base.join("a/b/c/d");
+            assert_eq!(find_dist_upward(&from, 4), Some(base.join("dist")));
+            // 上 3 级:差一级,够不到
+            assert_eq!(find_dist_upward(&from, 3), None);
+            None
+        });
+    }
 }
