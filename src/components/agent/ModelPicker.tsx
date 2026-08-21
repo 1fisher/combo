@@ -24,12 +24,17 @@ function containingBlockOf(el: HTMLElement): HTMLElement | null {
   while (n) {
     const cs = window.getComputedStyle(n);
     if (
+      // transform 与 translate/rotate/scale 独立属性都会建立包含块;
+      // Tailwind v4 的 -translate-x-1/2 编译为 translate 属性(transform 为 none)
       cs.transform !== 'none' ||
+      cs.translate !== 'none' ||
+      cs.rotate !== 'none' ||
+      cs.scale !== 'none' ||
       cs.perspective !== 'none' ||
       cs.filter !== 'none' ||
       (cs.backdropFilter && cs.backdropFilter !== 'none') ||
       (cs.contain && cs.contain !== 'none') ||
-      /(transform|perspective)/.test(cs.willChange)
+      /(transform|perspective|translate|rotate|scale)/.test(cs.willChange)
     ) {
       return n;
     }
@@ -62,23 +67,30 @@ export function useAnchorPopover(
       const anchor = anchorRef.current;
       if (!anchor) return;
       const rect = anchor.getBoundingClientRect();
-      // fixed 定位落在 transformed 祖先内时坐标相对该祖先而非视口,
-      // 统一换算成「相对实际包含块原点」的偏移(无则即视口,原点 0,0)
+      // fixed 定位落在带 transform 的祖先内时以它为包含块,坐标须换成相对它的
+      // 偏移;若该祖先还是滚动容器(如设置弹窗的 overflow-y-auto 内容区),
+      // 弹层按「内容坐标系」排版、会随内容一起滚走,须把包含块自身的
+      // 滚动量补回,才能与锚点的当前视口位置对齐
       const cb = containingBlockOf(anchor);
       const base = cb ? cb.getBoundingClientRect() : null;
       const originX = base ? base.left : 0;
       const originY = base ? base.top : 0;
+      const scrollX = cb ? cb.scrollLeft : 0;
+      const scrollY = cb ? cb.scrollTop : 0;
       const vw = base ? base.width : window.innerWidth;
       const vh = base ? base.height : window.innerHeight;
       const rawLeft =
-        opts.align === 'left' ? rect.left - originX : rect.right - originX - opts.width;
+        opts.align === 'left'
+          ? rect.left - originX + scrollX
+          : rect.right - originX + scrollX - opts.width;
       const left = Math.min(Math.max(rawLeft, 8), Math.max(8, vw - opts.width - 8));
       // 弹层按 max-h-80(320px)+ 边距预留 ~356px;下方放不下且开启 flip 时翻到上方
-      const anchorBottom = rect.bottom - originY;
+      const anchorBottom = rect.bottom - originY + scrollY;
+      const anchorTop = rect.top - originY + scrollY;
       const openUp =
         opts.placement === 'top' || (opts.flip === true && vh - anchorBottom < 356);
       const pos = openUp
-        ? { left, bottom: vh - (rect.top - originY) + 8 }
+        ? { left, bottom: vh - anchorTop + 8 }
         : { left, top: anchorBottom + 8 };
       setPos(pos);
     }
