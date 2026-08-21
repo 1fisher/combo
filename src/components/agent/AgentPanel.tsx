@@ -553,7 +553,9 @@ export function AgentPanel({
             )}
           </div>
         )}
-        {/* 问题卡片(question 工具):非模态,优先于任务列表显示在输入坞上方 */}
+        {/* 任务列表 */}
+        {sessionId && todos.length > 0 && <TodoList todos={todos} />}
+        {/* 问题卡片(question 工具):非模态,显示在任务列表下方、输入坞上方 */}
         {questionQueue[0] && workspaceId && (
           <QuestionCard
             batch={questionQueue[0]}
@@ -563,8 +565,6 @@ export function AgentPanel({
             }}
           />
         )}
-        {/* 任务列表 */}
-        {sessionId && todos.length > 0 && <TodoList todos={todos} />}
         {/* 子 agent 进度(multi-agent:agent 工具派发的子任务) */}
         {sessionId && subagents.length > 0 && <SubAgentPanel tasks={subagents} />}
         {/* 变更栏 */}
