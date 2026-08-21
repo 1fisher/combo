@@ -46,12 +46,16 @@ PREV="$(cat "$STAMP" 2>/dev/null || true)"
 echo "[1/2] 构建前端 (npm run build)..."
 npm run build
 
+# 前端已在 [1/2] 构建过;置空 beforeBuildCommand 避免 tauri build 重复构建前端
+# (tauri-cli 对空字符串 hook 直接跳过)
+SKIP_WEB_BUILD='{"build":{"beforeBuildCommand":""}}'
+
 if [ -n "$PREV" ] && [ "$CURRENT" = "$PREV" ] && [ -x "$BIN" ]; then
     echo "[2/2] Rust 无变化 → 跳过 cargo 编译,复用二进制重新打包 (tauri bundle)..."
     npx tauri bundle --bundles dmg
 else
     echo "[2/2] Rust 有变化(或首次/清理后打包)→ 完整构建 (tauri build)..."
-    npx tauri build --bundles dmg
+    npx tauri build --bundles dmg --config "$SKIP_WEB_BUILD"
 fi
 
 mkdir -p target

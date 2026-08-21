@@ -115,9 +115,13 @@ terminal 2 `bash scripts/dev-backend.sh`(一步编译 combo-cli 并以 serve 模
 (`crates/`、`src-tauri/{src,capabilities,icons,fallback-frontend}`、根与
 src-tauri 的 `Cargo.toml`/`tauri.conf.json`/`build.rs`/`Info.plist`/
 `entitlements.plist`、`Cargo.lock`、`vendor/`)做内容指纹(存
-`target/.dmg-rust-inputs.sha256`):未变化且 `target/release/combo-app` 存在时
+`target/.dmg-rust-inputs.sha256`):未变化且 `target/release/Combo` 存在时
 仅 `npm run build` + **`npx tauri bundle --bundles dmg`**(只打包、不跑
-cargo),前端变更不再牵连 Rust 编译;有变化则走完整 `npx tauri build`。
+cargo),前端变更不再牵连 Rust 编译;有变化则走完整
+`npx tauri build --bundles dmg --config '{"build":{"beforeBuildCommand":""}}'`
+——用 `--config` 置空 beforeBuildCommand,前端只由脚本构建一次(tauri-cli
+对空字符串 hook 直接跳过;不置空的话 tauri build 会再跑一遍
+`npm run build`,前后端各构建两次)。
 配套机制(让「复用旧二进制 + 新 dist」成为完整新版本):
 ① `tauri.conf.json` 的 `frontendDist` 指向稳定兜底页
 `src-tauri/fallback-frontend/`——tauri-codegen 原本会把 frontendDist 下所有
