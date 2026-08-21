@@ -47,9 +47,8 @@ use axum::{
     routing::{delete, get, post},
 };
 use futures::stream::{iter, unfold, StreamExt};
-use rig::completion::message::{ToolCall, ToolFunction};
+use rig::completion::message::{ToolCall, ToolCallId, ToolFunction};
 use rig::completion::{AssistantContent, Message};
-use rig::OneOrMany;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -974,53 +973,53 @@ fn build_router(
         .route("/v1/control", post(control))
         // ---- agent 运行 / SSE / 模型 ----
         .route(
-            "/v1/workspaces/:id/agent",
+            "/v1/workspaces/{id}/agent",
             get(agent_info).post(run_agent_ws),
         )
         .route(
-            "/v1/workspaces/:id/agent/sessions/:sid/cancel",
+            "/v1/workspaces/{id}/agent/sessions/{sid}/cancel",
             post(cancel_agent),
         )
         .route(
-            "/v1/workspaces/:id/current-session",
+            "/v1/workspaces/{id}/current-session",
             post(current_session),
         )
         .route(
-            "/v1/workspaces/:id/permissions/skip",
+            "/v1/workspaces/{id}/permissions/skip",
             get(permission_skip_get).post(permission_skip_post),
         )
         .route(
-            "/v1/workspaces/:id/permissions/grant",
+            "/v1/workspaces/{id}/permissions/grant",
             post(permission_grant),
         )
         .route(
-            "/v1/workspaces/:id/questions/answer",
+            "/v1/workspaces/{id}/questions/answer",
             post(question_answer),
         )
-        .route("/v1/workspaces/:id/events", get(events))
-        .route("/v1/workspaces/:id/providers", get(list_providers))
+        .route("/v1/workspaces/{id}/events", get(events))
+        .route("/v1/workspaces/{id}/providers", get(list_providers))
         .route(
-            "/v1/workspaces/:id/providers/fetch-models",
+            "/v1/workspaces/{id}/providers/fetch-models",
             post(fetch_models),
         )
-        .route("/v1/workspaces/:id/providers/save-key", post(save_provider_key))
-        .route("/v1/workspaces/:id/providers/keys", post(add_provider_key))
+        .route("/v1/workspaces/{id}/providers/save-key", post(save_provider_key))
+        .route("/v1/workspaces/{id}/providers/keys", post(add_provider_key))
         .route(
-            "/v1/workspaces/:id/providers/keys/activate",
+            "/v1/workspaces/{id}/providers/keys/activate",
             post(activate_provider_key),
         )
         .route(
-            "/v1/workspaces/:id/providers/keys/remove",
+            "/v1/workspaces/{id}/providers/keys/remove",
             post(remove_provider_key),
         )
         .route(
-            "/v1/workspaces/:id/providers/keys/rename",
+            "/v1/workspaces/{id}/providers/keys/rename",
             post(rename_provider_key),
         )
-        .route("/v1/workspaces/:id/providers/create", post(create_provider))
-        .route("/v1/workspaces/:id/providers/remove", post(delete_provider))
+        .route("/v1/workspaces/{id}/providers/create", post(create_provider))
+        .route("/v1/workspaces/{id}/providers/remove", post(delete_provider))
         .route(
-            "/v1/workspaces/:id/providers/context-window",
+            "/v1/workspaces/{id}/providers/context-window",
             post(set_context_window),
         )
         .route("/v1/providers", get(list_providers))
@@ -1042,13 +1041,13 @@ fn build_router(
         .route("/v1/providers/create", post(create_provider))
         .route("/v1/providers/remove", post(delete_provider))
         .route("/v1/providers/context-window", post(set_context_window))
-        .route("/v1/workspaces/:id/config/model", post(config_model))
+        .route("/v1/workspaces/{id}/config/model", post(config_model))
         .route(
-            "/v1/workspaces/:id/config",
+            "/v1/workspaces/{id}/config",
             get(workspace_config_get),
         )
         .route(
-            "/v1/workspaces/:id/config/set",
+            "/v1/workspaces/{id}/config/set",
             post(workspace_config_set),
         )
         // ---- 认证(移动端远程访问令牌) ----
@@ -1086,7 +1085,7 @@ fn build_router(
         )
         .route("/v1/stats/usage", get(usage_stats))
         .route("/v1/terminal", get(terminal::terminal_default))
-        .route("/v1/workspaces/:id/terminal", get(terminal::terminal))
+        .route("/v1/workspaces/{id}/terminal", get(terminal::terminal))
         .route("/v1/relay/start", post(relay::start_relay))
         .route("/v1/relay/stop", post(relay::stop_relay))
         .route("/v1/relay/status", get(relay::relay_status))
@@ -1097,114 +1096,114 @@ fn build_router(
         .route("/v1/host/dirs", get(host::dirs))
         // ---- 目录访问授权(敏感目录只询问一次) ----
         .route("/v1/dir-grants", get(dirperm::list).post(dirperm::grant))
-        .route("/v1/dir-grants/:id", delete(dirperm::revoke))
+        .route("/v1/dir-grants/{id}", delete(dirperm::revoke))
         // ---- workspaces / sessions / 文件 / git ----
         .route(
             "/v1/workspaces",
             get(workspace::list).post(workspace::create),
         )
         .route(
-            "/v1/workspaces/:id",
+            "/v1/workspaces/{id}",
             get(workspace::get)
                 .patch(workspace::rename)
                 .delete(workspace::delete),
         )
         .route(
-            "/v1/workspaces/:id/sessions",
+            "/v1/workspaces/{id}/sessions",
             get(session::list).post(session::create),
         )
         // 分页会话列表与项目级汇总(侧边栏任务分页加载;静态段优先于 :sid 匹配)
-        .route("/v1/workspaces/:id/sessions/page", get(session::list_page))
+        .route("/v1/workspaces/{id}/sessions/page", get(session::list_page))
         .route(
-            "/v1/workspaces/:id/sessions/summary",
+            "/v1/workspaces/{id}/sessions/summary",
             get(session::summary),
         )
         .route(
-            "/v1/workspaces/:id/sessions/:sid",
+            "/v1/workspaces/{id}/sessions/{sid}",
             delete(session::delete).patch(session::rename),
         )
         .route(
-            "/v1/workspaces/:id/sessions/:sid/history",
+            "/v1/workspaces/{id}/sessions/{sid}/history",
             get(session::history),
         )
         .route(
-            "/v1/workspaces/:id/sessions/:sid/messages",
+            "/v1/workspaces/{id}/sessions/{sid}/messages",
             post(session::upsert_msg),
         )
         .route(
-            "/v1/workspaces/:id/sessions/:sid/clear",
+            "/v1/workspaces/{id}/sessions/{sid}/clear",
             post(session::clear),
         )
-        .route("/v1/workspaces/:id/files/list", get(fs::list))
+        .route("/v1/workspaces/{id}/files/list", get(fs::list))
         .route(
-            "/v1/workspaces/:id/files/content",
+            "/v1/workspaces/{id}/files/content",
             get(fs::read).put(fs::write),
         )
-        .route("/v1/workspaces/:id/files/raw", get(fs::raw))
+        .route("/v1/workspaces/{id}/files/raw", get(fs::raw))
         // 二进制上传(输入框粘贴/拖拽附件):raw body,默认 2MB body limit 不够,
         // 挂 20MB(与 fs::MAX_UPLOAD_BYTES 一致,外加少量头部余量)
         .route(
-            "/v1/workspaces/:id/files/upload",
+            "/v1/workspaces/{id}/files/upload",
             post(fs::upload).layer(axum::extract::DefaultBodyLimit::max(
                 crate::fs::MAX_UPLOAD_BYTES + 1024,
             )),
         )
         .route(
-            "/v1/workspaces/:id/files/search",
+            "/v1/workspaces/{id}/files/search",
             get(fs::search),
         )
         // ---- 知识图谱 ----
-        .route("/v1/workspaces/:id/graph", get(graph::graph))
+        .route("/v1/workspaces/{id}/graph", get(graph::graph))
         // ---- workspace 语言统计(会话界面 LSP 检测提示) ----
-        .route("/v1/workspaces/:id/languages", get(lsp::workspace_languages))
+        .route("/v1/workspaces/{id}/languages", get(lsp::workspace_languages))
         // ---- 编辑器文档同步与实时诊断(didOpen/didChange 全量 → publishDiagnostics) ----
-        .route("/v1/workspaces/:id/lsp/document", post(lsp::lsp_document_sync))
+        .route("/v1/workspaces/{id}/lsp/document", post(lsp::lsp_document_sync))
         .route(
-            "/v1/workspaces/:id/lsp/diagnostics",
+            "/v1/workspaces/{id}/lsp/diagnostics",
             get(lsp::lsp_document_diagnostics),
         )
         .route(
-            "/v1/workspaces/:id/lsp/diagnostics/all",
+            "/v1/workspaces/{id}/lsp/diagnostics/all",
             get(lsp::lsp_document_diagnostics_all),
         )
-        .route("/v1/workspaces/:id/git/status", get(git::status))
-        .route("/v1/workspaces/:id/git/repos", get(git::repos))
-        .route("/v1/workspaces/:id/git/diff", get(git::diff))
-        .route("/v1/workspaces/:id/git/diff/staged", get(git::diff_staged))
-        .route("/v1/workspaces/:id/git/diff/head", get(git::diff_head))
-        .route("/v1/workspaces/:id/git/file", get(git::file_at_head))
-        .route("/v1/workspaces/:id/git/log", get(git::git_log))
-        .route("/v1/workspaces/:id/git/stage", post(git::stage))
-        .route("/v1/workspaces/:id/git/unstage", post(git::unstage))
-        .route("/v1/workspaces/:id/git/discard", post(git::discard))
-        .route("/v1/workspaces/:id/git/commit", post(git::commit))
+        .route("/v1/workspaces/{id}/git/status", get(git::status))
+        .route("/v1/workspaces/{id}/git/repos", get(git::repos))
+        .route("/v1/workspaces/{id}/git/diff", get(git::diff))
+        .route("/v1/workspaces/{id}/git/diff/staged", get(git::diff_staged))
+        .route("/v1/workspaces/{id}/git/diff/head", get(git::diff_head))
+        .route("/v1/workspaces/{id}/git/file", get(git::file_at_head))
+        .route("/v1/workspaces/{id}/git/log", get(git::git_log))
+        .route("/v1/workspaces/{id}/git/stage", post(git::stage))
+        .route("/v1/workspaces/{id}/git/unstage", post(git::unstage))
+        .route("/v1/workspaces/{id}/git/discard", post(git::discard))
+        .route("/v1/workspaces/{id}/git/commit", post(git::commit))
         .route(
-            "/v1/workspaces/:id/git/commit-message",
+            "/v1/workspaces/{id}/git/commit-message",
             post(git::commit_message),
         )
-        .route("/v1/workspaces/:id/git/push", post(git::push))
-        .route("/v1/workspaces/:id/git/pull", post(git::pull))
-        .route("/v1/workspaces/:id/git/fetch", post(git::fetch))
-        .route("/v1/workspaces/:id/git/branch-info", get(git::branch_info))
-        .route("/v1/workspaces/:id/git/branches", get(git::git_branches))
-        .route("/v1/workspaces/:id/git/checkout", post(git::git_checkout))
-        .route("/v1/workspaces/:id/git/branch/create", post(git::git_branch_create))
-        .route("/v1/workspaces/:id/git/branch/delete", post(git::git_branch_delete))
-        .route("/v1/workspaces/:id/git/commit/files", get(git::commit_files))
-        .route("/v1/workspaces/:id/git/commit/diff", get(git::commit_diff))
+        .route("/v1/workspaces/{id}/git/push", post(git::push))
+        .route("/v1/workspaces/{id}/git/pull", post(git::pull))
+        .route("/v1/workspaces/{id}/git/fetch", post(git::fetch))
+        .route("/v1/workspaces/{id}/git/branch-info", get(git::branch_info))
+        .route("/v1/workspaces/{id}/git/branches", get(git::git_branches))
+        .route("/v1/workspaces/{id}/git/checkout", post(git::git_checkout))
+        .route("/v1/workspaces/{id}/git/branch/create", post(git::git_branch_create))
+        .route("/v1/workspaces/{id}/git/branch/delete", post(git::git_branch_delete))
+        .route("/v1/workspaces/{id}/git/commit/files", get(git::commit_files))
+        .route("/v1/workspaces/{id}/git/commit/diff", get(git::commit_diff))
         // ---- 自动化(定时任务) ----
         .route(
             "/v1/automations",
             get(automation::list).post(automation::create),
         )
         .route(
-            "/v1/automations/:id",
+            "/v1/automations/{id}",
             get(automation::get)
                 .patch(automation::update)
                 .delete(automation::remove),
         )
-        .route("/v1/automations/:id/run", post(automation::run_now))
-        .route("/v1/automations/:id/runs", get(automation::runs))
+        .route("/v1/automations/{id}/run", post(automation::run_now))
+        .route("/v1/automations/{id}/runs", get(automation::runs))
         .layer(from_fn_with_state(state.clone(), auth::require_token))
         .with_state(state);
 
@@ -1903,13 +1902,13 @@ fn history_to_messages(history: &[Value]) -> Vec<Message> {
     }
     let mut out = Vec::new();
     // 等待 tool 消息响应的 assistant(tool_calls) 回合:
-    // Some((out 中该 assistant 消息的下标, 剩余待响应的 call id 集合))。
+    // Some((out 中该 assistant 消息的下标, 剩余待响应的 call id → 工具名))。
     // OpenAI 兼容 provider 要求 role=tool 消息紧跟带 tool_calls 的 assistant
     // 且每个 call 都有响应;历史里若出现坏序列(如持久化漏存了 assistant 的
     // tool_call/finish parts、只留下中间快照,或 tool_result 与 call 不配对),
     // 整组回滚丢弃,否则跟进消息 400("Messages with role 'tool' must be a
     // response to a preceding message with 'tool_calls'")。
-    let mut pending: Option<(usize, HashSet<String>)> = None;
+    let mut pending: Option<(usize, HashMap<String, String>)> = None;
     for h in history {
         let role = h.get("role").and_then(Value::as_str).unwrap_or("assistant");
         let Some(parts) = h.get("parts").and_then(Value::as_array) else {
@@ -1935,13 +1934,20 @@ fn history_to_messages(history: &[Value]) -> Vec<Message> {
                             .and_then(Value::as_str)
                             .unwrap_or("")
                             .to_string();
-                        let matched = matches!(&pending, Some((_, ids)) if ids.contains(&id));
+                        let matched = matches!(&pending, Some((_, ids)) if ids.contains_key(&id));
                         if matched {
                             if let Some((_, ids)) = &mut pending {
                                 ids.remove(&id);
                             }
                             out.push(Message::tool_result(
                                 id.clone(),
+                                // 工具名:从同回合 tool_call part 的 data.name 读取;
+                                // 无匹配时退化为空串(仅影响 wire 序列化,不影响语义)
+                                pending
+                                    .as_ref()
+                                    .and_then(|(_, ids)| ids.get(&id))
+                                    .cloned()
+                                    .unwrap_or_default(),
                                 truncate_tool_result(
                                     data.get("content").and_then(Value::as_str).unwrap_or(""),
                                 ),
@@ -1974,7 +1980,7 @@ fn history_to_messages(history: &[Value]) -> Vec<Message> {
         let mut texts: Vec<String> = Vec::new();
         let mut reasoning_text = String::new();
         let mut calls: Vec<AssistantContent> = Vec::new();
-        let mut call_ids: HashSet<String> = HashSet::new();
+        let mut call_ids: HashMap<String, String> = HashMap::new();
         for p in parts {
             let ptype = p.get("type").and_then(Value::as_str).unwrap_or("");
             let Some(data) = p.get("data") else { continue };
@@ -2002,9 +2008,9 @@ fn history_to_messages(history: &[Value]) -> Vec<Message> {
                     let raw = data.get("input").and_then(Value::as_str).unwrap_or("{}");
                     let arguments: Value =
                         serde_json::from_str(raw).unwrap_or_else(|_| json!({}));
-                    call_ids.insert(id.clone());
+                    call_ids.insert(id.clone(), name.clone());
                     calls.push(AssistantContent::ToolCall(ToolCall::new(
-                        id,
+                        ToolCallId::new(id.clone()).unwrap_or_else(ToolCallId::mint),
                         ToolFunction::new(name, arguments),
                     )));
                 }
@@ -2022,10 +2028,10 @@ fn history_to_messages(history: &[Value]) -> Vec<Message> {
                 out.push(Message::assistant(texts.join("\n")));
             }
             if !calls.is_empty() {
-                // calls 非空由上面的分支保证,unwrap 安全
+                // calls 非空由上面的分支保证
                 out.push(Message::Assistant {
                     id: None,
-                    content: OneOrMany::many(calls).expect("calls 非空"),
+                    content: calls,
                 });
                 pending = Some((out.len() - 1, call_ids));
             }
@@ -2042,7 +2048,7 @@ fn history_to_messages(history: &[Value]) -> Vec<Message> {
             content.extend(calls);
             out.push(Message::Assistant {
                 id: None,
-                content: OneOrMany::many(content).expect("reasoning 非空,集合必然非空"),
+                content,
             });
             if has_calls {
                 pending = Some((out.len() - 1, call_ids));
@@ -3357,8 +3363,8 @@ mod tests {
         match &msgs[0] {
             Message::User { content } => {
                 assert!(matches!(
-                    content.first_ref(),
-                    &rig::completion::message::UserContent::Text(_)
+                    content.first(),
+                    Some(rig::completion::message::UserContent::Text(_))
                 ));
             }
             _ => panic!("expected user message"),
@@ -3372,8 +3378,8 @@ mod tests {
         match &msgs[2] {
             Message::Assistant { content, .. } => {
                 assert!(matches!(
-                    content.first_ref(),
-                    &rig::completion::AssistantContent::ToolCall(_)
+                    content.first(),
+                    Some(rig::completion::AssistantContent::ToolCall(_))
                 ));
             }
             _ => panic!("expected assistant tool_call message"),
@@ -3382,8 +3388,8 @@ mod tests {
         match &msgs[3] {
             Message::User { content } => {
                 assert!(matches!(
-                    content.first_ref(),
-                    &rig::completion::message::UserContent::ToolResult(_)
+                    content.first(),
+                    Some(rig::completion::message::UserContent::ToolResult(_))
                 ));
             }
             _ => panic!("expected user tool_result message"),
@@ -3608,8 +3614,8 @@ mod tests {
         match &msgs[2] {
             Message::Assistant { content, .. } => {
                 assert!(matches!(
-                    content.first_ref(),
-                    &rig::completion::AssistantContent::ToolCall(_)
+                    content.first(),
+                    Some(rig::completion::AssistantContent::ToolCall(_))
                 ));
             }
             _ => panic!("expected assistant tool_call message"),
@@ -3663,8 +3669,8 @@ mod tests {
         match &msgs[2] {
             Message::Assistant { content, .. } => {
                 assert!(matches!(
-                    content.first_ref(),
-                    &rig::completion::AssistantContent::ToolCall(_)
+                    content.first(),
+                    Some(rig::completion::AssistantContent::ToolCall(_))
                 ));
             }
             _ => panic!("expected assistant tool_call message"),
@@ -3707,8 +3713,8 @@ mod tests {
             Message::Assistant { id, content } => {
                 assert!(id.is_none());
                 assert!(matches!(
-                    content.first_ref(),
-                    &rig::completion::AssistantContent::Text(_)
+                    content.first(),
+                    Some(rig::completion::AssistantContent::Text(_))
                 ));
             }
             _ => panic!("expected assistant text message"),

@@ -239,7 +239,7 @@ async fn connect_and_serve(
     let emit: crate::p2p::EmitSignal = {
         let ws_tx = ws_tx.clone();
         Arc::new(move |id: &str, data: &str| {
-            let _ = ws_tx.send(Message::Text(signal_frame(id, data)));
+            let _ = ws_tx.send(Message::text(signal_frame(id, data)));
         })
     };
 
@@ -259,7 +259,7 @@ async fn connect_and_serve(
                     }
                 }
                 _ = ping_interval.tick() => {
-                    if ws_sink.send(Message::Ping(Vec::new())).await.is_err() {
+                    if ws_sink.send(Message::Ping(Default::default())).await.is_err() {
                         break;
                     }
                 }
@@ -289,7 +289,7 @@ async fn connect_and_serve(
         };
         let Some(msg) = msg else { break };
         let text = match msg {
-            Ok(Message::Text(t)) => t,
+            Ok(Message::Text(t)) => t.to_string(),
             Ok(Message::Binary(d)) => String::from_utf8_lossy(&d).into_owned(),
             Ok(Message::Ping(p)) => {
                 let _ = ws_tx.send(Message::Pong(p));
@@ -671,9 +671,9 @@ async fn handle_ws_data(
         Err(_) => return,
     };
     let msg = if binary {
-        Message::Binary(decoded)
+        Message::binary(decoded)
     } else {
-        Message::Text(String::from_utf8_lossy(&decoded).into_owned())
+        Message::text(String::from_utf8_lossy(&decoded).into_owned())
     };
     let map = ws_tunnels.lock().await;
     if let Some(tx) = map.get(&id) {
@@ -688,7 +688,7 @@ async fn handle_ws_close(ws_tunnels: WsTunnelMap, id: String) {
 
 fn send_desktop_msg(tx: &mpsc::UnboundedSender<Message>, msg: DesktopMsg) -> Result<(), ()> {
     let json = serde_json::to_string(&msg).map_err(|_| ())?;
-    tx.send(Message::Text(json)).map_err(|_| ())
+    tx.send(Message::text(json)).map_err(|_| ())
 }
 
 /// 生成本地 WS 握手的 Sec-WebSocket-Key 原始字节(16 随机字节)。

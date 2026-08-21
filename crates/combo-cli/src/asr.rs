@@ -741,10 +741,10 @@ async fn run_stream(mut socket: WebSocket, asr: Arc<AsrService>, sample_rate: u3
     let Some(recognizer) = asr.recognizer() else {
         let _ = socket
             .send(Message::Text(
-                json!({"type": "error", "code": "asr_not_ready", "message": "语音识别模型尚未就绪,请稍后重试"}).to_string(),
+                json!({"type": "error", "code": "asr_not_ready", "message": "语音识别模型尚未就绪,请稍后重试"}).to_string().into(),
             ))
             .await;
-        let _ = socket.close().await;
+        let _ = socket.send(Message::Close(None)).await;
         return;
     };
     let session = Arc::new(Mutex::new(StreamSession::new(recognizer)));
@@ -781,7 +781,8 @@ async fn run_stream(mut socket: WebSocket, asr: Arc<AsrService>, sample_rate: u3
                                 "text": text,
                                 "finalized": finalized
                             })
-                            .to_string(),
+                            .to_string()
+                            .into(),
                         ))
                         .await
                         .is_err()
@@ -799,7 +800,7 @@ async fn run_stream(mut socket: WebSocket, asr: Arc<AsrService>, sample_rate: u3
                     .await
                     .unwrap_or_default();
                 let _ = socket
-                    .send(Message::Text(json!({"type": "final", "text": text}).to_string()))
+                    .send(Message::Text(json!({"type": "final", "text": text}).to_string().into()))
                     .await;
                 break;
             }
@@ -807,7 +808,7 @@ async fn run_stream(mut socket: WebSocket, asr: Arc<AsrService>, sample_rate: u3
             Ok(_) => {}
         }
     }
-    let _ = socket.close().await;
+    let _ = socket.send(Message::Close(None)).await;
 }
 
 /// 客户端收尾指令:纯文本 `finish` 或 JSON `{"type":"finish"}`。

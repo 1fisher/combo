@@ -1,10 +1,7 @@
-use crate::client::{
-    self, BearerAuth, Capabilities, Capable, DebugExt, Nothing, Provider, ProviderBuilder,
-    ProviderClient,
-};
+use crate::client::{self, BearerAuth, DebugExt, Provider};
 use crate::embeddings;
 use crate::embeddings::EmbeddingError;
-use crate::http_client::{self, HttpClientExt};
+use crate::http_client::HttpClientExt;
 use crate::rerank;
 use crate::rerank::RerankError;
 use bytes::Bytes;
@@ -31,58 +28,25 @@ impl Provider for VoyageExt {
     const VERIFY_PATH: &'static str = "";
 }
 
-impl<H> Capabilities<H> for VoyageExt {
-    type Completion = Nothing;
-    type Embeddings = Capable<EmbeddingModel<H>>;
-    type Rerank = Capable<RerankModel<H>>;
-    type Transcription = Nothing;
-    type ModelListing = Nothing;
-    #[cfg(feature = "image")]
-    type ImageGeneration = Nothing;
-
-    #[cfg(feature = "audio")]
-    type AudioGeneration = Nothing;
-}
+client::impl_capabilities!(
+    VoyageExt,
+    embeddings = EmbeddingModel<H>,
+    rerank = RerankModel<H>,
+);
 
 impl DebugExt for VoyageExt {}
 
-impl ProviderBuilder for VoyageBuilder {
-    type Extension<H>
-        = VoyageExt
-    where
-        H: HttpClientExt;
-    type ApiKey = VoyageApiKey;
-
-    const BASE_URL: &'static str = VOYAGEAI_API_BASE_URL;
-
-    fn build<H>(
-        _builder: &crate::client::ClientBuilder<Self, Self::ApiKey, H>,
-    ) -> http_client::Result<Self::Extension<H>>
-    where
-        H: HttpClientExt,
-    {
-        Ok(VoyageExt)
-    }
-}
+client::impl_default_provider_builder!(
+    VoyageBuilder => VoyageExt,
+    api_key = VoyageApiKey,
+    base_url = VOYAGEAI_API_BASE_URL,
+);
 
 pub type Client<H = reqwest::Client> = client::Client<VoyageExt, H>;
 pub type ClientBuilder<H = crate::markers::Missing> =
     client::ClientBuilder<VoyageBuilder, VoyageApiKey, H>;
 
-impl ProviderClient for Client {
-    type Input = String;
-    type Error = crate::client::ProviderClientError;
-
-    /// Create a new OpenAI client from the `OPENAI_API_KEY` environment variable.
-    fn from_env() -> Result<Self, Self::Error> {
-        let api_key = crate::client::required_env_var("VOYAGE_API_KEY")?;
-        Self::new(&api_key).map_err(Into::into)
-    }
-
-    fn from_val(input: Self::Input) -> Result<Self, Self::Error> {
-        Self::new(&input).map_err(Into::into)
-    }
-}
+client::impl_provider_client!(Client, input = String, api_key_env = "VOYAGE_API_KEY");
 
 impl<T> EmbeddingModel<T> {
     pub fn new(client: Client<T>, model: impl Into<String>, ndims: usize) -> Self {
@@ -90,6 +54,7 @@ impl<T> EmbeddingModel<T> {
             client,
             model: model.into(),
             ndims,
+            options: EmbeddingOptions::default(),
         }
     }
 
@@ -98,7 +63,15 @@ impl<T> EmbeddingModel<T> {
             client,
             model: model.into(),
             ndims,
+            options: EmbeddingOptions::default(),
         }
+    }
+
+    /// Set optional request parameters for every embedding call made through
+    /// this model. Defaults to [`EmbeddingOptions::default()`] (all `None`).
+    pub fn with_options(mut self, options: EmbeddingOptions) -> Self {
+        self.options = options;
+        self
     }
 }
 
@@ -143,9 +116,24 @@ pub struct Usage {
     pub total_tokens: usize,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 pub struct ApiErrorResponse {
+    /// Provider error message; tolerant of `{"message": "..."}`,
+    /// `{"error": "..."}`, nested `{"error": {"message": ...}}`, and bodies
+    /// carrying both keys. Used for logging only — the raw body is preserved
+    /// on the returned error.
     pub(crate) message: String,
+}
+
+impl<'de> Deserialize<'de> for ApiErrorResponse {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(Self {
+            message: crate::providers::internal::envelope::error_message(deserializer)?,
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -162,11 +150,37 @@ pub struct EmbeddingData {
     pub index: usize,
 }
 
+/// Optional request parameters for Voyage AI embedding calls.
+///
+/// All fields default to `None`, which matches Voyage's own server defaults:
+/// no `input_type`, `truncation` enabled, and the model's default output
+/// dimension.
+///
+/// TODO: `output_dtype` (`float` | `int8` | `uint8` | `binary` | `ubinary`) is
+/// intentionally not implemented yet. Quantized dtypes return integer vectors
+/// instead of floats, so they need a separate response-parsing change before
+/// they can be supported here.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EmbeddingOptions {
+    /// Prepends a retrieval prompt to the input text. Use `"document"` when
+    /// embedding stored chunks and `"query"` when embedding search queries.
+    ///
+    /// Embeddings produced with and without `input_type` are compatible.
+    pub input_type: Option<String>,
+    /// Whether to truncate inputs that exceed the model's maximum context
+    /// length. Voyage's server default is `true`.
+    pub truncation: Option<bool>,
+    /// Dimensionality of the returned embeddings. Defaults to the model's
+    /// default output dimension when unset.
+    pub output_dimension: Option<usize>,
+}
+
 #[derive(Clone)]
 pub struct EmbeddingModel<T> {
     client: Client<T>,
     pub model: String,
     ndims: usize,
+    options: EmbeddingOptions,
 }
 
 impl<T> embeddings::EmbeddingModel for EmbeddingModel<T>
@@ -204,10 +218,24 @@ where
         documents: impl IntoIterator<Item = String>,
     ) -> Result<embeddings::EmbeddingResponse, EmbeddingError> {
         let documents: Vec<String> = documents.into_iter().collect();
-        let request = json!({
+        let mut request = json!({
             "model": self.model,
             "input": documents,
         });
+
+        let request_obj = request.as_object_mut().ok_or_else(|| {
+            EmbeddingError::ResponseError("embedding request body must be a JSON object".into())
+        })?;
+
+        if let Some(input_type) = &self.options.input_type {
+            request_obj.insert("input_type".to_owned(), json!(input_type));
+        }
+        if let Some(truncation) = self.options.truncation {
+            request_obj.insert("truncation".to_owned(), json!(truncation));
+        }
+        if let Some(output_dimension) = self.options.output_dimension {
+            request_obj.insert("output_dimension".to_owned(), json!(output_dimension));
+        }
 
         let body = serde_json::to_vec(&request)?;
 
@@ -515,5 +543,81 @@ mod tests {
             }
             other => panic!("expected ProviderResponse, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn embedding_request_includes_options_when_set() {
+        use crate::client::EmbeddingsClient;
+        use crate::embeddings::EmbeddingModel as _;
+        use crate::test_utils::RecordingHttpClient;
+
+        let response_body = r#"{
+            "object": "list",
+            "data": [{"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": 0}],
+            "model": "voyage-3-large",
+            "usage": {"total_tokens": 7}
+        }"#;
+        let http_client = RecordingHttpClient::new(response_body);
+        let client = super::Client::builder()
+            .api_key("test-key")
+            .http_client(http_client.clone())
+            .build()
+            .expect("build client");
+        let model = client.embedding_model(super::VOYAGE_3_LARGE);
+
+        model
+            .with_options(super::EmbeddingOptions {
+                input_type: Some("document".to_string()),
+                truncation: Some(true),
+                output_dimension: Some(256),
+            })
+            .embed_texts_with_usage(vec!["doc".to_string()])
+            .await
+            .expect("embed should succeed");
+
+        let captured = http_client.requests();
+        assert_eq!(captured.len(), 1);
+        let body: serde_json::Value =
+            serde_json::from_slice(&captured[0].body).expect("request body is valid JSON");
+        assert_eq!(body["model"], super::VOYAGE_3_LARGE);
+        assert_eq!(body["input_type"], "document");
+        assert_eq!(body["truncation"], true);
+        assert_eq!(body["output_dimension"], serde_json::json!(256));
+        assert_eq!(body.get("output_dtype"), None);
+    }
+
+    #[tokio::test]
+    async fn embedding_request_omits_options_when_unset() {
+        use crate::client::EmbeddingsClient;
+        use crate::embeddings::EmbeddingModel as _;
+        use crate::test_utils::RecordingHttpClient;
+
+        let response_body = r#"{
+            "object": "list",
+            "data": [{"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": 0}],
+            "model": "voyage-3-large",
+            "usage": {"total_tokens": 7}
+        }"#;
+        let http_client = RecordingHttpClient::new(response_body);
+        let client = super::Client::builder()
+            .api_key("test-key")
+            .http_client(http_client.clone())
+            .build()
+            .expect("build client");
+        let model = client.embedding_model(super::VOYAGE_3_LARGE);
+
+        model
+            .embed_texts_with_usage(vec!["doc".to_string()])
+            .await
+            .expect("embed should succeed");
+
+        let captured = http_client.requests();
+        assert_eq!(captured.len(), 1);
+        let body: serde_json::Value =
+            serde_json::from_slice(&captured[0].body).expect("request body is valid JSON");
+        assert_eq!(body["model"], super::VOYAGE_3_LARGE);
+        assert_eq!(body.get("input_type"), None);
+        assert_eq!(body.get("truncation"), None);
+        assert_eq!(body.get("output_dimension"), None);
     }
 }

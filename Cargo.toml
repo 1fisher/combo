@@ -1,12 +1,17 @@
 [workspace]
-members = ["crates/combo-relay", "crates/combo-cli", "src-tauri"]
+members = ["crates/combo-relay", "crates/combo-cli", "src-tauri", "vendor/rig-core"]
 resolver = "2"
+# vendor/rig-core 是 [patch] 依赖而非 workspace member:其自带的
+# integration tests 依赖 crate-private 的 test_utils,独立测试在
+# workspace 上下文无法编译;补丁代码经 combo-cli 编译 + cargo test -p rig-core
+# 间接验证(rig-core 的 lib 单元测试在 path 依赖下可跑)。
 
-# 本地补丁版 rig-core(基于 0.41.0):
+# 本地补丁版 rig-core(基于 0.42.0):
 # 修复 OpenAI 兼容 SSE 流收到 `data: [DONE]` 哨兵后不终结、
 # 要等 HTTP 连接关闭才结束 turn 的问题 —— 部分网关/中转会保持
 # 连接不关,导致最后一条流式消息长时间挂起。改动见
-# vendor/rig-core 下 `combo patch` 注释标记的三处流处理。
+# vendor/rig-core 下 `combo patch` 注释标记的流处理(0.42 WireAdapter
+# 重构后等价移植到 CompatEvent::Done 分支)。
 [patch.crates-io]
 rig-core = { path = "vendor/rig-core" }
 

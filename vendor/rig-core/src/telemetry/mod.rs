@@ -2,9 +2,7 @@
 //! This includes tracing, being able to send traces to an OpenTelemetry collector, setting up your
 //! agents with the correct tracing style so you can emit the right traces for platforms like Langfuse,
 //! and more.
-
-use crate::OneOrMany;
-use crate::completion::{AssistantContent, GetTokenUsage, Message};
+use crate::completion::{AssistantContent, Message, Usage};
 use crate::message::{
     DocumentSourceKind, Image, MimeType, Reasoning, ReasoningContent, ToolResult,
     ToolResultContent, UserContent,
@@ -93,7 +91,6 @@ macro_rules! new_completion_span {
 
 /// A supported GenAI completion operation and its canonical span name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
 pub enum CompletionOperation {
     /// A chat completion.
     Chat,
@@ -611,7 +608,7 @@ fn tool_result_response(result: &ToolResult) -> serde_json::Value {
     }
 }
 
-fn user_parts(content: &OneOrMany<UserContent>) -> Vec<TelemetryPart> {
+fn user_parts(content: &[UserContent]) -> Vec<TelemetryPart> {
     content
         .iter()
         .filter_map(|content| match content {
@@ -619,7 +616,7 @@ fn user_parts(content: &OneOrMany<UserContent>) -> Vec<TelemetryPart> {
                 content: text.text.clone(),
             }),
             UserContent::ToolResult(result) => Some(TelemetryPart::ToolCallResponse {
-                id: Some(result.id.clone()),
+                id: Some(result.call.as_str().to_owned()),
                 response: tool_result_response(result),
             }),
             UserContent::Image(image) => image_part(image),
@@ -636,7 +633,7 @@ fn user_parts(content: &OneOrMany<UserContent>) -> Vec<TelemetryPart> {
         .collect()
 }
 
-fn assistant_parts(content: &OneOrMany<AssistantContent>) -> Vec<TelemetryPart> {
+fn assistant_parts(content: &[AssistantContent]) -> Vec<TelemetryPart> {
     content
         .iter()
         .flat_map(|content| match content {
@@ -644,7 +641,7 @@ fn assistant_parts(content: &OneOrMany<AssistantContent>) -> Vec<TelemetryPart> 
                 content: text.text.clone(),
             }],
             AssistantContent::ToolCall(tool_call) => vec![TelemetryPart::ToolCall {
-                id: Some(tool_call.id.clone()),
+                id: Some(tool_call.id.as_str().to_owned()),
                 name: tool_call.function.name.clone(),
                 arguments: tool_call.function.arguments.clone(),
             }],
@@ -676,7 +673,7 @@ fn input_messages(messages: &[Message]) -> Vec<TelemetryChatMessage> {
         .collect()
 }
 
-fn output_messages(content: &OneOrMany<AssistantContent>) -> Vec<TelemetryOutputMessage> {
+fn output_messages(content: &[AssistantContent]) -> Vec<TelemetryOutputMessage> {
     let finish_reason = if content
         .iter()
         .any(|content| matches!(content, AssistantContent::ToolCall(_)))
@@ -731,11 +728,7 @@ pub fn record_model_input(span: &tracing::Span, messages: &[Message], enabled: b
 /// Message content can contain model responses, tool calls, and other sensitive
 /// or high-cardinality data. Keep this disabled unless the caller has explicitly
 /// opted in for debugging/observability.
-pub fn record_model_output(
-    span: &tracing::Span,
-    content: &OneOrMany<AssistantContent>,
-    enabled: bool,
-) {
+pub fn record_model_output(span: &tracing::Span, content: &[AssistantContent], enabled: bool) {
     if !enabled || span.is_disabled() {
         return;
     }
@@ -748,8 +741,6 @@ pub fn record_model_output(
 
 /// Provider response metadata used to populate GenAI telemetry spans.
 pub trait ProviderResponseExt {
-    /// Provider-native output message type.
-    type OutputMessage: Serialize;
     /// Provider-native usage type.
     type Usage: Serialize;
 
@@ -758,9 +749,6 @@ pub trait ProviderResponseExt {
 
     /// Returns the provider response model name, if supplied.
     fn get_response_model_name(&self) -> Option<String>;
-
-    /// Returns serialized output messages produced by the provider.
-    fn get_output_messages(&self) -> Vec<Self::OutputMessage>;
 
     /// Returns the primary text response, when available.
     fn get_text_response(&self) -> Option<String>;
@@ -773,9 +761,7 @@ pub trait ProviderResponseExt {
 /// Implemented for [`tracing::Span`] to record GenAI semantic convention fields.
 pub trait SpanCombinator {
     /// Record Rig-normalized token usage fields on the span.
-    fn record_token_usage<U>(&self, usage: &U)
-    where
-        U: GetTokenUsage;
+    fn record_token_usage(&self, usage: &Usage);
 
     /// Record provider response metadata such as response ID and model name.
     fn record_response_metadata<R>(&self, response: &R)
@@ -784,15 +770,11 @@ pub trait SpanCombinator {
 }
 
 impl SpanCombinator for tracing::Span {
-    fn record_token_usage<U>(&self, usage: &U)
-    where
-        U: GetTokenUsage,
-    {
+    fn record_token_usage(&self, usage: &Usage) {
         if self.is_disabled() {
             return;
         }
 
-        let usage = usage.token_usage();
         // Zero-valued usage is the documented sentinel for missing provider
         // usage metrics; leave the span fields unset.
         if usage.has_values() {
@@ -835,22 +817,13 @@ impl SpanCombinator for tracing::Span {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::completion::{AssistantContent, GetTokenUsage, Message, Usage};
+    use crate::completion::{AssistantContent, Message, Usage};
     use serde_json::json;
     use std::sync::{Arc, Mutex};
     use tracing::field::{Field, Visit};
     use tracing::{Id, Subscriber};
     use tracing_subscriber::layer::{Context, SubscriberExt};
     use tracing_subscriber::{Layer, Registry, registry::LookupSpan};
-
-    #[derive(Clone)]
-    struct TestUsage(Usage);
-
-    impl GetTokenUsage for TestUsage {
-        fn token_usage(&self) -> Usage {
-            self.0
-        }
-    }
 
     #[test]
     fn content_attributes_follow_gen_ai_semantic_convention_json_shapes() {
@@ -863,7 +836,7 @@ mod tests {
         let input = input_messages(&[
             Message::system("follow policy"),
             Message::user("hello"),
-            Message::tool_result("call_1", "sunny"),
+            Message::tool_result("call_1", "weather", "sunny"),
         ]);
         assert_eq!(
             serde_json::to_value(input).expect("semantic-convention input DTOs serialize"),
@@ -887,11 +860,11 @@ mod tests {
             ])
         );
 
-        let output = OneOrMany::one(AssistantContent::tool_call(
+        let output = vec![AssistantContent::tool_call(
             "call_1",
             "weather",
             json!({"city": "Paris"}),
-        ));
+        )];
         assert_eq!(
             serde_json::to_value(output_messages(&output))
                 .expect("semantic-convention output DTOs serialize"),
@@ -907,7 +880,7 @@ mod tests {
             }])
         );
 
-        let text_output = OneOrMany::one(AssistantContent::text("done"));
+        let text_output = vec![AssistantContent::text("done")];
         assert_eq!(
             serde_json::to_value(output_messages(&text_output))
                 .expect("semantic-convention text output DTOs serialize"),
@@ -1827,7 +1800,7 @@ mod tests {
         let subscriber = Registry::default().with(FieldCaptureLayer {
             fields: fields.clone(),
         });
-        let usage = TestUsage(Usage {
+        let usage = Usage {
             input_tokens: 1,
             output_tokens: 2,
             total_tokens: 15,
@@ -1835,7 +1808,7 @@ mod tests {
             cache_creation_input_tokens: 4,
             tool_use_prompt_tokens: 12,
             reasoning_tokens: 5,
-        });
+        };
 
         // Scoped-subscriber tests must not run concurrently; see
         // `test_utils::scoped_tracing_subscriber_guard`.

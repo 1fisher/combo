@@ -12,7 +12,7 @@ use futures::StreamExt;
 use rig::agent::{Agent, MultiTurnStreamItem};
 use rig::client::ProviderClient;
 use rig::completion::message::ToolResultContent;
-use rig::completion::{CompletionModel, GetTokenUsage, Message};
+use rig::completion::{CompletionModel, Message};
 use rig::prelude::AgentClientExt;
 use rig::streaming::{StreamedAssistantContent, StreamedUserContent, StreamingChat, StreamingPrompt};
 use rig::tool::DynamicTool;
@@ -59,7 +59,7 @@ async fn build_agent<C>(
     mcp_specs: Vec<(String, Option<String>, Option<String>)>,
     reasoning_effort: Option<&str>,
 ) -> Result<(
-    Agent<C::CompletionModel>,
+    Agent,
     Option<McpConnection>,
 )>
 where
@@ -345,11 +345,7 @@ pub async fn ask_with(cfg: &AskConfig, question: &str) -> Result<()> {
 }
 
 /// 泛型单轮问答(流式打印)。
-async fn ask_one<M>(agent: &Agent<M>, question: &str) -> Result<String>
-where
-    M: CompletionModel + 'static,
-    M::StreamingResponse: GetTokenUsage,
-{
+async fn ask_one(agent: &Agent, question: &str) -> Result<String> {
     let mut stream = agent.stream_prompt(question).await;
     let mut out = String::new();
     while let Some(item) = stream.next().await {
@@ -539,16 +535,14 @@ async fn idle_future(d: Option<Duration>) {
 }
 
 /// 泛型流式执行:逐条消费 stream,文本增量与工具调用经 `on_event` 上报。
-async fn stream_one<M, F>(
-    agent: &Agent<M>,
+async fn stream_one<F>(
+    agent: &Agent,
     question: &str,
     history: &[Message],
     cancel: &mut tokio::sync::watch::Receiver<bool>,
     on_event: &mut F,
 ) -> Result<Option<String>>
 where
-    M: CompletionModel + 'static,
-    M::StreamingResponse: GetTokenUsage,
     F: FnMut(RunEvent),
 {
     let mut stream = agent.stream_chat(question, history.to_vec()).await;
@@ -605,9 +599,10 @@ where
             }) => {
                 on_event(RunEvent::ReasoningDelta(reasoning));
             }
-            MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Reasoning(
+            MultiTurnStreamItem::StreamAssistantItem(StreamedAssistantContent::Reasoning {
                 reasoning,
-            )) => {
+                ..
+            }) => {
                 // 部分 provider 一次性下发完整 reasoning 块而非增量
                 let display = reasoning.display_text();
                 if !display.is_empty() {
@@ -619,10 +614,11 @@ where
                 ..
             }) => {
                 let input = tool_call.function.arguments.to_string();
-                tool_names.insert(tool_call.id.clone(), tool_call.function.name.clone());
-                running_tools.insert(tool_call.id.clone());
+                let call_id = tool_call.id.to_string();
+                tool_names.insert(call_id.clone(), tool_call.function.name.clone());
+                running_tools.insert(call_id.clone());
                 on_event(RunEvent::ToolCall {
-                    id: tool_call.id,
+                    id: call_id,
                     name: tool_call.function.name,
                     input,
                 });
@@ -631,8 +627,9 @@ where
                 tool_result,
                 ..
             }) => {
+                let result_id = tool_result.call.to_string();
                 let name = tool_names
-                    .get(&tool_result.id)
+                    .get(&result_id)
                     .cloned()
                     .unwrap_or_default();
                 // text / json 内容块都转成字符串;image 块跳过。bash 工具返回
@@ -676,9 +673,9 @@ where
                 if tool_result_is_error(exit_code, timed_out) {
                     is_error = true;
                 }
-                running_tools.remove(&tool_result.id);
+                running_tools.remove(&result_id);
                 on_event(RunEvent::ToolResult {
-                    id: tool_result.id,
+                    id: result_id,
                     name,
                     content,
                     is_error,
@@ -807,11 +804,7 @@ trait AnyAgent: Send + Sync {
 }
 
 #[async_trait::async_trait]
-impl<M> AnyAgent for Arc<Agent<M>>
-where
-    M: CompletionModel + Send + Sync + 'static,
-    M::StreamingResponse: GetTokenUsage,
-{
+impl AnyAgent for Arc<Agent> {
     async fn chat_stream(
         &self,
         question: &str,

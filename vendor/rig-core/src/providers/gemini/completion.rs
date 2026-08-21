@@ -28,24 +28,21 @@ pub const GEMINI_2_0_FLASH_LITE: &str = "gemini-2.0-flash-lite";
 pub const GEMINI_2_0_FLASH: &str = "gemini-2.0-flash";
 
 use self::gemini_api_types::tool_parameters_to_schema;
+use crate::completion::{self, CompletionError, CompletionRequest};
 use crate::http_client::HttpClientExt;
 use crate::message::{self, MimeType, Reasoning};
 use crate::providers::gemini::completion::gemini_api_types::{
     AdditionalParameters, FunctionCallingMode, ToolConfig,
 };
-use crate::providers::gemini::streaming::StreamingCompletionResponse;
+use crate::providers::internal::completion_send::send_completion;
+use crate::providers::internal::envelope::DirectPayload;
 use crate::telemetry::{CompletionOperation, CompletionSpanBuilder, SpanCombinator};
-use crate::{
-    OneOrMany,
-    completion::{self, CompletionError, CompletionRequest, GetTokenUsage},
-};
 use gemini_api_types::{
     Content, FinishReason, FunctionDeclaration, GenerateContentRequest, GenerateContentResponse,
-    GenerationConfig, Part, PartKind, Role, Tool,
+    GenerationConfig, Part, PartKind, Role, Tool, map_finish_reason,
 };
 use serde_json::{Map, Value};
 use std::convert::TryFrom;
-use tracing::{Level, enabled};
 use tracing_futures::Instrument;
 
 use super::Client;
@@ -53,6 +50,12 @@ use super::Client;
 // =================================================================
 // Rig Implementation Types
 // =================================================================
+
+/// Stable descriptor name for the Gemini GenerateContent API.
+///
+/// Recorded on every normalized response and stream this module produces, and
+/// on the telemetry spans, so the two never drift apart.
+pub(crate) const PROVIDER_NAME: &str = "gcp.gemini";
 
 #[derive(Clone, Debug)]
 pub struct CompletionModel<T = reqwest::Client> {
@@ -76,25 +79,25 @@ impl<T> CompletionModel<T> {
     }
 }
 
-impl<T> completion::CompletionModel for CompletionModel<T>
+impl<T> CompletionModel<T>
 where
     T: HttpClientExt + Clone + 'static,
 {
-    type Response = GenerateContentResponse;
-    type StreamingResponse = StreamingCompletionResponse;
-    type Client = super::Client<T>;
-
-    fn make(client: &Self::Client, model: impl Into<String>) -> Self {
-        Self::new(client.clone(), model)
-    }
-
-    async fn completion(
+    /// Execute a completion and return Gemini's own `generateContent` payload.
+    ///
+    /// This is the escape hatch for provider-specific fields rig does not
+    /// normalize. It shares the request builder, transport, telemetry, and
+    /// error handling with
+    /// [`CompletionModel::completion`](completion::CompletionModel::completion),
+    /// which calls it and then applies the provider-local mapping — one network
+    /// request either way.
+    pub async fn raw_completion(
         &self,
         completion_request: CompletionRequest,
-    ) -> Result<completion::CompletionResponse<GenerateContentResponse>, CompletionError> {
+    ) -> Result<GenerateContentResponse, CompletionError> {
         let request_model = resolve_request_model(&self.model, &completion_request);
         let span = CompletionSpanBuilder::new(
-            "gcp.gemini",
+            PROVIDER_NAME,
             &request_model,
             CompletionOperation::GenerateContent,
         )
@@ -106,13 +109,11 @@ where
 
         let request = create_request_body(completion_request)?;
 
-        if enabled!(Level::TRACE) {
-            tracing::trace!(
-                target: "rig::completions",
-                "Gemini completion request: {}",
-                serde_json::to_string_pretty(&request)?
-            );
-        }
+        crate::providers::internal::trace_json(
+            crate::providers::internal::LogTarget::Completions,
+            "Gemini completion request",
+            &request,
+        );
 
         let body = serde_json::to_vec(&request)?;
 
@@ -124,65 +125,59 @@ where
             .body(body)
             .map_err(|e| CompletionError::HttpError(e.into()))?;
 
-        async move {
-            let response = self.client.send::<_, Vec<u8>>(request).await?;
-
-            if response.status().is_success() {
-                let response_body = response
-                    .into_body()
-                    .await
-                    .map_err(CompletionError::HttpError)?;
-
-                let response_text = String::from_utf8_lossy(&response_body).to_string();
-
-                let response: GenerateContentResponse = serde_json::from_slice(&response_body)
-                    .map_err(|err| {
-                        tracing::error!(
-                            error = %err,
-                            body = %response_text,
-                            "Failed to deserialize Gemini completion response"
-                        );
-                        CompletionError::JsonError(err)
-                    })?;
-
+        send_completion::<_, DirectPayload<GenerateContentResponse>, _>(
+            &self.client,
+            request,
+            "Gemini completion",
+            // Gemini reports no transport request-id response header (verified
+            // against the live API); the normalized id is None by design.
+            None,
+            |response| {
                 let span = tracing::Span::current();
-                span.record_response_metadata(&response);
-                span.record_token_usage(&response.usage_metadata);
-
-                if enabled!(Level::TRACE) {
-                    tracing::trace!(
-                        target: "rig::completions",
-                        "Gemini completion response: {}",
-                        serde_json::to_string_pretty(&response)?
-                    );
-                }
-
-                response.try_into()
-            } else {
-                let status = response.status();
-                let body = response
-                    .into_body()
-                    .await
-                    .map_err(CompletionError::HttpError)?;
-
-                Err(CompletionError::from_http_response(
-                    status,
-                    String::from_utf8_lossy(&body),
-                ))
-            }
-        }
+                span.record_response_metadata(response);
+                let usage = response
+                    .usage_metadata
+                    .as_ref()
+                    .map(crate::completion::Usage::from)
+                    .unwrap_or_default();
+                span.record_token_usage(&usage);
+            },
+        )
         .instrument(span)
         .await
+        .map(|(payload, _)| payload)
+    }
+}
+
+impl<T> completion::CompletionModel for CompletionModel<T>
+where
+    T: HttpClientExt + Clone + 'static,
+{
+    async fn completion(
+        &self,
+        completion_request: CompletionRequest,
+    ) -> Result<completion::CompletionResponse, CompletionError> {
+        // Capture before `try_into` consumes the raw value.
+        let raw = self.raw_completion(completion_request).await?;
+        let captured = serde_json::to_value(&raw)?;
+        let response: completion::CompletionResponse = raw.try_into()?;
+        Ok(response.with_raw(captured))
     }
 
     async fn stream(
         &self,
         request: CompletionRequest,
-    ) -> Result<
-        crate::streaming::StreamingCompletionResponse<Self::StreamingResponse>,
-        CompletionError,
-    > {
+    ) -> Result<crate::streaming::StreamingCompletionResponse, CompletionError> {
         CompletionModel::stream(self, request).await
+    }
+}
+
+impl<T> crate::client::ConstructCompletionModel<Client<T>> for CompletionModel<T>
+where
+    Client<T>: Clone,
+{
+    fn construct(client: &Client<T>, model: String) -> Self {
+        Self::new(client.clone(), model)
     }
 }
 
@@ -207,6 +202,9 @@ pub(crate) fn create_request_body(
 
     let mut full_history = Vec::new();
     full_history.extend(chat_history);
+    // functionResponse.name keys the replay: cross-provider ingested
+    // results arrive with an empty name and their call carries it.
+    crate::providers::internal::resolve_empty_tool_result_names(&mut full_history);
     let (history_system, full_history) = split_system_messages_from_history(full_history);
 
     let mut additional_params_payload = additional_params
@@ -227,17 +225,27 @@ pub(crate) fn create_request_body(
         cfg.response_json_schema = Some(schema.to_value());
     }
 
-    generation_config = generation_config.map(|mut cfg| {
+    // `Option::map` is a no-op on `None`, so a request that set `temperature` or
+    // `max_tokens` without ALSO supplying an `additional_params.generationConfig`
+    // used to drop both silently — `.max_tokens(8)` on a Gemini agent never
+    // reached `maxOutputTokens` and the model ran to its own limit. Create the
+    // config when either field is set, mirroring the `output_schema` arm above.
+    //
+    // `GenerationConfig::default()` is all-`None` and every field is
+    // `skip_serializing_if = "Option::is_none"`, so a caller who sets one field
+    // does not silently acquire the other: the unset field stays off the wire
+    // and Gemini applies its own default.
+    if temperature.is_some() || max_tokens.is_some() {
+        let cfg = generation_config.get_or_insert_with(GenerationConfig::default);
+
         if let Some(temp) = temperature {
             cfg.temperature = Some(temp);
-        };
+        }
 
         if let Some(max_tokens) = max_tokens {
             cfg.max_output_tokens = Some(max_tokens);
-        };
-
-        cfg
-    });
+        }
+    }
 
     let mut system_parts: Vec<Part> = Vec::new();
     if let Some(preamble) = preamble.filter(|preamble| !preamble.is_empty()) {
@@ -292,7 +300,9 @@ pub(crate) fn create_request_body(
     Ok(request)
 }
 
-fn split_system_messages_from_history(
+/// Split system messages out of a chat history, keeping their contents in
+/// order. Shared with sibling Gemini transports (e.g. `rig-gemini-grpc`).
+pub fn split_system_messages_from_history(
     history: Vec<completion::Message>,
 ) -> (Vec<String>, Vec<completion::Message>) {
     let mut system = Vec::new();
@@ -406,7 +416,148 @@ pub(crate) fn function_call_finish_reason_error(
     }
 }
 
-impl TryFrom<GenerateContentResponse> for completion::CompletionResponse<GenerateContentResponse> {
+/// Map one response `Part` onto the assistant content it carries.
+///
+/// An empty result means the part is real Gemini output that carries no
+/// rig-modeled assistant content, so it contributes nothing to the choice and
+/// the rest of the turn still converts. Only a part rig cannot account for at
+/// all is an `Err`. One part can yield *two* items: a trailing
+/// `thoughtSignature` rides a text part that carries no `thought` flag, and
+/// the signature belongs to a reasoning block rather than to the text.
+fn map_response_part(part: &Part) -> Result<Vec<completion::AssistantContent>, CompletionError> {
+    let Part {
+        thought,
+        thought_signature,
+        part,
+        ..
+    } = part;
+
+    Ok(vec![match part {
+        PartKind::Text(text) => {
+            if let Some(thought) = thought
+                && *thought
+            {
+                completion::AssistantContent::Reasoning(Reasoning::new_with_signature(
+                    text,
+                    thought_signature.clone(),
+                ))
+            } else if thought_signature.is_some() {
+                // A trailing signature on a part with no `thought` flag: the
+                // caller places it, because where it belongs depends on what
+                // came before. See `attach_trailing_signature`.
+                return Ok(vec![completion::AssistantContent::text(text)]);
+            } else {
+                completion::AssistantContent::text(text)
+            }
+        }
+        PartKind::InlineData(inline_data) => {
+            let mime_type = message::MediaType::from_mime_type(&inline_data.mime_type);
+
+            match mime_type {
+                Some(message::MediaType::Image(media_type)) => {
+                    message::AssistantContent::image_base64(
+                        &inline_data.data,
+                        Some(media_type),
+                        Some(message::ImageDetail::default()),
+                    )
+                }
+                _ => {
+                    return Err(CompletionError::ResponseError(format!(
+                        "Unsupported media type {mime_type:?}"
+                    )));
+                }
+            }
+        }
+        PartKind::FunctionCall(function_call) => {
+            let tool_call = message::ToolCall::from_wire(
+                function_call.id.clone().unwrap_or_default(),
+                message::ToolFunction::new(function_call.name.clone(), function_call.args.clone()),
+            )
+            .with_signature(thought_signature.clone());
+            completion::AssistantContent::ToolCall(tool_call)
+        }
+        // The `codeExecution` tool's own output. Rig lets callers enable that
+        // tool (`additional_params.tools = [{"codeExecution": {}}]`, lifted
+        // onto the request by `extract_tools_from_additional_params`), and
+        // Gemini then answers with `executableCode`/`codeExecutionResult`
+        // parts alongside the text. Neither has a slot in
+        // `AssistantContent` — the same position OpenAI Responses' hosted-tool
+        // items are in, which decode to `Output::Unknown` and contribute no
+        // content rather than failing the response. Erroring here discarded
+        // the entire turn, final text answer included, while the streaming
+        // adapter skipped the parts and kept it. Their own `thoughtSignature`
+        // goes with them, which is the streaming path's behaviour too — those
+        // part kinds have nowhere to round-trip from, so keeping the
+        // transports in step is the most that can be preserved here.
+        PartKind::ExecutableCode(_) | PartKind::CodeExecutionResult(_) => return Ok(Vec::new()),
+        other => {
+            return Err(CompletionError::ResponseError(format!(
+                "Gemini response part kind {} carries no assistant content rig can account for",
+                part_kind_name(other)
+            )));
+        }
+    }])
+}
+
+/// Place a trailing `thoughtSignature` — one that rode a part carrying no
+/// `thought` flag — onto the assistant content mapped so far.
+///
+/// Gemini hangs the signature on a trailing part instead of on the thought
+/// it belongs to — recorded on gemini-3-flash-preview and on
+/// gemini-2.5-flash alike — and the signature is replay-required state the provider
+/// validates (`MISSING_THOUGHT_SIGNATURE`). Only `Reasoning` round-trips it
+/// back onto a request, so it has to land on one — and *which* one is the
+/// same question the streaming accumulator answers, so the answer is the
+/// same:
+///
+/// * an earlier unsigned reasoning block takes it, because that block holds
+///   the chain-of-thought the signature signs
+///   (`streaming/parts.rs::a_trailing_signature_signs_the_finished_block`);
+/// * with no such block, it becomes a signature-only reasoning part, which
+///   is what the accumulator records when nothing streamed.
+///
+/// Blocking and streaming therefore normalize the same bytes to the same
+/// choice, which is the point: a turn replayed from either transport sends
+/// the signature back the same way. Public because the gRPC transport's
+/// unary mapper answers the same question about the same wire.
+pub fn attach_trailing_signature(
+    content: &mut Vec<completion::AssistantContent>,
+    signature: String,
+) {
+    let unsigned_reasoning = content.iter_mut().rev().find_map(|item| match item {
+        completion::AssistantContent::Reasoning(reasoning) => match reasoning.content.first_mut() {
+            Some(message::ReasoningContent::Text {
+                signature: slot @ None,
+                ..
+            }) => Some(slot),
+            _ => None,
+        },
+        _ => None,
+    });
+
+    match unsigned_reasoning {
+        Some(slot) => *slot = Some(signature),
+        None => content.push(completion::AssistantContent::Reasoning(
+            Reasoning::new_with_signature("", Some(signature)),
+        )),
+    }
+}
+
+/// The wire name of a part kind, for error messages.
+fn part_kind_name(part: &PartKind) -> &'static str {
+    match part {
+        PartKind::Text(_) => "text",
+        PartKind::InlineData(_) => "inlineData",
+        PartKind::FunctionCall(_) => "functionCall",
+        PartKind::FunctionResponse(_) => "functionResponse",
+        PartKind::FileData(_) => "fileData",
+        PartKind::ExecutableCode(_) => "executableCode",
+        PartKind::CodeExecutionResult(_) => "codeExecutionResult",
+    }
+}
+
+/// Normalize a Gemini `generateContent` response.
+impl TryFrom<GenerateContentResponse> for completion::CompletionResponse {
     type Error = CompletionError;
 
     fn try_from(response: GenerateContentResponse) -> Result<Self, Self::Error> {
@@ -421,7 +572,9 @@ impl TryFrom<GenerateContentResponse> for completion::CompletionResponse<Generat
             return Err(err);
         }
 
-        let content = candidate
+        let finish_reason = candidate.finish_reason.as_ref().and_then(map_finish_reason);
+
+        let parts = &candidate
             .content
             .as_ref()
             .ok_or_else(|| {
@@ -438,90 +591,40 @@ impl TryFrom<GenerateContentResponse> for completion::CompletionResponse<Generat
                     "Gemini candidate missing content ({reason}, finish_message={message})"
                 ))
             })?
-            .parts
-            .iter()
-            .map(
-                |Part {
-                     thought,
-                     thought_signature,
-                     part,
-                     ..
-                 }| {
-                    Ok(match part {
-                        PartKind::Text(text) => {
-                            if let Some(thought) = thought
-                                && *thought
-                            {
-                                completion::AssistantContent::Reasoning(
-                                    Reasoning::new_with_signature(text, thought_signature.clone()),
-                                )
-                            } else {
-                                completion::AssistantContent::text(text)
-                            }
-                        }
-                        PartKind::InlineData(inline_data) => {
-                            let mime_type =
-                                message::MediaType::from_mime_type(&inline_data.mime_type);
+            .parts;
 
-                            match mime_type {
-                                Some(message::MediaType::Image(media_type)) => {
-                                    message::AssistantContent::image_base64(
-                                        &inline_data.data,
-                                        Some(media_type),
-                                        Some(message::ImageDetail::default()),
-                                    )
-                                }
-                                _ => {
-                                    return Err(CompletionError::ResponseError(format!(
-                                        "Unsupported media type {mime_type:?}"
-                                    )));
-                                }
-                            }
-                        }
-                        PartKind::FunctionCall(function_call) => {
-                            let tool_call = message::ToolCall::new(
-                                function_call.name.clone(),
-                                message::ToolFunction::new(
-                                    function_call.name.clone(),
-                                    function_call.args.clone(),
-                                ),
-                            )
-                            .with_signature(thought_signature.clone());
-                            let tool_call = if let Some(id) = &function_call.id {
-                                tool_call.with_call_id(id.clone())
-                            } else {
-                                tool_call
-                            };
-                            completion::AssistantContent::ToolCall(tool_call)
-                        }
-                        _ => {
-                            return Err(CompletionError::ResponseError(
-                                "Response did not contain a message or tool call".into(),
-                            ));
-                        }
-                    })
-                },
-            )
-            .collect::<Result<Vec<_>, _>>()?;
+        // Mapped in wire order, one part at a time — a part may contribute no
+        // content at all (skipped, not failed; see `map_response_part`), and
+        // `?` still surfaces the first error in wire order. A trailing
+        // signature is placed against the content mapped *before* it, so the
+        // fold cannot become a `map`.
+        let mut content: Vec<completion::AssistantContent> = Vec::with_capacity(parts.len());
+        for part in parts {
+            content.extend(map_response_part(part)?);
+            if !part.thought.unwrap_or(false)
+                && matches!(part.part, PartKind::Text(_))
+                && let Some(signature) = part.thought_signature.clone()
+            {
+                attach_trailing_signature(&mut content, signature);
+            }
+        }
 
-        let choice = OneOrMany::many(content).map_err(|_| {
-            CompletionError::ResponseError(
-                "Response contained no message or tool call (empty)".to_owned(),
-            )
-        })?;
+        let choice = crate::message::require_non_empty_response(content)?;
 
         let usage = response
             .usage_metadata
             .as_ref()
-            .map(GetTokenUsage::token_usage)
+            .map(crate::completion::Usage::from)
             .unwrap_or_default();
 
-        Ok(completion::CompletionResponse {
-            choice,
-            usage,
-            raw_response: response,
-            message_id: None,
-        })
+        Ok(
+            completion::CompletionResponse::new(choice, usage, PROVIDER_NAME)
+                .with_optional_response_id(
+                    Some(response.response_id.as_str()).filter(|id| !id.is_empty()),
+                )
+                .with_optional_model(response.model_version.as_deref())
+                .with_optional_finish_reason(finish_reason),
+        )
     }
 }
 
@@ -535,7 +638,6 @@ pub mod gemini_api_types {
     use serde::{Deserialize, Serialize};
     use serde_json::{Value, json};
 
-    use crate::completion::GetTokenUsage;
     use crate::message::{DocumentSourceKind, ImageMediaType, MessageError, MimeType};
     use crate::{
         completion::CompletionError,
@@ -588,7 +690,6 @@ pub mod gemini_api_types {
     }
 
     impl ProviderResponseExt for GenerateContentResponse {
-        type OutputMessage = ContentCandidate;
         type Usage = UsageMetadata;
 
         fn get_response_id(&self) -> Option<String> {
@@ -597,10 +698,6 @@ pub mod gemini_api_types {
 
         fn get_response_model_name(&self) -> Option<String> {
             self.model_version.clone()
-        }
-
-        fn get_output_messages(&self) -> Vec<Self::OutputMessage> {
-            self.candidates.clone()
         }
 
         fn get_text_response(&self) -> Option<String> {
@@ -613,20 +710,7 @@ pub mod gemini_api_types {
                         return None;
                     }
 
-                    let res = content
-                        .parts
-                        .iter()
-                        .filter_map(|part| {
-                            if let PartKind::Text(ref str) = part.part {
-                                Some(str.to_owned())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect::<Vec<String>>()
-                        .join("\n");
-
-                    Some(res)
+                    Some(visible_text_parts(content).collect::<Vec<_>>().join("\n"))
                 })
                 .collect::<Vec<String>>()
                 .join("\n");
@@ -637,6 +721,27 @@ pub mod gemini_api_types {
         fn get_usage(&self) -> Option<Self::Usage> {
             self.usage_metadata.clone()
         }
+    }
+
+    /// The model-visible text of a content's parts, in order.
+    ///
+    /// A `thought: true` part is the model's chain-of-thought, not its answer:
+    /// `thinkingConfig.includeThoughts` puts both in the same `parts` array,
+    /// distinguished only by that flag. Every reader that wants the response
+    /// *text* must skip them — the completion mapper routes them to
+    /// [`crate::message::AssistantContent::Reasoning`] instead, and a reader
+    /// that takes them for output text reports reasoning as the answer.
+    ///
+    /// The *skip* rule lives here; the *join* rule stays with each caller,
+    /// because they differ legitimately: a transcript is one continuous text
+    /// whose part boundaries are not sentence boundaries, so transcription
+    /// concatenates, while `get_text_response` keeps the newline separator it
+    /// has always used between a candidate's blocks.
+    pub(crate) fn visible_text_parts(content: &Content) -> impl Iterator<Item = &str> {
+        content.parts.iter().filter_map(|part| match &part.part {
+            PartKind::Text(text) if !part.thought.unwrap_or(false) => Some(text.as_str()),
+            _ => None,
+        })
     }
 
     /// A response candidate generated from the model.
@@ -775,38 +880,83 @@ pub mod gemini_api_types {
         }
     }
 
+    /// Map a media body onto the Gemini part kind that carries it.
+    ///
+    /// Gemini takes every non-text body one of exactly two ways — a URI
+    /// reference (`fileData`) or a base64 payload (`inlineData`) — and rejects
+    /// the rest. `kind` names the medium in the rejection messages.
+    /// `string_is_data` says whether an untagged [`DocumentSourceKind::String`]
+    /// counts as a payload for this medium: it does for images and documents,
+    /// whose bodies routinely arrive as an unlabelled base64 string, but a bare
+    /// string is never audio or video.
+    fn media_source_to_part_kind(
+        kind: &str,
+        mime_type: String,
+        source: DocumentSourceKind,
+        string_is_data: bool,
+    ) -> Result<PartKind, message::MessageError> {
+        match source {
+            DocumentSourceKind::Url(file_uri) => Ok(PartKind::FileData(FileData {
+                mime_type: Some(mime_type),
+                file_uri,
+            })),
+            DocumentSourceKind::Base64(data) => Ok(PartKind::InlineData(Blob { mime_type, data })),
+            DocumentSourceKind::String(data) if string_is_data => {
+                Ok(PartKind::InlineData(Blob { mime_type, data }))
+            }
+            DocumentSourceKind::String(_) => Err(message::MessageError::ConversionError(format!(
+                "Strings cannot be used as Gemini {kind} inputs"
+            ))),
+            DocumentSourceKind::Raw(_) => Err(message::MessageError::ConversionError(
+                "Raw files not supported, encode as base64 first".to_string(),
+            )),
+            DocumentSourceKind::FileId(_) => Err(message::MessageError::ConversionError(format!(
+                "Provider file IDs are not supported for Gemini {kind} inputs"
+            ))),
+            DocumentSourceKind::Unknown => Err(message::MessageError::ConversionError(format!(
+                "Gemini {kind} input has no body"
+            ))),
+        }
+    }
+
     impl TryFrom<(ImageMediaType, DocumentSourceKind)> for PartKind {
         type Error = message::MessageError;
         fn try_from(
             (mime_type, doc_src): (ImageMediaType, DocumentSourceKind),
         ) -> Result<Self, Self::Error> {
-            let mime_type = mime_type.to_mime_type().to_string();
-            let part = match doc_src {
-                DocumentSourceKind::Url(url) => PartKind::FileData(FileData {
-                    mime_type: Some(mime_type),
-                    file_uri: url,
-                }),
-                DocumentSourceKind::Base64(data) | DocumentSourceKind::String(data) => {
-                    PartKind::InlineData(Blob { mime_type, data })
-                }
-                DocumentSourceKind::Raw(_) => {
-                    return Err(message::MessageError::ConversionError(
-                        "Raw files not supported, encode as base64 first".into(),
-                    ));
-                }
-                DocumentSourceKind::FileId(_) => {
-                    return Err(message::MessageError::ConversionError(
-                        "Provider file IDs are not supported for Gemini image inputs".into(),
-                    ));
-                }
-                DocumentSourceKind::Unknown => {
-                    return Err(message::MessageError::ConversionError(
-                        "Can't convert an unknown document source".to_string(),
-                    ));
-                }
-            };
+            media_source_to_part_kind("image", mime_type.to_mime_type().to_string(), doc_src, true)
+        }
+    }
 
-            Ok(part)
+    /// Convert a message image into a Gemini part.
+    ///
+    /// Gemini takes images identically in either role, so the user and
+    /// assistant conversions share this.
+    fn image_to_part(image: message::Image) -> Result<Part, message::MessageError> {
+        let message::Image {
+            data, media_type, ..
+        } = image;
+
+        let Some(media_type) = media_type else {
+            return Err(message::MessageError::ConversionError(
+                "Media type for image is required for Gemini".to_string(),
+            ));
+        };
+
+        match media_type {
+            message::ImageMediaType::JPEG
+            | message::ImageMediaType::PNG
+            | message::ImageMediaType::WEBP
+            | message::ImageMediaType::HEIC
+            | message::ImageMediaType::HEIF => Ok(Part {
+                thought: Some(false),
+                thought_signature: None,
+                part: PartKind::try_from((media_type, data))?,
+                additional_params: None,
+            }),
+            _ => Err(message::MessageError::ConversionError(format!(
+                "Unsupported image media type {media_type:?}"
+            ))),
         }
     }
 
@@ -841,10 +991,13 @@ pub mod gemini_api_types {
                     additional_params: None,
                 }),
                 message::UserContent::ToolResult(message::ToolResult {
-                    id,
-                    call_id,
+                    call: _,
+                    provider,
+                    name,
                     content,
                 }) => {
+                    // The executed tool's name travels as required data.
+                    let function_name = name;
                     let mut response_values = Vec::new();
                     let mut parts: Vec<FunctionResponsePart> = Vec::new();
 
@@ -911,39 +1064,15 @@ pub mod gemini_api_types {
                         thought: Some(false),
                         thought_signature: None,
                         part: PartKind::FunctionResponse(FunctionResponse {
-                            name: id,
-                            id: call_id,
+                            name: function_name,
+                            id: provider.map(|provider| provider.call_id),
                             response: response_json,
                             parts: if parts.is_empty() { None } else { Some(parts) },
                         }),
                         additional_params: None,
                     })
                 }
-                message::UserContent::Image(message::Image {
-                    data, media_type, ..
-                }) => match media_type {
-                    Some(media_type) => match media_type {
-                        message::ImageMediaType::JPEG
-                        | message::ImageMediaType::PNG
-                        | message::ImageMediaType::WEBP
-                        | message::ImageMediaType::HEIC
-                        | message::ImageMediaType::HEIF => {
-                            let part = PartKind::try_from((media_type, data))?;
-                            Ok(Part {
-                                thought: Some(false),
-                                thought_signature: None,
-                                part,
-                                additional_params: None,
-                            })
-                        }
-                        _ => Err(message::MessageError::ConversionError(format!(
-                            "Unsupported image media type {media_type:?}"
-                        ))),
-                    },
-                    None => Err(message::MessageError::ConversionError(
-                        "Media type for image is required for Gemini".to_string(),
-                    )),
-                },
+                message::UserContent::Image(image) => image_to_part(image),
                 message::UserContent::Document(message::Document {
                     data, media_type, ..
                 }) => {
@@ -1016,27 +1145,12 @@ pub mod gemini_api_types {
                             ..Default::default()
                         })
                     } else if !media_type.is_code() {
-                        let mime_type = media_type.to_mime_type().to_string();
-
-                        let part = match data {
-                            DocumentSourceKind::Url(file_uri) => PartKind::FileData(FileData {
-                                mime_type: Some(mime_type),
-                                file_uri,
-                            }),
-                            DocumentSourceKind::Base64(data) | DocumentSourceKind::String(data) => {
-                                PartKind::InlineData(Blob { mime_type, data })
-                            }
-                            DocumentSourceKind::Raw(_) => {
-                                return Err(message::MessageError::ConversionError(
-                                    "Raw files not supported, encode as base64 first".into(),
-                                ));
-                            }
-                            _ => {
-                                return Err(message::MessageError::ConversionError(
-                                    "Document has no body".to_string(),
-                                ));
-                            }
-                        };
+                        let part = media_source_to_part_kind(
+                            "document",
+                            media_type.to_mime_type().to_string(),
+                            data,
+                            true,
+                        )?;
 
                         Ok(Part {
                             thought: Some(false),
@@ -1059,39 +1173,12 @@ pub mod gemini_api_types {
                         ));
                     };
 
-                    let mime_type = media_type.to_mime_type().to_string();
-
-                    let part = match data {
-                        DocumentSourceKind::Base64(data) => {
-                            PartKind::InlineData(Blob { data, mime_type })
-                        }
-
-                        DocumentSourceKind::Url(file_uri) => PartKind::FileData(FileData {
-                            mime_type: Some(mime_type),
-                            file_uri,
-                        }),
-                        DocumentSourceKind::String(_) => {
-                            return Err(message::MessageError::ConversionError(
-                                "Strings cannot be used as audio files!".into(),
-                            ));
-                        }
-                        DocumentSourceKind::Raw(_) => {
-                            return Err(message::MessageError::ConversionError(
-                                "Raw files not supported, encode as base64 first".into(),
-                            ));
-                        }
-                        DocumentSourceKind::FileId(_) => {
-                            return Err(message::MessageError::ConversionError(
-                                "Provider file IDs are not supported for Gemini audio inputs"
-                                    .into(),
-                            ));
-                        }
-                        DocumentSourceKind::Unknown => {
-                            return Err(message::MessageError::ConversionError(
-                                "Content has no body".to_string(),
-                            ));
-                        }
-                    };
+                    let part = media_source_to_part_kind(
+                        "audio",
+                        media_type.to_mime_type().to_string(),
+                        data,
+                        false,
+                    )?;
 
                     Ok(Part {
                         thought: Some(false),
@@ -1108,55 +1195,26 @@ pub mod gemini_api_types {
                     let mime_type = media_type.map(|media_ty| media_ty.to_mime_type().to_string());
 
                     let part = match data {
-                        DocumentSourceKind::Url(file_uri) => {
-                            if file_uri.starts_with("https://www.youtube.com") {
-                                PartKind::FileData(FileData {
-                                    mime_type,
-                                    file_uri,
-                                })
-                            } else {
-                                if mime_type.is_none() {
-                                    return Err(MessageError::ConversionError(
-                                        "A mime type is required for non-Youtube video file inputs to Gemini"
-                                            .to_string(),
-                                    ));
-                                }
-
-                                PartKind::FileData(FileData {
-                                    mime_type,
-                                    file_uri,
-                                })
-                            }
+                        // YouTube links are the one Gemini video source that
+                        // needs no MIME type: the service resolves the media
+                        // itself. Every other source must declare one.
+                        DocumentSourceKind::Url(file_uri)
+                            if file_uri.starts_with("https://www.youtube.com") =>
+                        {
+                            PartKind::FileData(FileData {
+                                mime_type,
+                                file_uri,
+                            })
                         }
-                        DocumentSourceKind::Base64(data) => {
-                            let Some(mime_type) = mime_type else {
-                                return Err(MessageError::ConversionError(
-                                    "A media type is expected for base64 encoded strings"
+                        data => {
+                            let mime_type = mime_type.ok_or_else(|| {
+                                MessageError::ConversionError(
+                                    "A mime type is required for non-Youtube video inputs to Gemini"
                                         .to_string(),
-                                ));
-                            };
-                            PartKind::InlineData(Blob { mime_type, data })
-                        }
-                        DocumentSourceKind::String(_) => {
-                            return Err(message::MessageError::ConversionError(
-                                "Strings cannot be used as audio files!".into(),
-                            ));
-                        }
-                        DocumentSourceKind::Raw(_) => {
-                            return Err(message::MessageError::ConversionError(
-                                "Raw file data not supported, encode as base64 first".into(),
-                            ));
-                        }
-                        DocumentSourceKind::FileId(_) => {
-                            return Err(message::MessageError::ConversionError(
-                                "Provider file IDs are not supported for Gemini video inputs"
-                                    .into(),
-                            ));
-                        }
-                        DocumentSourceKind::Unknown => {
-                            return Err(message::MessageError::ConversionError(
-                                "Media type for video is required for Gemini".to_string(),
-                            ));
+                                )
+                            })?;
+
+                            media_source_to_part_kind("video", mime_type, data, false)?
                         }
                     };
 
@@ -1164,7 +1222,7 @@ pub mod gemini_api_types {
                         thought: Some(false),
                         thought_signature: None,
                         part,
-                        additional_params,
+                        additional_params: additional_params.map(Into::into),
                     })
                 }
             }
@@ -1177,31 +1235,7 @@ pub mod gemini_api_types {
         fn try_from(content: message::AssistantContent) -> Result<Self, Self::Error> {
             match content {
                 message::AssistantContent::Text(message::Text { text, .. }) => Ok(text.into()),
-                message::AssistantContent::Image(message::Image {
-                    data, media_type, ..
-                }) => match media_type {
-                    Some(media_type) => match media_type {
-                        message::ImageMediaType::JPEG
-                        | message::ImageMediaType::PNG
-                        | message::ImageMediaType::WEBP
-                        | message::ImageMediaType::HEIC
-                        | message::ImageMediaType::HEIF => {
-                            let part = PartKind::try_from((media_type, data))?;
-                            Ok(Part {
-                                thought: Some(false),
-                                thought_signature: None,
-                                part,
-                                additional_params: None,
-                            })
-                        }
-                        _ => Err(message::MessageError::ConversionError(format!(
-                            "Unsupported image media type {media_type:?}"
-                        ))),
-                    },
-                    None => Err(message::MessageError::ConversionError(
-                        "Media type for image is required for Gemini".to_string(),
-                    )),
-                },
+                message::AssistantContent::Image(image) => image_to_part(image),
                 message::AssistantContent::ToolCall(tool_call) => Ok(tool_call.into()),
                 message::AssistantContent::Reasoning(reasoning) => Ok(Part {
                     thought: Some(true),
@@ -1221,7 +1255,9 @@ pub mod gemini_api_types {
                 part: PartKind::FunctionCall(FunctionCall {
                     name: tool_call.function.name,
                     args: tool_call.function.arguments,
-                    id: tool_call.call_id,
+                    // Only a provider-issued id may travel back on the wire;
+                    // minted correlation handles stay internal.
+                    id: tool_call.provider.map(|provider| provider.call_id),
                 }),
                 additional_params: None,
             }
@@ -1259,7 +1295,7 @@ pub mod gemini_api_types {
             Self {
                 name: tool_call.function.name,
                 args: tool_call.function.arguments,
-                id: tool_call.call_id,
+                id: tool_call.provider.map(|provider| provider.call_id),
             }
         }
     }
@@ -1424,19 +1460,25 @@ pub mod gemini_api_types {
         }
     }
 
-    impl GetTokenUsage for UsageMetadata {
-        fn token_usage(&self) -> crate::completion::Usage {
+    impl From<&UsageMetadata> for crate::completion::Usage {
+        fn from(value: &UsageMetadata) -> crate::completion::Usage {
             let mut usage = crate::completion::Usage::new();
 
-            usage.input_tokens = self.prompt_token_count as u64;
-            usage.output_tokens = self.candidates_token_count.unwrap_or_default() as u64;
-            usage.cached_input_tokens = self.cached_content_token_count.unwrap_or_default() as u64;
-            usage.reasoning_tokens = self.thoughts_token_count.unwrap_or_default() as u64;
+            usage.input_tokens = value.prompt_token_count as u64;
+            usage.output_tokens = value.candidates_token_count.unwrap_or_default() as u64;
+            usage.cached_input_tokens = value.cached_content_token_count.unwrap_or_default() as u64;
+            usage.reasoning_tokens = value.thoughts_token_count.unwrap_or_default() as u64;
             usage.tool_use_prompt_tokens =
-                self.tool_use_prompt_token_count.unwrap_or_default() as u64;
-            usage.total_tokens = self.total_token_count as u64;
+                value.tool_use_prompt_token_count.unwrap_or_default() as u64;
+            usage.total_tokens = value.total_token_count as u64;
 
             usage
+        }
+    }
+
+    impl From<UsageMetadata> for crate::completion::Usage {
+        fn from(value: UsageMetadata) -> crate::completion::Usage {
+            (&value).into()
         }
     }
 
@@ -1464,6 +1506,11 @@ pub mod gemini_api_types {
         Blocklist,
         /// Prompt was blocked due to prohibited content.
         ProhibitedContent,
+        /// A block reason this crate does not know yet. Google adds wire
+        /// values without notice; carrying the spelling verbatim keeps the
+        /// whole payload deserializable instead of failing on the new value.
+        #[serde(untagged)]
+        Unknown(String),
     }
 
     #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1499,6 +1546,74 @@ pub mod gemini_api_types {
         TooManyToolCalls,
         /// The provider could not parse the generated response into a valid protocol shape.
         MalformedResponse,
+        /// A finish reason this crate does not know yet. Google adds wire
+        /// values without notice; carrying the spelling verbatim keeps the
+        /// whole payload deserializable — and the finish observable — instead
+        /// of failing on the new value, matching the gRPC crate's handling.
+        #[serde(untagged)]
+        Unknown(String),
+    }
+
+    impl FinishReason {
+        /// The exact spelling Gemini uses for this reason on the wire.
+        ///
+        /// Spelled out rather than derived from `Debug` (which would yield
+        /// `MaxTokens`, not `MAX_TOKENS`) so the string that reaches
+        /// [`crate::completion::FinishReason::Other`] is the provider's own.
+        pub fn as_wire_str(&self) -> &str {
+            match self {
+                Self::FinishReasonUnspecified => "FINISH_REASON_UNSPECIFIED",
+                Self::Stop => "STOP",
+                Self::MaxTokens => "MAX_TOKENS",
+                Self::Safety => "SAFETY",
+                Self::Recitation => "RECITATION",
+                Self::Language => "LANGUAGE",
+                Self::Other => "OTHER",
+                Self::Blocklist => "BLOCKLIST",
+                Self::ProhibitedContent => "PROHIBITED_CONTENT",
+                Self::Spii => "SPII",
+                Self::MalformedFunctionCall => "MALFORMED_FUNCTION_CALL",
+                Self::UnexpectedToolCall => "UNEXPECTED_TOOL_CALL",
+                Self::MissingThoughtSignature => "MISSING_THOUGHT_SIGNATURE",
+                Self::TooManyToolCalls => "TOO_MANY_TOOL_CALLS",
+                Self::MalformedResponse => "MALFORMED_RESPONSE",
+                Self::Unknown(reason) => reason,
+            }
+        }
+    }
+
+    /// Map a Google `finishReason` — in its wire SCREAMING_SNAKE spelling —
+    /// onto rig's normalized vocabulary.
+    ///
+    /// Every Google surface (Gemini REST, Gemini gRPC, Vertex AI) publishes the
+    /// same vocabulary, so they share one table and can never disagree about
+    /// what a reason means; each transport supplies only its own spelling
+    /// accessor and its own fallback for a discriminant it cannot name.
+    ///
+    /// Only the four reasons that have a normalized counterpart are folded in;
+    /// everything else — including Google's own `OTHER` and the tool-protocol
+    /// failures — is carried verbatim so a reason rig does not model never reads
+    /// as a natural stop. `None` for `FINISH_REASON_UNSPECIFIED`: it is the
+    /// proto default and means the service reported no reason.
+    pub fn map_google_finish_reason(wire_name: &str) -> Option<crate::completion::FinishReason> {
+        Some(match wire_name {
+            "FINISH_REASON_UNSPECIFIED" => return None,
+            "STOP" => crate::completion::FinishReason::Stop,
+            "MAX_TOKENS" => crate::completion::FinishReason::Length,
+            "SAFETY" | "BLOCKLIST" | "PROHIBITED_CONTENT" | "SPII" => {
+                crate::completion::FinishReason::ContentFilter
+            }
+            other => crate::completion::FinishReason::Other(other.to_owned()),
+        })
+    }
+
+    /// Map a Gemini REST `finishReason` onto rig's normalized vocabulary.
+    ///
+    /// Shared by the unary and streaming paths so both agree.
+    pub(crate) fn map_finish_reason(
+        reason: &FinishReason,
+    ) -> Option<crate::completion::FinishReason> {
+        map_google_finish_reason(reason.as_wire_str())
     }
 
     #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1555,7 +1670,16 @@ pub mod gemini_api_types {
     /// Can be serialized into a type-safe
     /// [`CompletionRequest::additional_params`](crate::completion::CompletionRequest::additional_params)
     /// value or a runtime builder's additional parameters.
-    #[derive(Debug, Deserialize, Serialize)]
+    ///
+    /// Every field defaults to `None`, and every field is
+    /// `skip_serializing_if = "Option::is_none"`. A default config therefore
+    /// puts *nothing* on the wire and lets Gemini apply each model's own
+    /// documented default. Do not reintroduce non-`None` defaults here: this
+    /// type seeds request construction, so a value set here is silently imposed
+    /// on callers who never asked for it (rig#2322 — a hardcoded
+    /// `max_output_tokens: Some(4096)` capped structured-output and image
+    /// requests at 4096 tokens regardless of the caller's budget).
+    #[derive(Debug, Default, Deserialize, Serialize)]
     #[serde(rename_all = "camelCase")]
     pub struct GenerationConfig {
         /// The set of character sequences (up to 5) that will stop output generation. If specified, the API will stop
@@ -1645,30 +1769,6 @@ pub mod gemini_api_types {
         pub response_modalities: Option<Vec<ResponseModality>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub image_config: Option<ImageConfig>,
-    }
-
-    impl Default for GenerationConfig {
-        fn default() -> Self {
-            Self {
-                temperature: Some(1.0),
-                max_output_tokens: Some(4096),
-                stop_sequences: None,
-                response_mime_type: None,
-                response_schema: None,
-                _response_json_schema: None,
-                response_json_schema: None,
-                candidate_count: None,
-                top_p: None,
-                top_k: None,
-                presence_penalty: None,
-                frequency_penalty: None,
-                response_logprobs: None,
-                logprobs: None,
-                thinking_config: None,
-                response_modalities: None,
-                image_config: None,
-            }
-        }
     }
 
     /// Response modalities supported by Gemini multimodal output models.
@@ -2198,9 +2298,9 @@ mod tests {
     use crate::{
         message,
         providers::gemini::completion::gemini_api_types::{
-            CitationMetadata, ContentCandidate, FinishReason, FunctionCall,
-            GenerateContentResponse, LogprobsResult, ModalityTokenCount, Schema, TopCandidate,
-            UsageMetadata, flatten_schema, tool_parameters_to_schema,
+            BlockReason, CitationMetadata, ContentCandidate, FinishReason, FunctionCall,
+            GenerateContentResponse, LogprobsResult, ModalityTokenCount, PromptFeedback, Schema,
+            TopCandidate, UsageMetadata, flatten_schema, tool_parameters_to_schema,
         },
     };
 
@@ -2319,7 +2419,7 @@ mod tests {
         let request = CompletionRequest {
             model: Some("gemini-2.5-flash".to_string()),
             preamble: None,
-            chat_history: crate::OneOrMany::one("Hello".into()),
+            chat_history: vec!["Hello".into()],
             documents: vec![],
             tools: vec![],
             temperature: None,
@@ -2347,7 +2447,7 @@ mod tests {
         let request = CompletionRequest {
             model: None,
             preamble: None,
-            chat_history: crate::OneOrMany::one("Hello".into()),
+            chat_history: vec!["Hello".into()],
             documents: vec![],
             tools: vec![],
             temperature: None,
@@ -2563,12 +2663,12 @@ mod tests {
             model_version: None,
         };
 
-        let converted: crate::completion::CompletionResponse<GenerateContentResponse> =
+        let converted: crate::completion::CompletionResponse =
             response.try_into().expect("convert response");
         let first = converted.choice.first();
         assert!(matches!(
             first,
-            message::AssistantContent::Reasoning(message::Reasoning { content, .. })
+            Some(message::AssistantContent::Reasoning(message::Reasoning { content, .. }))
                 if matches!(
                     content.first(),
                     Some(message::ReasoningContent::Text {
@@ -2634,10 +2734,8 @@ mod tests {
                 model_version: None,
             };
 
-            let err = crate::completion::CompletionResponse::<GenerateContentResponse>::try_from(
-                response,
-            )
-            .expect_err("tool protocol finish reason should fail");
+            let err = crate::completion::CompletionResponse::try_from(response)
+                .expect_err("tool protocol finish reason should fail");
 
             assert!(matches!(
                 err,
@@ -2688,7 +2786,7 @@ mod tests {
             model_version: Some("gemini-2.0-flash-001".to_string()),
         };
 
-        let converted: crate::completion::CompletionResponse<GenerateContentResponse> =
+        let converted: crate::completion::CompletionResponse =
             response.try_into().expect("convert response");
 
         assert_eq!(converted.usage.input_tokens, 40);
@@ -2700,15 +2798,254 @@ mod tests {
     }
 
     #[test]
+    fn test_finish_reason_maps_every_wire_variant() {
+        use crate::completion::FinishReason as Normalized;
+
+        for (wire, expected) in [
+            (FinishReason::Stop, Normalized::Stop),
+            (FinishReason::MaxTokens, Normalized::Length),
+            (FinishReason::Safety, Normalized::ContentFilter),
+            (FinishReason::Blocklist, Normalized::ContentFilter),
+            (FinishReason::ProhibitedContent, Normalized::ContentFilter),
+            (FinishReason::Spii, Normalized::ContentFilter),
+            // Everything Gemini reports that rig does not model survives in the
+            // provider's own SCREAMING_SNAKE_CASE spelling.
+            (
+                FinishReason::Recitation,
+                Normalized::Other("RECITATION".to_string()),
+            ),
+            (
+                FinishReason::Language,
+                Normalized::Other("LANGUAGE".to_string()),
+            ),
+            (FinishReason::Other, Normalized::Other("OTHER".to_string())),
+            (
+                FinishReason::MalformedFunctionCall,
+                Normalized::Other("MALFORMED_FUNCTION_CALL".to_string()),
+            ),
+            (
+                FinishReason::UnexpectedToolCall,
+                Normalized::Other("UNEXPECTED_TOOL_CALL".to_string()),
+            ),
+            (
+                FinishReason::MissingThoughtSignature,
+                Normalized::Other("MISSING_THOUGHT_SIGNATURE".to_string()),
+            ),
+            (
+                FinishReason::TooManyToolCalls,
+                Normalized::Other("TOO_MANY_TOOL_CALLS".to_string()),
+            ),
+            (
+                FinishReason::MalformedResponse,
+                Normalized::Other("MALFORMED_RESPONSE".to_string()),
+            ),
+        ] {
+            assert_eq!(
+                map_finish_reason(&wire),
+                Some(expected),
+                "wire reason {wire:?}"
+            );
+        }
+
+        // The proto default means Gemini reported no reason; both the REST and
+        // gRPC mappers treat it as absent rather than an `Other` value.
+        assert_eq!(
+            map_finish_reason(&FinishReason::FinishReasonUnspecified),
+            None
+        );
+    }
+
+    #[test]
+    fn test_finish_reason_wire_spelling_matches_serde() {
+        // `as_wire_str` is hand-written; keep it honest against the serde
+        // representation the same enum deserializes from.
+        for reason in [
+            FinishReason::FinishReasonUnspecified,
+            FinishReason::Stop,
+            FinishReason::MaxTokens,
+            FinishReason::Safety,
+            FinishReason::Recitation,
+            FinishReason::Language,
+            FinishReason::Other,
+            FinishReason::Blocklist,
+            FinishReason::ProhibitedContent,
+            FinishReason::Spii,
+            FinishReason::MalformedFunctionCall,
+            FinishReason::UnexpectedToolCall,
+            FinishReason::MissingThoughtSignature,
+            FinishReason::TooManyToolCalls,
+            FinishReason::MalformedResponse,
+        ] {
+            let serialized = serde_json::to_value(&reason).expect("reason should serialize");
+            assert_eq!(serialized, json!(reason.as_wire_str()));
+        }
+    }
+
+    #[test]
+    fn test_unknown_finish_reason_round_trips_verbatim() {
+        // A wire value this crate does not know must land in `Unknown` with
+        // the provider's spelling intact — and serialize back to the same
+        // string — so nothing is lost between deserialize and re-serialize.
+        let reason: FinishReason = serde_json::from_value(json!("FINISH_REASON_FUTURE"))
+            .expect("unknown finish reason should deserialize");
+        assert!(matches!(&reason, FinishReason::Unknown(s) if s == "FINISH_REASON_FUTURE"));
+        assert_eq!(reason.as_wire_str(), "FINISH_REASON_FUTURE");
+        assert_eq!(
+            serde_json::to_value(&reason).expect("reason should serialize"),
+            json!("FINISH_REASON_FUTURE")
+        );
+        assert_eq!(
+            map_finish_reason(&reason),
+            Some(crate::completion::FinishReason::Other(
+                "FINISH_REASON_FUTURE".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_unknown_block_reason_deserializes_verbatim() {
+        // Same contract for prompt feedback: a new block reason must not fail
+        // the payload, and the spelling is preserved.
+        let feedback: PromptFeedback = serde_json::from_value(json!({
+            "blockReason": "BLOCK_REASON_FUTURE"
+        }))
+        .expect("unknown block reason should deserialize");
+        assert!(matches!(
+            feedback.block_reason,
+            Some(BlockReason::Unknown(ref s)) if s == "BLOCK_REASON_FUTURE"
+        ));
+    }
+
+    #[test]
+    fn test_unary_response_with_unknown_finish_reason_stays_parseable() {
+        // A finish reason Google ships tomorrow must not fail the whole
+        // payload: content and usage stay intact, and the reason maps to
+        // `Other` verbatim — matching the gRPC crate's handling of unknowns.
+        let response: GenerateContentResponse = serde_json::from_value(json!({
+            "responseId": "resp-future",
+            "candidates": [{
+                "content": {
+                    "parts": [{"text": "hi"}],
+                    "role": "model"
+                },
+                "finishReason": "FINISH_REASON_FUTURE"
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 3,
+                "candidatesTokenCount": 2,
+                "totalTokenCount": 5
+            }
+        }))
+        .expect("unknown finish reason should not fail the payload");
+
+        let converted: crate::completion::CompletionResponse =
+            response.try_into().expect("convert response");
+
+        assert!(matches!(
+            converted.choice.first(),
+            Some(message::AssistantContent::Text(text)) if text.text == "hi"
+        ));
+        assert_eq!(converted.usage.total_tokens, 5);
+        assert_eq!(
+            converted.finish_reason(),
+            Some(crate::completion::FinishReason::Other(
+                "FINISH_REASON_FUTURE".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_streaming_candidate_with_unknown_finish_reason_stays_parseable() {
+        // Streaming terminal chunks embed the same `ContentCandidate`; an
+        // unknown reason must leave the chunk deserializable so the terminal
+        // record is still produced.
+        let candidate: ContentCandidate = serde_json::from_value(json!({
+            "content": {
+                "parts": [{"text": "done"}],
+                "role": "model"
+            },
+            "finishReason": "FINISH_REASON_FUTURE"
+        }))
+        .expect("unknown finish reason should not fail the chunk");
+
+        let reason = candidate.finish_reason.expect("finish reason present");
+        assert_eq!(
+            map_finish_reason(&reason),
+            Some(crate::completion::FinishReason::Other(
+                "FINISH_REASON_FUTURE".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn test_completion_response_carries_normalized_metadata() {
+        let response: GenerateContentResponse = serde_json::from_value(json!({
+            "responseId": "resp-meta",
+            "modelVersion": "gemini-2.0-flash-001",
+            "candidates": [{
+                "content": {
+                    "parts": [{"text": "hi"}],
+                    "role": "model"
+                },
+                "finishReason": "MAX_TOKENS"
+            }]
+        }))
+        .expect("response should deserialize");
+
+        let converted: crate::completion::CompletionResponse =
+            response.try_into().expect("convert response");
+
+        assert_eq!(converted.provider, PROVIDER_NAME);
+        assert_eq!(converted.model.as_deref(), Some("gemini-2.0-flash-001"));
+        assert_eq!(converted.response_id.as_deref(), Some("resp-meta"));
+        assert_eq!(converted.message_id, None);
+        assert_eq!(
+            converted.finish_reason(),
+            Some(crate::completion::FinishReason::Length)
+        );
+    }
+
+    #[test]
+    fn test_completion_response_upgrades_stop_to_tool_calls() {
+        // Gemini reports STOP on turns that only emitted a function call; the
+        // normalized response must still say `ToolCalls`.
+        let response: GenerateContentResponse = serde_json::from_value(json!({
+            "responseId": "resp-tool",
+            "candidates": [{
+                "content": {
+                    "parts": [{
+                        "functionCall": {
+                            "name": "get_weather",
+                            "args": {"city": "Paris"}
+                        }
+                    }],
+                    "role": "model"
+                },
+                "finishReason": "STOP"
+            }]
+        }))
+        .expect("response should deserialize");
+
+        let converted: crate::completion::CompletionResponse =
+            response.try_into().expect("convert response");
+
+        assert_eq!(
+            converted.finish_reason(),
+            Some(crate::completion::FinishReason::ToolCalls)
+        );
+        assert_eq!(converted.model, None);
+    }
+
+    #[test]
     fn test_reasoning_signature_is_emitted_in_gemini_part() {
         let msg = message::Message::Assistant {
             id: None,
-            content: OneOrMany::one(message::AssistantContent::Reasoning(
+            content: vec![message::AssistantContent::Reasoning(
                 message::Reasoning::new_with_signature(
                     "structured thought",
                     Some("reuse_sig_456".to_string()),
                 ),
-            )),
+            )],
         };
 
         let converted: Content = msg.try_into().expect("convert message");
@@ -2723,20 +3060,17 @@ mod tests {
 
     #[test]
     fn test_message_conversion_tool_call() {
-        let tool_call = message::ToolCall {
-            id: "test_tool".to_string(),
-            call_id: Some("call-123".to_string()),
-            function: message::ToolFunction {
+        let tool_call = message::ToolCall::from_wire(
+            "call-123",
+            message::ToolFunction {
                 name: "test_function".to_string(),
                 arguments: json!({"arg1": "value1"}),
             },
-            signature: None,
-            additional_params: None,
-        };
+        );
 
         let msg = message::Message::Assistant {
             id: None,
-            content: OneOrMany::one(message::AssistantContent::ToolCall(tool_call)),
+            content: vec![message::AssistantContent::ToolCall(tool_call)],
         };
 
         let content: Content = msg.try_into().unwrap();
@@ -2778,13 +3112,16 @@ mod tests {
         }))
         .expect("response should deserialize");
 
-        let converted: crate::completion::CompletionResponse<GenerateContentResponse> =
+        let converted: crate::completion::CompletionResponse =
             response.try_into().expect("response should convert");
-        let message::AssistantContent::ToolCall(tool_call) = converted.choice.first() else {
+        let Some(message::AssistantContent::ToolCall(tool_call)) = converted.choice.first() else {
             panic!("expected a tool call");
         };
-        assert_eq!(tool_call.id, "test_function");
-        assert_eq!(tool_call.call_id.as_deref(), Some("call-123"));
+        assert_eq!(tool_call.id, "call-123");
+        assert_eq!(
+            tool_call.provider.as_ref().expect("wire id").call_id,
+            "call-123"
+        );
     }
 
     #[test]
@@ -2994,11 +3331,9 @@ mod tests {
             Some(DocumentMediaType::TXT),
         );
 
-        let content: Content = message::Message::User {
-            content: crate::OneOrMany::one(doc),
-        }
-        .try_into()
-        .unwrap();
+        let content: Content = message::Message::User { content: vec![doc] }
+            .try_into()
+            .unwrap();
 
         if let Part {
             part: PartKind::Text(text),
@@ -3018,16 +3353,16 @@ mod tests {
     #[test]
     fn test_tool_result_with_image_content() {
         // Test that a ToolResult with image content converts correctly to Gemini's Part format
-        use crate::OneOrMany;
         use crate::message::{
             DocumentSourceKind, Image, ImageMediaType, ToolResult, ToolResultContent,
         };
 
         // Create a tool result with both text and image content
         let tool_result = ToolResult {
-            id: "test_tool".to_string(),
-            call_id: Some("call-123".to_string()),
-            content: OneOrMany::many(vec![
+            call: message::ToolCallId::new_or_mint("call-123"),
+            provider: message::ProviderCallId::new("call-123"),
+            name: "test_tool".to_string(),
+            content: vec![
                 ToolResultContent::Text(message::Text::new(r#"{"status": "success"}"#.to_string())),
                 ToolResultContent::Image(Image {
                     data: DocumentSourceKind::Base64("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==".to_string()),
@@ -3035,12 +3370,12 @@ mod tests {
                     detail: None,
                     additional_params: None,
                 }),
-            ]).expect("Should create OneOrMany with multiple items"),
+            ],
         };
 
         let user_content = message::UserContent::ToolResult(tool_result);
         let msg = message::Message::User {
-            content: OneOrMany::one(user_content),
+            content: vec![user_content],
         };
 
         // Convert to Gemini Content
@@ -3085,14 +3420,14 @@ mod tests {
 
     #[test]
     fn mixed_inline_images_and_text_keep_text_response_and_ordered_parts() {
-        use crate::OneOrMany;
         use crate::message::{ImageMediaType, ToolResult, ToolResultContent};
 
         let message = message::Message::User {
-            content: OneOrMany::one(message::UserContent::ToolResult(ToolResult {
-                id: "ordered_tool".to_string(),
-                call_id: None,
-                content: OneOrMany::many(vec![
+            content: vec![message::UserContent::ToolResult(ToolResult {
+                call: message::ToolCallId::mint(),
+                provider: None,
+                name: "ordered_tool".to_string(),
+                content: vec![
                     ToolResultContent::image_base64("first-image", Some(ImageMediaType::PNG), None),
                     ToolResultContent::text("between-images"),
                     ToolResultContent::image_base64(
@@ -3100,9 +3435,8 @@ mod tests {
                         Some(ImageMediaType::JPEG),
                         None,
                     ),
-                ])
-                .expect("mixed tool result content should be non-empty"),
-            })),
+                ],
+            })],
         };
 
         let content: Content = message.try_into().expect("tool result should convert");
@@ -3132,19 +3466,18 @@ mod tests {
 
     #[test]
     fn mixed_inline_image_and_json_keep_structured_value_and_media_part() {
-        use crate::OneOrMany;
         use crate::message::{ImageMediaType, ToolResult, ToolResultContent};
 
         let message = message::Message::User {
-            content: OneOrMany::one(message::UserContent::ToolResult(ToolResult {
-                id: "ordered_tool".to_string(),
-                call_id: None,
-                content: OneOrMany::many(vec![
+            content: vec![message::UserContent::ToolResult(ToolResult {
+                call: message::ToolCallId::mint(),
+                provider: None,
+                name: "ordered_tool".to_string(),
+                content: vec![
                     ToolResultContent::json(json!({ "status": "ok" })),
                     ToolResultContent::image_base64("image-data", Some(ImageMediaType::PNG), None),
-                ])
-                .expect("mixed tool result content should be non-empty"),
-            })),
+                ],
+            })],
         };
 
         let content: Content = message.try_into().expect("tool result should convert");
@@ -3168,14 +3501,14 @@ mod tests {
 
     #[test]
     fn mixed_url_image_and_response_value_is_rejected() {
-        use crate::OneOrMany;
         use crate::message::{DocumentSourceKind, Image, ImageMediaType, ToolResultContent};
 
         let tool_result = message::Message::User {
-            content: OneOrMany::one(message::UserContent::ToolResult(message::ToolResult {
-                id: "url_tool".to_string(),
-                call_id: None,
-                content: OneOrMany::many(vec![
+            content: vec![message::UserContent::ToolResult(message::ToolResult {
+                call: message::ToolCallId::mint(),
+                provider: None,
+                name: "url_tool".to_string(),
+                content: vec![
                     ToolResultContent::Image(Image {
                         data: DocumentSourceKind::Url("https://example.com/image.png".to_string()),
                         media_type: Some(ImageMediaType::PNG),
@@ -3183,9 +3516,8 @@ mod tests {
                         additional_params: None,
                     }),
                     ToolResultContent::text("after-image"),
-                ])
-                .expect("mixed tool result content should be non-empty"),
-            })),
+                ],
+            })],
         };
 
         let error = Content::try_from(tool_result)
@@ -3200,7 +3532,6 @@ mod tests {
 
     #[test]
     fn tool_result_rejects_unsupported_image_media_types() {
-        use crate::OneOrMany;
         use crate::message::{ImageMediaType, ToolResult, ToolResultContent};
 
         for media_type in [
@@ -3210,15 +3541,16 @@ mod tests {
             ImageMediaType::SVG,
         ] {
             let message = message::Message::User {
-                content: OneOrMany::one(message::UserContent::ToolResult(ToolResult {
-                    id: "image_tool".to_string(),
-                    call_id: None,
-                    content: OneOrMany::one(ToolResultContent::image_base64(
+                content: vec![message::UserContent::ToolResult(ToolResult {
+                    call: message::ToolCallId::mint(),
+                    provider: None,
+                    name: "image_tool".to_string(),
+                    content: vec![ToolResultContent::image_base64(
                         "image-data",
                         Some(media_type),
                         None,
-                    )),
-                })),
+                    )],
+                })],
             };
 
             let error = Content::try_from(message)
@@ -3234,23 +3566,22 @@ mod tests {
 
     #[test]
     fn structured_json_refs_remain_literal_with_unreferenced_image_parts() {
-        use crate::OneOrMany;
         use crate::message::{ImageMediaType, ToolResult, ToolResultContent};
 
         let message = message::Message::User {
-            content: OneOrMany::one(message::UserContent::ToolResult(ToolResult {
-                id: "collision_tool".to_string(),
-                call_id: None,
-                content: OneOrMany::many(vec![
+            content: vec![message::UserContent::ToolResult(ToolResult {
+                call: message::ToolCallId::mint(),
+                provider: None,
+                name: "collision_tool".to_string(),
+                content: vec![
                     ToolResultContent::json(json!({
                         "literal": {
                             "$ref": "tool_result_image_0"
                         }
                     })),
                     ToolResultContent::image_base64("image-data", Some(ImageMediaType::PNG), None),
-                ])
-                .expect("mixed tool result content should be non-empty"),
-            })),
+                ],
+            })],
         };
 
         let content: Content = message.try_into().expect("tool result should convert");
@@ -3281,7 +3612,6 @@ mod tests {
 
     #[test]
     fn tool_result_literal_text_and_structured_json_remain_distinct() {
-        use crate::OneOrMany;
         use crate::message::{ToolResult, ToolResultContent};
 
         let cases = [
@@ -3297,11 +3627,12 @@ mod tests {
 
         for (tool_content, expected) in cases {
             let message = message::Message::User {
-                content: OneOrMany::one(message::UserContent::ToolResult(ToolResult {
-                    id: "test_tool".to_string(),
-                    call_id: None,
-                    content: OneOrMany::one(tool_content),
-                })),
+                content: vec![message::UserContent::ToolResult(ToolResult {
+                    call: message::ToolCallId::mint(),
+                    provider: None,
+                    name: "test_tool".to_string(),
+                    content: vec![tool_content],
+                })],
             };
             let content: Content = message.try_into().expect("tool result should convert");
 
@@ -3310,6 +3641,111 @@ mod tests {
             };
             assert_eq!(response.response.as_ref(), Some(&expected));
         }
+    }
+
+    /// A consumer echoing a minted `ToolCall::id` through
+    /// `tool_result()` must not put that handle on Gemini's wire: the
+    /// paired functionCall omitted its id (the provider issued none), and
+    /// an asymmetric functionCall/functionResponse id pair is rejected.
+    #[test]
+    fn echoed_minted_handle_never_reaches_the_function_response_id() {
+        use crate::message::{ToolCall, ToolCallId, ToolFunction, ToolResultContent};
+
+        // An id-less wire minted the handle (Gemini REST issued no id).
+        let call = ToolCall::new(
+            ToolCallId::mint(),
+            ToolFunction {
+                name: "lookup".to_string(),
+                arguments: json!({}),
+            },
+        );
+
+        let message = message::Message::User {
+            content: vec![message::UserContent::tool_result(
+                call.id.as_str(),
+                "lookup",
+                vec![ToolResultContent::text("out")],
+            )],
+        };
+        let content: Content = message.try_into().expect("tool result should convert");
+        let PartKind::FunctionResponse(response) = &content.parts[0].part else {
+            panic!("expected a function response");
+        };
+        assert_eq!(response.id, None);
+    }
+
+    /// A cross-provider ingested transcript (rig's inbound converters
+    /// stamp `name: ""` — Anthropic/OpenAI-chat/Cohere/Bedrock wires carry
+    /// no name) must reach Gemini with the name resolved from the paired
+    /// call: `functionResponse.name: ""` is INVALID_ARGUMENT.
+    #[test]
+    fn ingested_nameless_results_resolve_their_name_at_request_assembly() {
+        use crate::completion::request::CompletionRequest;
+        use crate::message::{AssistantContent, ToolCall, ToolFunction, ToolResultContent};
+
+        let request = CompletionRequest {
+            preamble: None,
+            chat_history: vec![
+                message::Message::user("weather?"),
+                message::Message::Assistant {
+                    id: None,
+                    content: vec![AssistantContent::ToolCall(ToolCall::from_wire(
+                        "toolu_abc",
+                        ToolFunction {
+                            name: "get_weather".to_owned(),
+                            arguments: json!({"city": "Paris"}),
+                        },
+                    ))],
+                },
+                message::Message::User {
+                    content: vec![message::UserContent::tool_result_from_wire(
+                        "toolu_abc",
+                        "",
+                        vec![ToolResultContent::text("sunny")],
+                    )],
+                },
+            ],
+            documents: vec![],
+            tools: vec![],
+            temperature: None,
+            model: None,
+            output_schema: None,
+            record_telemetry_content: false,
+            max_tokens: None,
+            tool_choice: None,
+            additional_params: None,
+        };
+
+        let body = create_request_body(request).expect("request should build");
+        let response_names: Vec<_> = body
+            .contents
+            .iter()
+            .flat_map(|content| &content.parts)
+            .filter_map(|part| match &part.part {
+                PartKind::FunctionResponse(response) => Some(response.name.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(response_names, ["get_weather"]);
+    }
+
+    /// A wire-derived result keeps its provider-issued id on replay.
+    #[test]
+    fn wire_derived_tool_result_keeps_the_provider_id_on_the_wire() {
+        use crate::message::ToolResultContent;
+
+        let message = message::Message::User {
+            content: vec![message::UserContent::tool_result_from_wire(
+                "gemini-issued-id",
+                "lookup",
+                vec![ToolResultContent::text("out")],
+            )],
+        };
+        let content: Content = message.try_into().expect("tool result should convert");
+        let PartKind::FunctionResponse(response) = &content.parts[0].part else {
+            panic!("expected a function response");
+        };
+        assert_eq!(response.id.as_deref(), Some("gemini-issued-id"));
     }
 
     #[test]
@@ -3322,11 +3758,9 @@ mod tests {
             Some(DocumentMediaType::MARKDOWN),
         );
 
-        let content: Content = message::Message::User {
-            content: crate::OneOrMany::one(doc),
-        }
-        .try_into()
-        .unwrap();
+        let content: Content = message::Message::User { content: vec![doc] }
+            .try_into()
+            .unwrap();
 
         if let Part {
             part: PartKind::Text(text),
@@ -3355,11 +3789,9 @@ mod tests {
             additional_params: None,
         });
 
-        let content: Content = message::Message::User {
-            content: crate::OneOrMany::one(doc),
-        }
-        .try_into()
-        .unwrap();
+        let content: Content = message::Message::User { content: vec![doc] }
+            .try_into()
+            .unwrap();
 
         if let Part {
             part: PartKind::FileData(file_data),
@@ -3381,25 +3813,25 @@ mod tests {
 
     #[test]
     fn test_tool_result_with_url_image_is_rejected() {
-        use crate::OneOrMany;
         use crate::message::{
             DocumentSourceKind, Image, ImageMediaType, ToolResult, ToolResultContent,
         };
 
         let tool_result = ToolResult {
-            id: "screenshot_tool".to_string(),
-            call_id: None,
-            content: OneOrMany::one(ToolResultContent::Image(Image {
+            call: message::ToolCallId::mint(),
+            provider: None,
+            name: "screenshot_tool".to_string(),
+            content: vec![ToolResultContent::Image(Image {
                 data: DocumentSourceKind::Url("https://example.com/image.png".to_string()),
                 media_type: Some(ImageMediaType::PNG),
                 detail: None,
                 additional_params: None,
-            })),
+            })],
         };
 
         let user_content = message::UserContent::ToolResult(tool_result);
         let msg = message::Message::User {
-            content: OneOrMany::one(user_content),
+            content: vec![user_content],
         };
 
         let error =
@@ -3415,7 +3847,6 @@ mod tests {
     #[test]
     fn test_create_request_body_with_documents() {
         // Test that documents are injected into chat history
-        use crate::OneOrMany;
         use crate::completion::request::{CompletionRequest, Document};
         use crate::message::Message;
 
@@ -3434,7 +3865,7 @@ mod tests {
 
         let documents_message = CompletionRequest {
             preamble: None,
-            chat_history: OneOrMany::one(Message::user("placeholder")),
+            chat_history: vec![Message::user("placeholder")],
             documents,
             tools: vec![],
             temperature: None,
@@ -3450,11 +3881,7 @@ mod tests {
 
         let completion_request = CompletionRequest {
             preamble: Some("You are a helpful assistant".to_string()),
-            chat_history: OneOrMany::many(vec![
-                documents_message,
-                Message::user("What are my notes about?"),
-            ])
-            .unwrap(),
+            chat_history: vec![documents_message, Message::user("What are my notes about?")],
             documents: vec![],
             tools: vec![],
             temperature: None,
@@ -3515,13 +3942,12 @@ mod tests {
     #[test]
     fn test_create_request_body_without_documents() {
         // Test backward compatibility: requests without documents work as before
-        use crate::OneOrMany;
         use crate::completion::request::CompletionRequest;
         use crate::message::Message;
 
         let completion_request = CompletionRequest {
             preamble: Some("You are a helpful assistant".to_string()),
-            chat_history: OneOrMany::one(Message::user("Hello")),
+            chat_history: vec![Message::user("Hello")],
             documents: vec![], // No documents
             tools: vec![],
             temperature: None,

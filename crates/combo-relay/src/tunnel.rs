@@ -155,7 +155,7 @@ async fn signal_task(state: RelayState, token: String, socket: WebSocket) {
             message: "桌面客户端未连接".into(),
         })
         .unwrap_or_default();
-        let _ = ws_sink.send(Message::Text(frame)).await;
+        let _ = ws_sink.send(Message::Text(frame.into())).await;
         let _ = ws_sink.close().await;
         return;
     };
@@ -164,7 +164,7 @@ async fn signal_task(state: RelayState, token: String, socket: WebSocket) {
 
     let write_task = tokio::spawn(async move {
         while let Some(frame) = rx.recv().await {
-            if ws_sink.send(Message::Text(frame)).await.is_err() {
+            if ws_sink.send(Message::Text(frame.into())).await.is_err() {
                 break;
             }
         }
@@ -254,7 +254,7 @@ async fn tunnel_task(state: RelayState, token: String, socket: WebSocket) {
                             continue;
                         }
                     };
-                    if ws_sink.send(Message::Text(json)).await.is_err() {
+                    if ws_sink.send(Message::Text(json.into())).await.is_err() {
                         break;
                     }
                 }
