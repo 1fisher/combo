@@ -78,13 +78,13 @@ describe('streamTailPreview', () => {
     ).toBe('短内容');
   });
 
-  it('取最后一段有内容的 part:正文(text)出现后覆盖思考(reasoning)', () => {
+  it('思考(reasoning)与正文(text)按顺序拼接展示', () => {
     const parts = [
       { type: 'reasoning', data: { thinking: '思考中…' } },
       { type: 'text', data: { text: '正文回答' } },
     ];
-    expect(streamTailPreview({ messages: [{ streaming: true, parts }] })).toBe('正文回答');
-    // 只有思考时显示思考
+    expect(streamTailPreview({ messages: [{ streaming: true, parts }] })).toBe('思考中… 正文回答');
+    // 只有思考时同样展示
     expect(
       streamTailPreview({
         messages: [{ streaming: true, parts: [{ type: 'reasoning', data: { thinking: '纯思考' } }] }],
@@ -92,7 +92,7 @@ describe('streamTailPreview', () => {
     ).toBe('纯思考');
   });
 
-  it('多条流式消息取最后出现的非空 part', () => {
+  it('多条流式消息按顺序拼接全部内容', () => {
     expect(
       streamTailPreview({
         messages: [
@@ -100,7 +100,7 @@ describe('streamTailPreview', () => {
           { streaming: true, parts: [{ type: 'text', data: { text: '最新消息内容' } }] },
         ],
       })
-    ).toBe('最新消息内容');
+    ).toBe('旧消息内容 最新消息内容');
   });
 });
 

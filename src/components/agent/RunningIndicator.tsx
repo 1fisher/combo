@@ -17,8 +17,9 @@ export function formatElapsed(ms: number): string {
 /** 流式输出速度采样间隔(毫秒) */
 const SPEED_SAMPLE_MS = 500;
 
-/** 流式尾部预览的最大字符数(按 Unicode 码点),超出保留尾部并加省略号 */
-const PREVIEW_MAX_CHARS = 96;
+/** 流式滚动预览的尾部截断字符数(按 Unicode 码点):足够把胶囊撑到最大宽度
+ * (CJK ~12px/字 → 240 字 ≈ 2880px,超出任意面板宽度),超出保留尾部并加省略号 */
+const PREVIEW_MAX_CHARS = 240;
 
 /** 结构化 part 形状:兼容 Api.ContentPart(text/reasoning),避免耦合生成类型 */
 interface PartLike {
@@ -39,24 +40,25 @@ function partText(p: PartLike): string {
 }
 
 /**
- * 提取当前流式输出的尾部预览(单行):取最后一段有内容的 text/reasoning
- * part(正文优先于更早的思考),折叠所有空白(换行/markdown 缩进压成单空格),
+ * 提取当前流式输出的滚动预览(单行):把所有流式消息的 text/reasoning part
+ * (思考与正文)按出现顺序全部拼接,折叠所有空白(换行/markdown 缩进压成单空格),
  * 超长保留尾部并加「…」前缀 —— 搭配 justify-end + overflow-hidden 渲染,
- * 最新内容始终可见、旧内容从左边滚出,形成滚动效果。
+ * 内容把胶囊撑到最大宽度后,最新文字始终贴右可见、旧内容从左边滚出隐藏,
+ * 形成滚动条带效果。
  */
 export function streamTailPreview(
   rt: { messages: { streaming: boolean; parts: ReadonlyArray<PartLike> }[] } | undefined,
   maxChars = PREVIEW_MAX_CHARS,
 ): string {
-  let last = '';
+  const chunks: string[] = [];
   for (const m of rt?.messages ?? []) {
     if (!m.streaming) continue;
     for (const p of m.parts) {
       const v = partText(p);
-      if (v) last = v;
+      if (v) chunks.push(v);
     }
   }
-  const raw = last.replace(/\s+/g, ' ').trim();
+  const raw = chunks.join(' ').replace(/\s+/g, ' ').trim();
   if (!raw) return '';
   const chars = Array.from(raw);
   if (chars.length <= maxChars) return raw;
@@ -130,8 +132,10 @@ export function useStreamPreview(active: boolean): string {
 
 /**
  * 运行中指示器:贴在输入坞(composer)上方,展示「正在执行 + 流式输出速度 +
- * 累计耗时 + 流式内容尾部预览(单行滚动)」,附带流光特效(高光自左向右
- * 循环扫过,见 index.css 的 .run-shimmer,光带宽度随胶囊宽度自适应)。
+ * 累计耗时 + 流式滚动预览(思考与正文拼接,单行)」:内容增长时把胶囊撑向
+ * 最大宽度,到达后新文字从右侧进入、旧文字从左侧溢出裁切(justify-end +
+ * overflow-hidden),附带流光特效(高光自左向右循环扫过,见 index.css 的
+ * .run-shimmer,光带宽度随胶囊宽度自适应)。
  */
 export function RunningIndicator({ startedAt }: { startedAt?: number }) {
   const [now, setNow] = useState(() => Date.now());
@@ -158,13 +162,15 @@ export function RunningIndicator({ startedAt }: { startedAt?: number }) {
         {formatElapsed(now - startedAt)}
       </span>
       {preview && (
-        // 单行滚动预览:内容右对齐、左侧溢出裁切(justify-end + overflow-hidden),
-        // 流式内容增长时最新文字始终贴右可见、旧文字从左边滚出。
+        // 单行滚动预览:不设固定 max-w,内容把胶囊(w-fit max-w-full)撑向
+        // 最大宽度;溢出时容器收缩(min-w-0)、内容右对齐、左侧溢出裁切
+        // (justify-end + overflow-hidden),流式内容增长时最新文字始终贴右
+        // 可见、旧文字从左边滚出隐藏。
         // aria-hidden:纯状态装饰,避免屏幕阅读器被不断更新的碎片打断。
         <span
           aria-hidden
           title={preview}
-          className="flex max-w-[9rem] min-w-0 justify-end overflow-hidden sm:max-w-56"
+          className="flex min-w-0 justify-end overflow-hidden"
         >
           <span className="shrink-0 whitespace-nowrap text-foreground-subtle/80">{preview}</span>
         </span>
