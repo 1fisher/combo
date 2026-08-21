@@ -81,6 +81,8 @@ describe('sfx', () => {
     expect(() => {
       mod.playComboHit(5);
       mod.playNotifyDone();
+      mod.playNotifyCancel();
+      mod.playNotifyError();
       mod.playNotifyAttention();
     }).not.toThrow();
   });
@@ -172,6 +174,26 @@ describe('sfx', () => {
     expect(oscs.map((o) => o.type)).toEqual(['triangle', 'triangle']);
     expect(oscs[0].frequency.setValueAtTime).toHaveBeenCalledWith(739.99, 0);
     expect(oscs[1].frequency.setValueAtTime).toHaveBeenCalledWith(987.77, 0.15);
+  });
+
+  it('playNotifyCancel 是双音下行(E6 → A5,与完成音镜像)', async () => {
+    const { mod, ctx } = await loadSfxWithStub();
+    mod.playNotifyCancel();
+    const c = ctx();
+    expect(c.createOscillator).toHaveBeenCalledTimes(2);
+    const oscs = c.createOscillator.mock.results.map((r) => r.value as FakeOscillatorNode);
+    expect(oscs[0].frequency.setValueAtTime).toHaveBeenCalledWith(1318.51, 0);
+    expect(oscs[1].frequency.setValueAtTime).toHaveBeenCalledWith(880, 0.12);
+  });
+
+  it('playNotifyError 是低音下行四度(C5 → G4),与完成/取消区分明显', async () => {
+    const { mod, ctx } = await loadSfxWithStub();
+    mod.playNotifyError();
+    const c = ctx();
+    expect(c.createOscillator).toHaveBeenCalledTimes(2);
+    const oscs = c.createOscillator.mock.results.map((r) => r.value as FakeOscillatorNode);
+    expect(oscs[0].frequency.setValueAtTime).toHaveBeenCalledWith(523.25, 0);
+    expect(oscs[1].frequency.setValueAtTime).toHaveBeenCalledWith(392, 0.2);
   });
 });
 

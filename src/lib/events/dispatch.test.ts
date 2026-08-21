@@ -1,9 +1,18 @@
-import { describe, expect, it, beforeEach } from 'vitest';
+import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { applyEvent } from './dispatch';
 import { useAgentStore } from '../../stores/agentStore';
+import { notifyRunComplete } from '../notify';
+
+// 只把 notifyRunComplete 换成 spy:断言收尾事件把 reason 透传给通知
+// (取消时不能再误报「任务已完成」并播完成音);其余导出保持真实实现。
+vi.mock('../notify', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../notify')>();
+  return { ...actual, notifyRunComplete: vi.fn() };
+});
 
 describe('applyEvent', () => {
-  beforeEach(() =>
+  beforeEach(() => {
+    vi.mocked(notifyRunComplete).mockClear();
     useAgentStore.setState({
       // 测试场景均为正在查看 s1 的用户:非当前会话的 run 收尾会回收运行态
       activeSessionId: 's1',
@@ -11,8 +20,8 @@ describe('applyEvent', () => {
       permissionQueue: [],
       questionQueue: [],
       todos: {},
-    })
-  );
+    });
+  });
 
   it('upserts message into its session slice', () => {
     const s = useAgentStore.getState();
@@ -385,5 +394,57 @@ describe('applyEvent', () => {
     });
     expect(useAgentStore.getState().bySession['s1']).toBeUndefined();
     expect(useAgentStore.getState().todos['s1']).toBeUndefined();
+  });
+
+  it('finish part reason=cancelled 时通知携带取消原因(不再误报完成)', () => {
+    useAgentStore.getState().markRun('s1', 'r1', 'running');
+    applyEvent(useAgentStore.getState(), {
+      type: 'message',
+      payload: {
+        type: 'updated',
+        payload: {
+          id: 'm1',
+          session_id: 's1',
+          role: 'assistant',
+          parts: [{ type: 'finish', data: { reason: 'cancelled', time: 1 } }],
+          created_at: 1,
+          updated_at: 2,
+        },
+      },
+    });
+    expect(notifyRunComplete).toHaveBeenCalledTimes(1);
+    expect(notifyRunComplete).toHaveBeenCalledWith('s1', undefined, '', 'cancelled');
+  });
+
+  it('finish part reason=error 时通知携带错误与原因', () => {
+    useAgentStore.getState().markRun('s1', 'r1', 'running');
+    applyEvent(useAgentStore.getState(), {
+      type: 'message',
+      payload: {
+        type: 'updated',
+        payload: {
+          id: 'm1',
+          session_id: 's1',
+          role: 'assistant',
+          parts: [{ type: 'finish', data: { reason: 'error', time: 1 } }],
+          created_at: 1,
+          updated_at: 2,
+        },
+      },
+    });
+    expect(notifyRunComplete).toHaveBeenCalledWith('s1', '任务运行出错', '', 'error');
+  });
+
+  it('run_complete 携带 reason 时透传给通知(取消场景)', () => {
+    useAgentStore.getState().markRun('s1', 'r1', 'running');
+    applyEvent(useAgentStore.getState(), {
+      type: 'run_complete',
+      payload: {
+        type: 'updated',
+        payload: { session_id: 's1', run_id: 'r1', message_id: 'm1', text: '', reason: 'cancelled' },
+      },
+    });
+    expect(notifyRunComplete).toHaveBeenCalledTimes(1);
+    expect(notifyRunComplete).toHaveBeenCalledWith('s1', undefined, '', 'cancelled');
   });
 });

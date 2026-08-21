@@ -782,6 +782,7 @@ pub(crate) async fn start_agent_run(
             &run_id2,
             &assistant_id,
             &text,
+            reason,
             error.as_deref(),
             usage,
         ));
@@ -1696,6 +1697,7 @@ fn run_complete_env(
     run_id: &str,
     message_id: &str,
     text: &str,
+    reason: &str,
     error: Option<&str>,
     usage: Option<RunUsage>,
 ) -> Value {
@@ -1704,6 +1706,7 @@ fn run_complete_env(
         "run_id": run_id,
         "message_id": message_id,
         "text": text,
+        "reason": reason,
     });
     if let Some(e) = error {
         payload["error"] = Value::String(e.to_string());
@@ -3866,14 +3869,20 @@ mod tests {
             cached_input: 0,
             turns: 2,
         };
-        let env = run_complete_env("s1", "r1", "m1", "hi", None, Some(u));
+        let env = run_complete_env("s1", "r1", "m1", "hi", "end_turn", None, Some(u));
         assert_eq!(env["type"], "run_complete");
+        assert_eq!(env["payload"]["payload"]["reason"], "end_turn");
         assert_eq!(env["payload"]["payload"]["usage"]["input_tokens"], 100);
         assert_eq!(env["payload"]["payload"]["usage"]["output_tokens"], 20);
         assert_eq!(env["payload"]["payload"]["usage"]["total_input_tokens"], 500);
         assert_eq!(env["payload"]["payload"]["usage"]["turns"], 2);
-        let plain = run_complete_env("s1", "r1", "m1", "hi", Some("err"), None);
+        let plain = run_complete_env("s1", "r1", "m1", "hi", "error", Some("err"), None);
+        assert_eq!(plain["payload"]["payload"]["reason"], "error");
+        assert_eq!(plain["payload"]["payload"]["error"], "err");
         assert!(plain["payload"]["payload"].get("usage").is_none());
+        // 取消也透传 reason,前端据此播取消提示音(而不是完成音)
+        let cancelled = run_complete_env("s1", "r1", "m1", "", "cancelled", None, None);
+        assert_eq!(cancelled["payload"]["payload"]["reason"], "cancelled");
     }
 
     #[test]

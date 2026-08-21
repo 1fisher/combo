@@ -6,6 +6,8 @@
  *   支持 count 一次连吐多颗:跟随 combo 数字增长,每涨 1 吐一颗、0.09s 错开,
  *   像鱼吐泡泡的一串;
  * - playNotifyDone:任务完成提示音(双音上行,轻快);
+ * - playNotifyCancel:任务取消提示音(双音下行,与完成镜像,柔和收尾);
+ * - playNotifyError:任务出错提示音(低音下行四度,更重更长,警示感);
  * - playNotifyAttention:需要交互的提醒音(双短音,略急促)。
  *
  * AudioContext 惰性创建并在调用时 resume(浏览器自动播放策略:见下方
@@ -195,6 +197,34 @@ export function playNotifyDone(): void {
     const out = masterOut(c, t);
     tone(c, out, 880, t, 0.18, 0.4);
     tone(c, out, 1318.51, t + 0.12, 0.28, 0.4);
+  } catch {
+    /* 音频失败不影响主流程 */
+  }
+}
+
+/** 任务取消:双音下行(E6 → A5,与完成音互为镜像),音量略轻,一听即知「任务停了」 */
+export function playNotifyCancel(): void {
+  const c = getSharedAudioContext();
+  if (!c || c.state !== 'running') return;
+  try {
+    const t = c.currentTime;
+    const out = masterOut(c, t);
+    tone(c, out, 1318.51, t, 0.16, 0.32);
+    tone(c, out, 880, t + 0.12, 0.24, 0.32);
+  } catch {
+    /* 音频失败不影响主流程 */
+  }
+}
+
+/** 任务出错:低音下行四度(C5 → G4),时长更长、音量更重,与完成/取消区分明显 */
+export function playNotifyError(): void {
+  const c = getSharedAudioContext();
+  if (!c || c.state !== 'running') return;
+  try {
+    const t = c.currentTime;
+    const out = masterOut(c, t);
+    tone(c, out, 523.25, t, 0.2, 0.42);
+    tone(c, out, 392, t + 0.2, 0.34, 0.42);
   } catch {
     /* 音频失败不影响主流程 */
   }

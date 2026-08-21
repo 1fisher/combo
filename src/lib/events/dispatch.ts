@@ -50,13 +50,13 @@ export function applyEvent(s: Store, env: EventEnvelope): void {
         const summary = wasRunning ? runCompleteSummary(p.session_id) : '';
         s.markRun(p.session_id, p.id, 'done');
         if (wasRunning) {
-          notifyRunComplete(p.session_id, finishData?.reason === 'error' ? '任务运行出错' : undefined, summary);
+          notifyRunComplete(p.session_id, finishData?.reason === 'error' ? '任务运行出错' : undefined, summary, finishData?.reason);
         }
       }
       break;
     }
     case 'run_complete': {
-      const p = unwrap<{ session_id: string; run_id?: string; error?: string }>(env);
+      const p = unwrap<{ session_id: string; run_id?: string; error?: string; reason?: string }>(env);
       console.debug(
         `[${ts()}][dispatch] ✓ run_complete session="${p.session_id}" run="${p.run_id}" error="${p.error ?? ''}"`
       );
@@ -74,7 +74,7 @@ export function applyEvent(s: Store, env: EventEnvelope): void {
       s.markRun(p.session_id, p.run_id || p.session_id, 'done', p.error);
       // 子 agent 进度面板随 run 收尾清空(最终结果已落 tool_result 消息)
       s.clearSubAgents(p.session_id);
-      if (wasRunning) notifyRunComplete(p.session_id, p.error, summary);
+      if (wasRunning) notifyRunComplete(p.session_id, p.error, summary, p.reason);
       break;
     }
     case 'usage': {

@@ -43,6 +43,14 @@ export const VOICE_RUN_ERROR: readonly string[] = [
   '任务执行出错,请回来处理。',
 ];
 
+/** 任务取消提示语(随机挑选)。 */
+export const VOICE_RUN_CANCELLED: readonly string[] = [
+  '好的,任务已取消,等你下一步指令。',
+  '任务已停止,随时可以重新开始。',
+  '已中止当前任务,需要继续再叫我。',
+  '取消完成,任务已停下,等你安排。',
+];
+
 /** 工具确认提示语(随机挑选)。 */
 export const VOICE_AWAIT_CONFIRM: readonly string[] = [
   '有个操作在等你确认,别让我等太久。',

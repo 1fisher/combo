@@ -1,12 +1,13 @@
 import { isTauri } from './connection';
 import { useUIPreferences } from '../stores/uiPreferencesStore';
 import { useAgentStore } from '../stores/agentStore';
-import { playNotifyAttention, playNotifyDone } from './sfx';
+import { playNotifyAttention, playNotifyCancel, playNotifyDone, playNotifyError } from './sfx';
 import {
   pickVoicePhrase,
   speakNotifyVoice,
   VOICE_AWAIT_ANSWER,
   VOICE_AWAIT_CONFIRM,
+  VOICE_RUN_CANCELLED,
   VOICE_RUN_DONE,
   VOICE_RUN_ERROR,
 } from './notifyVoice';
@@ -164,23 +165,39 @@ function dndMuted(): boolean {
   return useUIPreferences.getState().dndEnabled;
 }
 
-/** 任务结束(run 收尾)通知;error 非空表示运行出错,summary 为任务的精简完成情况 */
+/**
+ * 任务结束(run 收尾)通知;error 非空表示运行出错,summary 为任务的精简完成情况,
+ * reason 为后端收尾原因(end_turn | cancelled | error),决定提示音与文案:
+ * 完成 → playNotifyDone 上行双音;取消 → playNotifyCancel 下行双音;出错 → playNotifyError 低沉警示。
+ * 旧调用不传 reason 时按 error 是否存在区分(出错 / 完成),兼容自动化等历史路径。
+ */
 export function notifyRunComplete(
   _sessionId?: string | null,
   error?: string,
-  summary?: string
+  summary?: string,
+  reason?: string
 ): void {
   if (dndMuted()) return;
   if (!useUIPreferences.getState().notifyRunComplete) return;
   // 任务完成总是通知:即使窗口聚焦且正在查看该会话 — 用户在等这个结果。
   // (交互类通知仍做免打扰判断,见 notifyPermissionRequest/notifyQuestionRequest)
-  const title = error ? '任务出错' : '任务已完成';
-  const body = error
-    ? truncate(error)
-    : truncate(summary || '会话任务已结束,点击返回查看结果');
-  if (useUIPreferences.getState().notifySoundEnabled) playNotifyDone();
+  const failed = Boolean(error) || reason === 'error';
+  const cancelled = !failed && reason === 'cancelled';
+  const title = failed ? '任务出错' : cancelled ? '任务已取消' : '任务已完成';
+  const body = failed
+    ? truncate(error || '任务运行出错')
+    : cancelled
+      ? '任务已被取消,随时可以重新发起'
+      : truncate(summary || '会话任务已结束,点击返回查看结果');
+  if (useUIPreferences.getState().notifySoundEnabled) {
+    if (failed) playNotifyError();
+    else if (cancelled) playNotifyCancel();
+    else playNotifyDone();
+  }
   if (useUIPreferences.getState().notifyVoiceEnabled) {
-    speakNotifyVoice(pickVoicePhrase(error ? VOICE_RUN_ERROR : VOICE_RUN_DONE));
+    speakNotifyVoice(
+      pickVoicePhrase(failed ? VOICE_RUN_ERROR : cancelled ? VOICE_RUN_CANCELLED : VOICE_RUN_DONE)
+    );
   }
   void sendNotification(title, body);
 }

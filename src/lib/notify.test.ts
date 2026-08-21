@@ -6,7 +6,7 @@ import {
   notifyRunComplete,
   runCompleteSummary,
 } from './notify';
-import { playNotifyAttention, playNotifyDone } from './sfx';
+import { playNotifyAttention, playNotifyCancel, playNotifyDone, playNotifyError } from './sfx';
 import { speakNotifyVoice } from './notifyVoice';
 import { useUIPreferences } from '../stores/uiPreferencesStore';
 import { useAgentStore } from '../stores/agentStore';
@@ -14,6 +14,8 @@ import { useAgentStore } from '../stores/agentStore';
 vi.mock('./connection', () => ({ isTauri: () => false }));
 vi.mock('./sfx', () => ({
   playNotifyDone: vi.fn(),
+  playNotifyCancel: vi.fn(),
+  playNotifyError: vi.fn(),
   playNotifyAttention: vi.fn(),
 }));
 vi.mock('./notifyVoice', () => ({
@@ -21,6 +23,7 @@ vi.mock('./notifyVoice', () => ({
   pickVoicePhrase: (pool: string[]) => pool[0] ?? '',
   VOICE_RUN_DONE: ['任务完成啦,快回来看看结果吧。'],
   VOICE_RUN_ERROR: ['哎呀,任务出错了,快回来看看。'],
+  VOICE_RUN_CANCELLED: ['好的,任务已取消,等你下一步指令。'],
   VOICE_AWAIT_CONFIRM: ['有个操作在等你确认,别让我等太久。'],
   VOICE_AWAIT_ANSWER: ['有个问题在等你回答,快来吧。'],
 }));
@@ -47,6 +50,11 @@ describe('notify', () => {
     NotificationStub.permission = 'granted';
     vi.stubGlobal('Notification', NotificationStub);
     vi.spyOn(document, 'hasFocus').mockReturnValue(false);
+    vi.mocked(playNotifyDone).mockClear();
+    vi.mocked(playNotifyCancel).mockClear();
+    vi.mocked(playNotifyError).mockClear();
+    vi.mocked(playNotifyAttention).mockClear();
+    vi.mocked(speakNotifyVoice).mockClear();
     useUIPreferences.setState({
       notifyRunComplete: true,
       notifyInteraction: true,
@@ -168,12 +176,30 @@ describe('notify', () => {
     expect(created[1].options.body).toContain('使用哪个分支?');
   });
 
-  it('发送通知时按音色播放提示音:完成/交互各用对应音效', () => {
+  it('发送通知时按音色播放提示音:完成/取消/出错/交互各用对应音效', () => {
     notifyRunComplete('s1');
+    expect(playNotifyDone).toHaveBeenCalledTimes(1);
+    // 取消 → 取消音,不再误播完成音
+    notifyRunComplete('s1', undefined, undefined, 'cancelled');
+    expect(playNotifyCancel).toHaveBeenCalledTimes(1);
+    expect(playNotifyDone).toHaveBeenCalledTimes(1);
+    // 出错 → 错误音(旧调用 error 非空同样走错误音)
+    notifyRunComplete('s1', 'provider 429');
+    notifyRunComplete('s1', undefined, undefined, 'error');
+    expect(playNotifyError).toHaveBeenCalledTimes(2);
     expect(playNotifyDone).toHaveBeenCalledTimes(1);
     notifyPermissionRequest({ session_id: 's1', tool_name: 'bash' });
     notifyQuestionRequest({ session_id: 's1', questions: [{ question: '继续吗' }] });
     expect(playNotifyAttention).toHaveBeenCalledTimes(2);
+  });
+
+  it('任务取消时以取消标题/正文发送通知,不播完成音', () => {
+    notifyRunComplete('s1', undefined, '已完成一半', 'cancelled');
+    expect(created).toHaveLength(1);
+    expect(created[0].title).toBe('任务已取消');
+    expect(created[0].options.body).toContain('随时可以重新发起');
+    expect(playNotifyDone).not.toHaveBeenCalled();
+    expect(playNotifyCancel).toHaveBeenCalledTimes(1);
   });
 
   it('关闭通知音效后只发系统通知不播音', () => {
@@ -187,17 +213,19 @@ describe('notify', () => {
 
   // --- 通知语音播报(随机提示语经 pickVoicePhrase mock 固定取池内第一句) ---
 
-  it('语音播报开启时:任务完成/出错与确认/提问各播报对应随机提示语', () => {
+  it('语音播报开启时:任务完成/取消/出错与确认/提问各播报对应随机提示语', () => {
     useUIPreferences.setState({ notifyVoiceEnabled: true });
     notifyRunComplete('s1');
     expect(speakNotifyVoice).toHaveBeenLastCalledWith('任务完成啦,快回来看看结果吧。');
+    notifyRunComplete('s1', undefined, undefined, 'cancelled');
+    expect(speakNotifyVoice).toHaveBeenLastCalledWith('好的,任务已取消,等你下一步指令。');
     notifyRunComplete('s1', 'provider 429');
     expect(speakNotifyVoice).toHaveBeenLastCalledWith('哎呀,任务出错了,快回来看看。');
     notifyPermissionRequest({ session_id: 's1', tool_name: 'bash' });
     expect(speakNotifyVoice).toHaveBeenLastCalledWith('有个操作在等你确认,别让我等太久。');
     notifyQuestionRequest({ session_id: 's1', questions: [{ question: '继续吗' }] });
     expect(speakNotifyVoice).toHaveBeenLastCalledWith('有个问题在等你回答,快来吧。');
-    expect(speakNotifyVoice).toHaveBeenCalledTimes(4);
+    expect(speakNotifyVoice).toHaveBeenCalledTimes(5);
   });
 
   it('语音播报关闭时不播报(通知本体不受影响)', () => {
