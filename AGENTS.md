@@ -113,8 +113,14 @@ cp scripts/git-hooks/pre-commit ~/.config/combo/git-hooks/
 chmod +x ~/.config/combo/git-hooks/pre-commit
 ```
 
-远端仓库建议同时开启 GitHub 分支保护(Settings → Branches → 禁止 push 到
-main、走 PR),把约定升级为服务端硬约束。
+远端已开启 GitHub 分支保护(经 `gh api` 配置):push 到 main 必须走 PR、
+禁止强推与删除分支;`enforce_admins=false`,管理员可绕过(紧急直推的逃生口)。
+调整/查看/关闭:
+
+```bash
+gh api repos/1fisher/combo/branches/main/protection          # 查看
+gh api -X DELETE repos/1fisher/combo/branches/main/protection  # 关闭
+```
 
 ## Commands
 
