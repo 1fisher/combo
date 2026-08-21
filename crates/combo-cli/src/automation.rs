@@ -563,6 +563,7 @@ pub(crate) async fn trigger(
         session_id,
         run_id,
         prompt: a.prompt.clone(),
+        attachments: Vec::new(),
         history: None,
         workspace_dir: None,
         model: model_from_stored(&a.model),

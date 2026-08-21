@@ -219,6 +219,32 @@ export function putFileContent(
   });
 }
 
+/** 二进制上传结果:path 为最终写入的 workspace 相对路径(同名自动加序号)。 */
+export interface UploadResult {
+  ok: boolean;
+  path: string;
+  name: string;
+}
+
+/**
+ * 二进制附件上传(输入框粘贴/拖拽):请求体为原始字节,默认落盘
+ * `.combo/uploads/<日期>/`,同名文件服务端自动去重。返回的 path 可直接
+ * 作为 Api.Attachment.file_path 随消息发送。
+ */
+export function uploadAttachment(
+  workspaceId: string,
+  name: string,
+  bytes: ArrayBuffer,
+  opts: { dir?: string; contentType?: string } = {}
+): Promise<UploadResult> {
+  return apiRequestRaw(`/v1/workspaces/${workspaceId}/files/upload`, {
+    method: 'POST',
+    query: { name, ...(opts.dir ? { dir: opts.dir } : {}) },
+    body: bytes,
+    contentType: opts.contentType,
+  });
+}
+
 export interface ContentSearchResult {
   path: string;
   name: string;

@@ -5,6 +5,7 @@ import {
   Brain,
   Check,
   ChevronDown,
+  CircleAlert,
   FileText,
   Loader2,
   Mic,
@@ -40,6 +41,14 @@ import { AttachmentPicker } from './AttachmentPicker';
 import { ModelPicker, useAnchorPopover } from './ModelPicker';
 import { FlameWrap } from '../canvasui/FlameWrap';
 import { DEFAULT_CONTEXT_WINDOW, formatTokenCount, getContextUsage, getRealUsage } from '../../lib/tokens';
+import {
+  MAX_UPLOAD_BYTES,
+  isImageFile,
+  pendingAttachmentFromFile,
+  toWireAttachments,
+  uploadLocalAttachment,
+  type LocalAttachment,
+} from '../../lib/attachments';
 
 /** 输入框的火焰特效参数(canvas-ui FlameWrap,参考组件默认值按输入框尺寸微调) */
 const FLAME_OPTIONS = {
@@ -134,7 +143,7 @@ export function Composer({
   workspaceId?: string;
   value: string;
   onChange: (v: string) => void;
-  onSend: (attachments: Api.Attachment[], contextItems: ContextItem[]) => void;
+  onSend: (attachments: LocalAttachment[], contextItems: ContextItem[]) => void;
   /** 斜杠命令处理器:发送文本命中注册命令时调用(替代 onSend);清空输入由调用方负责 */
   onCommand?: (command: SlashCommandDef, args: string) => void;
   disabled?: boolean;
@@ -148,7 +157,12 @@ export function Composer({
   /** 听写预输入镜像层(确认文本实色、推断文本半透明,textarea 文字透明对齐光标) */
   const dictationMirrorRef = useRef<HTMLDivElement>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [attachments, setAttachments] = useState<Api.Attachment[]>([]);
+  /** 附件(含粘贴/拖拽上传的本地运行时态:上传进度、图片缩略图、失败提示) */
+  const [attachments, setAttachments] = useState<LocalAttachment[]>([]);
+  /** 拖拽文件悬停高亮(仅 Files 类型拖入) */
+  const [dragOver, setDragOver] = useState(false);
+  /** 粘贴上传的环境类错误(无项目等),短促提示后自动消失 */
+  const [attachErr, setAttachErr] = useState('');
   const contextItems = useContextStore((s) => s.items);
   const removeContextItem = useContextStore((s) => s.removeItem);
   const clearContextItems = useContextStore((s) => s.clear);
@@ -463,7 +477,16 @@ export function Composer({
       if (raw) {
         setAttachments((prev) => {
           if (prev.some((a) => a.file_path === raw.path)) return prev;
-          return [...prev, { file_path: raw.path, file_name: raw.name }];
+          return [
+            ...prev,
+            {
+              key: raw.path,
+              file_path: raw.path,
+              file_name: raw.name,
+              isImage: isImageFile(undefined, raw.name),
+              uploading: false,
+            },
+          ];
         });
       }
     }
@@ -484,16 +507,91 @@ export function Composer({
     }
   }, [value]);
 
+  /** 释放图片缩略图的 blob URL,避免内存泄漏 */
+  function revokePreview(list: LocalAttachment[]) {
+    for (const a of list) {
+      if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+    }
+  }
+
+  function removeAttachment(key: string) {
+    setAttachments((prev) => {
+      const hit = prev.find((a) => a.key === key);
+      if (hit?.previewUrl) URL.revokeObjectURL(hit.previewUrl);
+      return prev.filter((a) => a.key !== key);
+    });
+  }
+
+  /**
+   * 粘贴/拖拽上传:立即以「上传中」chip 占位,完成后回填 workspace 相对
+   * 路径;单文件失败不中断其余(失败态 chip 可手动移除)。
+   */
+  function addFiles(files: File[]) {
+    if (files.length === 0) return;
+    if (!workspaceId || disabled) {
+      setAttachErr(!workspaceId ? '请先选择项目后再粘贴/拖拽上传附件' : '当前不可上传附件');
+      return;
+    }
+    for (const file of files) {
+      if (file.size > MAX_UPLOAD_BYTES) {
+        setAttachments((prev) => [
+          ...prev,
+          {
+            key: `size-${file.name}-${Date.now()}`,
+            file_path: '',
+            file_name: file.name,
+            mime_type: file.type || undefined,
+            isImage: isImageFile(file.type, file.name),
+            uploading: false,
+            error: '超过 20MB 上限',
+          },
+        ]);
+        continue;
+      }
+      const pending = pendingAttachmentFromFile(file);
+      setAttachments((prev) => [...prev, pending]);
+      const wsId = workspaceId;
+      void uploadLocalAttachment(wsId, pending, file)
+        .then((done) => {
+          setAttachments((prev) => prev.map((a) => (a.key === pending.key ? done : a)));
+        })
+        .catch((e) => {
+          setAttachments((prev) =>
+            prev.map((a) =>
+              a.key === pending.key
+                ? { ...a, uploading: false, error: e instanceof Error ? e.message : '上传失败' }
+                : a
+            )
+          );
+        });
+    }
+  }
+
+  // 环境类错误(无项目/禁用态粘贴)短促提示后自动消失
+  useEffect(() => {
+    if (!attachErr) return;
+    const id = window.setTimeout(() => setAttachErr(''), 4000);
+    return () => window.clearTimeout(id);
+  }, [attachErr]);
+
   function submit() {
-    if (running || disabled || (!value.trim() && attachments.length === 0 && contextItems.length === 0)) return;
+    if (running || disabled) return;
+    // 上传未完成不发(发送按钮同样禁用;回车兜底)
+    if (attachments.some((a) => a.uploading)) return;
+    const wire = toWireAttachments(attachments);
+    if (!value.trim() && wire.length === 0 && contextItems.length === 0) return;
     // 斜杠命令拦截:首 token 命中注册命令(且不带附件/上下文)时本地执行,
     // 不再作为 prompt 发给 agent;未注册的 `/xxx`(如路径)照常发送
     const parsed = parseSlashCommand(value);
-    if (parsed && onCommand && attachments.length === 0 && contextItems.length === 0) {
+    if (parsed && onCommand && wire.length === 0 && contextItems.length === 0) {
       onCommand(parsed.command, parsed.args);
       return;
     }
-    onSend(attachments, contextItems);
+    // 传给上层的是「可发送」附件(过滤上传中/失败项;AgentPanel 据此构造
+    // 乐观消息的图片 part 与 wire 附件)
+    const sendable = attachments.filter((a) => !a.uploading && !a.error);
+    onSend(sendable, contextItems);
+    revokePreview(sendable);
     setAttachments([]);
     clearContextItems();
   }
@@ -501,7 +599,16 @@ export function Composer({
   function handlePick(files: Api.Attachment[]) {
     setAttachments((prev) => {
       const existing = new Set(prev.map((a) => a.file_path));
-      const added = files.filter((f) => !existing.has(f.file_path));
+      const added = files
+        .filter((f) => !existing.has(f.file_path))
+        .map((f) => ({
+          key: f.file_path,
+          file_path: f.file_path,
+          file_name: f.file_name,
+          mime_type: f.mime_type,
+          isImage: isImageFile(f.mime_type, f.file_name),
+          uploading: false,
+        }));
       return [...prev, ...added];
     });
     setPickerOpen(false);
@@ -557,23 +664,61 @@ export function Composer({
             <div
               ref={boxRef}
               className="relative flex flex-col gap-3 bg-input focus-within:bg-input-focused p-3 border border-input-border hover:border-input-border-hover focus-within:!border-input-border-focused rounded-2xl transition-colors"
+              onDragOver={(e) => {
+                // 仅拦截文件拖入(文本/内部拖拽照常),preventDefault 才允许 drop
+                if (!e.dataTransfer.types.includes('Files')) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'copy';
+                setDragOver(true);
+              }}
+              onDragLeave={(e) => {
+                // 移出到容器之外才算离开(子元素间移动会触发 dragleave)
+                if (e.relatedTarget && e.currentTarget.contains(e.relatedTarget as Node)) return;
+                setDragOver(false);
+              }}
+              onDrop={(e) => {
+                const files = Array.from(e.dataTransfer?.files ?? []);
+                setDragOver(false);
+                if (files.length === 0) return;
+                e.preventDefault();
+                addFiles(files);
+              }}
             >
-              {/* 附件 chips */}
+              {/* 拖拽悬停提示 */}
+              {dragOver && (
+                <div className="bg-surface/85 pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-brand">
+                  <span className="text-sm font-medium text-foreground">松开以上传附件</span>
+                </div>
+              )}
+              {/* 附件 chips(支持粘贴/拖拽上传:图片缩略图、上传中 spinner、失败态) */}
               {(attachments.length > 0 || contextItems.length > 0) && (
                 <div className="flex flex-wrap items-center gap-1.5">
                   {attachments.map((a) => (
                     <span
-                      key={a.file_path}
-                      className="group/att flex items-center gap-1.5 bg-surface px-2 py-1 border border-border rounded-lg min-w-0 max-w-full text-foreground text-xs"
-                      title={a.file_path}
+                      key={a.key}
+                      className={cn(
+                        'group/att flex items-center gap-1.5 bg-surface px-2 py-1 border rounded-lg min-w-0 max-w-full text-foreground text-xs',
+                        a.error ? 'border-destructive/40' : 'border-border'
+                      )}
+                      title={a.error ? `${a.file_name}:${a.error}` : a.file_path}
                     >
-                      <Paperclip className="size-3 text-foreground-subtle shrink-0" />
+                      {a.isImage && a.previewUrl ? (
+                        <img
+                          src={a.previewUrl}
+                          alt=""
+                          className="bg-surface-hover border border-border rounded size-6 object-cover shrink-0"
+                        />
+                      ) : (
+                        <Paperclip className="size-3 text-foreground-subtle shrink-0" />
+                      )}
                       <span className="min-w-0 max-w-[14rem] font-mono truncate">{a.file_name}</span>
+                      {a.uploading && (
+                        <Loader2 className="size-3 animate-spin text-foreground-subtle shrink-0" aria-label="上传中" />
+                      )}
+                      {a.error && <CircleAlert className="size-3 text-destructive shrink-0" />}
                       <button
                         type="button"
-                        onClick={() =>
-                          setAttachments((prev) => prev.filter((x) => x.file_path !== a.file_path))
-                        }
+                        onClick={() => removeAttachment(a.key)}
                         className="hover:bg-surface-hover p-0.5 rounded text-foreground-subtlest hover:text-foreground transition-colors"
                         aria-label={`移除附件 ${a.file_name}`}
                       >
@@ -663,6 +808,14 @@ export function Composer({
                       onChange(v);
                     }
                     autosize();
+                  }}
+                  onPaste={(e) => {
+                    // 粘贴文件/截图(Finder ⌘C、系统截图、网页复制图片):
+                    // 剪贴板带 files 时拦截默认行为,上传为附件;纯文本粘贴不受影响
+                    const files = Array.from(e.clipboardData?.files ?? []);
+                    if (files.length === 0) return;
+                    e.preventDefault();
+                    addFiles(files);
                   }}
                   onCompositionStart={() => {
                     composingRef.current = true;
@@ -881,10 +1034,14 @@ export function Composer({
                     <Button
                       type="submit"
                       size="icon-sm"
-                      disabled={(!value.trim() && attachments.length === 0 && contextItems.length === 0) || disabled}
+                      disabled={
+                        (!value.trim() && attachments.length === 0 && contextItems.length === 0) ||
+                        disabled ||
+                        attachments.some((a) => a.uploading)
+                      }
                       className="gap-1 bg-brand hover:bg-brand/80 rounded-lg text-foreground-inverse shrink-0"
                       aria-label="发送"
-                      title="发送"
+                      title={attachments.some((a) => a.uploading) ? '附件上传中…' : '发送'}
                     >
                       <ArrowUp className="size-4" />
                       <span className="sr-only">发送</span>
@@ -925,9 +1082,19 @@ export function Composer({
                   </span>
                 </div>
               )}
-              {(modelErr || dictation.error) && (
+              {(modelErr || dictation.error || attachErr) && (
                 <div className="flex items-center gap-2 px-1 text-destructive text-xs" role="alert">
-                  <span className="min-w-0 flex-1">{modelErr || dictation.error}</span>
+                  <span className="min-w-0 flex-1">{modelErr || dictation.error || attachErr}</span>
+                  {!modelErr && dictation.error === '' && attachErr && (
+                    <button
+                      type="button"
+                      onClick={() => setAttachErr('')}
+                      className="hover:bg-surface-hover p-0.5 rounded text-foreground-subtlest hover:text-foreground transition-colors"
+                      aria-label="关闭提示"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  )}
                   {!modelErr && dictation.errorAction === 'open-settings' && (
                     <Button
                       type="button"

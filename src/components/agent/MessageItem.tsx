@@ -12,6 +12,7 @@ import { ToolCallCard } from './ToolCallCard';
 import { ToolResultCard } from './ToolResultCard';
 import { JsonView, tryParseJson } from './JsonView';
 import { TodoList } from './TodoList';
+import { resolveImageUrl } from '../../lib/attachments';
 import { cn } from '../../lib/utils';
 
 const ROLE_LABEL: Record<MessageVM['role'], string> = {
@@ -154,6 +155,29 @@ export const MessageItem = memo(function MessageItem({
                         streaming={vm.streaming && vm.role === 'assistant'}
                         inverted={isInvertedBubble}
                       />
+                    );
+                  }
+                  case 'image_url': {
+                    // 图片附件(用户粘贴/上传的图片):URL 为本地 blob 预览或
+                    // 后端生成的相对 API 路径(拼 proxy base 与鉴权 query)
+                    const url = (part.data as { url?: string }).url;
+                    if (!url) return null;
+                    return (
+                      <a
+                        key={i}
+                        href={resolveImageUrl(url)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block w-fit max-w-full overflow-hidden rounded-lg border border-border"
+                        title="点击查看大图"
+                      >
+                        <img
+                          src={resolveImageUrl(url)}
+                          alt="图片附件"
+                          loading="lazy"
+                          className="max-h-72 max-w-full object-contain"
+                        />
+                      </a>
                     );
                   }
                   case 'reasoning':

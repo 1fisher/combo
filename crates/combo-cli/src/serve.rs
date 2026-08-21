@@ -50,7 +50,7 @@ use futures::stream::{iter, unfold, StreamExt};
 use rig::completion::message::{ToolCall, ToolFunction};
 use rig::completion::{AssistantContent, Message};
 use rig::OneOrMany;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::Infallible;
@@ -354,10 +354,79 @@ struct AgentReq {
     session_id: String,
     run_id: Option<String>,
     prompt: String,
+    /// 随消息发送的附件(workspace 相对路径;输入框粘贴/选择器添加)。
+    #[serde(default)]
+    attachments: Vec<WireAttachment>,
     /// proxy 注入的历史消息:[{ role, parts }](可选)。
     history: Option<Vec<Value>>,
     /// workspace 根目录(旧 proxy 注入字段,保留兜底),供 read/write/search 工具使用。
     workspace_dir: Option<String>,
+}
+
+/// wire 附件定义(与前端 Api.Attachment 对齐)。
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WireAttachment {
+    pub file_path: String,
+    #[serde(default)]
+    pub file_name: Option<String>,
+    #[serde(default)]
+    pub mime_type: Option<String>,
+}
+
+impl WireAttachment {
+    /// 展示名:优先 file_name,回退 file_path 末段。
+    pub fn display_name(&self) -> &str {
+        self.file_name.as_deref().unwrap_or_else(|| {
+            self.file_path
+                .rsplit('/')
+                .next()
+                .unwrap_or(self.file_path.as_str())
+        })
+    }
+
+    /// 是否图片(按 mime 或扩展名)。
+    pub fn is_image(&self) -> bool {
+        if let Some(m) = self.mime_type.as_deref() {
+            if m.starts_with("image/") {
+                return true;
+            }
+        }
+        let lower = self.file_path.to_lowercase();
+        [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"]
+            .iter()
+            .any(|e| lower.ends_with(e))
+    }
+}
+
+/// 附件注入 LLM prompt 的说明块:告诉 agent 附件在 workspace 里的路径,
+/// 以及按类型可用的处理方式(图片 → ocr 工具识别文字;文本 → read 工具读取)。
+/// 仅拼接进发往模型的 prompt,不污染广播/落库的用户消息原文。
+fn attachments_prompt(atts: &[WireAttachment]) -> Option<String> {
+    if atts.is_empty() {
+        return None;
+    }
+    let lines: Vec<String> = atts
+        .iter()
+        .map(|a| {
+            if a.is_image() {
+                format!(
+                    "- `{}`(图片,显示名「{}」;可用 ocr 工具识别其中的文字)",
+                    a.file_path,
+                    a.display_name()
+                )
+            } else {
+                format!(
+                    "- `{}`(文件,显示名「{}」;可用 read 工具查看内容)",
+                    a.file_path,
+                    a.display_name()
+                )
+            }
+        })
+        .collect();
+    Some(format!(
+        "\n\n<attached-files>\n用户随本条消息附加了以下文件(路径相对 workspace 根目录):\n{}\n</attached-files>",
+        lines.join("\n")
+    ))
 }
 
 /// 发起一次 agent 运行所需的全部参数(供 HTTP handler 与自动化调度器共用)。
@@ -366,6 +435,8 @@ pub(crate) struct AgentRunRequest {
     pub session_id: String,
     pub run_id: String,
     pub prompt: String,
+    /// 随消息发送的附件(workspace 相对路径),注入 LLM prompt。
+    pub attachments: Vec<WireAttachment>,
     /// 客户端注入的历史消息(可选;None 时从 sqlite 读取)。
     pub history: Option<Vec<Value>>,
     /// workspace 根目录兜底(可选;优先从 sqlite 元数据解析)。
@@ -390,7 +461,7 @@ pub(crate) async fn start_agent_run(
     req: AgentRunRequest,
     on_finish: Option<AgentFinishCallback>,
 ) -> Result<(), (StatusCode, String)> {
-    if req.session_id.is_empty() || req.prompt.is_empty() {
+    if req.session_id.is_empty() || (req.prompt.is_empty() && req.attachments.is_empty()) {
         return Err((
             StatusCode::BAD_REQUEST,
             "session_id 与 prompt 不能为空".into(),
@@ -446,7 +517,7 @@ pub(crate) async fn start_agent_run(
         };
         base.with_workspace(workspace_dir.clone(), &ws_disabled)
     };
-    let user_msg = user_message_json(&req.session_id, &req.prompt, &cfg);
+    let user_msg = user_message_json(&req.session_id, &req.prompt, &cfg, ws_id, &req.attachments);
     let _ = tx.send(msg_env("created", user_msg.clone()));
     // 服务端持久化:用户消息立即落库(历史不再依赖前端订阅回写,
     // 未订阅该 workspace 的客户端也能拿到完整历史)。
@@ -515,6 +586,12 @@ pub(crate) async fn start_agent_run(
                 None => req.prompt.clone(),
             },
             None => req.prompt.clone(),
+        };
+        // 附件清单注入(同上仅进 LLM prompt):告知 agent 附件的 workspace
+        // 相对路径与可用工具(图片 → ocr;文件 → read),模型按需读取。
+        let prompt = match attachments_prompt(&req.attachments) {
+            Some(block) => format!("{prompt}{block}"),
+            None => prompt,
         };
         let run_id2 = run_id_for_task.clone();
         let assistant_id = uuid::Uuid::new_v4().to_string();
@@ -800,6 +877,7 @@ async fn run_agent_ws(
         session_id: body.session_id,
         run_id: run_id.clone(),
         prompt: body.prompt,
+        attachments: body.attachments,
         history: body.history,
         workspace_dir: body.workspace_dir,
         model: None,
@@ -1063,6 +1141,14 @@ fn build_router(
             get(fs::read).put(fs::write),
         )
         .route("/v1/workspaces/:id/files/raw", get(fs::raw))
+        // 二进制上传(输入框粘贴/拖拽附件):raw body,默认 2MB body limit 不够,
+        // 挂 20MB(与 fs::MAX_UPLOAD_BYTES 一致,外加少量头部余量)
+        .route(
+            "/v1/workspaces/:id/files/upload",
+            post(fs::upload).layer(axum::extract::DefaultBodyLimit::max(
+                crate::fs::MAX_UPLOAD_BYTES + 1024,
+            )),
+        )
         .route(
             "/v1/workspaces/:id/files/search",
             get(fs::search),
@@ -1629,17 +1715,49 @@ fn run_complete_env(
     json!({ "type": "run_complete", "payload": { "type": "updated", "payload": payload } })
 }
 
-fn user_message_json(session_id: &str, text: &str, cfg: &AskConfig) -> Value {
+fn user_message_json(
+    session_id: &str,
+    text: &str,
+    cfg: &AskConfig,
+    ws_id: &str,
+    attachments: &[WireAttachment],
+) -> Value {
+    let mut parts = vec![text_part(text)];
+    // 图片附件追加 image_url part:URL 指向 files/raw(相对路径,前端渲染时
+    // 拼 proxy base 与鉴权参数)。历史注入(history_to_messages)忽略未知
+    // part 类型,多轮回放安全。
+    for a in attachments.iter().filter(|a| a.is_image()) {
+        let url = format!(
+            "/v1/workspaces/{}/files/raw?path={}",
+            ws_id,
+            urlencode(&a.file_path)
+        );
+        parts.push(json!({ "type": "image_url", "data": { "url": url } }));
+    }
     json!({
         "id": uuid::Uuid::new_v4().to_string(),
         "session_id": session_id,
         "role": "user",
-        "parts": [text_part(text)],
+        "parts": parts,
         "model": cfg.model,
         "provider": cfg.provider.id,
         "created_at": now_secs(),
         "updated_at": now_secs(),
     })
+}
+
+/// 组件化 percent-encode(避免为单一调用引入 urlencoding 依赖)。
+fn urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 fn assistant_message_json(
@@ -3106,6 +3224,117 @@ mod tests {
         json!({ "type": t, "data": serde_json::from_str::<Value>(text).unwrap() })
     }
 
+    /// 测试用最小 AskConfig(仅 user_message_json 读取 model/provider 字段)。
+    fn test_ask_cfg() -> AskConfig {
+        AskConfig {
+            provider: crate::providers::ProviderInfo {
+                id: "test".into(),
+                name: None,
+                api_key: None,
+                api_keys: vec![],
+                api_endpoint: None,
+                provider_type: None,
+                default_large_model_id: None,
+                default_small_model_id: None,
+                models: Vec::new(),
+            },
+            model: "m".into(),
+            preamble: String::new(),
+            base_preamble: String::new(),
+            skills_paths: Vec::new(),
+            disabled_skills: Vec::new(),
+            tools: false,
+            mcp_command: None,
+            mcp_url: None,
+            explicit_api_key: None,
+            explicit_base_url: None,
+            mcp_servers: Vec::new(),
+            reasoning_effort: None,
+            lsp: std::collections::BTreeMap::new(),
+            readonly_tools: false,
+        }
+    }
+
+    #[test]
+    fn wire_attachment_helpers() {
+        let img = WireAttachment {
+            file_path: ".combo/uploads/2025-01-01/截图.png".into(),
+            file_name: Some("截图.png".into()),
+            mime_type: Some("image/png".into()),
+        };
+        assert!(img.is_image());
+        assert_eq!(img.display_name(), "截图.png");
+        // 无 file_name:回退路径末段
+        let doc = WireAttachment {
+            file_path: "docs/spec.md".into(),
+            file_name: None,
+            mime_type: None,
+        };
+        assert!(!doc.is_image());
+        assert_eq!(doc.display_name(), "spec.md");
+        // mime 优先于扩展名
+        let weird = WireAttachment {
+            file_path: "x.png".into(),
+            file_name: None,
+            mime_type: Some("text/plain".into()),
+        };
+        assert!(weird.is_image()); // 扩展名兜底命中
+    }
+
+    #[test]
+    fn attachments_prompt_lists_paths_with_tool_hints() {
+        let atts = vec![
+            WireAttachment {
+                file_path: ".combo/uploads/2025-01-01/屏幕截图.png".into(),
+                file_name: Some("屏幕截图.png".into()),
+                mime_type: Some("image/png".into()),
+            },
+            WireAttachment {
+                file_path: "docs/api.md".into(),
+                file_name: None,
+                mime_type: None,
+            },
+        ];
+        let block = attachments_prompt(&atts).unwrap();
+        assert!(block.contains(".combo/uploads/2025-01-01/屏幕截图.png"));
+        assert!(block.contains("ocr"));
+        assert!(block.contains("docs/api.md"));
+        assert!(block.contains("read"));
+        // 空附件 → None(不注入)
+        assert!(attachments_prompt(&[]).is_none());
+    }
+
+    #[test]
+    fn user_message_json_appends_image_parts() {
+        let cfg = test_ask_cfg();
+        let atts = vec![
+            WireAttachment {
+                file_path: ".combo/uploads/a b.png".into(),
+                file_name: None,
+                mime_type: Some("image/png".into()),
+            },
+            WireAttachment {
+                file_path: "docs/x.md".into(),
+                file_name: None,
+                mime_type: None,
+            },
+        ];
+        let msg = user_message_json("s1", "看下这张图", &cfg, "ws9", &atts);
+        let parts = msg["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 2, "文本 + 1 个图片 part(非图片附件不加)");
+        assert_eq!(parts[0]["type"], "text");
+        assert_eq!(parts[1]["type"], "image_url");
+        let url = parts[1]["data"]["url"].as_str().unwrap();
+        assert_eq!(
+            url,
+            "/v1/workspaces/ws9/files/raw?path=.combo/uploads/a%20b.png",
+            "路径需 percent-encode,空格不能裸拼"
+        );
+        // 空附件不追加 part
+        let plain = user_message_json("s1", "hi", &cfg, "ws9", &[]);
+        assert_eq!(plain["parts"].as_array().unwrap().len(), 1);
+    }
+
     #[test]
     fn history_to_messages_reconstructs_turns() {
         let history = vec![
@@ -3998,6 +4227,7 @@ mod tests {
                 session_id: "rel-sid".into(),
                 run_id: "rel-run".into(),
                 prompt: "你好".into(),
+                attachments: Vec::new(),
                 history: None,
                 workspace_dir: None,
                 model: None,

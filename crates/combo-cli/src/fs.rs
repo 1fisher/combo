@@ -54,6 +54,77 @@ pub struct WriteBody {
     pub content: String,
 }
 
+/// 上传文件大小上限(20MB,与二进制读取上限 MAX_RAW_BYTES 一致)。
+pub const MAX_UPLOAD_BYTES: usize = 20 * 1024 * 1024;
+
+/// 清洗上传文件名:先取最后一段路径(输入可能带 `/`、`\` 分隔符),
+/// 再去掉各平台非法字符、空白收敛为单个 `-`,过长截断(保留扩展名),
+/// 空结果回退 `upload-<毫秒时间戳>`。
+fn sanitize_upload_name(name: &str) -> String {
+    // 取最后一段:带路径的输入(`a/b/c.png`、`../../evil.txt`)只保留文件名
+    let last_seg = name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or("")
+        .trim();
+    let cleaned: String = last_seg
+        .chars()
+        .map(|c| match c {
+            ':' | '*' | '?' | '"' | '<' | '>' | '|' => '-',
+            c if c.is_control() => '-',
+            c => c,
+        })
+        .collect();
+    let cleaned = cleaned.trim_matches(|c: char| c == '.' || c.is_whitespace()).to_string();
+    let cleaned = cleaned
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("-");
+    if cleaned.is_empty() {
+        return format!("upload-{}", chrono::Utc::now().timestamp_millis());
+    }
+    // 超长截断:保留扩展名,主干最多 80 字符
+    let p = FsPath::new(&cleaned);
+    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("upload");
+    let ext = p.extension().and_then(|e| e.to_str());
+    let mut stem: String = stem.chars().take(80).collect();
+    if stem.is_empty() {
+        stem = "upload".into();
+    }
+    match ext {
+        Some(e) if !e.is_empty() => format!("{stem}.{}", e.chars().take(16).collect::<String>()),
+        _ => stem,
+    }
+}
+
+/// 目标文件已存在时生成不冲突的文件名:`name (n).ext`(n 从 1 递增)。
+fn dedupe_upload_path(dir: &FsPath, name: &str) -> PathBuf {
+    let candidate = dir.join(name);
+    if !candidate.exists() {
+        return candidate;
+    }
+    let p = FsPath::new(name);
+    let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("upload");
+    let ext = p.extension().and_then(|e| e.to_str());
+    for n in 1..1000u32 {
+        let next = match ext {
+            Some(e) => format!("{stem} ({n}).{e}"),
+            None => format!("{stem} ({n})"),
+        };
+        let candidate = dir.join(next);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    // 兜底:毫秒时间戳几乎不可能冲突
+    dir.join(format!(
+        "{stem}-{}.{}",
+        chrono::Utc::now().timestamp_millis(),
+        ext.unwrap_or("bin")
+    ))
+}
+
+
 fn json_response(status: StatusCode, value: serde_json::Value) -> Response {
     Response::builder()
         .status(status)
@@ -343,6 +414,87 @@ pub async fn write(
     }
     match std::fs::rename(&tmp, &file) {
         Ok(_) => ok_json(json!({ "ok": true })),
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct UploadQuery {
+    /// 目标目录(workspace 相对路径);缺省为 `.combo/uploads/<yyyy-mm-dd>`。
+    pub dir: Option<String>,
+    /// 上传文件名(会清洗,同名自动加序号);缺省按时间戳生成。
+    pub name: Option<String>,
+}
+
+/// POST /v1/workspaces/{id}/files/upload?dir=<相对目录>&name=<文件名>
+/// 请求体为原始二进制(非 multipart,前端直接 fetch 字节)。
+///
+/// 面向输入框粘贴/拖拽上传:目标目录不存在时自动创建,同名文件自动
+/// `name (n).ext` 递增,写入走 tmp + rename 原子替换。返回最终写入的
+/// workspace 相对路径,可直接作为附件 file_path 发给 agent。
+///
+/// 大小上限 20MB(路由挂 DefaultBodyLimit,见 serve.rs)。
+pub async fn upload(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<UploadQuery>,
+    body: axum::body::Bytes,
+) -> Response {
+    if body.is_empty() {
+        return error(StatusCode::BAD_REQUEST, "上传内容为空");
+    }
+    if body.len() > MAX_UPLOAD_BYTES {
+        return error(StatusCode::PAYLOAD_TOO_LARGE, "文件超过 20MB");
+    }
+    let root = match resolve_root(&state, &id) {
+        Ok(r) => r,
+        Err(resp) => return resp,
+    };
+    // 默认落盘 `.combo/uploads/<yyyy-mm-dd>/`(隐藏目录,不进文件树)
+    let dir_rel = q.dir.unwrap_or_else(|| {
+        let today = chrono::Local::now().format("%Y-%m-%d");
+        format!(".combo/uploads/{today}")
+    });
+    let dir = match safe_join(&root, &dir_rel) {
+        Ok(d) => d,
+        Err(e) => return error(StatusCode::BAD_REQUEST, &e.to_string()),
+    };
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, &format!("创建目录失败: {e}"));
+    }
+    let name = sanitize_upload_name(q.name.as_deref().unwrap_or(""));
+    let file = dedupe_upload_path(&dir, &name);
+    let Some(parent) = file.parent() else {
+        return error(StatusCode::BAD_REQUEST, "无效路径");
+    };
+    let tmp = parent.join(format!(
+        ".combo-upload-{}-{}.tmp",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    if let Err(e) = std::fs::write(&tmp, &body) {
+        let _ = std::fs::remove_file(&tmp);
+        return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string());
+    }
+    match std::fs::rename(&tmp, &file) {
+        Ok(_) => {
+            // safe_join 返回的路径基于 canonicalize 后的根目录,这里同样
+            // canonicalize 再做前缀剥离,避免 macOS 上 /var ↔ /Users 符号
+            // 链差异导致 strip_prefix 失败回退成绝对路径。
+            let canon_root = std::fs::canonicalize(&root).unwrap_or(root);
+            let rel = file
+                .strip_prefix(&canon_root)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| file.to_string_lossy().to_string());
+            tracing::debug!("附件上传: ws={id} path={rel} bytes={}", body.len());
+            ok_json(json!({ "ok": true, "path": rel, "name": name }))
+        }
         Err(e) => {
             let _ = std::fs::remove_file(&tmp);
             error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
@@ -786,5 +938,127 @@ mod tests {
         assert!(paths.contains(&"src/nested/deep.rs"), "应包含 src/nested/deep.rs: {paths:?}");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    async fn parse_obj(resp: Response) -> Value {
+        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    /// 粘贴上传:默认目录写入、返回 workspace 相对路径、同名自动加序号。
+    #[tokio::test]
+    async fn upload_writes_and_dedupes() {
+        let (state, dir) = fs_test_state("upload");
+        let bytes = axum::body::Bytes::from_static(b"pngbytes");
+
+        // 第一次上传:默认目录(.combo/uploads/<date>/)
+        let resp = upload(
+            State(state.clone()),
+            Path("ws".into()),
+            Query(UploadQuery {
+                dir: None,
+                name: Some("截图.png".into()),
+            }),
+            bytes.clone(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = parse_obj(resp).await;
+        let path1 = v["path"].as_str().unwrap().to_string();
+        assert!(path1.starts_with(".combo/uploads/"), "默认目录错误: {path1}");
+        assert!(path1.ends_with("截图.png"), "文件名错误: {path1}");
+        assert_eq!(std::fs::read(dir.join(&path1)).unwrap(), b"pngbytes");
+
+        // 第二次同名上传:自动 `name (1).ext`
+        let resp = upload(
+            State(state.clone()),
+            Path("ws".into()),
+            Query(UploadQuery {
+                dir: None,
+                name: Some("截图.png".into()),
+            }),
+            bytes.clone(),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = parse_obj(resp).await;
+        let path2 = v["path"].as_str().unwrap().to_string();
+        assert!(path2.ends_with("截图 (1).png"), "去重命名错误: {path2}");
+        assert!(std::fs::read(dir.join(&path2)).is_ok(), "第二次上传未落盘");
+
+        // 指定目录 + 危险文件名清洗
+        let resp = upload(
+            State(state),
+            Path("ws".into()),
+            Query(UploadQuery {
+                dir: Some("uploads".into()),
+                name: Some("../../evil/name.txt".into()),
+            }),
+            bytes,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let v = parse_obj(resp).await;
+        let path3 = v["path"].as_str().unwrap().to_string();
+        assert!(path3.starts_with("uploads/"), "指定目录无效: {path3}");
+        // 清洗后文件名不再含路径分隔符(即便原名带 ../../ 也只是一段平面文件名)
+        let fname = path3.strip_prefix("uploads/").unwrap();
+        assert!(!fname.contains('/') && !fname.contains('\\') && !fname.contains("..") , "文件名残留路径成分: {fname}");
+        assert!(std::fs::read(dir.join(&path3)).is_ok());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 上传目录参数不允许 `..` 越出 workspace 根。
+    #[tokio::test]
+    async fn upload_rejects_traversal_dir() {
+        let (state, dir) = fs_test_state("upload-trav");
+        let resp = upload(
+            State(state),
+            Path("ws".into()),
+            Query(UploadQuery {
+                dir: Some("../outside".into()),
+                name: Some("a.txt".into()),
+            }),
+            axum::body::Bytes::from_static(b"x"),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 超过 20MB 拒绝(413)。
+    #[tokio::test]
+    async fn upload_rejects_oversize() {
+        let (state, dir) = fs_test_state("upload-big");
+        let big = vec![0u8; MAX_UPLOAD_BYTES + 1];
+        let resp = upload(
+            State(state),
+            Path("ws".into()),
+            Query(UploadQuery {
+                dir: None,
+                name: Some("big.bin".into()),
+            }),
+            axum::body::Bytes::from(big),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sanitize_upload_name_cleanups() {
+        // 带路径分隔符的输入只保留最后一段
+        assert_eq!(sanitize_upload_name("../../evil/name.txt"), "name.txt");
+        assert_eq!(sanitize_upload_name("a\\b\\c.png"), "c.png");
+        // 非法字符替换为 `-`
+        assert_eq!(sanitize_upload_name("a:b*c?d.png"), "a-b-c-d.png");
+        // 空白名回退为时间戳名
+        assert!(sanitize_upload_name("   ").starts_with("upload-"));
+        // 超长主干截断到 80 字符,扩展名保留
+        let long = format!("{}.png", "x".repeat(200));
+        assert_eq!(sanitize_upload_name(&long), format!("{}.png", "x".repeat(80)));
     }
 }

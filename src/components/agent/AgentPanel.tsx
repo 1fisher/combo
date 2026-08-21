@@ -5,6 +5,7 @@ import { randomUUID } from '../../lib/clientId';
 import { useAgentStore } from '../../stores/agentStore';
 import { useEditorStore } from '../../stores/editorStore';
 import { formatContextPrompt, type ContextItem } from '../../stores/contextStore';
+import { toWireAttachments, type LocalAttachment } from '../../lib/attachments';
 import { cancelAgent, sendAgentMessage, answerQuestion, clearSession, getFileContent } from '../../lib/api';
 import type { Api } from '../../lib/api/types';
 import type { SlashCommandDef } from '../../lib/slashCommands';
@@ -237,7 +238,7 @@ export function AgentPanel({
 
   async function doSend(
     prompt: string,
-    attachments: Api.Attachment[] = [],
+    attachments: LocalAttachment[] = [],
     contextItems: ContextItem[] = [],
   ) {
     const fullPrompt = formatContextPrompt(prompt, contextItems);
@@ -248,14 +249,31 @@ export function AgentPanel({
     setPostError(null);
     setDraft('');
     const sendPrompt = fullPrompt;
+    // 图片附件的展示地址:粘贴上传用本地 blob 预览,工作区已有文件指向 raw 端点
+    // (与服务端落库消息里的 image_url part 同构,服务端消息到达后替换乐观消息)
+    const imageParts: Api.ContentPart[] = attachments
+      .filter((a) => a.isImage && !a.uploading && !a.error)
+      .map((a) => ({
+        type: 'image_url' as const,
+        data: {
+          url:
+            a.previewUrl ??
+            `/v1/workspaces/${workspaceId}/files/raw?path=${encodeURIComponent(a.file_path)}`,
+        },
+      }));
+    // 发送给后端的 wire 附件(剥离本地运行时字段)
+    const wireAttachments = toWireAttachments(attachments);
     let sid = sessionId;
     let reused = !!sid;
     // 本次发送新建的会话:发送失败时需删除,避免侧边栏残留空会话
     let createdSid: string | null = null;
     if (!sid) {
-      // 首个消息:先创建会话,发送成功后才保留(失败时自动删除)
+      // 首个消息:先创建会话,发送成功后才保留(失败时自动删除);
+      // 纯附件发送(prompt 为空)时用首个附件名作标题
       try {
-        const s = await createSessionIn(titleFromPrompt(sendPrompt));
+        const s = await createSessionIn(
+          titleFromPrompt(sendPrompt.trim() || wireAttachments[0]?.file_name || '')
+        );
         sid = s.id;
         createdSid = s.id;
       } catch (e) {
@@ -285,7 +303,7 @@ export function AgentPanel({
       id: `local-${runId}`,
       session_id: sid!,
       role: 'user',
-      parts: [{ type: 'text', data: { text: sendPrompt } }],
+      parts: [{ type: 'text', data: { text: sendPrompt } }, ...imageParts],
       model: '',
       provider: '',
       created_at: Date.now(),
@@ -304,7 +322,7 @@ export function AgentPanel({
     markRunStarted(sid!);
     st.markRun(sid!, runId, 'running');
     try {
-      await sendAgentMessage(workspaceId, { sessionId: sid!, runId, prompt: sendPrompt, attachments });
+      await sendAgentMessage(workspaceId, { sessionId: sid!, runId, prompt: sendPrompt, attachments: wireAttachments });
       console.debug(`[agent] 发送成功 run running sid="${sid}" runId="${runId}"`);
       // 记录本轮发送时刻,用于连击(combo)判定
       pendingRef.current = { sid: sid!, sentAt: Date.now() };
@@ -342,7 +360,7 @@ export function AgentPanel({
             id: `local-${retryRunId}`,
             session_id: sid,
             role: 'user',
-            parts: [{ type: 'text', data: { text: sendPrompt } }],
+            parts: [{ type: 'text', data: { text: sendPrompt } }, ...imageParts],
             model: '',
             provider: '',
             created_at: Date.now(),
@@ -352,7 +370,7 @@ export function AgentPanel({
           setQueued(sid, true);
           markRunStarted(sid);
           st.markRun(sid, retryRunId, 'running');
-          await sendAgentMessage(workspaceId, { sessionId: sid, runId: retryRunId, prompt: sendPrompt, attachments });
+          await sendAgentMessage(workspaceId, { sessionId: sid, runId: retryRunId, prompt: sendPrompt, attachments: wireAttachments });
           pendingRef.current = { sid, sentAt: Date.now() };
           return;
         } catch (e2) {
