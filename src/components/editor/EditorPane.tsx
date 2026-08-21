@@ -40,8 +40,19 @@ function fileKindOf(name: string): FileKind {
   return 'text';
 }
 
+/**
+ * 文件 raw 预览地址(仅用于 `<img>` / `<iframe>` 的 src)。
+ * proxy base 来自运行时配置/URL 覆盖,属不可信输入:协议白名单校验,
+ * 拒绝 javascript: 等可执行协议被拼入 img/iframe src。
+ */
 function fileUrl(workspaceId: string, path: string): string {
   const base = getProxyBaseUrl();
+  try {
+    const protocol = new URL(base).protocol;
+    if (protocol !== 'http:' && protocol !== 'https:') return 'about:blank';
+  } catch {
+    return 'about:blank';
+  }
   const q = new URLSearchParams({ client_id: getClientId(), path });
   return `${base}/v1/workspaces/${workspaceId}/files/raw?${q.toString()}`;
 }

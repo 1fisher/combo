@@ -12,7 +12,7 @@ import { ToolCallCard } from './ToolCallCard';
 import { ToolResultCard } from './ToolResultCard';
 import { JsonView, tryParseJson } from './JsonView';
 import { TodoList } from './TodoList';
-import { resolveImageUrl } from '../../lib/attachments';
+import { isSafeImageUrl, resolveImageUrl } from '../../lib/attachments';
 import { cn } from '../../lib/utils';
 
 const ROLE_LABEL: Record<MessageVM['role'], string> = {
@@ -159,20 +159,23 @@ export const MessageItem = memo(function MessageItem({
                   }
                   case 'image_url': {
                     // 图片附件(用户粘贴/上传的图片):URL 为本地 blob 预览或
-                    // 后端生成的相对 API 路径(拼 proxy base 与鉴权 query)
+                    // 后端生成的相对 API 路径(拼 proxy base 与鉴权 query)。
+                    // 协议白名单:拒绝 javascript: 等可执行协议进入 href/src。
                     const url = (part.data as { url?: string }).url;
-                    if (!url) return null;
+                    if (!url || !isSafeImageUrl(url)) return null;
+                    const imgSrc = resolveImageUrl(url);
+                    if (!imgSrc) return null;
                     return (
                       <a
                         key={i}
-                        href={resolveImageUrl(url)}
+                        href={imgSrc}
                         target="_blank"
                         rel="noreferrer"
                         className="block w-fit max-w-full overflow-hidden rounded-lg border border-border"
                         title="点击查看大图"
                       >
                         <img
-                          src={resolveImageUrl(url)}
+                          src={imgSrc}
                           alt="图片附件"
                           loading="lazy"
                           className="max-h-72 max-w-full object-contain"

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Minus, Plus, RotateCcw, ZoomIn } from 'lucide-react';
+import { isSafeImageUrl } from '../../lib/attachments';
 
 const MIN_SCALE = 0.1;
 const MAX_SCALE = 10;
@@ -9,6 +10,9 @@ const MAX_SCALE = 10;
  * 拖拽平移、底部工具栏。
  */
 export function ImageViewer({ src, alt }: { src: string; alt: string }) {
+  // 协议白名单:src 可能来自用户可控的路径/代理地址,拒绝 javascript: 等
+  // 可执行协议进入 <img src>(防御性校验,不渲染任何危险值)。
+  const safeSrc = isSafeImageUrl(src) ? src : undefined;
   const [scale, setScale] = useState(1);
   const [tx, setTx] = useState(0);
   const [ty, setTy] = useState(0);
@@ -72,19 +76,23 @@ export function ImageViewer({ src, alt }: { src: string; alt: string }) {
         onPointerUp={onPointerUp}
         className="relative flex min-h-0 flex-1 touch-none items-center justify-center overflow-hidden"
       >
-        <img
-          src={src}
-          alt={alt}
-          draggable={false}
-          className="select-none object-contain"
-          style={{
-            maxWidth: '90%',
-            maxHeight: '90%',
-            transform: `translate(${tx}px, ${ty}px) scale(${scale})`,
-            transformOrigin: 'center center',
-            cursor: dragRef.current ? 'grabbing' : 'grab',
-          }}
-        />
+        {safeSrc ? (
+          <img
+            src={safeSrc}
+            alt={alt}
+            draggable={false}
+            className="select-none object-contain"
+            style={{
+              maxWidth: '90%',
+              maxHeight: '90%',
+              transform: `translate(${tx}px, ${ty}px) scale(${scale})`,
+              transformOrigin: 'center center',
+              cursor: dragRef.current ? 'grabbing' : 'grab',
+            }}
+          />
+        ) : (
+          <div className="text-sm text-muted-foreground">图片无法显示(不支持的地址)</div>
+        )}
       </div>
       {/* 工具栏 */}
       <div className="flex shrink-0 items-center justify-center gap-1 border-t bg-muted/30 px-2 py-1.5">

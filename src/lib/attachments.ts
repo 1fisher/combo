@@ -89,13 +89,36 @@ export async function uploadLocalAttachment(
 }
 
 /**
+ * 校验 URL 是否可安全用于 `<img src>` / `<a href>` / `<iframe src>`:
+ * 仅接受 http/https、`blob:`(本地预览)、`data:image/`(仅图片 data URL)
+ * 与站内相对路径(不含 protocol-relative `//`);拒绝 `javascript:`、
+ * `vbscript:` 等可执行协议 —— 这类 URL 放进 `href`/`iframe src` 后,
+ * 点击/导航会在页面上下文执行任意脚本(react 只转义 HTML 元字符,
+ * 不拦截 `javascript:` 协议),属真实 XSS 入口。
+ */
+export function isSafeImageUrl(url: string): boolean {
+  try {
+    if (url.startsWith('/') && !url.startsWith('//')) return true; // 站内相对路径
+    if (url.startsWith('blob:')) return true; // 乐观消息/附件本地 blob 预览
+    const protocol = new URL(url).protocol;
+    if (protocol === 'http:' || protocol === 'https:') return true;
+    if (protocol === 'data:' && url.startsWith('data:image/')) return true;
+    return false;
+  } catch {
+    return false; // 无法解析的输入(如 javascript:alert(1))一律拒绝
+  }
+}
+
+/**
  * 解析消息 image_url part 的展示地址:
  * - `blob:`(乐观消息本地预览)原样返回;
  * - 后端生成的相对 API 路径(`/v1/workspaces/...`)拼 proxy base,并附加
  *   client_id 与远程访问令牌 —— `<img>` 标签无法携带 Authorization header,
  *   远程访问时鉴权只能走 `?token=` query(后端 auth::extract_token 支持)。
+ * - 危险协议(如 `javascript:`)返回空串,调用方不再渲染。
  */
 export function resolveImageUrl(url: string): string {
+  if (!isSafeImageUrl(url)) return '';
   if (!url.startsWith('/v1/')) return url;
   const q = new URLSearchParams({ client_id: getClientId() });
   const token = getAccessToken();

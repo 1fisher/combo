@@ -39,6 +39,23 @@ describe('lanDirect', () => {
     expect(getLanUrl()).toBeNull();
   });
 
+  it('rejects non-http(s) lan urls (javascript: XSS guard)', () => {
+    setLanUrl('javascript:alert(1)');
+    expect(getLanUrl()).toBeNull();
+    setLanUrl('data:text/html,<script>alert(1)</script>');
+    expect(getLanUrl()).toBeNull();
+    setLanUrl('ftp://192.168.1.5');
+    expect(getLanUrl()).toBeNull();
+  });
+
+  it('does not redirect to a javascript: lan url', () => {
+    stubLocation({});
+    setLanUrl('javascript:alert(document.cookie)');
+    const redirected = maybeRedirectToLan('tok123');
+    expect(redirected).toBe(false);
+    expect(window.location.replace).not.toHaveBeenCalled();
+  });
+
   it('extracts lan from URL and removes the param', () => {
     stubLocation({ search: '?token=abc&lan=http%3A%2F%2F192.168.1.5%3A18236' });
     const lan = extractLanFromUrl();

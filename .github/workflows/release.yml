@@ -23,6 +23,11 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# 最小权限:默认只读 contents(ci 两个 job 仅需读代码/跑检查);
+# bump-version / build / publish-release 在各自 job 内显式提升为 contents: write。
+permissions:
+  contents: read
+
 jobs:
   # ─── CI: 前端 + 后端检查(push main / PR,跳过 tag) ───────────────────
   ci-frontend:

@@ -14,6 +14,21 @@
 const LAN_URL_KEY = 'combo.lanUrl';
 const LAN_TRIED_KEY = 'combo.lanTried';
 
+/**
+ * 局域网直连地址必须为 http/https。
+ * 该值来自二维码 `?lan=` 参数(敌人可伪造扫码页),若放任 `javascript:` 等
+ * 协议进入 `window.location.replace`,会直接执行任意脚本(XSS),故写入与
+ * 跳转两处都做协议白名单校验。
+ */
+function isHttpUrl(value: string): boolean {
+  try {
+    const protocol = new URL(value).protocol;
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 export function getLanUrl(): string | null {
   try {
     return localStorage.getItem(LAN_URL_KEY);
@@ -25,7 +40,7 @@ export function getLanUrl(): string | null {
 export function setLanUrl(url: string): void {
   try {
     const clean = url.trim().replace(/\/$/, '');
-    if (clean) localStorage.setItem(LAN_URL_KEY, clean);
+    if (clean && isHttpUrl(clean)) localStorage.setItem(LAN_URL_KEY, clean);
   } catch {
     /* 忽略存储不可用 */
   }
@@ -99,6 +114,8 @@ export function maybeRedirectToLan(token: string | null): boolean {
   if (typeof window === 'undefined') return false;
   const lan = getLanUrl();
   if (!lan || !token) return false;
+  // 协议白名单(存储值同样可能是伪造的):拒绝 javascript: 等可执行/钓鱼协议
+  if (!isHttpUrl(lan)) return false;
   let sameOrigin = false;
   try {
     sameOrigin = window.location.origin === lan;
