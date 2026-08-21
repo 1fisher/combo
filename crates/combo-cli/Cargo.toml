@@ -43,7 +43,7 @@ which = "7"
 webrtc = "0.20.3"
 sherpa-onnx = "1.13.5"
 tar = "0.4"
-bzip2 = { version = "0.4", features = ["static"] }
+bzip2 = { version = "0.6", features = ["static"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # macOS Vision 本地 OCR(ocr.rs):objc2 系框架绑定,仅 macOS 编译
