@@ -30,39 +30,39 @@ export function comboHue(combo: number): number {
   return Math.round(120 * (1 - clamped / 100));
 }
 
-/** 整体摆动/数字膨胀动画的节流间隔:低于它只刷新数字,不重播,避免连续增长时抖动 */
-const BUMP_THROTTLE_MS = 600;
-/** 距上次 combo 更新超过该时长(与连击中断阈值一致)无更新 → 缩小渐隐 */
+/** 距上次 combo 更新超过该时长(与连击中断阈值一致)无更新 → 缩回原大小 */
 const IDLE_SHRINK_MS = 2000;
 
 type Phase = 'hidden' | 'shown' | 'shrink';
 
 /**
  * 会话区中央的连击浮动特效(拳皇连招风):
- * 弹出大字「COMBO × N」,放大后**保持放大态**上浮渐隐。
+ * 数字增长时放大并保持,超时无更新平滑缩回原大小(不消失),combo 归零才渐隐移除。
  * - 颜色随 combo 数值从绿(1)渐变到红(100),100+ 保持红色;
- * - 连续数字增长:整体停在放大态 scale(1.3) 不回缩,每次更新整体做一次
- *   倾斜摆动 + 单程放大(combo-tilt,scale 1.25→1.3、rotate −5°→0°,600ms
- *   节流,**无心跳脉冲**),同时标题与数字自身同步膨胀(combo-count-bump,
- *   ×1→×1.25→×1),避免高频刷新时「放大→缩小」来回闪烁;
- * - 气泡音效**跟随数字增长**,与视觉摆动节流解耦:每涨 1 吐一颗泡泡
- *   (1→2 一颗,2→10 八颗),连续高频更新时像鱼吐泡泡的一串;
- * - 超过阈值时间(2s)无更新(流式结束/连击中断):播放缩小动画渐隐,
- *   下轮连击重新从放大弹出开始。
+ * - 数字增长:整体经 transition 平滑放大到 scale(1.3) 并**保持**——连续增长
+ *   期间一直停在大尺寸,无呼吸脉冲、无来回缩放闪烁;
+ * - 气泡音效跟随数字增长:每涨 1 吐一颗泡泡(1→2 一颗,2→10 八颗),
+ *   连续高频更新时像鱼吐泡泡的一串;
+ * - 超过阈值时间(2s)无更新(流式结束):整体平滑**缩回原大小 scale(1)**,
+ *   保持展示;下次数字增长再次放大;
+ * - combo 归零(连击中断/切会话):播放缩小渐隐动画后移除。
  */
 export function ComboOverlay({ combo }: { combo: number }) {
   const [display, setDisplay] = useState(combo);
   const [phase, setPhase] = useState<Phase>('hidden');
-  const lastBumpRef = useRef(0);
+  /** 放大态:数字增长置 true(放大并保持),超时无更新置 false(缩回原大小) */
+  const [big, setBig] = useState(false);
+  /** 首次出现播放弹出动画;结束后移除 --enter,缩放交给 transition 接管 */
+  const [entering, setEntering] = useState(false);
   /** 上一次的 combo 值:增长量 = 本次 − 上次,决定吐几颗泡泡 */
   const prevComboRef = useRef(0);
+  /** 当前是否可见:hidden 判定用 ref,避免把 phase/entering 加进 effect 依赖 */
+  const visibleRef = useRef(false);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const popRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     // 气泡声跟随数字增长:每涨 1 吐一颗(1→2 一颗,2→10 八颗),像鱼吐泡泡
-    // 一样连续;与视觉摆动的节流解耦,数字涨多少就响多少,不因 600ms 节流
-    // 吞掉中间的增长声
+    // 一样连续
     const prev = prevComboRef.current;
     prevComboRef.current = combo;
     if (combo > prev && useUIPreferences.getState().comboSoundEnabled) {
@@ -70,29 +70,21 @@ export function ComboOverlay({ combo }: { combo: number }) {
     }
     if (combo <= 0) {
       // 连击中断:若正在展示则走缩小渐隐,否则保持隐藏
+      visibleRef.current = false;
       setPhase((p) => (p === 'shown' ? 'shrink' : 'hidden'));
       return;
     }
+    const fromHidden = !visibleRef.current;
+    visibleRef.current = true;
     setDisplay(combo);
-    // 出现/重新出现 → 放大弹出;已展示 → 保持放大态
-    setPhase((p) => (p === 'hidden' || p === 'shrink' ? 'shown' : 'shown'));
-    // 连续增长:整体倾斜摆动 + 数字自身膨胀(节流),不回缩;
-    // 视觉摆动保持 600ms 节流,避免高频更新时来回抖动
-    const now = Date.now();
-    if (now - lastBumpRef.current >= BUMP_THROTTLE_MS) {
-      lastBumpRef.current = now;
-      const el = popRef.current;
-      if (el) {
-        el.classList.remove('combo-bump');
-        // 强制 reflow,确保连续更新时动画可重播
-        void el.offsetWidth;
-        el.classList.add('combo-bump');
-      }
-    }
-    // 超时缩小:超过阈值无更新(流式结束)先缩小再隐藏
+    setPhase('shown');
+    // 数字增长 → 放大并保持;首次出现同时播放弹出动画(--enter)
+    setBig(true);
+    if (fromHidden) setEntering(true);
+    // 超时缩回:超过阈值无更新(流式结束)平滑缩回原大小,保持展示不消失
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
     idleTimerRef.current = setTimeout(() => {
-      setPhase((p) => (p === 'shown' ? 'shrink' : p));
+      setBig(false);
     }, IDLE_SHRINK_MS);
   }, [combo]);
 
@@ -108,12 +100,22 @@ export function ComboOverlay({ combo }: { combo: number }) {
   return (
     <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center overflow-visible px-[12%] py-[8%] [container-type:inline-size]">
       <div
-        ref={popRef}
-        className={cn('combo-pop select-none text-center', phase === 'shrink' && 'combo-pop--shrink')}
+        className={cn(
+          'combo-pop select-none text-center',
+          big && 'combo-pop--big',
+          entering && 'combo-pop--enter',
+          phase === 'shrink' && 'combo-pop--shrink'
+        )}
         style={{ '--combo-hue': hue } as CSSProperties}
         onAnimationEnd={(e) => {
-          if (e.animationName === 'combo-shrink' && e.target === e.currentTarget) {
+          if (e.target !== e.currentTarget) return;
+          if (e.animationName === 'combo-pop-in') {
+            // 弹出结束:移除 --enter(forwards 终态与 --big 声明值一致,无跳变)
+            setEntering(false);
+          } else if (e.animationName === 'combo-shrink') {
             setPhase('hidden');
+            setBig(false);
+            setEntering(false);
           }
         }}
       >
