@@ -1,6 +1,6 @@
 import { ApiError, streamSpeech } from './api';
 import { waitSpeechModelReady } from './speech';
-import { getSharedAudioContext } from './sfx';
+import { getSharedAudioContext, markAudioScheduled } from './sfx';
 import { pcm16ToAudioBuffer } from './pcm';
 
 /**
@@ -114,6 +114,7 @@ async function speakStream(text: string, retry: boolean): Promise<void> {
         src.connect(ctx.destination);
         const startAt = Math.max(ctx.currentTime + 0.03, nextAt);
         src.start(startAt);
+        markAudioScheduled();
         nextAt = startAt + buffer.duration + (hard ? HARD_GAP_SEC : SOFT_GAP_SEC);
         sources.add(src);
         src.onended = () => sources.delete(src);

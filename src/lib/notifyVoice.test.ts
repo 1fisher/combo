@@ -35,7 +35,10 @@ vi.mock('./api', () => {
   return { ApiError, streamSpeech };
 });
 vi.mock('./speech', () => ({ waitSpeechModelReady: vi.fn() }));
-vi.mock('./sfx', () => ({ getSharedAudioContext: vi.fn() }));
+vi.mock('./sfx', () => ({
+  getSharedAudioContext: vi.fn(),
+  markAudioScheduled: vi.fn(),
+}));
 
 const apiMock = vi.mocked(streamSpeech);
 const waitMock = vi.mocked(waitSpeechModelReady);

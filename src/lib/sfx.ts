@@ -23,6 +23,35 @@
 let ctx: AudioContext | null = null;
 /** 缓存的白噪声 buffer(气泡破裂瞬态复用) */
 let noiseBuf: AudioBuffer | null = null;
+/** 当前共享上下文的创建时刻:高龄兜底重建的计时起点 */
+let ctxCreatedAt = 0;
+/** 连续观察到 suspended 的取用次数:手势内反复 resume 也救不回 → 判定卡死换新 */
+let suspendStreak = 0;
+/** 最近一次排期声音的时刻(各播放路径经 markAudioScheduled 上报):
+ * 宽限期内可能有 TTS 在播,不换上下文以免拦腰切断朗读 */
+let lastScheduleAt = 0;
+/** 待重建标记(高龄/窗口重新可见时置位):延迟到下一个用户手势内执行,
+ * 因为新上下文必须靠手势内的 resume 才能出声,SSE 路径换出来也是哑的 */
+let needsRebuild = false;
+
+/**
+ * 上下文高龄阈值。WebKit 有一种「假 running」状态:系统睡眠唤醒/切换音频
+ * 输出设备/CoreAudio 重启后,state 仍是 running 但输出管线已死 —— 不触发
+ * closed/interrupted 自愈,手势 resume 也无从谈起,表现为全部音效无声、
+ * 只有重启应用才恢复。无法直接探测,按「高龄 + 静默时机」定期换新兜底:
+ * 新上下文会重新绑定当前系统音频输出,等价于一次无需重启的自愈。
+ */
+const MAX_CTX_AGE_MS = 10 * 60_000;
+/** 换新宽限:距上次排期不足该时长视为可能正在播放(TTS),推迟换新 */
+const SCHEDULE_GRACE_MS = 10_000;
+
+/**
+ * 播放路径上报「本次确实排期了声音」:供换新宽限判定(近期有排期就可能
+ * 正在出声,不要动上下文)。音效走 masterOut、听写提示音/TTS 朗读各自调用。
+ */
+export function markAudioScheduled(): void {
+  lastScheduleAt = Date.now();
+}
 
 /**
  * 共享 AudioContext:音效、听写提示音与 TTS 语音播报/朗读复用同一个
@@ -30,24 +59,56 @@ let noiseBuf: AudioBuffer | null = null;
  * WebKit 对同页同时运行的 AudioContext 有数量上限,各处自建会互相挤占,
  * 超限的上下文会被静默拒绝启动(表现为「特效/提示音全部无声」)。
  * 环境不支持(jsdom/旧内核)时返回 null,调用方各自静默跳过。
+ *
+ * @param fromGesture 是否来自用户手势(armGestureUnlock 传 true)。涉及
+ * 「换新上下文」的兜底(待重建标记/高龄/卡死)只在手势路径执行:新实例
+ * 处于 suspended,必须靠手势内 resume 才能出声;SSE 触发的播放路径换新
+ * 只会得到一个解锁不了的新哑巴,不如继续用旧实例(还能播就播)。
  */
-export function getSharedAudioContext(): AudioContext | null {
+export function getSharedAudioContext(fromGesture = false): AudioContext | null {
   if (typeof window === 'undefined') return null;
   const AC: typeof AudioContext | undefined =
     window.AudioContext ??
     (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!AC) return null;
   try {
+    const now = Date.now();
+    const idle = now - lastScheduleAt > SCHEDULE_GRACE_MS;
+    // 假 running 无法直接探测:非手势路径发现上下文高龄且当前静默时,
+    // 只置「待重建」标记,推迟到下一个手势内真正换新(见 fromGesture 注释)
+    if (!fromGesture && ctx && idle && now - ctxCreatedAt > MAX_CTX_AGE_MS) {
+      needsRebuild = true;
+    }
     // 自愈重建:close 只会来自异常路径;WebKit 在音频输出中断(切换蓝牙
     // 设备/系统睡眠唤醒/窗口隐藏到托盘)后可能把上下文永久卡在
     // interrupted —— 两者都无法再出声,丢弃重建,并 close 被弃实例释放
     // WebKit 的上下文数量配额(泄漏耗尽后 new 直接抛错,永久无声)。
-    if (!ctx || ctx.state === 'closed' || (ctx.state as string) === 'interrupted') {
+    // 手势路径额外兜底:待重建标记(高龄/窗口重新可见)或连续多次
+    // resume 仍挂起(输出管线卡死的可观测征兆)时同样换新。
+    if (
+      !ctx ||
+      ctx.state === 'closed' ||
+      (ctx.state as string) === 'interrupted' ||
+      (fromGesture &&
+        idle &&
+        (needsRebuild || suspendStreak >= 3 || now - ctxCreatedAt > MAX_CTX_AGE_MS))
+    ) {
       const dead = ctx;
       ctx = new AC();
-      if (dead && dead.state !== 'closed') void dead.close().catch(() => {});
+      ctxCreatedAt = Date.now();
+      suspendStreak = 0;
+      needsRebuild = false;
+      if (dead && dead.state !== 'closed' && typeof dead.close === 'function') {
+        void dead.close().catch(() => {});
+      }
     }
-    if (ctx.state === 'suspended') void ctx.resume().catch(() => {});
+    if (ctx.state === 'suspended') {
+      // 连续挂起计数:手势内反复 resume 无效时,下次手势换新上下文
+      suspendStreak += 1;
+      void ctx.resume().catch(() => {});
+    } else if (ctx.state === 'running') {
+      suspendStreak = 0;
+    }
     return ctx;
   } catch {
     // 构造失败(并发上限等):丢弃缓存,下次调用再试
@@ -58,6 +119,12 @@ export function getSharedAudioContext(): AudioContext | null {
 
 /** 手势解锁是否已挂监听(幂等守卫) */
 let gestureUnlockArmed = false;
+
+function handleGesture(): void {
+  // 取用即自愈:interrupted 重建、suspended 在手势内同步发起 resume;
+  // fromGesture=true 时额外执行「待重建/高龄/卡死」的换新兜底
+  getSharedAudioContext(true);
+}
 
 /**
  * 用户手势内解锁共享 AudioContext。WebKit(WKWebView/Safari)的自动
@@ -72,20 +139,85 @@ function armGestureUnlock(): void {
   if (typeof window === 'undefined' || gestureUnlockArmed) return;
   gestureUnlockArmed = true;
   const events = ['pointerdown', 'keydown'] as const;
-  const onGesture = () => {
-    // 取用即自愈:interrupted 重建、suspended 在手势内同步发起 resume
-    getSharedAudioContext();
-  };
-  events.forEach((ev) => window.addEventListener(ev, onGesture, true));
+  events.forEach((ev) => window.addEventListener(ev, handleGesture, true));
+}
+
+/** 可见性监听是否已挂(幂等守卫) */
+let visibilityArmed = false;
+
+function handleVisibilityChange(): void {
+  if (document.visibilityState !== 'visible') return;
+  // 刚在播放(TTS)时不动,避免拦腰切断;宽限过后再标记
+  if (Date.now() - lastScheduleAt > SCHEDULE_GRACE_MS) needsRebuild = true;
+}
+
+/**
+ * 窗口从隐藏恢复可见(托盘唤出/休眠唤醒)时标记待重建:WKWebView 的音频
+ * 输出路由可能在隐藏期间被系统回收/切换,而 state 不发生任何变化 ——
+ * 现有自愈(closed/interrupted/suspended)全都无从触发。置标记后由下一个
+ * 用户手势静默换新上下文,重新绑定当前输出设备。
+ */
+function armVisibilityRebuild(): void {
+  if (typeof document === 'undefined' || visibilityArmed) return;
+  visibilityArmed = true;
+  document.addEventListener('visibilitychange', handleVisibilityChange);
 }
 
 // 模块加载即挂手势监听(常驻):任意用户交互都能(重新)解锁共享上下文
 armGestureUnlock();
+armVisibilityRebuild();
+
+/**
+ * 音频诊断信息(挂在 window.__comboSfxDebug 供控制台直接调用):
+ * 再遇「全部无声」时无需重启,先看这里 —— state 是否 running、上下文
+ * 高龄、距上次排期时长、是否已标记待重建,据此判断是假 running 还是
+ * 未解锁(suspended)。
+ */
+export function sfxDebugInfo(): {
+  state: string | null;
+  ageMs: number | null;
+  msSinceLastSchedule: number | null;
+  needsRebuild: boolean;
+} {
+  const now = Date.now();
+  return {
+    state: ctx ? String(ctx.state) : null,
+    ageMs: ctxCreatedAt ? now - ctxCreatedAt : null,
+    msSinceLastSchedule: lastScheduleAt ? now - lastScheduleAt : null,
+    needsRebuild,
+  };
+}
+if (typeof window !== 'undefined') {
+  (window as unknown as Record<string, unknown>).__comboSfxDebug = sfxDebugInfo;
+}
+
+/**
+ * 测试专用清理:摘除常驻监听并重置模块状态。vi.resetModules 后旧模块实例
+ * 的手势/可见性监听仍挂在共享的 window/document 上,会在后续用例的事件里
+ * 触发旧模块创建上下文,污染计数 —— 各用例 afterEach 统一调用摘除。
+ */
+export function disposeAudioHooksForTests(): void {
+  if (typeof window !== 'undefined') {
+    window.removeEventListener('pointerdown', handleGesture, true);
+    window.removeEventListener('keydown', handleGesture, true);
+  }
+  if (typeof document !== 'undefined') {
+    document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }
+  ctx = null;
+  ctxCreatedAt = 0;
+  suspendStreak = 0;
+  lastScheduleAt = 0;
+  needsRebuild = false;
+  gestureUnlockArmed = false;
+  visibilityArmed = false;
+}
 
 /** 所有音效共用的总音量,避免突兀 */
 const MASTER_GAIN = 0.5;
 
 function masterOut(c: AudioContext, t: number): GainNode {
+  markAudioScheduled();
   const g = c.createGain();
   g.gain.setValueAtTime(MASTER_GAIN, t);
   g.connect(c.destination);

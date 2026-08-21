@@ -539,6 +539,24 @@ crate;真实前端只经 `bundle.resources`(`{"../dist/": "dist/"}`)随包分发
   打断(新发消息/切会话/关开关/run 出错)中止流请求 + 停掉全部已排期音频 +
   清缓冲。设置界面
   `TtsSection`(开关 + 模型下拉,开关写 `[tts] enabled` 并联动朗读 hook)。
+- **音效共享 AudioContext 与「假 running」自愈**(`src/lib/sfx.ts`):combo
+  特效音、听写气泡音(`audio.ts::playDictationChime`)、任务提示音
+  (`playNotifyDone/Cancel/Error/Attention`)、TTS 朗读与通知播报全部复用
+  `getSharedAudioContext()` 这一个播放上下文(WebKit 对同页 AudioContext
+  有数量上限,各处自建会互相挤占致全静音)。自愈分层:① `closed`/
+  `interrupted` 状态直接丢弃重建(close 被弃实例释放配额);② `suspended`
+  靠常驻手势监听(pointerdown/keydown,不摘除)在手势内 resume;③
+  **假 running 兜底**——WKWebView 在睡眠唤醒/切换音频设备/CoreAudio 重启后
+  可能停在 `state==='running'` 但输出管线已死(无报错、手势救不回、重启才
+  恢复),无法直接探测,按三信号在**下一个用户手势内**静默换新上下文:
+  高龄(`MAX_CTX_AGE_MS` 10 分钟)、待重建标记(非手势路径发现高龄或
+  `visibilitychange`→visible 时置位)、连续 ≥3 次 resume 无效
+  (`suspendStreak`)。换新必须延迟到手势内(新实例要靠手势 resume 才能出声,
+  SSE 路径换出来是哑巴);近期有排期(`markAudioScheduled`,10s 宽限,
+  masterOut/playBubbleTone/TTS 排期各路径上报)则推迟,避免拦腰切断朗读。
+  `window.__comboSfxDebug()`(`sfxDebugInfo`)供控制台诊断 state/龄/排期。
+  测试注意:`vi.resetModules` 后旧模块的常驻监听仍挂在共享 window 上,
+  各用例 afterEach 必须调 `disposeAudioHooksForTests()` 摘除。
 - **Frontend layout:** `src/components/{ui,shell,agent}` — `ui/` is generated
   shadcn primitives, `shell/` is app chrome, `agent/` is the chat/tool/modal UI.
   The shell is a 1:1 仿写 ZCode 的 agent 布局:左侧 `WorkspaceSidebar`(默认 372px,

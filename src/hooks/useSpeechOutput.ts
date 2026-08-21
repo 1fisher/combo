@@ -5,7 +5,7 @@ import { useAgentStore } from '../stores/agentStore';
 import { splitSentences } from '../lib/ttsSplit';
 import { waitSpeechModelReady } from '../lib/speech';
 import { pcm16ToAudioBuffer } from '../lib/pcm';
-import { getSharedAudioContext } from '../lib/sfx';
+import { getSharedAudioContext, markAudioScheduled } from '../lib/sfx';
 
 /** 待处理缓冲上限(字符):防止超长未成句内容(如大段代码块)无限累积。 */
 const MAX_PENDING_CHARS = 4000;
@@ -107,6 +107,7 @@ export function useSpeechOutput() {
       src.connect(ctx.destination);
       const startAt = Math.max(ctx.currentTime + 0.03, nextStartRef.current);
       src.start(startAt);
+      markAudioScheduled();
       nextStartRef.current = startAt + buffer.duration + (hard ? HARD_GAP_SEC : SOFT_GAP_SEC);
       sourcesRef.current.add(src);
       src.onended = () => sourcesRef.current.delete(src);

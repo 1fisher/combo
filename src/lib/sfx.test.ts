@@ -62,8 +62,16 @@ async function loadSfxWithStub() {
   contexts.length = 0;
   vi.stubGlobal('AudioContext', FakeAudioContext);
   vi.resetModules();
-  const mod = await import('./sfx');
+  const mod = trackMod(await import('./sfx'));
   return { mod, ctx: () => contexts[0] };
+}
+
+/** 本用例文件加载过的全部 sfx 模块实例(afterEach 统一摘除常驻监听) */
+const loadedSfxMods: Array<{ disposeAudioHooksForTests: () => void }> = [];
+
+function trackMod<T extends { disposeAudioHooksForTests: () => void }>(mod: T): T {
+  loadedSfxMods.push(mod);
+  return mod;
 }
 
 describe('sfx', () => {
@@ -73,11 +81,12 @@ describe('sfx', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    loadedSfxMods.splice(0).forEach((m) => m.disposeAudioHooksForTests());
   });
 
   it('环境不支持 AudioContext 时静默跳过,不抛错', async () => {
     vi.resetModules();
-    const mod = await import('./sfx');
+    const mod = trackMod(await import('./sfx'));
     expect(() => {
       mod.playComboHit(5);
       mod.playNotifyDone();
@@ -206,49 +215,67 @@ describe('sfx', () => {
  * 2. 自愈重建 —— 上下文 closed/中断卡死后,下次调用必须能拿到新实例,
  * 且被弃实例要 close 释放 WebKit 的上下文数量配额。
  * 用独立的 Fake(state 起始 suspended、resume 异步兑现翻转状态)模拟真实 WebKit。
+ *
+ * 注意:每个用例经 loadSfxSuspended 拿到全新模块实例,但旧模块挂在共享
+ * window/document 上的常驻监听(手势/可见性)不会摘除 —— dispatch 事件时
+ * 它们也会触发并创建上下文。因此 Fake 类按用例独立工厂化,instances 计数
+ * 只统计本用例模块的创建,不受历史模块监听污染。
  */
 
-class SuspendedAudioContext {
-  static instances: SuspendedAudioContext[] = [];
-  state: AudioContextState = 'suspended';
-  // 与真实 WebKit 行为一致:状态在 promise 异步兑现时才翻转
-  resume: Mock<() => Promise<void>> = vi.fn(() =>
-    Promise.resolve().then(() => {
-      this.state = 'running';
-    })
-  );
-  close = vi.fn(async () => {
-    this.state = 'closed';
-  });
-  // 供「挂起时不调度」断言用
-  createGain = vi.fn();
-  createOscillator = vi.fn();
-  constructor() {
-    SuspendedAudioContext.instances.push(this);
+type SuspendedAC = {
+  state: AudioContextState;
+  resume: Mock<() => Promise<void>>;
+  close: Mock<() => Promise<void>>;
+  createGain: Mock;
+  createOscillator: Mock;
+};
+
+function makeSuspendedACClass() {
+  const instances: SuspendedAC[] = [];
+  class SuspendedAudioContext {
+    static instances = instances;
+    state: AudioContextState = 'suspended';
+    // 与真实 WebKit 行为一致:状态在 promise 异步兑现时才翻转
+    resume: Mock<() => Promise<void>> = vi.fn(() =>
+      Promise.resolve().then(() => {
+        this.state = 'running';
+      })
+    );
+    close = vi.fn(async () => {
+      this.state = 'closed';
+    });
+    // 供「挂起时不调度」断言用
+    createGain = vi.fn();
+    createOscillator = vi.fn();
+    constructor() {
+      instances.push(this);
+    }
   }
+  return SuspendedAudioContext;
 }
 
 async function loadSfxSuspended() {
   vi.resetModules();
-  SuspendedAudioContext.instances = [];
-  vi.stubGlobal('AudioContext', SuspendedAudioContext);
-  return await import('./sfx');
+  const AC = makeSuspendedACClass();
+  vi.stubGlobal('AudioContext', AC);
+  return { ...trackMod(await import('./sfx')), AC };
 }
 
 describe('sfx 共享 AudioContext', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    loadedSfxMods.splice(0).forEach((m) => m.disposeAudioHooksForTests());
   });
 
   it('手势解锁:手势内发起 resume;运行中常驻监听空转不重复 resume', async () => {
-    const { getSharedAudioContext } = await loadSfxSuspended();
+    const { getSharedAudioContext, AC } = await loadSfxSuspended();
     // 任意时刻取用都拿到同一实例(全应用唯一播放上下文)
     window.dispatchEvent(new Event('pointerdown'));
     const c = getSharedAudioContext();
-    expect(c).toBeInstanceOf(SuspendedAudioContext);
+    expect(c instanceof AC).toBe(true);
     await vi.waitFor(() => expect(c?.state).toBe('running'));
     // 运行中:后续手势与取用都不会重复 resume(监听保留但空转)
-    const fake = c as unknown as SuspendedAudioContext;
+    const fake = c as unknown as SuspendedAC;
     fake.resume.mockClear();
     window.dispatchEvent(new Event('pointerdown'));
     window.dispatchEvent(new Event('keydown'));
@@ -263,7 +290,7 @@ describe('sfx 共享 AudioContext', () => {
     await vi.waitFor(() => expect(c?.state).toBe('running'));
     // 系统把上下文重新挂起
     (c as unknown as { state: AudioContextState }).state = 'suspended';
-    const fake = c as unknown as SuspendedAudioContext;
+    const fake = c as unknown as SuspendedAC;
     fake.resume.mockClear();
     window.dispatchEvent(new Event('keydown'));
     await vi.waitFor(() => expect(fake.resume).toHaveBeenCalled());
@@ -271,37 +298,108 @@ describe('sfx 共享 AudioContext', () => {
   });
 
   it('未解锁前调用也安全:suspended 时跳过本次播放,不抛错也不排队迟播', async () => {
-    const { getSharedAudioContext, playNotifyDone, playComboHit } = await loadSfxSuspended();
+    const { getSharedAudioContext, playNotifyDone, playComboHit } =
+      await loadSfxSuspended();
     const c = getSharedAudioContext();
     expect(c?.state).toBe('suspended');
     expect(() => {
       playNotifyDone();
       playComboHit(3);
     }).not.toThrow();
-    const fake = c as unknown as SuspendedAudioContext;
+    const fake = c as unknown as SuspendedAC;
     expect(fake.createGain).not.toHaveBeenCalled();
     expect(fake.createOscillator).not.toHaveBeenCalled();
   });
 
   it('自愈重建:上下文 closed 后丢弃缓存,下次调用拿到新实例', async () => {
-    const { getSharedAudioContext } = await loadSfxSuspended();
+    const { getSharedAudioContext, AC } = await loadSfxSuspended();
     const c1 = getSharedAudioContext();
     (c1 as unknown as { state: AudioContextState }).state = 'closed';
     const c2 = getSharedAudioContext();
     expect(c2).not.toBe(c1);
-    expect(SuspendedAudioContext.instances).toHaveLength(2);
+    expect(AC.instances).toHaveLength(2);
   });
 
   it('自愈重建:interrupted(WebKit 输出中断)同样重建,且 close 被弃实例释放配额', async () => {
-    const { getSharedAudioContext } = await loadSfxSuspended();
-    const c1 = getSharedAudioContext();
+    const { getSharedAudioContext, AC } = await loadSfxSuspended();
+    const c1 = getSharedAudioContext() as unknown as SuspendedAC;
     // Safari 系专属状态,TS 类型未收录,按运行时字符串写入
     (c1 as unknown as { state: string }).state = 'interrupted';
     const c2 = getSharedAudioContext();
     expect(c2).not.toBe(c1);
-    expect((c1 as unknown as SuspendedAudioContext).close).toHaveBeenCalled();
+    expect(AC.instances).toHaveLength(2);
+    expect(c1.close).toHaveBeenCalled();
     // 新实例在后续手势内可正常解锁(监听常驻)
     window.dispatchEvent(new Event('pointerdown'));
     await vi.waitFor(() => expect(c2?.state).toBe('running'));
+  });
+
+  it('高龄兜底:上下文超过阈值且静默时,下一个用户手势内静默换新(假 running 自愈)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { getSharedAudioContext, AC } = await loadSfxSuspended();
+      const c1 = getSharedAudioContext() as unknown as SuspendedAC;
+      await vi.advanceTimersByTimeAsync(1); // resume 兑现 → running
+      expect((c1 as unknown as { state: string }).state).toBe('running');
+      // 静默 11 分钟(期间无任何排期)后点击:state 仍是 running,
+      // 但输出管线可能已假死 —— 按高龄在手势内换新,重新绑定音频输出
+      await vi.advanceTimersByTimeAsync(11 * 60_000);
+      window.dispatchEvent(new Event('pointerdown'));
+      expect(AC.instances).toHaveLength(2);
+      expect(AC.instances[0]).toBe(c1);
+      expect(c1.close).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('宽限期保护:近期排期过声音(TTS 可能在播)时推迟换新,不拦腰切断朗读', async () => {
+    vi.useFakeTimers();
+    try {
+      const { getSharedAudioContext, playNotifyDone, AC } =
+        await loadSfxSuspended();
+      const c1 = getSharedAudioContext() as unknown as SuspendedAC;
+      await vi.advanceTimersByTimeAsync(1);
+      expect((c1 as unknown as { state: string }).state).toBe('running');
+      // 涨龄到接近阈值时播一次音效(排期上报),再涨过阈值
+      await vi.advanceTimersByTimeAsync(9 * 60_000 + 59_000);
+      playNotifyDone(); // markAudioScheduled:lastScheduleAt ≈ t=599s
+      await vi.advanceTimersByTimeAsync(6_000); // 龄 605s > 阈值,但距排期仅 6s < 宽限
+      window.dispatchEvent(new Event('pointerdown'));
+      expect(AC.instances).toHaveLength(1); // 不换新,不打断播放
+      await vi.advanceTimersByTimeAsync(10_000); // 距排期超过宽限
+      window.dispatchEvent(new Event('pointerdown'));
+      expect(AC.instances).toHaveLength(2); // 此刻才静默换新
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('窗口从隐藏恢复可见:输出路由可能已失效,标记待重建并在下一手势换新', async () => {
+    const { getSharedAudioContext, AC } = await loadSfxSuspended();
+    const c1 = getSharedAudioContext();
+    await vi.waitFor(() => expect(c1?.state).toBe('running'));
+    Object.defineProperty(document, 'visibilityState', {
+      value: 'visible',
+      configurable: true,
+    });
+    document.dispatchEvent(new Event('visibilitychange'));
+    // 年轻上下文也照样标记:隐藏期间 WebKit 可能回收了输出管线而 state 不变
+    window.dispatchEvent(new Event('pointerdown'));
+    expect(AC.instances).toHaveLength(2);
+  });
+
+  it('resume 反复无效(suspendStreak ≥ 3):手势内判定卡死,换新上下文', async () => {
+    const { getSharedAudioContext, AC } = await loadSfxSuspended();
+    const c1 = getSharedAudioContext() as unknown as SuspendedAC;
+    // 模拟管线卡死:resume 兑现但 state 永远不变
+    c1.resume.mockImplementation(() => Promise.resolve());
+    // 初始取用 streak=1;两次手势 → 3;第三次手势触发换新
+    window.dispatchEvent(new Event('pointerdown'));
+    window.dispatchEvent(new Event('pointerdown'));
+    expect(AC.instances).toHaveLength(1);
+    window.dispatchEvent(new Event('pointerdown'));
+    expect(AC.instances).toHaveLength(2);
+    expect(c1.close).toHaveBeenCalled();
   });
 });

@@ -1,5 +1,5 @@
 /** 录音音频处理:Float32 采样 → 16kHz 单声道 PCM16(供本地流式 ASR 推流)。 */
-import { getSharedAudioContext } from './sfx';
+import { getSharedAudioContext, markAudioScheduled } from './sfx';
 
 
 /** Float32 采样 → PCM16 小端(削波 clamp 到 [-1, 1])。 */
@@ -61,6 +61,7 @@ export function mergeDictationTail(
  * 几毫秒快起 + 指数衰减的包络保证圆润无爆音。
  */
 function playBubbleTone(ctx: AudioContext, freq: number, startAt: number, slide: number) {
+  markAudioScheduled();
   const osc = ctx.createOscillator();
   const gain = ctx.createGain();
   osc.type = 'sine';
