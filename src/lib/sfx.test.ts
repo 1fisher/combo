@@ -112,6 +112,32 @@ describe('sfx', () => {
     expect(blip100.stop).toHaveBeenCalled();
   });
 
+  it('playComboHit count:一次连吐多颗(2→10 涨 8 颗,0.09s 错开、音高渐变)', async () => {
+    const { mod, ctx } = await loadSfxWithStub();
+    mod.playComboHit(10, 8);
+    const c = ctx();
+    // 每颗 = 主音振荡器 + 破裂瞬态(buffer source)
+    expect(c.createOscillator).toHaveBeenCalledTimes(8);
+    expect(c.createBufferSource).toHaveBeenCalledTimes(8);
+    const blips = c.createOscillator.mock.results.map((r) => r.value as FakeOscillatorNode);
+    // 第 i 颗对应 combo = 10-8+1+i = 3+i:起始频率随数值渐变
+    expect(blips[0].frequency.setValueAtTime.mock.calls[0][0]).toBeCloseTo(950 - 0.03 * 260, 3);
+    expect(blips[7].frequency.setValueAtTime.mock.calls[0][0]).toBeCloseTo(924, 3);
+    // 每颗错开 0.09s 排期,连续吐泡泡
+    expect(blips[1].start).toHaveBeenCalledWith(0.09);
+    expect(blips[7].start).toHaveBeenCalledWith(0.63);
+  });
+
+  it('playComboHit count 越界 clamp:至少 1 颗、至多 16 颗', async () => {
+    const { mod, ctx } = await loadSfxWithStub();
+    mod.playComboHit(5, 0);
+    mod.playComboHit(5, 99);
+    const c = ctx();
+    // 0 → clamp 为 1 颗;99 → clamp 为 16 颗
+    expect(c.createOscillator).toHaveBeenCalledTimes(17);
+    expect(c.createBufferSource).toHaveBeenCalledTimes(17);
+  });
+
   it('上下文未 running(suspended)时跳过播放:不调度,避免解锁后积压的声音迟到爆出', async () => {
     const { mod, ctx } = await loadSfxWithStub();
     // 先取用一次让上下文创建出来,再模拟系统挂起

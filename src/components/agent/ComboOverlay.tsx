@@ -45,6 +45,8 @@ type Phase = 'hidden' | 'shown' | 'shrink';
  *   倾斜摆动 + 单程放大(combo-tilt,scale 1.25→1.3、rotate −5°→0°,600ms
  *   节流,**无心跳脉冲**),同时标题与数字自身同步膨胀(combo-count-bump,
  *   ×1→×1.25→×1),避免高频刷新时「放大→缩小」来回闪烁;
+ * - 气泡音效**跟随数字增长**,与视觉摆动节流解耦:每涨 1 吐一颗泡泡
+ *   (1→2 一颗,2→10 八颗),连续高频更新时像鱼吐泡泡的一串;
  * - 超过阈值时间(2s)无更新(流式结束/连击中断):播放缩小动画渐隐,
  *   下轮连击重新从放大弹出开始。
  */
@@ -52,10 +54,20 @@ export function ComboOverlay({ combo }: { combo: number }) {
   const [display, setDisplay] = useState(combo);
   const [phase, setPhase] = useState<Phase>('hidden');
   const lastBumpRef = useRef(0);
+  /** 上一次的 combo 值:增长量 = 本次 − 上次,决定吐几颗泡泡 */
+  const prevComboRef = useRef(0);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const popRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    // 气泡声跟随数字增长:每涨 1 吐一颗(1→2 一颗,2→10 八颗),像鱼吐泡泡
+    // 一样连续;与视觉摆动的节流解耦,数字涨多少就响多少,不因 600ms 节流
+    // 吞掉中间的增长声
+    const prev = prevComboRef.current;
+    prevComboRef.current = combo;
+    if (combo > prev && useUIPreferences.getState().comboSoundEnabled) {
+      playComboHit(combo, combo - prev);
+    }
     if (combo <= 0) {
       // 连击中断:若正在展示则走缩小渐隐,否则保持隐藏
       setPhase((p) => (p === 'shown' ? 'shrink' : 'hidden'));
@@ -65,11 +77,10 @@ export function ComboOverlay({ combo }: { combo: number }) {
     // 出现/重新出现 → 放大弹出;已展示 → 保持放大态
     setPhase((p) => (p === 'hidden' || p === 'shrink' ? 'shown' : 'shown'));
     // 连续增长:整体倾斜摆动 + 数字自身膨胀(节流),不回缩;
-    // 气泡音效与视觉摆动共用同一节流(600ms),连续高频更新不会连成一串水声
+    // 视觉摆动保持 600ms 节流,避免高频更新时来回抖动
     const now = Date.now();
     if (now - lastBumpRef.current >= BUMP_THROTTLE_MS) {
       lastBumpRef.current = now;
-      if (useUIPreferences.getState().comboSoundEnabled) playComboHit(combo);
       const el = popRef.current;
       if (el) {
         el.classList.remove('combo-bump');

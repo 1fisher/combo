@@ -62,14 +62,28 @@ describe('ComboOverlay 音效', () => {
     useUIPreferences.setState({ comboSoundEnabled: true });
   });
 
-  it('连击出现时播放气泡音效,连续增长被节流不重复播放', () => {
-    const { rerender } = render(<ComboOverlay combo={3} />);
+  it('连击出现时播放气泡音效,数字每涨 1 吐一颗(1→2→3 共 3 颗)', () => {
+    const { rerender } = render(<ComboOverlay combo={0} />); // 挂载时无连击
+    expect(playComboHit).not.toHaveBeenCalled();
+    rerender(<ComboOverlay combo={1} />); // 0→1 首次出现,吐 1 颗
     expect(playComboHit).toHaveBeenCalledTimes(1);
-    expect(playComboHit).toHaveBeenCalledWith(3);
-    // 600ms 内的连续增长只刷新数字,音效与视觉摆动共用节流
-    rerender(<ComboOverlay combo={4} />);
-    rerender(<ComboOverlay combo={5} />);
+    expect(playComboHit).toHaveBeenCalledWith(1, 1);
+    // 视觉摆动仍被 600ms 节流,气泡声不节流:跟随每次数字增长播放
+    rerender(<ComboOverlay combo={2} />);
+    rerender(<ComboOverlay combo={3} />);
+    expect(playComboHit).toHaveBeenCalledTimes(3);
+    expect(playComboHit).toHaveBeenCalledWith(2, 1);
+    expect(playComboHit).toHaveBeenCalledWith(3, 1);
+  });
+
+  it('数字跳涨(2→10)按增量吐 8 颗,像鱼吐泡泡', () => {
+    const { rerender } = render(<ComboOverlay combo={0} />);
+    rerender(<ComboOverlay combo={2} />); // 0→2 吐 2 颗
     expect(playComboHit).toHaveBeenCalledTimes(1);
+    expect(playComboHit).toHaveBeenCalledWith(2, 2);
+    rerender(<ComboOverlay combo={10} />); // 2→10 吐 8 颗
+    expect(playComboHit).toHaveBeenCalledTimes(2);
+    expect(playComboHit).toHaveBeenCalledWith(10, 8);
   });
 
   it('关闭 Combo 特效音效后不播放', () => {

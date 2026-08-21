@@ -3,6 +3,8 @@
  * - playComboHit:连击气泡音——轻量的气泡「啵」爆破音(单振荡器正弦快上滑,
  *   Minnaert 气泡共振配方的轻量版)+ 极短带通噪声的破裂瞬态;气泡随
  *   combo 数值(1→100)略变大,整体保持轻短不沉,与特效的绿→红渐变呼应;
+ *   支持 count 一次连吐多颗:跟随 combo 数字增长,每涨 1 吐一颗、0.09s 错开,
+ *   像鱼吐泡泡的一串;
  * - playNotifyDone:任务完成提示音(双音上行,轻快);
  * - playNotifyAttention:需要交互的提醒音(双短音,略急促)。
  *
@@ -123,51 +125,65 @@ function tone(
   o.stop(at + dur + 0.02);
 }
 
-/** 连击气泡音:轻量的气泡「啵」爆破音,combo 越高气泡略大(起始略低) */
-export function playComboHit(combo: number): void {
+/**
+ * 连击气泡音:轻量的气泡「啵」爆破音,combo 越高气泡略大(起始略低)。
+ * `count` 支持一次连续吐多颗(跟随 combo 数字增长:1→2 吐 1 颗,2→10 吐
+ * 8 颗),每颗按各自数值取音高、错开 0.09s 排期,连成「鱼吐泡泡」似的一串;
+ * 单次连发上限 16 颗,极端跳涨(如 0→50)也不会一口气爆出几十颗。
+ */
+export function playComboHit(combo: number, count = 1): void {
   const c = getSharedAudioContext();
   if (!c || c.state !== 'running') return;
   try {
     const t = c.currentTime;
     const out = masterOut(c, t);
-    const k = Math.max(0, Math.min(100, combo)) / 100;
-    // 轻量小气泡:起始与终点都偏高、时长极短,听感是「啵」而不是「咚」
-    const f0 = 950 - k * 260; // combo=1 → ~947Hz 小气泡;100 → 690Hz 略大
-    const f1 = 1500 + k * 340; // 上滑终点 ~1503Hz → 1840Hz
-    const dur = 0.055 + k * 0.03; // 55ms → 85ms,轻短
-
-    // 主音(blub):正弦指数快上滑 —— 气泡上浮时体积胀大、共振频率升高
-    const blip = c.createOscillator();
-    const bg = c.createGain();
-    blip.type = 'sine';
-    blip.frequency.setValueAtTime(f0, t);
-    blip.frequency.exponentialRampToValueAtTime(f1, t + dur * 0.6);
-    bg.gain.setValueAtTime(0.0001, t);
-    bg.gain.exponentialRampToValueAtTime(0.3 + 0.1 * k, t + 0.003);
-    bg.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    blip.connect(bg);
-    bg.connect(out);
-    blip.start(t);
-    blip.stop(t + dur + 0.01);
-
-    // 破裂瞬态(pop):极短带通噪声,给「爆破」感,轻到不抢戏
-    const noise = noiseSource(c);
-    const bp = c.createBiquadFilter();
-    bp.type = 'bandpass';
-    bp.frequency.value = f1 * 1.4;
-    bp.Q.value = 1.5;
-    const ng = c.createGain();
-    ng.gain.setValueAtTime(0.0001, t);
-    ng.gain.exponentialRampToValueAtTime(0.07 + 0.05 * k, t + 0.002);
-    ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.03);
-    noise.connect(bp);
-    bp.connect(ng);
-    ng.connect(out);
-    noise.start(t);
-    noise.stop(t + 0.035);
+    const n = Math.max(1, Math.min(16, Math.floor(count)));
+    for (let i = 0; i < n; i++) {
+      // 第 i 颗对应最早那次增长:数值从 combo-n+1 到 combo,音高随数值渐变
+      comboBubbleOne(c, out, t + i * 0.09, combo - n + 1 + i);
+    }
   } catch {
     /* 音频失败不影响主流程 */
   }
+}
+
+/** 单颗连击气泡:主音「啵」快上滑 + 极短带通噪声破裂瞬态(见 playComboHit) */
+function comboBubbleOne(c: AudioContext, out: AudioNode, at: number, combo: number): void {
+  const k = Math.max(0, Math.min(100, combo)) / 100;
+  // 轻量小气泡:起始与终点都偏高、时长极短,听感是「啵」而不是「咚」
+  const f0 = 950 - k * 260; // combo=1 → ~947Hz 小气泡;100 → 690Hz 略大
+  const f1 = 1500 + k * 340; // 上滑终点 ~1503Hz → 1840Hz
+  const dur = 0.055 + k * 0.03; // 55ms → 85ms,轻短
+
+  // 主音(blub):正弦指数快上滑 —— 气泡上浮时体积胀大、共振频率升高
+  const blip = c.createOscillator();
+  const bg = c.createGain();
+  blip.type = 'sine';
+  blip.frequency.setValueAtTime(f0, at);
+  blip.frequency.exponentialRampToValueAtTime(f1, at + dur * 0.6);
+  bg.gain.setValueAtTime(0.0001, at);
+  bg.gain.exponentialRampToValueAtTime(0.3 + 0.1 * k, at + 0.003);
+  bg.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+  blip.connect(bg);
+  bg.connect(out);
+  blip.start(at);
+  blip.stop(at + dur + 0.01);
+
+  // 破裂瞬态(pop):极短带通噪声,给「爆破」感,轻到不抢戏
+  const noise = noiseSource(c);
+  const bp = c.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.value = f1 * 1.4;
+  bp.Q.value = 1.5;
+  const ng = c.createGain();
+  ng.gain.setValueAtTime(0.0001, at);
+  ng.gain.exponentialRampToValueAtTime(0.07 + 0.05 * k, at + 0.002);
+  ng.gain.exponentialRampToValueAtTime(0.0001, at + 0.03);
+  noise.connect(bp);
+  bp.connect(ng);
+  ng.connect(out);
+  noise.start(at);
+  noise.stop(at + 0.035);
 }
 
 /** 任务完成:双音上行(A5 → E6,纯五度),轻快不刺耳 */
