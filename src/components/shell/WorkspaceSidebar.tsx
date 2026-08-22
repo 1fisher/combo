@@ -286,12 +286,24 @@ export function WorkspaceSidebar({
   const filterInputRef = useRef<HTMLInputElement | null>(null);
   // 任务筛选(状态/时间)
   const [filter, setFilter] = useState<FilterMode>('all');
-  // 项目拖拽排序:拖中的项目 id + 悬停目标的插入位置(id + before/after 边)
+  // 项目拖拽排序(Pointer Events 原生实现,触摸+鼠标统一):
+  // dragId/dropTarget 只驱动渲染;拖拽会话与最新落点放 ref,避免高频 move 全量重渲染
   const [dragId, setDragId] = useState<string | null>(null);
   const [dropTarget, setDropTarget] = useState<{
     id: string;
     edge: 'before' | 'after';
   } | null>(null);
+  const dragSessionRef = useRef<{
+    id: string;
+    startX: number;
+    startY: number;
+    active: boolean;
+  } | null>(null);
+  // dropTarget 最新值镜像:pointerup 结算时读(setState 异步,直接读 state 可能是旧值)
+  const dropTargetRef = useRef<{ id: string; edge: 'before' | 'after' } | null>(null);
+  dropTargetRef.current = dropTarget;
+  // 项目行 DOM 登记表:命中测试用(jsdom 等环境没有 elementFromPoint)
+  const rowRefs = useRef(new Map<string, HTMLElement>());
   // 右键上下文菜单位置 + 目标 workspace
   const [ctxMenu, setCtxMenu] = useState<{
     x: number;
@@ -485,26 +497,97 @@ export function WorkspaceSidebar({
     );
   }
 
-  /** 项目行拖拽经过时计算插入边(指针在上半/下半决定插到目标前/后) */
-  function projectDragOver(e: React.DragEvent, id: string) {
-    if (!dragId || dragId === id) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    const rect = e.currentTarget.getBoundingClientRect();
+  /** 命中测试:指针落在哪个项目行上。优先 elementFromPoint,不可用时按行矩形回退 */
+  function hitTestRow(x: number, y: number): string | null {
+    let el: Element | null = null;
+    try {
+      el = document.elementFromPoint(x, y);
+    } catch {
+      el = null; // jsdom 等环境未实现
+    }
+    const row = (el as HTMLElement | null)?.closest?.('[data-project-row]') as
+      | HTMLElement
+      | null;
+    if (row?.dataset.projectRow) return row.dataset.projectRow;
+    for (const [id, el2] of rowRefs.current) {
+      const r = el2.getBoundingClientRect();
+      if (r.bottom > r.top && y >= r.top && y <= r.bottom) return id;
+    }
+    return null;
+  }
+
+  /** 拖到滚动容器上下缘时自动滚动,长列表也能把项目拖到可视区外 */
+  function autoScrollDuringDrag(y: number) {
+    const first = rowRefs.current.values().next().value as HTMLElement | undefined;
+    if (!first) return;
+    let p: HTMLElement | null = first.parentElement;
+    while (p) {
+      const style = window.getComputedStyle(p);
+      if (
+        (style.overflowY === 'auto' || style.overflowY === 'scroll') &&
+        p.scrollHeight > p.clientHeight + 1
+      )
+        break;
+      p = p.parentElement;
+    }
+    if (!p) return;
+    const rect = p.getBoundingClientRect();
+    const EDGE = 40;
+    if (y < rect.top + EDGE) p.scrollTop -= 8;
+    else if (y > rect.bottom - EDGE) p.scrollTop += 8;
+  }
+
+  /** 手柄按下:记录起点并捕获指针(触摸+鼠标统一);移动超阈值才真正进入拖拽 */
+  function projectDragPointerDown(e: React.PointerEvent, id: string) {
+    if (editingId === id) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    dragSessionRef.current = { id, startX: e.clientX, startY: e.clientY, active: false };
+    // setPointerCapture:拖出小窗口/移出元素后 move 事件仍派发到手柄
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      // 合成事件/jsdom 下可能抛 NotFoundError,忽略
+    }
+  }
+
+  /** 拖拽移动:超 5px 阈值激活;实时计算悬停目标行与插入边,并驱动边缘自动滚动 */
+  function projectDragPointerMove(e: React.PointerEvent) {
+    const d = dragSessionRef.current;
+    if (!d) return;
+    if (!d.active) {
+      // 阈值内视为点击/误触,不进入拖拽
+      if (Math.hypot(e.clientX - d.startX, e.clientY - d.startY) < 5) return;
+      d.active = true;
+      setDragId(d.id);
+      e.preventDefault();
+    }
+    autoScrollDuringDrag(e.clientY);
+    const id = hitTestRow(e.clientX, e.clientY);
+    if (!id || id === d.id) {
+      setDropTarget(null);
+      return;
+    }
+    const row = rowRefs.current.get(id);
+    if (!row) return;
+    const rect = row.getBoundingClientRect();
     const edge = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
     setDropTarget((prev) =>
       prev?.id === id && prev.edge === edge ? prev : { id, edge }
     );
   }
 
-  function projectDragLeave(id: string) {
-    setDropTarget((prev) => (prev?.id === id ? null : prev));
-  }
-
-  function projectDrop(e: React.DragEvent, id: string) {
-    e.preventDefault();
-    const source = dragId ?? e.dataTransfer.getData('text/plain');
-    if (source && dropTarget?.id === id) commitReorder(source, id, dropTarget.edge);
+  /** 抬起/取消:结算排序(取消不结算)并清理拖拽状态 */
+  function projectDragPointerUp(e: React.PointerEvent, cancel = false) {
+    const d = dragSessionRef.current;
+    dragSessionRef.current = null;
+    if (!d?.active) return;
+    try {
+      (e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId);
+    } catch {
+      // 忽略
+    }
+    const t = dropTargetRef.current;
+    if (!cancel && t && t.id !== d.id) commitReorder(d.id, t.id, t.edge);
     setDragId(null);
     setDropTarget(null);
   }
@@ -740,14 +823,16 @@ export function WorkspaceSidebar({
               {workspaces?.map((w) => (
                 <div
                   key={w.id}
+                  ref={(el) => {
+                    if (el) rowRefs.current.set(w.id, el);
+                    else rowRefs.current.delete(w.id);
+                  }}
+                  data-project-row={w.id}
                   className={cn(
                     'group relative flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-hover',
                     active === w.id && 'bg-surface-hover',
                     dragId === w.id && 'opacity-40'
                   )}
-                  onDragOver={(e) => projectDragOver(e, w.id)}
-                  onDragLeave={() => projectDragLeave(w.id)}
-                  onDrop={(e) => projectDrop(e, w.id)}
                   onClick={() => {
                     setActive(w.id);
                     onNavigate?.();
@@ -768,18 +853,12 @@ export function WorkspaceSidebar({
                   <span
                     aria-label={`拖动排序 ${projectName(w)}`}
                     title="拖动排序"
-                    draggable={editingId !== w.id}
-                    onDragStart={(e) => {
-                      setDragId(w.id);
-                      e.dataTransfer.effectAllowed = 'move';
-                      e.dataTransfer.setData('text/plain', w.id);
-                    }}
-                    onDragEnd={() => {
-                      setDragId(null);
-                      setDropTarget(null);
-                    }}
+                    onPointerDown={(e) => projectDragPointerDown(e, w.id)}
+                    onPointerMove={projectDragPointerMove}
+                    onPointerUp={projectDragPointerUp}
+                    onPointerCancel={(e) => projectDragPointerUp(e, true)}
                     onClick={(e) => e.stopPropagation()}
-                    className="-ml-1 flex shrink-0 cursor-grab touch-none items-center rounded p-0.5 text-foreground-subtlest transition-colors hover:text-foreground active:cursor-grabbing md:-ml-1.5"
+                    className="-ml-1 flex shrink-0 touch-none cursor-grab items-center rounded p-0.5 text-foreground-subtlest transition-colors hover:text-foreground active:cursor-grabbing md:-ml-1.5"
                   >
                     <GripVertical className="size-3.5" />
                   </span>

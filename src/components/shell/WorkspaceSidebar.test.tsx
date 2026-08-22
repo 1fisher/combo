@@ -249,42 +249,70 @@ describe('WorkspaceSidebar', () => {
     expect(rowB.querySelector('[aria-label="该项目有任务正在处理中"]')).toBeNull();
   });
 
-  it('drag-to-reorder project rows calls the reorder API with the new order', async () => {
+  it('pointer-drag-to-reorder project rows calls the reorder API with the new order', async () => {
     wrap();
     const rowA = (await projSection().findByText('项目A')).closest('div')!;
     const rowB = projSection().getByText('项目B').closest('div')!;
-    // 拖动手柄在每个项目行最前面,只有手柄可拖起
-    const handleA = rowA.querySelector('[aria-label="拖动排序 项目A"]')!;
-    expect(handleA.getAttribute('draggable')).toBe('true');
+    // 原生 Pointer Events 实现,不再有 HTML5 draggable
     expect(rowA.getAttribute('draggable')).toBeNull();
-    // 模拟把手柄拖到项目B 行的下半部(插到 B 之后)
-    const dt = {
-      setData: vi.fn(),
-      getData: vi.fn(() => 'w1'),
-      dropEffect: 'none',
-      effectAllowed: 'none',
-    };
-    fireEvent.dragStart(handleA, { dataTransfer: dt });
-    fireEvent.dragOver(rowB, { dataTransfer: dt, clientY: 100 });
-    fireEvent.drop(rowB, { dataTransfer: dt });
+    expect(rowA.dataset.projectRow).toBe('w1');
+    const handleA = rowA.querySelector('[aria-label="拖动排序 项目A"]')!;
+    // 行矩形打桩(jsdom 无布局):行A 0-40、行B 40-80
+    const rectOf = (top: number) => ({
+      top,
+      bottom: top + 40,
+      height: 40,
+      left: 0,
+      right: 300,
+      width: 300,
+      x: 0,
+      y: top,
+      toJSON() {},
+    });
+    Object.defineProperty(rowA, 'getBoundingClientRect', { value: () => rectOf(0) });
+    Object.defineProperty(rowB, 'getBoundingClientRect', { value: () => rectOf(40) });
+    // 从手柄按下,拖到行 B 下半部(插到 B 之后)后抬起
+    fireEvent.pointerDown(handleA, {
+      pointerId: 1,
+      pointerType: 'mouse',
+      button: 0,
+      clientX: 10,
+      clientY: 5,
+    });
+    fireEvent.pointerMove(handleA, { pointerId: 1, clientX: 10, clientY: 70 });
+    fireEvent.pointerUp(handleA, { pointerId: 1, clientX: 10, clientY: 70 });
     await waitFor(() => {
       expect(reorderWorkspaces).toHaveBeenCalledWith(['w2', 'w1']);
     });
   });
 
-  it('drag-over shows the insertion indicator on the hovered row', async () => {
+  it('pointer drag-over shows the insertion indicator on the hovered row', async () => {
     wrap();
     const rowA = (await projSection().findByText('项目A')).closest('div')!;
     const rowB = projSection().getByText('项目B').closest('div')!;
+    const rectOf = (top: number) => ({
+      top,
+      bottom: top + 40,
+      height: 40,
+      left: 0,
+      right: 300,
+      width: 300,
+      x: 0,
+      y: top,
+      toJSON() {},
+    });
+    Object.defineProperty(rowA, 'getBoundingClientRect', { value: () => rectOf(0) });
+    Object.defineProperty(rowB, 'getBoundingClientRect', { value: () => rectOf(40) });
     const handleA = rowA.querySelector('[aria-label="拖动排序 项目A"]')!;
-    const dt = {
-      setData: vi.fn(),
-      getData: vi.fn(() => 'w1'),
-      dropEffect: 'none',
-      effectAllowed: 'none',
-    };
-    fireEvent.dragStart(handleA, { dataTransfer: dt });
-    fireEvent.dragOver(rowB, { dataTransfer: dt, clientY: 100 });
+    // touch 指针类型走同一条 Pointer Events 路径
+    fireEvent.pointerDown(handleA, {
+      pointerId: 1,
+      pointerType: 'touch',
+      button: 0,
+      clientX: 10,
+      clientY: 5,
+    });
+    fireEvent.pointerMove(handleA, { pointerId: 1, clientX: 10, clientY: 50 });
     await waitFor(() => {
       expect(rowB.querySelector('span[aria-hidden]')).not.toBeNull();
     });
