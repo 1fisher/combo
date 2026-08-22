@@ -30,27 +30,27 @@ export function comboHue(combo: number): number {
   return Math.round(120 * (1 - clamped / 100));
 }
 
-/** 距上次 combo 更新超过该时长(与连击中断阈值一致)无更新 → 缩回原大小 */
-const IDLE_SHRINK_MS = 2000;
+/** 距上次 combo 更新超过该时长(与连击中断阈值一致)无更新 → 缩小渐隐关闭 */
+const IDLE_CLOSE_MS = 2000;
 
 type Phase = 'hidden' | 'shown' | 'shrink';
 
 /**
  * 会话区中央的连击浮动特效(拳皇连招风):
- * 数字增长时放大并保持,超时无更新平滑缩回原大小(不消失),combo 归零才渐隐移除。
+ * 数字增长时放大并保持,超时无更新(2s)播放缩小渐隐动画后关闭,combo 归零立即渐隐移除。
  * - 颜色随 combo 数值从绿(1)渐变到红(100),100+ 保持红色;
  * - 数字增长:整体经 transition 平滑放大到 scale(1.3) 并**保持**——连续增长
  *   期间一直停在大尺寸,无呼吸脉冲、无来回缩放闪烁;
  * - 气泡音效跟随数字增长:每涨 1 吐一颗泡泡(1→2 一颗,2→10 八颗),
  *   连续高频更新时像鱼吐泡泡的一串;
- * - 超过阈值时间(2s)无更新(流式结束):整体平滑**缩回原大小 scale(1)**,
- *   保持展示;下次数字增长再次放大;
- * - combo 归零(连击中断/切会话):播放缩小渐隐动画后移除。
+ * - 超过阈值时间(2s)无更新(流式结束):整体播放缩小渐隐动画后**关闭移除**,
+ *   下次数字增长重新从弹出动画开始;
+ * - combo 归零(连击中断/切会话):立即播放缩小渐隐动画后移除。
  */
 export function ComboOverlay({ combo }: { combo: number }) {
   const [display, setDisplay] = useState(combo);
   const [phase, setPhase] = useState<Phase>('hidden');
-  /** 放大态:数字增长置 true(放大并保持),超时无更新置 false(缩回原大小) */
+  /** 放大态:数字增长置 true(放大并保持),超时关闭/combo 归零时置 false */
   const [big, setBig] = useState(false);
   /** 首次出现播放弹出动画;结束后移除 --enter,缩放交给 transition 接管 */
   const [entering, setEntering] = useState(false);
@@ -81,11 +81,16 @@ export function ComboOverlay({ combo }: { combo: number }) {
     // 数字增长 → 放大并保持;首次出现同时播放弹出动画(--enter)
     setBig(true);
     if (fromHidden) setEntering(true);
-    // 超时缩回:超过阈值无更新(流式结束)平滑缩回原大小,保持展示不消失
+    // 超时关闭:超过阈值无更新(流式结束)播放缩小渐隐动画后移除,
+    // 下次数字增长重新从弹出动画开始
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
     idleTimerRef.current = setTimeout(() => {
+      // 已被 combo 归零路径关闭则跳过,避免对隐藏态重播缩小动画
+      if (!visibleRef.current) return;
+      visibleRef.current = false;
       setBig(false);
-    }, IDLE_SHRINK_MS);
+      setPhase('shrink');
+    }, IDLE_CLOSE_MS);
   }, [combo]);
 
   useEffect(

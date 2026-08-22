@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render } from '@testing-library/react';
+import { act, render } from '@testing-library/react';
 import { ComboOverlay, comboHue, nextCombo, settleCombo } from './ComboOverlay';
 import { playComboHit } from '../../lib/sfx';
 import { useUIPreferences } from '../../stores/uiPreferencesStore';
@@ -97,5 +97,65 @@ describe('ComboOverlay 音效', () => {
     expect(playComboHit).toHaveBeenCalledTimes(1);
     rerender(<ComboOverlay combo={0} />);
     expect(playComboHit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('ComboOverlay 超时关闭', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useUIPreferences.setState({ comboSoundEnabled: false });
+  });
+
+  it('2s 无更新播放缩小渐隐动画并关闭,下次增长重新弹出', () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender, container } = render(<ComboOverlay combo={0} />);
+      rerender(<ComboOverlay combo={3} />);
+      expect(container.querySelector('.combo-pop')).not.toBeNull();
+
+      // 未超时仍展示
+      act(() => {
+        vi.advanceTimersByTime(1999);
+      });
+      expect(container.querySelector('.combo-pop--shrink')).toBeNull();
+
+      // 超时 → 进入缩小渐隐
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      const shrinking = container.querySelector('.combo-pop--shrink');
+      expect(shrinking).not.toBeNull();
+
+      // 缩小动画结束(onAnimationEnd)后彻底移除
+      act(() => {
+        shrinking!.dispatchEvent(
+          new AnimationEvent('animationend', { bubbles: true, animationName: 'combo-shrink' })
+        );
+      });
+      expect(container.querySelector('.combo-pop')).toBeNull();
+
+      // 下次数字增长重新从弹出动画开始
+      rerender(<ComboOverlay combo={4} />);
+      expect(container.querySelector('.combo-pop--enter')).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('超时前 combo 归零则不再触发超时关闭(避免对隐藏态重播动画)', () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender, container } = render(<ComboOverlay combo={2} />);
+      rerender(<ComboOverlay combo={0} />);
+      const shrinking = container.querySelector('.combo-pop--shrink');
+      expect(shrinking).not.toBeNull();
+      act(() => {
+        vi.advanceTimersByTime(5000);
+      });
+      // 归零路径已把 visibleRef 置 false,超时回调不应改变收缩状态
+      expect(container.querySelector('.combo-pop--shrink')).toBe(shrinking);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
