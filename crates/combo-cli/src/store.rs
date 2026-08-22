@@ -200,7 +200,8 @@ impl ComboDb {
                 path       TEXT NOT NULL,
                 name       TEXT NOT NULL,
                 backend    TEXT NOT NULL,
-                created_at INTEGER NOT NULL
+                created_at INTEGER NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS conversations (
                 id            TEXT PRIMARY KEY,
@@ -284,6 +285,8 @@ impl ComboDb {
             "ALTER TABLE conversations ADD COLUMN api_calls INTEGER NOT NULL DEFAULT 0",
             "ALTER TABLE workspace_config ADD COLUMN model TEXT NOT NULL DEFAULT ''",
             "ALTER TABLE automations ADD COLUMN model TEXT NOT NULL DEFAULT ''",
+            // 项目侧边栏拖动排序:旧库补列,存量行全部为 0 → 回退 created_at 排序,行为不变
+            "ALTER TABLE workspaces ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0",
         ];
         for sql in &mig {
             let _ = conn.execute(sql, []);
@@ -300,8 +303,10 @@ impl ComboDb {
             .lock()
             .unwrap()
             .execute(
-                "INSERT INTO workspaces (id, path, name, backend, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)
+                // 新项目排到已有项目末尾(MAX+1);更新(path/rename/backend)不动 sort_order
+                "INSERT INTO workspaces (id, path, name, backend, created_at, sort_order)
+                 VALUES (?1, ?2, ?3, ?4, ?5,
+                         (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM workspaces))
                  ON CONFLICT(id) DO UPDATE SET path=?2, name=?3, backend=?4",
                 params![
                     w.id,
@@ -332,8 +337,10 @@ impl ComboDb {
 
     pub fn list_workspaces(&self) -> anyhow::Result<Vec<WorkspaceMeta>> {
         let conn = self.conn.lock().unwrap();
+        // 拖动排序优先;未排序过(全 0)的旧库回退创建时间,行为与历史一致
         let mut stmt = conn.prepare(
-            "SELECT id, path, name, backend FROM workspaces ORDER BY created_at ASC",
+            "SELECT id, path, name, backend FROM workspaces
+             ORDER BY sort_order ASC, created_at ASC",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok(WorkspaceMeta {
@@ -387,6 +394,41 @@ impl ComboDb {
                 "UPDATE workspaces SET path=?1 WHERE id=?2",
                 params![path, id],
             )?;
+        Ok(())
+    }
+
+    /// 按传入的 id 顺序重排项目(侧边栏拖动排序落库)。
+    /// 列表未包含的项目保持相对顺序追加在末尾;事务保证要么全部生效要么不变。
+    pub fn reorder_workspaces(&self, ordered_ids: &[String]) -> anyhow::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
+        // 先把传入顺序写为 0..n
+        for (i, id) in ordered_ids.iter().enumerate() {
+            tx.execute(
+                "UPDATE workspaces SET sort_order=?1 WHERE id=?2",
+                params![i as i64, id],
+            )?;
+        }
+        // 未列出的项目按现有顺序追加在末尾
+        let listed: std::collections::HashSet<&str> =
+            ordered_ids.iter().map(|s| s.as_str()).collect();
+        let mut stmt = tx.prepare(
+            "SELECT id FROM workspaces ORDER BY sort_order ASC, created_at ASC",
+        )?;
+        let rest: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .filter_map(|r| r.ok())
+            .filter(|id| !listed.contains(id.as_str()))
+            .collect();
+        drop(stmt);
+        let base = ordered_ids.len() as i64;
+        for (i, id) in rest.iter().enumerate() {
+            tx.execute(
+                "UPDATE workspaces SET sort_order=?1 WHERE id=?2",
+                params![base + i as i64, id],
+            )?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -1231,6 +1273,76 @@ mod tests {
         db.upsert_workspace(&ws("w1", "旧名")).unwrap();
         db.rename_workspace("w1", "新名").unwrap();
         assert_eq!(db.get_workspace("w1").unwrap().unwrap().name, "新名");
+    }
+
+    #[test]
+    fn new_workspaces_append_in_insertion_order() {
+        let db = ComboDb::in_memory();
+        for id in ["w3", "w1", "w2"] {
+            db.upsert_workspace(&ws(id, id)).unwrap();
+        }
+        let ids: Vec<String> = db
+            .list_workspaces()
+            .unwrap()
+            .iter()
+            .map(|w| w.id.clone())
+            .collect();
+        assert_eq!(ids, vec!["w3", "w1", "w2"]);
+    }
+
+    #[test]
+    fn reorder_workspaces_persists_order() {
+        let db = ComboDb::in_memory();
+        for id in ["w1", "w2", "w3"] {
+            db.upsert_workspace(&ws(id, id)).unwrap();
+        }
+        db.reorder_workspaces(&["w3".into(), "w1".into(), "w2".into()])
+            .unwrap();
+        let ids: Vec<String> = db
+            .list_workspaces()
+            .unwrap()
+            .iter()
+            .map(|w| w.id.clone())
+            .collect();
+        assert_eq!(ids, vec!["w3", "w1", "w2"]);
+    }
+
+    #[test]
+    fn reorder_appends_unlisted_and_ignores_unknown_ids() {
+        let db = ComboDb::in_memory();
+        for id in ["w1", "w2", "w3"] {
+            db.upsert_workspace(&ws(id, id)).unwrap();
+        }
+        // 只传 w2、w1(不含 w3),附带一个不存在的 id
+        db.reorder_workspaces(&["w2".into(), "ghost".into(), "w1".into()])
+            .unwrap();
+        let ids: Vec<String> = db
+            .list_workspaces()
+            .unwrap()
+            .iter()
+            .map(|w| w.id.clone())
+            .collect();
+        // w3 未列出 → 按原相对顺序追加在末尾;ghost 不存在被忽略
+        assert_eq!(ids, vec!["w2", "w1", "w3"]);
+    }
+
+    #[test]
+    fn update_does_not_touch_sort_order() {
+        let db = ComboDb::in_memory();
+        db.upsert_workspace(&ws("w1", "一")).unwrap();
+        db.upsert_workspace(&ws("w2", "二")).unwrap();
+        db.reorder_workspaces(&["w2".into(), "w1".into()]).unwrap();
+        // 重命名/换目录不应影响排序
+        db.rename_workspace("w2", "改名").unwrap();
+        db.update_workspace_path("w1", "/tmp/other").unwrap();
+        db.upsert_workspace(&ws("w2", "改名")).unwrap();
+        let ids: Vec<String> = db
+            .list_workspaces()
+            .unwrap()
+            .iter()
+            .map(|w| w.id.clone())
+            .collect();
+        assert_eq!(ids, vec!["w2", "w1"]);
     }
 
     #[test]

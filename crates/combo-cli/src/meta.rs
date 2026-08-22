@@ -85,6 +85,11 @@ impl MetaStore {
         Ok(true)
     }
 
+    /// 按传入顺序重排项目(侧边栏拖动排序),未包含的项目追加在末尾。
+    pub fn reorder(&self, ordered_ids: &[String]) -> anyhow::Result<()> {
+        self.db.reorder_workspaces(ordered_ids)
+    }
+
     /// 更新项目后端类型,返回是否找到。
     pub fn update_backend(&self, id: &str, backend: BackendType) -> anyhow::Result<bool> {
         let before = self.db.get_workspace(id)?;

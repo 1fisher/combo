@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
 import { useAgentStore } from '../../stores/agentStore';
 import { isTauri } from '../../lib/connection';
 import { open } from '@tauri-apps/plugin-dialog';
-import { changeWorkspacePath, createWorkspace } from '../../lib/api';
+import { changeWorkspacePath, createWorkspace, reorderWorkspaces } from '../../lib/api';
 
 const workspaces: { id: string; path: string; name?: string }[] = [];
 
@@ -47,6 +47,7 @@ vi.mock('../../lib/api', () => ({
     if (w) w.path = path;
     return w;
   }),
+  reorderWorkspaces: vi.fn(async () => ({ ok: true })),
   listSkills: vi.fn(async () => []),
   getWorkspaceConfig: vi.fn(async () => ({ options: {} })),
   setConfigKey: vi.fn(async () => undefined),
@@ -246,5 +247,42 @@ describe('WorkspaceSidebar', () => {
     );
     const rowB = projSection().getByText('项目B').closest('div')!;
     expect(rowB.querySelector('[aria-label="该项目有任务正在处理中"]')).toBeNull();
+  });
+
+  it('drag-to-reorder project rows calls the reorder API with the new order', async () => {
+    wrap();
+    const rowA = (await projSection().findByText('项目A')).closest('div')!;
+    const rowB = projSection().getByText('项目B').closest('div')!;
+    expect(rowA.getAttribute('draggable')).toBe('true');
+    // 模拟把项目A 拖到项目B 行的下半部(插到 B 之后)
+    const dt = {
+      setData: vi.fn(),
+      getData: vi.fn(() => 'w1'),
+      dropEffect: 'none',
+      effectAllowed: 'none',
+    };
+    fireEvent.dragStart(rowA, { dataTransfer: dt });
+    fireEvent.dragOver(rowB, { dataTransfer: dt, clientY: 100 });
+    fireEvent.drop(rowB, { dataTransfer: dt });
+    await waitFor(() => {
+      expect(reorderWorkspaces).toHaveBeenCalledWith(['w2', 'w1']);
+    });
+  });
+
+  it('drag-over shows the insertion indicator on the hovered row', async () => {
+    wrap();
+    const rowA = (await projSection().findByText('项目A')).closest('div')!;
+    const rowB = projSection().getByText('项目B').closest('div')!;
+    const dt = {
+      setData: vi.fn(),
+      getData: vi.fn(() => 'w1'),
+      dropEffect: 'none',
+      effectAllowed: 'none',
+    };
+    fireEvent.dragStart(rowA, { dataTransfer: dt });
+    fireEvent.dragOver(rowB, { dataTransfer: dt, clientY: 100 });
+    await waitFor(() => {
+      expect(rowB.querySelector('span[aria-hidden]')).not.toBeNull();
+    });
   });
 });

@@ -250,7 +250,8 @@ export function WorkspaceSidebar({
   activeView?: AppView;
 } = {}) {
   const qc = useQueryClient();
-  const { workspaces, isLoading, create, rename, changePath, remove } = useWorkspaces();
+  const { workspaces, isLoading, create, rename, changePath, remove, reorder } =
+    useWorkspaces();
   const active = useActiveWorkspaceId();
   const setActive = useAgentStore((s) => s.setActiveWorkspace);
   const setActiveSessionId = useAgentStore((s) => s.setActiveSessionId);
@@ -291,6 +292,12 @@ export function WorkspaceSidebar({
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
   // 任务筛选(状态/时间)
   const [filter, setFilter] = useState<FilterMode>('all');
+  // 项目拖拽排序:拖中的项目 id + 悬停目标的插入位置(id + before/after 边)
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [dropTarget, setDropTarget] = useState<{
+    id: string;
+    edge: 'before' | 'after';
+  } | null>(null);
   // 右键上下文菜单位置 + 目标 workspace
   const [ctxMenu, setCtxMenu] = useState<{
     x: number;
@@ -457,6 +464,42 @@ export function WorkspaceSidebar({
     ws: { id: string; name?: string; path: string }
   ) {
     setCtxMenu({ x, y, ws });
+  }
+
+  /** 拖拽落点结算:把 dragId 移动到 targetId 的 before/after,乐观更新 + 落库 */
+  function commitReorder(dragId: string, targetId: string, edge: 'before' | 'after') {
+    if (!workspaces || dragId === targetId) return;
+    const ids = workspaces.map((w) => w.id).filter((id) => id !== dragId);
+    const idx = ids.indexOf(targetId);
+    if (idx === -1) return;
+    ids.splice(edge === 'before' ? idx : idx + 1, 0, dragId);
+    reorder(ids).catch((e) =>
+      setSidebarError(e instanceof Error ? e.message : String(e))
+    );
+  }
+
+  /** 项目行拖拽经过时计算插入边(指针在上半/下半决定插到目标前/后) */
+  function projectDragOver(e: React.DragEvent, id: string) {
+    if (!dragId || dragId === id) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    const rect = e.currentTarget.getBoundingClientRect();
+    const edge = e.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+    setDropTarget((prev) =>
+      prev?.id === id && prev.edge === edge ? prev : { id, edge }
+    );
+  }
+
+  function projectDragLeave(id: string) {
+    setDropTarget((prev) => (prev?.id === id ? null : prev));
+  }
+
+  function projectDrop(e: React.DragEvent, id: string) {
+    e.preventDefault();
+    const source = dragId ?? e.dataTransfer.getData('text/plain');
+    if (source && dropTarget?.id === id) commitReorder(source, id, dropTarget.edge);
+    setDragId(null);
+    setDropTarget(null);
   }
 
   async function confirmDelete() {
@@ -734,15 +777,39 @@ export function WorkspaceSidebar({
                 <div
                   key={w.id}
                   className={cn(
-                    'group flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-hover',
-                    active === w.id && 'bg-surface-hover'
+                    'group relative flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[13px] transition-colors hover:bg-surface-hover',
+                    active === w.id && 'bg-surface-hover',
+                    dragId === w.id && 'opacity-40'
                   )}
+                  draggable={editingId !== w.id}
+                  onDragStart={(e) => {
+                    setDragId(w.id);
+                    e.dataTransfer.effectAllowed = 'move';
+                    e.dataTransfer.setData('text/plain', w.id);
+                  }}
+                  onDragEnd={() => {
+                    setDragId(null);
+                    setDropTarget(null);
+                  }}
+                  onDragOver={(e) => projectDragOver(e, w.id)}
+                  onDragLeave={() => projectDragLeave(w.id)}
+                  onDrop={(e) => projectDrop(e, w.id)}
                   onClick={() => {
                     setActive(w.id);
                     onNavigate?.();
                   }}
                   onContextMenu={(e) => openContextMenu(e, w)}
                 >
+                  {/* 拖拽插入位置指示线(上半=插到本行前,下半=插到本行后) */}
+                  {dropTarget?.id === w.id && (
+                    <span
+                      aria-hidden
+                      className={cn(
+                        'pointer-events-none absolute inset-x-1 z-10 h-0.5 rounded-full bg-brand',
+                        dropTarget.edge === 'before' ? 'top-0' : 'bottom-0'
+                      )}
+                    />
+                  )}
                   <Folder
                     className={cn(
                       'size-4 shrink-0',
