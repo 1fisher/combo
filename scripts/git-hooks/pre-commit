@@ -1,12 +1,12 @@
 #!/bin/sh
 # combo 主分支保护 hook(pre-commit):
-# 禁止直接在 main 分支上提交代码,强制走 worktree + feat 分支流程(见 AGENTS.md「Git 开发流程」)。
+# 禁止在 main 分支上做任何本地提交(含 *.md 文档),强制走 worktree + feat 分支 + PR
+# 流程(见 AGENTS.md「Git 开发流程」)。远端 GitHub 分支保护同样对管理员强制生效,
+# main 上的直接推送会被一律拒绝。
 #
 # 放行条件:
 #   - 当前分支不是 main;
-#   - 合并提交(存在 MERGE_HEAD,即 `git merge` 产生的收尾提交);
-#   - 暂存的改动全部是 *.md 文档(文档类改动允许直接进 main);
-#   - 紧急情况可用 `git commit --no-verify` 显式跳过。
+#   - 合并提交(存在 MERGE_HEAD,避免本地 git merge 卡在半途;正常合并请用 gh pr merge)。
 #
 # 安装位置:全局 core.hooksPath 目录(combo 署名功能接管为
 # ~/.config/combo/git-hooks/,repo 内 .git/hooks 在 hooksPath 存在时会被忽略)。
@@ -26,21 +26,11 @@ branch=$(git symbolic-ref --short HEAD 2>/dev/null) || exit 0
 gitdir=$(git rev-parse --git-dir)
 [ -f "$gitdir/MERGE_HEAD" ] && exit 0
 
-staged=$(git diff --cached --name-only)
-[ -z "$staged" ] && exit 0
-
-code_files=$(echo "$staged" | grep -v '\.md$')
-if [ -n "$code_files" ]; then
-  echo ""
-  echo "⛔ 禁止直接在 main 分支上提交代码(AGENTS.md「Git 开发流程」)。"
-  echo "   请改用 worktree + feat 分支:"
-  echo "     git worktree add ../combo-feat-xxx -b feat/xxx"
-  echo ""
-  echo "   本次暂存中包含非文档文件:"
-  echo "$code_files" | sed 's/^/     - /'
-  echo ""
-  echo "   文档(*.md)改动可直接提交;确需绕过请用 git commit --no-verify。"
-  exit 1
-fi
-
-exit 0
+echo ""
+echo "⛔ 禁止在 main 分支上直接提交(push 到 main 必须走 PR,GitHub 对管理员也强制生效)。"
+echo "   请改用 worktree + feat 分支 + PR 流程:"
+echo "     git worktree add ../combo-feat-xxx -b feat/xxx"
+echo "     # ...开发、提交..."
+echo "     git push -u origin feat/xxx"
+echo "     gh pr create && gh pr merge --merge"
+exit 1
