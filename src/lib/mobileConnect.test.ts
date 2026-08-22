@@ -3,6 +3,9 @@ import {
   parseConnectUrl,
   applyConnection,
   shouldShowMobileConnect,
+  buildTargetUrl,
+  rememberLastServer,
+  getLastServer,
 } from './mobileConnect';
 import { getAccessToken } from './authToken';
 import { getProxyUrlOverride } from './connection';
@@ -71,6 +74,40 @@ describe('shouldShowMobileConnect', () => {
   it('远端移动视口:展示', () => {
     expect(shouldShowMobileConnect({ ...base, isMobile: true })).toBe(true);
   });
+
+  it('原生壳(Android/iOS):永远展示(本地 origin 是壳自身)', () => {
+    expect(shouldShowMobileConnect({ ...base, isNative: true })).toBe(true);
+    // 即便已持有令牌/本地回环,壳内也先展示连接屏
+    expect(shouldShowMobileConnect({ ...base, isNative: true, hasToken: true })).toBe(true);
+    expect(shouldShowMobileConnect({ ...base, isNative: true, isLocalOrigin: true })).toBe(true);
+  });
+});
+
+describe('buildTargetUrl(原生壳目标页)', () => {
+  it('拼接 token,不含 lan', () => {
+    expect(buildTargetUrl({ server: 'https://proxy.apesoft.cn', token: 't1', lan: null })).toBe(
+      'https://proxy.apesoft.cn/?token=t1',
+    );
+  });
+
+  it('携带 lan 时一并拼入查询串', () => {
+    const url = buildTargetUrl({
+      server: 'https://proxy.apesoft.cn/',
+      token: 't 2',
+      lan: 'http://192.168.1.5:18236',
+    });
+    expect(url).toBe(
+      'https://proxy.apesoft.cn/?token=t+2&lan=http%3A%2F%2F192.168.1.5%3A18236',
+    );
+  });
+});
+
+describe('最近连接地址记忆(原生壳预填)', () => {
+  it('记住后可读回,未设置时为 null', () => {
+    expect(getLastServer()).toBeNull();
+    rememberLastServer('https://proxy.apesoft.cn');
+    expect(getLastServer()).toBe('https://proxy.apesoft.cn');
+  });
 });
 
 describe('applyConnection', () => {
@@ -124,5 +161,18 @@ describe('applyConnection', () => {
     });
     expect(r.ok).toBe(false);
     expect(r.error).toMatch(/无法连接到该地址/);
+  });
+
+  it('verifyHealth:false(原生壳):跳过预检直接成功,不发请求', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const r = await applyConnection(
+      { server: 'https://proxy.example.com', token: 'tok-native', lan: null },
+      { verifyHealth: false },
+    );
+    expect(r.ok).toBe(true);
+    expect(r.error).toBeUndefined();
+    expect(getAccessToken()).toBe('tok-native');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
