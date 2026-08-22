@@ -16,7 +16,7 @@
     "tauri": "tauri",
     "cap:sync": "npm run build && cap sync android",
     "cap:android": "npm run build && cap sync android && cap open android",
-    "apk": "npm run build && cap sync android && cd android && ./gradlew assembleDebug"
+    "apk": "npm run build && cap sync android && cd android && ./gradlew assembleRelease"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.0",

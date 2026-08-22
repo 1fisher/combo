@@ -1,5 +1,9 @@
 apply plugin: 'com.android.application'
 
+// 从根 package.json 读取版本,保证 APK 版本号与 npm 包版本始终一致
+// (scripts/version.sh 统一维护 package.json 版本)
+def pkgVersion = new groovy.json.JsonSlurper().parseText(rootProject.file("../package.json").text).version
+
 android {
     namespace "dev.combo.ide"
     compileSdk rootProject.ext.compileSdkVersion
@@ -8,7 +12,7 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
-        versionName "1.0"
+        versionName pkgVersion
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,10 +20,39 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        release {
+            // 从 android/keystore.properties 读取正式签名(密钥文件不入库)
+            def ks = new Properties()
+            def keystorePropertiesFile = rootProject.file("keystore.properties")
+            if (keystorePropertiesFile.exists()) {
+                keystorePropertiesFile.withInputStream { ks.load(it) }
+                if (ks['storeFile'] != null) {
+                    storeFile file(ks['storeFile'])
+                    storePassword ks['storePassword']
+                    keyAlias ks['keyAlias']
+                    keyPassword ks['keyPassword']
+                }
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            // 未配置正式签名时回退 debug 签名,保证 release APK 本地可安装测试;
+            // 配置 keystore.properties 后自动切到正式签名
+            if (rootProject.file("keystore.properties").exists()) {
+                signingConfig signingConfigs.release
+            } else {
+                signingConfig signingConfigs.debug
+            }
+        }
+    }
+    // 输出文件名统一为 Combo-<version>.apk(debug/release 各自输出目录,互不冲突)
+    applicationVariants.all { variant ->
+        variant.outputs.all { output ->
+            output.outputFileName = "Combo-${variant.versionName}.apk"
         }
     }
 }
