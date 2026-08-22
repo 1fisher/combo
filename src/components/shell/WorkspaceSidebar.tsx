@@ -24,6 +24,7 @@ import {
   Trash2,
   WandSparkles,
   Waypoints,
+  X,
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import {
@@ -289,9 +290,14 @@ export function WorkspaceSidebar({
   }, [mobileConnectOpen, mobileConnectLoaded]);
   // 会话列表排序 & 筛选
   const [sortMode, setSortMode] = useState<'recent' | 'name'>('recent');
-  const [sortMenuOpen, setSortMenuOpen] = useState(false);
-  // 弹出方向:按钮下方空间不足时向上翻(矮窗口下避免被视口裁掉)
-  const [sortMenuUp, setSortMenuUp] = useState(false);
+  // 任务搜索 + 筛选栏(点「筛选和排序」在任务列表顶部展开)
+  const [filterBarOpen, setFilterBarOpen] = useState(false);
+  const [taskQuery, setTaskQuery] = useState('');
+  // 搜索框右侧的筛选项下拉
+  const [filterMenuOpen, setFilterMenuOpen] = useState(false);
+  // 弹出方向:下方空间不足时向上翻(矮窗口下避免被视口裁掉)
+  const [filterMenuUp, setFilterMenuUp] = useState(false);
+  const filterInputRef = useRef<HTMLInputElement | null>(null);
   // 任务筛选(状态/时间)
   const [filter, setFilter] = useState<FilterMode>('all');
   // 项目拖拽排序:拖中的项目 id + 悬停目标的插入位置(id + before/after 边)
@@ -373,13 +379,26 @@ export function WorkspaceSidebar({
     };
   }, []);
 
-  // 排序菜单外部点击关闭
+  // 筛选项下拉外部点击关闭
   useEffect(() => {
-    if (!sortMenuOpen) return;
-    const close = () => setSortMenuOpen(false);
+    if (!filterMenuOpen) return;
+    const close = () => setFilterMenuOpen(false);
     window.addEventListener('click', close);
     return () => window.removeEventListener('click', close);
-  }, [sortMenuOpen]);
+  }, [filterMenuOpen]);
+
+  // 展开筛选栏时自动聚焦搜索框
+  useEffect(() => {
+    if (filterBarOpen) filterInputRef.current?.focus();
+  }, [filterBarOpen]);
+
+  // 收起任务搜索/筛选栏并重置条件
+  const closeTaskFilterBar = () => {
+    setFilterBarOpen(false);
+    setTaskQuery('');
+    setFilter('all');
+    setFilterMenuOpen(false);
+  };
 
   // 展开/全部收起:同步两个折叠分区
   function toggleExpandAll() {
@@ -682,78 +701,28 @@ export function WorkspaceSidebar({
             >
               <Maximize2 className={cn('size-3.5 transition-transform', projOpen && taskOpen && 'rotate-180')} />
             </Button>
-            <div className="relative">
-              <Button
-                variant="ghost"
-                size="icon-xs"
-                className={cn(
-                  'shrink-0 text-foreground-subtle hover:text-foreground',
-                  filter !== 'all' && 'text-brand'
-                )}
-                aria-label="筛选和排序"
-                title="筛选和排序"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  // 注意:e.currentTarget 在事件处理返回后会被 React 置空,
-                  // 不能放进 setState updater 里读取,先在这里取好矩形
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  setSortMenuUp(window.innerHeight - rect.bottom < 280);
-                  setSortMenuOpen((o) => !o);
-                }}
-              >
-                <ListFilter className="size-3.5" />
-              </Button>
-              {sortMenuOpen && (
-                <div
-                  className={cn(
-                  'absolute left-0 z-50 min-w-[160px] rounded-lg border border-border bg-popover p-1 text-[13px] text-popover-foreground shadow-lg',
-                  sortMenuUp ? 'bottom-full mb-2' : 'top-full mt-2'
-                )}
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <div className="px-2 py-1 text-xs font-medium text-foreground-subtlest">排序方式</div>
-                  {([
-                    ['recent', '最近优先'],
-                    ['name', '按名称'],
-                  ] as const).map(([mode, label]) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      className={cn(
-                        'flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left transition-colors hover:bg-surface-hover',
-                        sortMode === mode && 'text-brand'
-                      )}
-                      onClick={() => {
-                        setSortMode(mode);
-                        setSortMenuOpen(false);
-                      }}
-                    >
-                      {label}
-                      {sortMode === mode && <ChevronDown className="size-3.5 -rotate-90" />}
-                    </button>
-                  ))
-                  }
-                  <div className="mt-1 border-t border-border px-2 pb-1 pt-1.5 text-xs font-medium text-foreground-subtlest">筛选</div>
-                  {FILTER_MODES.map(([mode, label]) => (
-                    <button
-                      key={mode}
-                      type="button"
-                      className={cn(
-                        'flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left transition-colors hover:bg-surface-hover',
-                        filter === mode && 'text-brand'
-                      )}
-                      onClick={() => {
-                        setFilter(mode);
-                        setSortMenuOpen(false);
-                      }}
-                    >
-                      {label}
-                      {filter === mode && <ChevronDown className="size-3.5 -rotate-90" />}
-                    </button>
-                  ))}
-                </div>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              className={cn(
+                'shrink-0 text-foreground-subtle hover:text-foreground',
+                (filterBarOpen || filter !== 'all' || taskQuery) && 'text-brand'
               )}
-            </div>
+              aria-label="筛选和排序"
+              title="筛选和排序"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (tab !== 'tasks') setTab('tasks');
+                if (filterBarOpen) {
+                  // 再次点击收起并清空搜索与筛选条件
+                  closeTaskFilterBar();
+                } else {
+                  setFilterBarOpen(true);
+                }
+              }}
+            >
+              <ListFilter className="size-3.5" />
+            </Button>
           </div>
         </div>
         {/* 分区列表 */}
@@ -883,17 +852,119 @@ export function WorkspaceSidebar({
               )}
             </Section>
           ) : (
-            <Section
-              title={activeWs ? projectName(activeWs) : '任务'}
-              open={taskOpen}
-              onToggle={() => setTaskOpen((o) => !o)}
-              onAdd={() => {
-                void onNewTask();
-              }}
-              addLabel="新建任务"
-            >
-              <ConversationList onNavigate={onNavigate} sortMode={sortMode} filter={filter} />
-            </Section>
+            <>
+              {/* 任务搜索 + 筛选栏:点「筛选和排序」展开;输入按标题过滤,chip 下拉选筛选项/排序 */}
+              {filterBarOpen && (
+                <div
+                  className="mb-1 flex flex-none items-center gap-1 px-2.5"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md border border-border bg-surface px-2 focus-within:border-brand">
+                    <Search className="size-3 shrink-0 text-foreground-subtlest" />
+                    <input
+                      ref={filterInputRef}
+                      value={taskQuery}
+                      onChange={(e) => setTaskQuery(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Escape') closeTaskFilterBar();
+                      }}
+                      placeholder="搜索任务…"
+                      aria-label="搜索任务"
+                      data-testid="task-search-input"
+                      className="h-full min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-foreground-subtlest"
+                    />
+                  </div>
+                  <div className="relative shrink-0">
+                    <button
+                      type="button"
+                      className={cn(
+                        'flex h-7 items-center gap-1 rounded-md border px-2 text-xs transition-colors',
+                        filter !== 'all'
+                          ? 'border-brand text-brand'
+                          : 'border-border text-foreground-subtle hover:text-foreground'
+                      )}
+                      aria-label="筛选项"
+                      title="筛选项"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        // 注意:e.currentTarget 在事件处理返回后会被 React 置空,先取好矩形
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        setFilterMenuUp(window.innerHeight - rect.bottom < 240);
+                        setFilterMenuOpen((o) => !o);
+                      }}
+                    >
+                      {FILTER_MODES.find(([m]) => m === filter)?.[1] ?? '全部'}
+                      <ChevronDown className={cn('size-3 transition-transform', filterMenuOpen && 'rotate-180')} />
+                    </button>
+                    {filterMenuOpen && (
+                      <div
+                        className={cn(
+                          'absolute right-0 z-50 min-w-[140px] rounded-lg border border-border bg-popover p-1 text-[13px] text-popover-foreground shadow-lg',
+                          filterMenuUp ? 'bottom-full mb-2' : 'top-full mt-2'
+                        )}
+                      >
+                        {FILTER_MODES.map(([mode, label]) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            className={cn(
+                              'flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left transition-colors hover:bg-surface-hover',
+                              filter === mode && 'text-brand'
+                            )}
+                            onClick={() => {
+                              setFilter(mode);
+                              setFilterMenuOpen(false);
+                            }}
+                          >
+                            {label}
+                            {filter === mode && <ChevronDown className="size-3.5 -rotate-90" />}
+                          </button>
+                        ))}
+                        <div className="mt-1 border-t border-border px-2 pb-1 pt-1.5 text-xs font-medium text-foreground-subtlest">排序方式</div>
+                        {([['recent', '最近优先'], ['name', '按名称']] as const).map(([mode, label]) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            className={cn(
+                              'flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left transition-colors hover:bg-surface-hover',
+                              sortMode === mode && 'text-brand'
+                            )}
+                            onClick={() => {
+                              setSortMode(mode);
+                              setFilterMenuOpen(false);
+                            }}
+                          >
+                            {label}
+                            {sortMode === mode && <ChevronDown className="size-3.5 -rotate-90" />}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    className="shrink-0 text-foreground-subtle hover:text-foreground"
+                    aria-label="关闭筛选"
+                    title="关闭筛选"
+                    onClick={closeTaskFilterBar}
+                  >
+                    <X className="size-3.5" />
+                  </Button>
+                </div>
+              )}
+              <Section
+                title={activeWs ? projectName(activeWs) : '任务'}
+                open={taskOpen}
+                onToggle={() => setTaskOpen((o) => !o)}
+                onAdd={() => {
+                  void onNewTask();
+                }}
+                addLabel="新建任务"
+              >
+                <ConversationList onNavigate={onNavigate} sortMode={sortMode} filter={filter} query={taskQuery} />
+              </Section>
+            </>
           )}
         </div>
       </div>

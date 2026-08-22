@@ -23,6 +23,8 @@ interface ConversationListProps {
   sortMode?: SortMode;
   /** 状态/时间筛选,默认 all(不筛) */
   filter?: FilterMode;
+  /** 标题关键词过滤(不区分大小写;来自侧边栏搜索框) */
+  query?: string;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -71,6 +73,7 @@ export function ConversationList({
   onNavigate,
   sortMode = 'recent',
   filter = 'all',
+  query = '',
 }: ConversationListProps = {}) {
   const workspaceId = useActiveWorkspaceId();
   const activeSessionId = useAgentStore((s) => s.activeSessionId);
@@ -130,12 +133,14 @@ export function ConversationList({
     );
   }
 
+  // 标题关键词过滤(不区分大小写)
+  const q = query.trim().toLowerCase();
   const showList = [...(sessions ?? [])]
     .sort((a, b) => {
       if (sortMode === 'name') return a.title.localeCompare(b.title, 'zh');
       return (b.created_at ?? 0) - (a.created_at ?? 0);
     })
-    .filter((s) => matchFilter(s, filter));
+    .filter((s) => matchFilter(s, filter) && (!q || s.title.toLowerCase().includes(q)));
 
   return (
     <div className="flex flex-col gap-0.5">
@@ -172,7 +177,7 @@ export function ConversationList({
       )}
       {!isLoading && showList.length === 0 && !hasNextPage && (
         <div className="px-3 py-2 text-[13px] text-foreground-subtle">
-          {EMPTY_TEXT[filter]}
+          {q ? `没有匹配「${query.trim()}」的任务` : EMPTY_TEXT[filter]}
         </div>
       )}
     </div>
