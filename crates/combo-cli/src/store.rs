@@ -109,6 +109,20 @@ pub struct AccessToken {
     pub revoked: bool,
 }
 
+/// 移动端远程访问的持久化隧道配置(单行表,`id=1`)。
+/// 用户开启「移动端远程控制」后落盘,serve 启动时自动恢复隧道连接;
+/// 令牌超期/撤销/手动停止隧道时清除。
+#[derive(Clone, Debug)]
+pub struct RelayConfig {
+    /// 中转服务器 WebSocket 地址。
+    pub relay_url: String,
+    /// 访问令牌。
+    pub token: String,
+    /// 本地 serve 地址(隧道转发目标;重启后端口可能变化,恢复时用当前端口重建)。
+    pub local_proxy_url: String,
+    pub created_at: i64,
+}
+
 /// 自动化任务(定时任务)。`schedule` 为 JSON 字符串,
 /// 结构见 `automation.rs::Schedule`。
 #[derive(Clone, Debug)]
@@ -235,6 +249,16 @@ impl ComboDb {
                 expires_at   INTEGER,
                 last_used_at INTEGER,
                 revoked      INTEGER NOT NULL DEFAULT 0
+            );
+            -- 移动端远程访问的持久化隧道配置(单行):用户开启过「移动端远程控制」
+            -- 后落盘,serve 启动时据此自动恢复桌面端 → combo-relay 的隧道连接,
+            -- 令牌超期/撤销时清除。id 恒为 1(单行表)。
+            CREATE TABLE IF NOT EXISTS relay_config (
+                id              INTEGER PRIMARY KEY CHECK (id = 1),
+                relay_url       TEXT NOT NULL,
+                token           TEXT NOT NULL,
+                local_proxy_url TEXT NOT NULL,
+                created_at      INTEGER NOT NULL
             );
             CREATE TABLE IF NOT EXISTS workspace_config (
                 workspace_id    TEXT PRIMARY KEY,
@@ -933,6 +957,57 @@ impl ComboDb {
             .lock()
             .unwrap()
             .execute("UPDATE access_tokens SET revoked=1", [])?;
+        Ok(())
+    }
+
+    // ---------- relay_config(移动端远程访问持久化) ----------
+
+    /// 写入持久化隧道配置(单行,覆盖旧值)。
+    pub fn set_relay_config(
+        &self,
+        relay_url: &str,
+        token: &str,
+        local_proxy_url: &str,
+    ) -> anyhow::Result<()> {
+        self.conn.lock().unwrap().execute(
+            "INSERT INTO relay_config (id, relay_url, token, local_proxy_url, created_at)
+             VALUES (1, ?1, ?2, ?3, ?4)
+             ON CONFLICT(id) DO UPDATE SET
+               relay_url = excluded.relay_url,
+               token = excluded.token,
+               local_proxy_url = excluded.local_proxy_url,
+               created_at = excluded.created_at",
+            params![relay_url, token, local_proxy_url, unix_secs()],
+        )?;
+        Ok(())
+    }
+
+    /// 读取持久化隧道配置(无配置返回 None)。
+    pub fn get_relay_config(&self) -> anyhow::Result<Option<RelayConfig>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT relay_url, token, local_proxy_url, created_at
+             FROM relay_config WHERE id = 1",
+        )?;
+        let mut rows = stmt.query([])?;
+        let row = match rows.next()? {
+            Some(r) => r,
+            None => return Ok(None),
+        };
+        Ok(Some(RelayConfig {
+            relay_url: row.get(0)?,
+            token: row.get(1)?,
+            local_proxy_url: row.get(2)?,
+            created_at: row.get(3)?,
+        }))
+    }
+
+    /// 清除持久化隧道配置(停止远程访问 / 令牌失效时)。
+    pub fn clear_relay_config(&self) -> anyhow::Result<()> {
+        self.conn
+            .lock()
+            .unwrap()
+            .execute("DELETE FROM relay_config WHERE id = 1", [])?;
         Ok(())
     }
 
@@ -1643,6 +1718,31 @@ mod tests {
         for t in db.list_tokens().unwrap() {
             assert!(t.revoked);
         }
+    }
+
+    #[test]
+    fn relay_config_roundtrip_and_clear() {
+        let db = ComboDb::in_memory();
+        // 未配置时返回 None
+        assert!(db.get_relay_config().unwrap().is_none());
+
+        db.set_relay_config("wss://relay.example.com/v1/relay/tunnel", "tok-abc", "http://127.0.0.1:18236")
+            .unwrap();
+        let cfg = db.get_relay_config().unwrap().unwrap();
+        assert_eq!(cfg.relay_url, "wss://relay.example.com/v1/relay/tunnel");
+        assert_eq!(cfg.token, "tok-abc");
+        assert_eq!(cfg.local_proxy_url, "http://127.0.0.1:18236");
+
+        // 覆盖更新(单行,不追加)
+        db.set_relay_config("wss://relay2.example.com/tunnel", "tok-xyz", "http://127.0.0.1:18237")
+            .unwrap();
+        let cfg = db.get_relay_config().unwrap().unwrap();
+        assert_eq!(cfg.token, "tok-xyz");
+        assert_eq!(db.get_relay_config().unwrap().unwrap().relay_url, "wss://relay2.example.com/tunnel");
+
+        // 清除
+        db.clear_relay_config().unwrap();
+        assert!(db.get_relay_config().unwrap().is_none());
     }
 
     #[test]

@@ -930,6 +930,9 @@ pub async fn serve_listener(
 ) -> Result<()> {
     // 启动自动化调度器(定时任务后台扫描;服务退出时随进程结束)。
     state.automations.start(state.clone());
+    // 恢复移动端远程访问隧道:用户开启过「移动端远程控制」时,配置已持久化
+    // 在 sqlite,重启后自动重连 combo-relay(令牌未撤销且未超期),手机端可随时访问。
+    relay::restore_persisted_relay(&state).await;
     // 同步 git 提交署名 hook(全局 core.hooksPath):开关开启时所有 git
     // 提交(含命令行/其他工具)自动追加 "Generated with Combo vX.Y.Z"(含
     // 版本号,每次启动重新同步),关闭时移除。

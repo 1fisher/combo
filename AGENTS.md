@@ -955,6 +955,19 @@ health 都走同一 base,跨域由 CORS 放开。
     `online` 立即重连(退避可被唤醒);P2P dead 状态在页面恢复可见时清零
     冷却立即重试(`bindResumeRetry`,绕过 2 分钟 RETRY_AFTER_MS);终端 WS
     断开后自动退避重连(1s→10s,页面恢复可见立即重连,`TerminalPanel`)。
+  - **持久化 + 重启自动恢复**:用户开启过「移动端远程控制」后,隧道配置
+    (relay_url/token)落盘 sqlite 单行表 `relay_config`(`store.rs`),
+    `serve_listener` 启动时 `relay::restore_persisted_relay` 自动重建隧道
+    (本地代理地址用当前实际端口重建,防重启后端口 +1 变化)——桌面端重启
+    后手机端仍可随时访问,**令牌超期/撤销前持续保持**。令牌有效性与「超期
+    即停」由 `spawn_token_watchdog`(60s 轮询:配置被换/清除则过时退出,
+    令牌撤销/过期则停隧道+清配置)兜底;`revoke_token`/`revoke_all_tokens`
+    撤销的是当前持久化令牌时立即清配置(无竞态:只删旧配置,用户刷新令牌
+    时 `start_relay` 会重新写入新配置)。`RelayStatus` 扩展
+    `persisted/token/expires_at/token_valid` 字段:前端
+    `MobileConnectDialog` 重开时优先**复用现有令牌**(不重新生成、不断开
+    手机端;隧道未连接时用现有令牌重连),侧边栏移动端按钮经
+    `useRelayStatus`(30s 轮询)显示「已开启」绿点。
 - **P2P 直连(扫码后优先直连,中转兜底)**:移动端扫码后的连接方式按优先级
   自动选择,三级回退,**LAN 直连 → WebRTC P2P → relay 中转**:
   1. **局域网直连**:桌面端(Tauri 模式)默认绑定 `0.0.0.0`(可用
