@@ -56,3 +56,26 @@ if (typeof window.matchMedia !== 'function') {
       dispatchEvent: () => false,
     }) as MediaQueryList) as typeof window.matchMedia;
 }
+
+// jsdom 未实现 AnimationEvent:React 在模块加载时会探测 `AnimationEvent in window`,
+// 缺失时把 onAnimationEnd/animationend 注册到 webkit 前缀事件上,测试里派发的
+// animationend 事件到不了 React 合成事件(如 ComboOverlay 的动画结束回调)。
+// 这里在 react-dom 加载前补一个最小实现,保证按标准事件名注册。
+if (typeof globalThis.AnimationEvent === 'undefined') {
+  class AnimationEventPolyfill extends Event {
+    animationName: string;
+    elapsedTime: number;
+    pseudoElement: string;
+    constructor(type: string, init: AnimationEventInit = {}) {
+      super(type, init);
+      this.animationName = init.animationName ?? '';
+      this.elapsedTime = init.elapsedTime ?? 0;
+      this.pseudoElement = init.pseudoElement ?? '';
+    }
+  }
+  Object.defineProperty(globalThis, 'AnimationEvent', {
+    configurable: true,
+    writable: true,
+    value: AnimationEventPolyfill,
+  });
+}
