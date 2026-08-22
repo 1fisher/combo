@@ -88,7 +88,8 @@ describe('ToolCallCard', () => {
       ['definition', 'lucide-locate-fixed', 'text-green-500'],
       ['references', 'lucide-link-2', 'text-green-500'],
       ['hover', 'lucide-message-square-text', 'text-green-500'],
-      ['bash', 'lucide-terminal', 'text-red-500'],
+      // bash 已从 danger(红)改为 info(蓝):终端执行是高频常规操作,红色过于刺眼
+      ['bash', 'lucide-terminal', 'text-brand'],
       ['mcp_unknown_tool', 'lucide-wrench', 'text-muted-foreground'],
     ];
     for (const [name, cls, color] of cases) {
