@@ -1113,6 +1113,7 @@ fn build_router(
             "/v1/workspaces",
             get(workspace::list).post(workspace::create),
         )
+        .route("/v1/workspaces/reorder", post(workspace::reorder))
         .route(
             "/v1/workspaces/{id}",
             get(workspace::get)

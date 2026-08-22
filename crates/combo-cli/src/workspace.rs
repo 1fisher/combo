@@ -10,19 +10,56 @@ use axum::response::Response;
 use serde_json::{json, Value};
 use std::path::Path as FsPath;
 
-/// GET /v1/workspaces — 列出 combo 的所有 workspace(按 path 去重)。
+/// GET /v1/workspaces — 列出 combo 的所有 workspace(按 path 去重,按用户排序)。
 pub async fn list(State(state): State<AppState>) -> Response {
+    // list_workspaces 已按 sort_order(拖动排序;未排过序回退创建时间)升序返回。
+    // 同 path 的重复别名行:展示位置取先出现(用户排序靠前)的,
+    // 胜出 id 取后出现的(与历史「保留最新创建」语义一致,会话归属不变)。
     let workspaces = state.meta.list();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let deduped: Vec<&WorkspaceMeta> = workspaces
-        .iter()
-        .rev()
-        .filter(|w| seen.insert(w.path.to_string_lossy().to_string()))
-        .collect();
-    let mut deduped: Vec<_> = deduped.into_iter().rev().collect();
-    deduped.sort_by_key(|w| w.path.to_string_lossy().to_string());
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut deduped: Vec<&WorkspaceMeta> = Vec::new();
+    for w in &workspaces {
+        let key = w.path.to_string_lossy().to_string();
+        match seen.get(&key) {
+            Some(&i) => deduped[i] = w,
+            None => {
+                seen.insert(key, deduped.len());
+                deduped.push(w);
+            }
+        }
+    }
     let arr: Vec<Value> = deduped.iter().map(|w| workspace_json(w)).collect();
     json_ok(&json!(arr))
+}
+
+/// POST /v1/workspaces/reorder — 侧边栏拖动排序落库。
+///
+/// 请求体:`{ order: [id1, id2, ...] }`,为完整的期望顺序;
+/// 未包含的项目保持相对顺序追加在末尾。
+pub async fn reorder(
+    State(state): State<AppState>,
+    axum::extract::Json(body): axum::extract::Json<Value>,
+) -> Response {
+    let Some(order) = body.get("order").and_then(|v| v.as_array()) else {
+        return json_err(StatusCode::BAD_REQUEST, "缺少 order 数组");
+    };
+    let ids: Vec<String> = order
+        .iter()
+        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+        .collect();
+    if ids.len() != order.len() {
+        return json_err(StatusCode::BAD_REQUEST, "order 必须是字符串数组");
+    }
+    if ids.is_empty() {
+        return json_err(StatusCode::BAD_REQUEST, "order 不能为空");
+    }
+    if let Err(e) = state.meta.reorder(&ids) {
+        return json_err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            &format!("重排项目失败: {e}"),
+        );
+    }
+    json_ok(&json!({ "ok": true }))
 }
 
 /// POST /v1/workspaces — 创建 workspace。`name` 缺省时取目录 basename。

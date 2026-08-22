@@ -38,6 +38,14 @@ export function changeWorkspacePath(id: string, path: string): Promise<Api.Works
   });
 }
 
+/** 项目拖动排序落库:`order` 为完整期望顺序(id 数组)。 */
+export function reorderWorkspaces(order: string[]): Promise<{ ok: boolean }> {
+  return apiRequest('/v1/workspaces/reorder', {
+    method: 'POST',
+    body: { order },
+  });
+}
+
 /** 敏感目录访问被拦(403 dir_permission_required)时为 true。 */
 export function isDirPermissionError(
   e: unknown,

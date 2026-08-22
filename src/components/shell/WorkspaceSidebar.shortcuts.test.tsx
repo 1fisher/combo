@@ -10,6 +10,7 @@ import { useShortcutStore } from '../../stores/shortcutStore';
 vi.mock('../../lib/api', () => ({
   listWorkspaces: vi.fn(async () => []),
   listSessions: vi.fn(async () => []),
+  reorderWorkspaces: vi.fn(async () => ({ ok: true })),
   listSessionsPage: vi.fn(async (_w: string, limit: number, offset: number) => ({
     sessions: [],
     total: 0,
