@@ -1,8 +1,8 @@
 /**
  * 音效:Web Audio 程序化合成,不依赖任何音频资源文件。
- * - playComboHit:连击气泡音——轻量的气泡「啵」爆破音(单振荡器正弦快上滑,
- *   Minnaert 气泡共振配方的轻量版)+ 极短带通噪声的破裂瞬态;气泡随
- *   combo 数值(1→100)略变大,整体保持轻短不沉,与特效的绿→红渐变呼应;
+ * - playComboHit:连击气泡音——轻量的气泡上升声(单振荡器正弦快上滑,
+ *   Minnaert 气泡共振配方的轻量版);气泡随 combo 数值(1→100)略变大,
+ *   整体保持轻短不沉,与特效的绿→红渐变呼应;
  *   支持 count 一次连吐多颗:跟随 combo 数字增长,每涨 1 吐一颗、0.09s 错开,
  *   像鱼吐泡泡的一串;
  * - playNotifyDone:任务完成提示音(双音上行,轻快);
@@ -21,8 +21,6 @@
  */
 
 let ctx: AudioContext | null = null;
-/** 缓存的白噪声 buffer(气泡破裂瞬态复用) */
-let noiseBuf: AudioBuffer | null = null;
 /** 当前共享上下文的创建时刻:高龄兜底重建的计时起点 */
 let ctxCreatedAt = 0;
 /** 连续观察到 suspended 的取用次数:手势内反复 resume 也救不回 → 判定卡死换新 */
@@ -224,18 +222,6 @@ function masterOut(c: AudioContext, t: number): GainNode {
   return g;
 }
 
-/** 短噪声源:0.12s 白噪声,循环取用不需要整段 */
-function noiseSource(c: AudioContext): AudioBufferSourceNode {
-  if (!noiseBuf) {
-    noiseBuf = c.createBuffer(1, Math.floor(c.sampleRate * 0.12), c.sampleRate);
-    const data = noiseBuf.getChannelData(0);
-    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
-  }
-  const src = c.createBufferSource();
-  src.buffer = noiseBuf;
-  return src;
-}
-
 /** 单音:快起音 + 指数衰减,合成「叮」类提示音的基本素材 */
 function tone(
   c: AudioContext,
@@ -260,7 +246,7 @@ function tone(
 }
 
 /**
- * 连击气泡音:轻量的气泡「啵」爆破音,combo 越高气泡略大(起始略低)。
+ * 连击气泡音:轻量的气泡上升声(气泡上浮「啵」),combo 越高气泡略大(起始略低)。
  * `count` 支持一次连续吐多颗(跟随 combo 数字增长:1→2 吐 1 颗,2→10 吐
  * 8 颗),每颗按各自数值取音高、错开 0.09s 排期,连成「鱼吐泡泡」似的一串;
  * 单次连发上限 16 颗,极端跳涨(如 0→50)也不会一口气爆出几十颗。
@@ -281,7 +267,7 @@ export function playComboHit(combo: number, count = 1): void {
   }
 }
 
-/** 单颗连击气泡:主音「啵」快上滑 + 极短带通噪声破裂瞬态(见 playComboHit) */
+/** 单颗连击气泡:气泡上升主音「啵」快上滑(仅上升声,无爆破瞬态) */
 function comboBubbleOne(c: AudioContext, out: AudioNode, at: number, combo: number): void {
   const k = Math.max(0, Math.min(100, combo)) / 100;
   // 轻量小气泡:起始与终点都偏高、时长极短,听感是「啵」而不是「咚」
@@ -302,22 +288,6 @@ function comboBubbleOne(c: AudioContext, out: AudioNode, at: number, combo: numb
   bg.connect(out);
   blip.start(at);
   blip.stop(at + dur + 0.01);
-
-  // 破裂瞬态(pop):极短带通噪声,给「爆破」感,轻到不抢戏
-  const noise = noiseSource(c);
-  const bp = c.createBiquadFilter();
-  bp.type = 'bandpass';
-  bp.frequency.value = f1 * 1.4;
-  bp.Q.value = 1.5;
-  const ng = c.createGain();
-  ng.gain.setValueAtTime(0.0001, at);
-  ng.gain.exponentialRampToValueAtTime(0.07 + 0.05 * k, at + 0.002);
-  ng.gain.exponentialRampToValueAtTime(0.0001, at + 0.03);
-  noise.connect(bp);
-  bp.connect(ng);
-  ng.connect(out);
-  noise.start(at);
-  noise.stop(at + 0.035);
 }
 
 /** 任务完成:双音上行(A5 → E6,纯五度),轻快不刺耳 */
