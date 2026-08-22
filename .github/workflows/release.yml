@@ -136,7 +136,9 @@ jobs:
           git checkout -b "$BRANCH"
           git add -A
           git commit -m "chore: bump version to ${VERSION}"
-          git push origin "$BRANCH"
+          # --force:上次 run 失败可能残留同名分支(如 pr create 权限问题),
+          # bump 分支为一次性 bot 分支,强推安全
+          git push --force origin "$BRANCH"
           gh pr create --head "$BRANCH" \
             --title "chore: bump version to ${VERSION}" \
             --body "版本发布自动 bump(release 工作流)"
