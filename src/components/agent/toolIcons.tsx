@@ -58,9 +58,9 @@ export type ToolRisk = 'safe' | 'info' | 'warn' | 'danger';
 /**
  * 工具风险分级(颜色语义):
  * - safe(绿):只读无副作用——read/search/grep/web_search/时间/LSP 导航
- * - info(蓝):纯交互,不触碰磁盘——question/todo_write
+ * - info(蓝):纯交互或有执行动作但常规使用无破坏——question/todo_write/bash
  * - warn(黄):变更会话状态或派生动作,但不直接改文件——compact/agent
- * - danger(红):写文件或执行任意命令,有破坏性——write/replace/bash
+ * - danger(红):写文件等直接破坏性操作——write/replace
  */
 const TOOL_RISK: Record<string, ToolRisk> = {
   read: 'safe',
@@ -78,8 +78,9 @@ const TOOL_RISK: Record<string, ToolRisk> = {
   agent: 'warn',
   write: 'danger',
   replace: 'danger',
-  bash: 'danger',
-  run_shell_command: 'danger',
+  // 终端执行是高频常规操作,红色警示过于刺眼,归为中性蓝
+  bash: 'info',
+  run_shell_command: 'info',
 };
 
 const RISK_CLASSES: Record<ToolRisk, string> = {
