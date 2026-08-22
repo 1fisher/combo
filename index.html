@@ -2,7 +2,7 @@
 <html lang="zh-CN" class="dark">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Combo — AI Agent IDE</title>
     <meta
       name="description"
@@ -10,10 +10,17 @@
     />
     <!-- 浏览器标签页图标:复用应用图标(public/combo-icon.png,与 Tauri/托盘图标同源) -->
     <link rel="icon" type="image/png" href="/combo-icon.png" />
-    <link rel="apple-touch-icon" href="/combo-icon.png" />
-    <link rel="apple-touch-icon" sizes="128x128" href="/combo-icon.png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
+    <!-- PWA:移动端可安装(Add to Home Screen),manifest 提供名称/图标/主题色 -->
+    <link rel="manifest" href="/manifest.json" />
     <!-- 移动端浏览器状态栏底色,对齐深色主题 --background(#101116) -->
     <meta name="theme-color" content="#101116" />
+    <!-- iOS 全屏/独立应用模式:隐藏浏览器 UI,调整状态栏样式,支持刘海屏安全区 -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Combo" />
     <!-- 启动画面(加载动画):纯 CSS + vanilla JS(public/splash.js),不依赖 React,
          在 bundle 下载/解析期间即可展示。React 挂载完成后由 main.tsx 派发
          combo:app-ready 事件,splash 收尾(粒子合并成图标 → 流光 combo → 淡出)。

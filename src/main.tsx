@@ -1,13 +1,16 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import './index.css';
 import { AppShell } from './components/shell/AppShell';
+import { MobileConnectScreen } from './components/shell/MobileConnectScreen';
 import { Liquid } from './components/canvasui/Liquid';
 import { useUIPreferences } from './stores/uiPreferencesStore';
 import { extractTokenFromUrl, getAccessToken } from './lib/authToken';
 import { extractLanFromUrl, maybeRedirectToLan } from './lib/lanDirect';
 import { ensureP2pConnected } from './lib/p2p/transport';
 import { isTauri } from './lib/connection';
+import { registerServiceWorker } from './lib/pwa';
+import { shouldShowMobileConnectScreen } from './lib/mobileConnect';
 
 // 移动端扫码打开后,从 URL 提取访问令牌并持久化(移除地址栏中的 token)。
 const token = extractTokenFromUrl();
@@ -19,6 +22,9 @@ if (!isTauri()) {
   // 未走局域网直连时,异步建立 WebRTC P2P(失败静默回退中转)
   if (!redirected) void ensureP2pConnected();
 }
+
+// 移动端 PWA:注册 Service Worker(仅生产/非 Tauri),使其可安装到主屏幕并提供离线壳。
+registerServiceWorker();
 
 // 桌面模式下隐藏窗口标题栏的产品名,仅保留浏览器标签页标题。
 if (isTauri()) {
@@ -52,6 +58,15 @@ function AppRoot() {
     });
     return () => cancelAnimationFrame(raf);
   }, []);
+
+  // 移动端/已安装 PWA 且未持有令牌时,先展示「连接设置屏」(扫码/手动配置),
+  // 连接成功后进入工作台。桌面端/本地回环/已连接场景直接进入 AppShell。
+  const [showConnect, setShowConnect] = useState<boolean>(() => shouldShowMobileConnectScreen());
+
+  if (showConnect) {
+    return <MobileConnectScreen onConnected={() => setShowConnect(false)} />;
+  }
+
   if (liquidEnabled) {
     return (
       <Liquid className="h-dvh w-full" {...liquidOptions}>
