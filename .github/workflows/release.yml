@@ -286,5 +286,10 @@ jobs:
           if [ "${{ needs.build.result }}" != "success" ]; then
             echo "⚠️ 部分构建失败,仍发布已上传的产物"
           fi
-          gh release edit "$TAG" --draft=false 2>/dev/null || echo "Release $TAG 可能已发布"
+          # -R 必须显式指定:本 job 无 checkout,gh 无法从 git remote 推断仓库,
+          # 此前该步骤一直静默失败(历史 v0.2.15/17/18 停在 Draft 就是这个原因)
+          if ! gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --draft=false; then
+            echo "⚠️ 自动发布失败,请到 Releases 页手动 Publish $TAG"
+            exit 1
+          fi
           echo "✓ Release $TAG 已发布"
