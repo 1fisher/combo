@@ -183,6 +183,74 @@ pub struct RelayStatus {
     pub connected: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// 是否已持久化远程访问配置(用户开启过;serve 重启会自动恢复)。
+    pub persisted: bool,
+    /// 持久化令牌明文(本地端点,前端复用二维码用);未持久化为 None。
+    pub token: Option<String>,
+    /// 持久化令牌的过期时间(unix 秒;None 表示永不过期);未持久化为 None。
+    pub expires_at: Option<i64>,
+    /// 持久化令牌是否仍有效(未撤销且未过期);未持久化为 None。
+    pub token_valid: Option<bool>,
+}
+
+/// 检查令牌是否仍有效(存在、未撤销、未过期)。
+/// 与 `auth::verify` 的区别:不更新 last_used_at(桌面端轮询/恢复不应污染
+/// 「手机端最后使用时间」统计)。
+fn token_is_valid(state: &crate::serve::AppState, token: &str) -> bool {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    match state.meta.db().get_token(token) {
+        Ok(Some(t)) => !t.revoked && t.expires_at.map_or(true, |e| e >= now),
+        _ => false,
+    }
+}
+
+/// 后台 watchdog:每 60s 检查持久化隧道的访问令牌是否仍有效。
+/// - 配置已被更换/清除(用户刷新令牌或停止了远程访问) → 本 watchdog 过时,退出;
+/// - 令牌被撤销/超期 → 停止隧道并清除持久化配置(「除非超期」语义)。
+pub fn spawn_token_watchdog(state: crate::serve::AppState, token: String) {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(60));
+        tick.tick().await; // 首次 tick 立即返回,先睡满一轮再检查
+        loop {
+            tick.tick().await;
+            let db = state.meta.db();
+            // 持久化配置已不指向本 watchdog 的令牌(用户刷新/停止) → 过时退出
+            let current = db.get_relay_config().ok().flatten();
+            if !current.as_ref().is_some_and(|c| c.token == token) {
+                return;
+            }
+            if !token_is_valid(&state, &token) {
+                tracing::info!("[relay] 访问令牌已撤销或超期,停止远程访问隧道");
+                state.relay.stop().await;
+                let _ = db.clear_relay_config();
+                return;
+            }
+        }
+    });
+}
+
+/// 恢复持久化的远程访问隧道(serve 启动时调用)。
+///
+/// 用户开启过「移动端远程控制」后,隧道配置落在 sqlite;桌面端重启后这里
+/// 自动重建隧道连接(令牌未撤销且未超期时),方便手机端随时访问。
+pub async fn restore_persisted_relay(state: &crate::serve::AppState) {
+    let Some(cfg) = state.meta.db().get_relay_config().ok().flatten() else {
+        return;
+    };
+    if !token_is_valid(state, &cfg.token) {
+        tracing::info!("[relay] 持久化的访问令牌已失效,跳过自动恢复并清除配置");
+        let _ = state.meta.db().clear_relay_config();
+        return;
+    }
+    tracing::info!("[relay] 恢复持久化的远程访问隧道: {}", cfg.relay_url);
+    // 重启后端口可能变化(被占用自动 +1),用当前实际端口重建本地代理地址
+    let local = format!("http://127.0.0.1:{}", state.local_port);
+    state.relay.p2p.reset(Some(local.clone()));
+    state.relay.start(cfg.relay_url.clone(), cfg.token.clone(), local).await;
+    spawn_token_watchdog(state.clone(), cfg.token);
 }
 
 pub async fn start_relay(
@@ -204,11 +272,28 @@ pub async fn start_relay(
     Ok(()) => {
         tracing::info!("[relay] 试连成功,启动后台隧道循环");
         state.relay.p2p.reset(Some(local.clone()));
-        state.relay.start(body.url, body.token, local).await;
+        state.relay.start(body.url.clone(), body.token.clone(), local.clone()).await;
+        // 持久化配置:桌面端重启后自动恢复隧道(令牌未超期前持续可用)
+        if let Err(e) = state.meta.db().set_relay_config(&body.url, &body.token, &local) {
+            tracing::warn!("[relay] 持久化隧道配置失败(不影响本次连接): {e}");
+        }
+        spawn_token_watchdog(state.clone(), body.token.clone());
+        // 读过期时间需在 move body.token 之前
+        let expires_at = state
+            .meta
+            .db()
+            .get_token(&body.token)
+            .ok()
+            .flatten()
+            .and_then(|t| t.expires_at);
             Json(RelayStatus {
                 running: true,
                 connected: true,
                 error: None,
+                persisted: true,
+                token: Some(body.token),
+                expires_at,
+                token_valid: Some(true),
             })
         }
         Err(e) => {
@@ -217,6 +302,10 @@ pub async fn start_relay(
                 running: false,
                 connected: false,
                 error: Some(e),
+                persisted: false,
+                token: None,
+                expires_at: None,
+                token_valid: None,
             })
         }
     }
@@ -227,20 +316,49 @@ pub async fn stop_relay(
 ) -> Json<RelayStatus> {
     state.relay.p2p.reset(None);
     state.relay.stop().await;
+    // 清除持久化配置:停止远程访问后不再自动恢复
+    let _ = state.meta.db().clear_relay_config();
     Json(RelayStatus {
         running: false,
         connected: false,
         error: None,
+        persisted: false,
+        token: None,
+        expires_at: None,
+        token_valid: None,
     })
 }
 
 pub async fn relay_status(
     State(state): State<crate::serve::AppState>,
 ) -> Json<RelayStatus> {
+    let cfg = state.meta.db().get_relay_config().ok().flatten();
+    let (persisted, token, expires_at, token_valid) = match &cfg {
+        Some(c) => {
+            let exp = state
+                .meta
+                .db()
+                .get_token(&c.token)
+                .ok()
+                .flatten()
+                .and_then(|t| t.expires_at);
+            (
+                true,
+                Some(c.token.clone()),
+                exp,
+                Some(token_is_valid(&state, &c.token)),
+            )
+        }
+        None => (false, None, None, None),
+    };
     Json(RelayStatus {
         running: state.relay.is_running().await,
         connected: state.relay.is_connected(),
         error: state.relay.last_error(),
+        persisted,
+        token,
+        expires_at,
+        token_valid,
     })
 }
 

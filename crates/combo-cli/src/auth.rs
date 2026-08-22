@@ -234,6 +234,17 @@ pub struct RevokeQuery {
     pub all: Option<bool>,
 }
 
+/// 撤销的令牌是当前持久化远程访问令牌时,清除自动恢复配置。
+/// 隧道本身由 relay watchdog 在 60s 内停止(避免与用户刷新令牌时的
+/// start_relay 竞态:此处只删旧配置,新令牌 start 会重新写入)。
+pub fn clear_relay_if_matches(state: &AppState, token: &str) {
+    if let Ok(Some(cfg)) = state.meta.db().get_relay_config() {
+        if cfg.token == token {
+            let _ = state.meta.db().clear_relay_config();
+        }
+    }
+}
+
 /// DELETE /v1/auth/token?token=&all= — 撤销令牌。
 pub async fn revoke_token(
     State(state): State<AppState>,
@@ -243,11 +254,19 @@ pub async fn revoke_token(
         if let Err(e) = state.meta.db().revoke_all_tokens() {
             return error(StatusCode::INTERNAL_SERVER_ERROR, &format!("撤销失败: {e}"));
         }
+        // 全部令牌已撤销,持久化的远程访问令牌必然失效 → 一并清除自动恢复配置
+        let _ = state.meta.db().clear_relay_config();
         return ok_json(json!({ "revoked": "all" }));
     }
     match q.token {
         Some(t) => match state.meta.db().revoke_token(&t) {
-            Ok(true) => ok_json(json!({ "revoked": t })),
+            Ok(true) => {
+                // 撤销的是当前持久化远程访问令牌 → 清除自动恢复配置(隧道由
+                // relay watchdog 在 60s 内停止;若用户随后用新令牌重启隧道,
+                // start_relay 会重新写入新配置,此处只删旧配置,无竞态)。
+                clear_relay_if_matches(&state, &t);
+                ok_json(json!({ "revoked": t }))
+            }
             Ok(false) => error(StatusCode::NOT_FOUND, "令牌不存在"),
             Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, &format!("撤销失败: {e}")),
         },
@@ -331,6 +350,67 @@ mod tests {
         assert_eq!(urlencoding_decode("abc"), "abc");
         assert_eq!(urlencoding_decode("a%2Bb"), "a+b");
         assert_eq!(urlencoding_decode("a+b"), "a b");
+    }
+
+    #[tokio::test]
+    async fn revoke_relay_token_clears_persisted_config() {
+        let state = make_state();
+        let tok = generate_token();
+        state.meta.db().insert_token(&tok, "移动端", None).unwrap();
+        state
+            .meta
+            .db()
+            .set_relay_config("wss://relay.example.com/v1/relay/tunnel", &tok, "http://127.0.0.1:18236")
+            .unwrap();
+        let resp = revoke_token(
+            State(state.clone()),
+            Query(RevokeQuery { token: Some(tok), all: None }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        // 撤销的正是持久化远程访问令牌 → 自动恢复配置被清除
+        assert!(state.meta.db().get_relay_config().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn revoke_other_token_keeps_persisted_config() {
+        let state = make_state();
+        let relay_tok = generate_token();
+        state.meta.db().insert_token(&relay_tok, "移动端", None).unwrap();
+        state
+            .meta
+            .db()
+            .set_relay_config("wss://relay.example.com/v1/relay/tunnel", &relay_tok, "http://127.0.0.1:18236")
+            .unwrap();
+        let other = generate_token();
+        state.meta.db().insert_token(&other, "其他", None).unwrap();
+        let resp = revoke_token(
+            State(state.clone()),
+            Query(RevokeQuery { token: Some(other), all: None }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        // 撤销的是别的令牌 → 远程访问配置不受影响
+        assert!(state.meta.db().get_relay_config().unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn revoke_all_tokens_clears_persisted_config() {
+        let state = make_state();
+        let tok = generate_token();
+        state.meta.db().insert_token(&tok, "移动端", None).unwrap();
+        state
+            .meta
+            .db()
+            .set_relay_config("wss://relay.example.com/v1/relay/tunnel", &tok, "http://127.0.0.1:18236")
+            .unwrap();
+        let resp = revoke_token(
+            State(state.clone()),
+            Query(RevokeQuery { token: None, all: Some(true) }),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        assert!(state.meta.db().get_relay_config().unwrap().is_none());
     }
 
     #[test]

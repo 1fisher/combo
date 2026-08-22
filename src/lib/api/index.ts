@@ -977,6 +977,14 @@ export interface RelayStatus {
   running: boolean;
   connected: boolean;
   error?: string;
+  /** 是否已持久化远程访问配置(用户开启过;serve 重启会自动恢复)。 */
+  persisted: boolean;
+  /** 持久化令牌明文(本地端点,前端复用二维码用);未持久化为 null。 */
+  token: string | null;
+  /** 持久化令牌过期时间(unix 秒;null 表示永不过期);未持久化为 null。 */
+  expires_at: number | null;
+  /** 持久化令牌是否仍有效(未撤销且未过期);未持久化为 null。 */
+  token_valid: boolean | null;
 }
 
 export interface LanInfo {

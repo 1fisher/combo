@@ -14,6 +14,7 @@ import { getExternalUrl, getEffectiveExternalUrl } from '../../lib/connection';
 import {
   createAccessToken,
   getLanInfo,
+  getRelayStatus,
   revokeAccessToken,
   startRelayTunnel,
   type CreatedToken,
@@ -107,7 +108,44 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
       setLanInfo(null);
       return;
     }
-    void generateToken();
+    void (async () => {
+      // 复用已开启的远程访问:隧道配置已持久化、令牌未撤销未超期时,直接复用
+      // 现有令牌 —— 不重新生成(重新生成会撤销旧令牌、断开手机端,需重新扫码)。
+      // 桌面端重启后隧道由 serve 自动恢复;这里若检测到隧道未连接(断线重连中),
+      // 用现有令牌重新拉起隧道,手机端令牌不变。
+      try {
+        const s = await getRelayStatus();
+        if (s.persisted && s.token && s.token_valid) {
+          const exp = s.expires_at ?? null;
+          const t: CreatedToken = { token: s.token, label: '移动端扫码', created_at: 0, expires_at: exp };
+          tokenRef.current = t;
+          setTokenInfo(t);
+          if (s.connected) {
+            setTunnelConnected(true);
+          } else {
+            // 持久化但未连接:用现有令牌重连(不换令牌,手机端无需重新扫码)
+            try {
+              const wsUrl = getEffectiveExternalUrl()
+                .replace(/^http/, 'ws')
+                .replace(/\/$/, '') + '/v1/relay/tunnel';
+              const r = await startRelayTunnel(wsUrl, s.token);
+              if (r.connected) setTunnelConnected(true);
+              else setTunnelError(r.error ?? '隧道连接失败,请稍后重试');
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e);
+              setTunnelError(`重新连接隧道失败: ${msg}`);
+            }
+          }
+          getLanInfo()
+            .then(setLanInfo)
+            .catch(() => setLanInfo(null));
+          return;
+        }
+      } catch {
+        // 查询失败走正常生成流程
+      }
+      await generateToken();
+    })();
   }, [open, generateToken]);
 
   // 兼容旧版二进制:start_relay 不同步等待连接结果时,
@@ -231,6 +269,18 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
                   : '隧道连接中,请稍候…'}
             </span>
           </div>
+
+          {/* 保持开启提示 */}
+          {tunnelConnected && (
+            <div className="w-full rounded-lg border border-success/30 bg-success/5 px-3 py-2 text-[12px] leading-relaxed text-foreground-subtle">
+              <p className="font-medium text-success">远程访问已保持开启</p>
+              <p className="mt-0.5">
+                关闭本窗口不会断开手机端;桌面端重启后会自动恢复连接,令牌超期
+                (<code className="text-foreground">{fmtExpiry(tokenInfo?.expires_at ?? null)}</code>)
+                或撤销前持续可用。
+              </p>
+            </div>
+          )}
 
           {/* 连接方式说明 */}
           <div className="w-full rounded-lg border border-border bg-surface-hover px-3 py-2 text-[12px] leading-relaxed text-foreground-subtle">

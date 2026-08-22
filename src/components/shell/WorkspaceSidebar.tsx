@@ -54,6 +54,7 @@ import { useShortcutStore } from '../../stores/shortcutStore';
 import { createSession as createSessionApi } from '../../lib/api';
 import type { Api } from '../../lib/api/types';
 import { useSessionSummary } from '../../hooks/useSessionSummary';
+import { useRelayStatus } from '../../hooks/useRelayStatus';
 import {
   ConversationList,
   FILTER_MODES,
@@ -253,6 +254,12 @@ export function WorkspaceSidebar({
   } = useSessions(active);
   // 底部「累计花费」:项目级汇总(分页后不能只对已加载页求和)
   const { data: activeSummary } = useSessionSummary(active);
+  // 移动端远程访问状态(桌面端 → combo-relay 隧道;30s 轮询)
+  const { data: relayStatus } = useRelayStatus();
+  const relayActive =
+    !!relayStatus?.persisted &&
+    !!relayStatus?.token_valid &&
+    !!relayStatus?.connected;
 
   const [tab, setTab] = useState<'tasks' | 'project'>('project');
   const [projOpen, setProjOpen] = useState(true);
@@ -1113,12 +1120,23 @@ export function WorkspaceSidebar({
           <Button
             variant="ghost"
             size="icon-sm"
-            className="shrink-0 text-foreground-subtle hover:bg-surface-hover hover:text-foreground"
+            className={cn(
+              'shrink-0 text-foreground-subtle hover:bg-surface-hover hover:text-foreground',
+              relayActive && 'text-brand',
+            )}
             aria-label="移动端远程控制"
-            title="移动端远程控制"
+            title={relayActive ? '移动端远程控制(已开启,重启后自动恢复)' : '移动端远程控制'}
             onClick={() => setMobileConnectOpen(true)}
           >
-            <Smartphone className="size-4" />
+            <span className="relative inline-flex">
+              <Smartphone className="size-4" />
+              {relayActive && (
+                <span
+                  className="absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-success"
+                  title="远程访问已开启"
+                />
+              )}
+            </span>
           </Button>
           <Button
             variant="ghost"
