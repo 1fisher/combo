@@ -1010,12 +1010,17 @@ health 都走同一 base,跨域由 CORS 放开。
   `npm run cap:android`(Android Studio 打开)、`npm run apk`(本机 gradle 出
   Debug APK,需 ANDROID_SDK_ROOT 或 android/local.properties);
   CI:`.github/workflows/android.yml`(workflow_dispatch,ubuntu runner 自带
-  SDK,上传 combo-debug-apk artifact)。**选型/构建注意**:固定 **Capacitor 6.x**
-  ——@capacitor/android 库自 7.x 起 `build.gradle` 硬编码 `sourceCompatibility 21`
-  (需 JDK 21),本项目本机/CI 均为 **JDK 17**,故用 6.x(VERSION_17);配置用
-  `capacitor.config.json` 而非 `.ts`(Capacitor 6 CLI 的 TS 加载器与本仓库
+  SDK,上传 combo-debug-apk artifact)。**选型/构建注意**:版本固定 **Capacitor 8.5.0**
+  ——AGP 8.13.0 / Gradle 8.14.3 / compileSdk+targetSdk 36 / minSdk 24 / cordova 14.0.1,
+  构建需 **JDK 21**(`sourceCompatibility VERSION_21`,JDK 17 报 `Source option 21 is
+  no longer supported`;本机与 CI 均为 JDK 21)。
+  Android 工具链统一放在移动端开发目录 `~/work/android`(`sdk/`、`.gradle/`、`jdk-21/`):
+  构建时 `GRADLE_USER_HOME=~/work/android/.gradle`、
+  `JAVA_HOME=~/work/android/jdk-21/Contents/Home`,`android/local.properties` 指
+  `sdk.dir=~/work/android/sdk`。
+  `capacitor.config.json` 为 JSON 而非 `.ts`(CLI 的 TS 加载器与本仓库
   TypeScript 7(tsgo)不兼容,JSON 由 CLI 直接解析)。`variables.gradle` 里
-  `compileSdkVersion=35/targetSdkVersion=35`(本机 SDK 仅装 platform 35/36)。
+  `compileSdkVersion=36/targetSdkVersion=36`。
   `android/.gitignore` 已忽略 web 资源拷贝(`app/src/main/assets/public`)与
   local.properties;正式发布签名待配置 keystore
   后接入 release 流程。

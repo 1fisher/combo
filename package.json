@@ -19,8 +19,8 @@
     "apk": "npm run build && cap sync android && cd android && ./gradlew assembleDebug"
   },
   "dependencies": {
-    "@capacitor/android": "^6.2.1",
-    "@capacitor/core": "^6.2.1",
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
     "@codemirror/lang-css": "^6.3.1",
     "@codemirror/lang-go": "^6.0.1",
     "@codemirror/lang-html": "^6.4.12",
@@ -63,7 +63,7 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
-    "@capacitor/cli": "^6.2.1",
+    "@capacitor/cli": "^8.5.0",
     "@playwright/test": "^1.49.0",
     "@tailwindcss/vite": "^4.0.0",
     "@tauri-apps/cli": "^2.11.4",
