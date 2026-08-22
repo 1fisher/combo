@@ -71,7 +71,8 @@ plain browser. M1 directory picking is a path input, not a native dialog.
 
 > **动手前先自检**:任何代码改动前先 `git branch --show-current`,若当前在
 > `main` 上,必须先建 worktree + feat 分支再改(pre-commit hook 会直接拒绝
-> 在 main 上提交代码,见本节末尾)。文档(*.md)改动可直接提交。
+> 在 main 上提交代码,见本节末尾)。**文档(*.md)改动同样走 PR**,main 上
+> 不允许任何本地提交与直接推送(远端分支保护对管理员也强制生效)。
 
 1. **建 worktree + 分支**:每个功能/修复在独立的 worktree 中开发,分支命名
    `feat/<简短描述>`(修复类可用 `fix/<描述>`)。主仓在 `main` 分支时:
@@ -87,24 +88,30 @@ plain browser. M1 directory picking is a path input, not a native dialog.
 2. **在 worktree 内开发**:正常编码、`cargo test -p combo-cli`、`npm test`
    验证,小步提交到 `feat/xxx` 分支。
 
-3. **完成后合并回主分支**:开发完成、测试通过后,回到主仓合并:
+3. **完成后走 PR 合并**:开发完成、测试通过后,push 分支并发起 PR 合并
+   (GitHub 分支保护要求所有改动——含管理员的——必须经 PR 进 main,
+   直接 push 到 main 会被一律拒绝):
 
    ```bash
-   cd <主仓路径>
-   git merge feat/xxx        # 或 rebase 后 fast-forward,保持历史整洁
-   git branch -d feat/xxx
+   git push -u origin feat/xxx
+   gh pr create --fill
+   gh pr merge --merge --delete-branch   # 所需 approve 数为 0,可直接自合
+
+   # 收尾:回主仓同步并清理 worktree
+   cd <主仓路径> && git pull origin main
    git worktree remove ../combo-feat-xxx
    ```
 
-   合并后删除 feat 分支与 worktree,保持仓库干净。
+   合并后删除远端/本地 feat 分支与 worktree,保持仓库干净。
 
 注意:多个 worktree 共享同一仓库,`cargo` 的 `target/` 不共享,各 worktree
 首次构建需全量编译;Rust 依赖变更(`Cargo.lock`)合并时留意冲突。
 
 **强制机制(pre-commit hook)**:`scripts/git-hooks/pre-commit` 安装到全局
 `core.hooksPath` 目录(combo 署名功能接管的 `~/.config/combo/git-hooks/`,
-repo 内 `.git/hooks` 在 hooksPath 存在时会被忽略),在 main 上暂存非文档文件时
-直接拒绝提交;合并提交与纯 `*.md` 改动放行,确需绕过用 `git commit --no-verify`。
+repo 内 `.git/hooks` 在 hooksPath 存在时会被忽略),在 main 上做任何本地提交
+(含 `*.md`)都直接拒绝(仅放行合并提交,避免本地 merge 卡在半途;
+正常合并请用 `gh pr merge`)。
 脚本自带仓库守卫,仅对 combo 主仓及 worktree(目录名 `combo` / `combo-*`)生效。
 新 clone 需手动安装一次:
 
@@ -113,8 +120,9 @@ cp scripts/git-hooks/pre-commit ~/.config/combo/git-hooks/
 chmod +x ~/.config/combo/git-hooks/pre-commit
 ```
 
-远端已开启 GitHub 分支保护(经 `gh api` 配置):push 到 main 必须走 PR、
-禁止强推与删除分支;`enforce_admins=false`,管理员可绕过(紧急直推的逃生口)。
+远端已开启 GitHub 分支保护(经 `gh api` 配置):push 到 main **必须走 PR**
+(所需 approve 数为 0,单人可自合)、禁止强推与删除分支;
+`enforce_admins=true`,**对管理员同样强制生效、无直推逃生口**。
 调整/查看/关闭:
 
 ```bash
