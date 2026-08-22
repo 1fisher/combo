@@ -96,22 +96,17 @@ describe('sfx', () => {
     }).not.toThrow();
   });
 
-  it('playComboHit 合成轻量气泡爆破音(单振荡器快上滑 + 极短破裂瞬态),combo 越高气泡略大', async () => {
+  it('playComboHit 合成轻量气泡上升声(单振荡器快上滑),combo 越高气泡略大', async () => {
     const { mod, ctx } = await loadSfxWithStub();
     mod.playComboHit(1);
     let c = ctx();
-    // 轻量版只留主音 + 破裂瞬态,不再叠加二次谐波(那是旧版「饱满/偏重」的来源)
+    // 轻量版只留主音(气泡上升),不再叠加二次谐波(那是旧版「饱满/偏重」的来源)
     expect(c.createOscillator).toHaveBeenCalledTimes(1);
-    expect(c.createBufferSource).toHaveBeenCalledTimes(1);
     const blip = c.createOscillator.mock.results[0].value as FakeOscillatorNode;
     expect(blip.type).toBe('sine');
     // combo=1:小气泡,起始 ~947Hz,指数上滑到 ~1503Hz(轻短的「啵」)
     expect(blip.frequency.setValueAtTime.mock.calls[0][0]).toBeCloseTo(947.4, 3);
     expect(blip.frequency.exponentialRampToValueAtTime.mock.calls[0][0]).toBeCloseTo(1503.4, 3);
-    // 破裂瞬态:白噪声过带通
-    expect(c.createBiquadFilter).toHaveBeenCalledTimes(1);
-    const bp = c.createBiquadFilter.mock.results[0].value as FakeBiquadFilterNode;
-    expect(bp.type).toBe('bandpass');
 
     mod.playComboHit(100);
     c = ctx();
@@ -127,9 +122,8 @@ describe('sfx', () => {
     const { mod, ctx } = await loadSfxWithStub();
     mod.playComboHit(10, 8);
     const c = ctx();
-    // 每颗 = 主音振荡器 + 破裂瞬态(buffer source)
+    // 每颗 = 主音振荡器
     expect(c.createOscillator).toHaveBeenCalledTimes(8);
-    expect(c.createBufferSource).toHaveBeenCalledTimes(8);
     const blips = c.createOscillator.mock.results.map((r) => r.value as FakeOscillatorNode);
     // 第 i 颗对应 combo = 10-8+1+i = 3+i:起始频率随数值渐变
     expect(blips[0].frequency.setValueAtTime.mock.calls[0][0]).toBeCloseTo(950 - 0.03 * 260, 3);
@@ -146,7 +140,6 @@ describe('sfx', () => {
     const c = ctx();
     // 0 → clamp 为 1 颗;99 → clamp 为 16 颗
     expect(c.createOscillator).toHaveBeenCalledTimes(17);
-    expect(c.createBufferSource).toHaveBeenCalledTimes(17);
   });
 
   it('上下文未 running(suspended)时跳过播放:不调度,避免解锁后积压的声音迟到爆出', async () => {
