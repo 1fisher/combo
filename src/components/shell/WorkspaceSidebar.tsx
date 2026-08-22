@@ -289,6 +289,8 @@ export function WorkspaceSidebar({
   // 会话列表排序 & 筛选
   const [sortMode, setSortMode] = useState<'recent' | 'name'>('recent');
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
+  // 弹出方向:按钮下方空间不足时向上翻(矮窗口下避免被视口裁掉)
+  const [sortMenuUp, setSortMenuUp] = useState(false);
   // 任务筛选(状态/时间)
   const [filter, setFilter] = useState<FilterMode>('all');
   // 右键上下文菜单位置 + 目标 workspace
@@ -649,6 +651,10 @@ export function WorkspaceSidebar({
                 title="筛选和排序"
                 onClick={(e) => {
                   e.stopPropagation();
+                  // 注意:e.currentTarget 在事件处理返回后会被 React 置空,
+                  // 不能放进 setState updater 里读取,先在这里取好矩形
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  setSortMenuUp(window.innerHeight - rect.bottom < 280);
                   setSortMenuOpen((o) => !o);
                 }}
               >
@@ -656,7 +662,10 @@ export function WorkspaceSidebar({
               </Button>
               {sortMenuOpen && (
                 <div
-                  className="fixed bottom-full left-0 z-50 mb-2 min-w-[160px] rounded-lg border border-border bg-popover p-1 text-[13px] text-popover-foreground shadow-lg"
+                  className={cn(
+                  'absolute left-0 z-50 min-w-[160px] rounded-lg border border-border bg-popover p-1 text-[13px] text-popover-foreground shadow-lg',
+                  sortMenuUp ? 'bottom-full mb-2' : 'top-full mt-2'
+                )}
                   onClick={(e) => e.stopPropagation()}
                 >
                   <div className="px-2 py-1 text-xs font-medium text-foreground-subtlest">排序方式</div>
