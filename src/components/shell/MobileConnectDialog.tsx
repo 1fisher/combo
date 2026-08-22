@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
-import { Check, Copy, KeyRound, RefreshCw, Smartphone, Wifi, AlertTriangle } from 'lucide-react';
+import { Check, Copy, KeyRound, Power, RefreshCw, Smartphone, Wifi, AlertTriangle } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -17,6 +17,7 @@ import {
   getRelayStatus,
   revokeAccessToken,
   startRelayTunnel,
+  stopRelayTunnel,
   type CreatedToken,
   type LanInfo,
 } from '../../lib/api';
@@ -33,6 +34,7 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
   const [loading, setLoading] = useState(false);
   const [tunnelConnected, setTunnelConnected] = useState(false);
   const [tunnelError, setTunnelError] = useState<string | null>(null);
+  const [closing, setClosing] = useState(false);
   const [lanInfo, setLanInfo] = useState<LanInfo | null>(null);
   // ref 持有当前令牌,供 generateToken 撤销旧令牌时读取,
   // 避免 useCallback 依赖 tokenInfo 导致与 useEffect 形成无限循环。
@@ -98,6 +100,28 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
     }
   }, []);
 
+  // 关闭连接:停止隧道(后端清持久化配置,重启不再自动恢复)+ 撤销当前令牌
+  // (手机端旧二维码立即失效)。清空本地状态后,重新打开对话框走 generateToken。
+  const closeConnection = useCallback(async () => {
+    setClosing(true);
+    setTunnelError(null);
+    try {
+      await stopRelayTunnel();
+      if (tokenRef.current) {
+        void revokeAccessToken(tokenRef.current.token).catch(() => {});
+      }
+      tokenRef.current = null;
+      setTokenInfo(null);
+      setQrDataUrl('');
+      setTunnelConnected(false);
+      setLanInfo(null);
+    } catch (e) {
+      setTunnelError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setClosing(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (!open) {
       tokenRef.current = null;
@@ -109,6 +133,7 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
       return;
     }
     void (async () => {
+      setLoading(true);
       // 复用已开启的远程访问:隧道配置已持久化、令牌未撤销未超期时,直接复用
       // 现有令牌 —— 不重新生成(重新生成会撤销旧令牌、断开手机端,需重新扫码)。
       // 桌面端重启后隧道由 serve 自动恢复;这里若检测到隧道未连接(断线重连中),
@@ -139,6 +164,7 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
           getLanInfo()
             .then(setLanInfo)
             .catch(() => setLanInfo(null));
+          setLoading(false);
           return;
         }
       } catch {
@@ -179,6 +205,9 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
     const days = Math.max(0, Math.round((expiresAt * 1000 - Date.now()) / 86_400_000));
     return days > 0 ? `${days} 天后过期` : '已过期';
   }
+
+  // 关闭连接后的空闲态:无令牌、未连接、非生成/断开/错误中 → 可重新开启
+  const disconnected = !tokenInfo && !tunnelConnected && !loading && !closing && !tunnelError;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -223,7 +252,7 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
               </div>
             ) : (
               <div className="flex size-52 items-center justify-center text-[13px] text-foreground-subtle">
-                {loading ? '生成中…' : tunnelConnected ? '等待令牌' : '隧道连接中…'}
+                {loading ? '生成中…' : tunnelConnected ? '等待令牌' : '尚未连接'}
               </div>
             )}
           </div>
@@ -249,7 +278,7 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
             </div>
           )}
 
-          {/* 隧道状态 */}
+          {/* 隧道状态 + 关闭连接 / 开启访问 */}
           <div className="flex w-full items-center justify-between rounded-lg border border-border bg-surface-hover px-3 py-2 text-[12px]">
             <span className="flex items-center gap-1.5 text-foreground-subtle">
               <span
@@ -259,15 +288,50 @@ export function MobileConnectDialog({ open, onOpenChange }: MobileConnectDialogP
                     ? 'bg-destructive'
                     : tunnelConnected
                       ? 'bg-success'
-                      : 'bg-warning animate-pulse',
+                      : closing
+                        ? 'bg-warning animate-pulse'
+                        : disconnected
+                          ? 'bg-foreground-subtlest'
+                          : 'bg-warning animate-pulse',
                 )}
               />
               {tunnelError
                 ? '隧道连接失败'
                 : tunnelConnected
                   ? '隧道已连接,可扫码访问'
-                  : '隧道连接中,请稍候…'}
+                  : closing
+                    ? '正在断开…'
+                    : loading
+                      ? '生成中…'
+                      : disconnected
+                        ? '尚未开启远程访问'
+                        : '隧道连接中,请稍候…'}
             </span>
+            {tunnelConnected && !closing ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 gap-1 px-1.5 text-[12px] text-destructive hover:bg-destructive/10 hover:text-destructive"
+                onClick={() => void closeConnection()}
+                disabled={closing}
+                title="关闭连接:断开隧道并撤销令牌,手机端将无法访问"
+              >
+                <Power className="size-3" />
+                关闭连接
+              </Button>
+            ) : disconnected ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 gap-1 px-1.5 text-[12px] text-brand hover:bg-brand/10 hover:text-brand"
+                onClick={() => void generateToken()}
+                disabled={loading}
+                title="重新开启远程访问(生成新令牌并连接)"
+              >
+                <RefreshCw className={cn('size-3', loading && 'animate-spin')} />
+                开启访问
+              </Button>
+            ) : null}
           </div>
 
           {/* 保持开启提示 */}

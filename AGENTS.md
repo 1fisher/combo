@@ -967,7 +967,9 @@ health 都走同一 base,跨域由 CORS 放开。
     `persisted/token/expires_at/token_valid` 字段:前端
     `MobileConnectDialog` 重开时优先**复用现有令牌**(不重新生成、不断开
     手机端;隧道未连接时用现有令牌重连),侧边栏移动端按钮经
-    `useRelayStatus`(30s 轮询)显示「已开启」绿点。
+    `useRelayStatus`(30s 轮询)显示「已开启」绿点;隧道已连接时对话框提供
+    「关闭连接」按钮(`stopRelayTunnel` 停隧道+清持久化配置 + 撤销当前令牌),
+    关闭后绿点熄灭、重启不再自动恢复,断开态提供「开启访问」重新生成并连接。
 - **P2P 直连(扫码后优先直连,中转兜底)**:移动端扫码后的连接方式按优先级
   自动选择,三级回退,**LAN 直连 → WebRTC P2P → relay 中转**:
   1. **局域网直连**:桌面端(Tauri 模式)默认绑定 `0.0.0.0`(可用
