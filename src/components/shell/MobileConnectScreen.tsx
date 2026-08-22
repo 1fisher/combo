@@ -12,9 +12,17 @@ import {
 import { Button } from '../ui/button';
 import { Tabs, TabsList, TabsTrigger } from '../ui/tabs';
 import { startQrScan, type QrScanHandle } from '../../lib/qrScan';
-import { parseConnectUrl, applyConnection, type ConnectParams } from '../../lib/mobileConnect';
+import {
+  parseConnectUrl,
+  applyConnection,
+  buildTargetUrl,
+  rememberLastServer,
+  getLastServer,
+  type ConnectParams,
+} from '../../lib/mobileConnect';
 import { useInstallPrompt } from '../../hooks/useInstallPrompt';
 import { isStandalonePwa } from '../../lib/pwa';
+import { isNativeApp } from '../../lib/native';
 
 interface MobileConnectScreenProps {
   onConnected: () => void;
@@ -36,7 +44,7 @@ export function MobileConnectScreen({ onConnected }: MobileConnectScreenProps) {
   const [scanError, setScanError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [manualServer, setManualServer] = useState('');
+  const [manualServer, setManualServer] = useState<string>(() => getLastServer() ?? '');
   const [manualToken, setManualToken] = useState('');
   const videoRef = useRef<HTMLVideoElement>(null);
   const scanRef = useRef<QrScanHandle | null>(null);
@@ -54,9 +62,21 @@ export function MobileConnectScreen({ onConnected }: MobileConnectScreenProps) {
       setError(null);
       stopScan();
       try {
-        const r = await applyConnection(params);
-        if (r.ok) onConnected();
-        else setError(r.error ?? '连接失败,请重试');
+        // 原生壳跳过健康预检:壳内 fetch 受 CORS/混合内容影响不可靠,且导航后
+        // 的页面自身带完整连接态 UI,预检失败不应阻断进入。
+        const native = isNativeApp();
+        const r = await applyConnection(params, { verifyHealth: !native });
+        if (!r.ok) {
+          setError(r.error ?? '连接失败,请重试');
+          return;
+        }
+        if (native) {
+          // 原生壳:记住地址(下次启动预填)并整页导航到移动端页面
+          rememberLastServer(params.server);
+          window.location.href = buildTargetUrl(params);
+          return;
+        }
+        onConnected();
       } finally {
         setBusy(false);
       }
@@ -120,7 +140,13 @@ export function MobileConnectScreen({ onConnected }: MobileConnectScreenProps) {
       setError('请输入访问令牌(可从桌面端「移动端远程控制」的二维码获得)');
       return;
     }
-    const server = manualServer.trim() || window.location.origin;
+    const serverInput = manualServer.trim();
+    // 原生壳的 origin 是壳自身(http://localhost),不能作为默认连接地址
+    if (!serverInput && isNativeApp()) {
+      setError('请输入访问地址(中转域名或桌面局域网地址)');
+      return;
+    }
+    const server = serverInput || window.location.origin;
     void connect({ server, token, lan: null });
   }, [manualServer, manualToken, connect]);
 
@@ -218,7 +244,9 @@ export function MobileConnectScreen({ onConnected }: MobileConnectScreenProps) {
             <div>
               <label className="mb-1 block text-xs text-foreground-subtle">
                 访问地址
-                <span className="text-foreground-subtlest">(可选,留空用当前域名)</span>
+                {!isNativeApp() && (
+                  <span className="text-foreground-subtlest">(可选,留空用当前域名)</span>
+                )}
               </label>
               <input
                 value={manualServer}

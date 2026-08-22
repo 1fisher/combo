@@ -990,3 +990,32 @@ health 都走同一 base,跨域由 CORS 放开。
      终端 WS 仍走中转代理。失败/断开自动回退 relay,`GET /v1/p2p/status` 查询
      状态,侧边栏连接状态显示 `局域网直连/P2P/中转`(`connectionStore.transport`)。
      **旧版中转服务器不认识 Signal 消息**——P2P 需要新版 combo-relay 配套部署。
+- **Android 壳(Capacitor,`android/` + `capacitor.config.json`)**:可安装的 Android
+  App(先做 Android,iOS 后续同构接入)。架构是「薄启动器」:原生壳只承载
+  **移动端连接设置屏**(`MobileConnectScreen`,与 PWA 复用同一组件)——扫码
+  (`getUserMedia` + BarcodeDetector/jsqr,CAMERA 权限经 Capacitor
+  BridgeWebChromeClient 映射为系统运行时授权;Manifest 声明 CAMERA +
+  `uses-feature required=false`)或手动输入地址+令牌——成功后 WebView **整页导航**
+  到目标页面(`<server>/?token=..&lan=..`,`server.allowNavigation: ['*']`),
+  之后 100% 复用 Web 端远程链路(token 提取 / P2P / 中转 / SSE / 终端 WS),
+  不在原生层重写任何连接逻辑。关键配置:`androidScheme: 'http'`(壳内 origin 为
+  http://localhost,加载 http 局域网目标不触发 mixed content)+ `cleartext` +
+  `allowMixedContent`(支持直连 http://192.168.x.x)。原生检测不经 import
+  (@capacitor/core),读全局 `window.Capacitor.isNativePlatform()`
+  (`src/lib/native.ts`);`shouldShowMobileConnect` 对原生壳恒真(壳 origin 无业务
+  含义);原生模式跳过 `/v1/health` 预检(壳内 fetch 受 CORS/混合内容影响不可靠,
+  导航后页面自身有完整连接态 UI),并记忆最近连接地址(`combo.nativeLastServer`)
+  下次启动预填。深色主题/启动屏(对齐 #101116)与全套 mipmap 图标由
+  `public/combo-icon.png` 程序化生成。命令:`npm run cap:sync`(build + 同步资源)、
+  `npm run cap:android`(Android Studio 打开)、`npm run apk`(本机 gradle 出
+  Debug APK,需 ANDROID_SDK_ROOT 或 android/local.properties);
+  CI:`.github/workflows/android.yml`(workflow_dispatch,ubuntu runner 自带
+  SDK,上传 combo-debug-apk artifact)。**选型/构建注意**:固定 **Capacitor 6.x**
+  ——@capacitor/android 库自 7.x 起 `build.gradle` 硬编码 `sourceCompatibility 21`
+  (需 JDK 21),本项目本机/CI 均为 **JDK 17**,故用 6.x(VERSION_17);配置用
+  `capacitor.config.json` 而非 `.ts`(Capacitor 6 CLI 的 TS 加载器与本仓库
+  TypeScript 7(tsgo)不兼容,JSON 由 CLI 直接解析)。`variables.gradle` 里
+  `compileSdkVersion=35/targetSdkVersion=35`(本机 SDK 仅装 platform 35/36)。
+  `android/.gitignore` 已忽略 web 资源拷贝(`app/src/main/assets/public`)与
+  local.properties;正式发布签名待配置 keystore
+  后接入 release 流程。

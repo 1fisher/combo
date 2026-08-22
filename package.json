@@ -13,9 +13,14 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "gen:api": "bash scripts/gen-api.sh",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "cap:sync": "npm run build && cap sync android",
+    "cap:android": "npm run build && cap sync android && cap open android",
+    "apk": "npm run build && cap sync android && cd android && ./gradlew assembleDebug"
   },
   "dependencies": {
+    "@capacitor/android": "^6.2.1",
+    "@capacitor/core": "^6.2.1",
     "@codemirror/lang-css": "^6.3.1",
     "@codemirror/lang-go": "^6.0.1",
     "@codemirror/lang-html": "^6.4.12",
@@ -42,9 +47,9 @@
     "d3-force": "^3.0.0",
     "diff": "^9.0.0",
     "highlight.js": "^11.12.0",
+    "jsqr": "^1.4.0",
     "lucide-react": "^1.31.0",
     "qrcode": "^1.5.4",
-    "jsqr": "^1.4.0",
     "radix-ui": "^1.6.7",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
@@ -58,6 +63,7 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
+    "@capacitor/cli": "^6.2.1",
     "@playwright/test": "^1.49.0",
     "@tailwindcss/vite": "^4.0.0",
     "@tauri-apps/cli": "^2.11.4",

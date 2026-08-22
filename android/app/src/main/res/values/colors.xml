@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 深色主题,对齐前端 background(dark) 约 #101116:
+         应用为全屏 WebView,主题只影响系统栏与启动瞬间背景,统一深色避免白闪 -->
+    <color name="colorPrimary">#101116</color>
+    <color name="colorPrimaryDark">#0b0c10</color>
+    <color name="colorAccent">#5494ff</color>
+    <color name="splash_background">#101116</color>
+</resources>
