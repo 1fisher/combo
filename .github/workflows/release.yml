@@ -87,6 +87,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -123,19 +124,39 @@ jobs:
             fi
             echo "CHANGELOG_EOF"
           } >> "$GITHUB_OUTPUT"
-      - name: Commit, tag and push
+      # main 开启分支保护(PR-only,管理员同样强制)后 bot 无法直推 main:
+      # 版本 bump 改走「bump 分支 → PR → 自动合并 → 在合并后的 main 提交上打 tag」。
+      # tag 推送不受分支保护限制,并触发下方 build(仅 tag 触发)完成多平台构建。
+      - name: Commit and merge via PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          VERSION="${{ steps.bump.outputs.version }}"
+          BRANCH="chore/bump-v${VERSION}"
+          git checkout -b "$BRANCH"
           git add -A
-          git commit -m "chore: bump version to ${{ steps.bump.outputs.version }}"
+          git commit -m "chore: bump version to ${VERSION}"
+          git push origin "$BRANCH"
+          gh pr create --head "$BRANCH" \
+            --title "chore: bump version to ${VERSION}" \
+            --body "版本发布自动 bump(release 工作流)"
+          gh pr merge "$BRANCH" --merge --delete-branch
+
+      - name: Tag merged main and push
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
           TAG="${{ steps.bump.outputs.tag }}"
-          git tag -a "$TAG" -m "Release $TAG" -m "${{ steps.changelog.outputs.content }}"
-          git push origin main
+          git fetch origin main
+          git tag -a "$TAG" origin/main -m "Release $TAG" -m "${{ steps.changelog.outputs.content }}"
           git push origin "$TAG"
 
-  # ─── 多平台构建(tag push 或 workflow_dispatch 后) ─────────────────────
+  # ─── 多平台构建(仅 tag push 触发) ──────────────────────────────────
   build:
     name: Build (${{ matrix.platform }})
-    if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+    # 仅 tag push 触发构建;workflow_dispatch 只做版本 bump + 打 tag(tag push 再触发本 job,
+    # 否则 dispatch 的 github.ref_name 是 main,tauri-action 会把产物挂到错误的「Combo main」release)
+    if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
     env:
@@ -225,7 +246,9 @@ jobs:
           releaseName: 'Combo ${{ github.ref_name }}'
           releaseBody: 'See assets below.'
           releaseDraft: true
-          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease }}
+          # build 仅由 tag push 触发,预发布标记不再从 dispatch 透传(需要预发布时
+          # 在 GitHub Release 页手动勾选,或给 tag 名加 -rc.N 后缀后自行调整此条件)
+          prerelease: false
           updaterJsonPreferNsis: true
           args: --target ${{ matrix.target }}
 
