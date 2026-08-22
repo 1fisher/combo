@@ -205,21 +205,7 @@ function Section({
             <ChevronRight className="size-3.5 shrink-0 opacity-0 transition-opacity group-hover/section:opacity-100 group-focus-within/section:opacity-100" />
           )}
         </button>
-        <div
-          className={cn(
-            'flex shrink-0 items-center pr-1.5 transition-opacity',
-            open
-              ? 'opacity-100'
-              : 'opacity-0 group-hover/section:opacity-100 group-focus-within/section:opacity-100'
-          )}
-        >
-          <button
-            type="button"
-            aria-label={`移动${title}分区`}
-            className="flex size-6 cursor-grab touch-none items-center justify-center rounded-md text-foreground-subtlest outline-none hover:bg-surface-hover hover:text-foreground"
-          >
-            <GripVertical className="size-3.5" />
-          </button>
+        <div className="flex shrink-0 items-center pr-1.5 transition-opacity">
           {onAdd && (
             <Button
               variant="ghost"
@@ -759,16 +745,6 @@ export function WorkspaceSidebar({
                     active === w.id && 'bg-surface-hover',
                     dragId === w.id && 'opacity-40'
                   )}
-                  draggable={editingId !== w.id}
-                  onDragStart={(e) => {
-                    setDragId(w.id);
-                    e.dataTransfer.effectAllowed = 'move';
-                    e.dataTransfer.setData('text/plain', w.id);
-                  }}
-                  onDragEnd={() => {
-                    setDragId(null);
-                    setDropTarget(null);
-                  }}
                   onDragOver={(e) => projectDragOver(e, w.id)}
                   onDragLeave={() => projectDragLeave(w.id)}
                   onDrop={(e) => projectDrop(e, w.id)}
@@ -788,6 +764,25 @@ export function WorkspaceSidebar({
                       )}
                     />
                   )}
+                  {/* 拖动排序手柄:只有从这里才能拖起项目(行本体不可拖,避免误拖) */}
+                  <span
+                    aria-label={`拖动排序 ${projectName(w)}`}
+                    title="拖动排序"
+                    draggable={editingId !== w.id}
+                    onDragStart={(e) => {
+                      setDragId(w.id);
+                      e.dataTransfer.effectAllowed = 'move';
+                      e.dataTransfer.setData('text/plain', w.id);
+                    }}
+                    onDragEnd={() => {
+                      setDragId(null);
+                      setDropTarget(null);
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    className="-ml-1 flex shrink-0 cursor-grab touch-none items-center rounded p-0.5 text-foreground-subtlest transition-colors hover:text-foreground active:cursor-grabbing md:-ml-1.5"
+                  >
+                    <GripVertical className="size-3.5" />
+                  </span>
                   <Folder
                     className={cn(
                       'size-4 shrink-0',

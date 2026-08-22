@@ -253,15 +253,18 @@ describe('WorkspaceSidebar', () => {
     wrap();
     const rowA = (await projSection().findByText('项目A')).closest('div')!;
     const rowB = projSection().getByText('项目B').closest('div')!;
-    expect(rowA.getAttribute('draggable')).toBe('true');
-    // 模拟把项目A 拖到项目B 行的下半部(插到 B 之后)
+    // 拖动手柄在每个项目行最前面,只有手柄可拖起
+    const handleA = rowA.querySelector('[aria-label="拖动排序 项目A"]')!;
+    expect(handleA.getAttribute('draggable')).toBe('true');
+    expect(rowA.getAttribute('draggable')).toBeNull();
+    // 模拟把手柄拖到项目B 行的下半部(插到 B 之后)
     const dt = {
       setData: vi.fn(),
       getData: vi.fn(() => 'w1'),
       dropEffect: 'none',
       effectAllowed: 'none',
     };
-    fireEvent.dragStart(rowA, { dataTransfer: dt });
+    fireEvent.dragStart(handleA, { dataTransfer: dt });
     fireEvent.dragOver(rowB, { dataTransfer: dt, clientY: 100 });
     fireEvent.drop(rowB, { dataTransfer: dt });
     await waitFor(() => {
@@ -273,13 +276,14 @@ describe('WorkspaceSidebar', () => {
     wrap();
     const rowA = (await projSection().findByText('项目A')).closest('div')!;
     const rowB = projSection().getByText('项目B').closest('div')!;
+    const handleA = rowA.querySelector('[aria-label="拖动排序 项目A"]')!;
     const dt = {
       setData: vi.fn(),
       getData: vi.fn(() => 'w1'),
       dropEffect: 'none',
       effectAllowed: 'none',
     };
-    fireEvent.dragStart(rowA, { dataTransfer: dt });
+    fireEvent.dragStart(handleA, { dataTransfer: dt });
     fireEvent.dragOver(rowB, { dataTransfer: dt, clientY: 100 });
     await waitFor(() => {
       expect(rowB.querySelector('span[aria-hidden]')).not.toBeNull();
