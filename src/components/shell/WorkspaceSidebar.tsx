@@ -1,6 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
-  Archive,
   BarChart3,
   Boxes,
   CalendarClock,
@@ -54,7 +53,11 @@ import { useShortcutStore } from '../../stores/shortcutStore';
 import { createSession as createSessionApi } from '../../lib/api';
 import type { Api } from '../../lib/api/types';
 import { useSessionSummary } from '../../hooks/useSessionSummary';
-import { ConversationList } from './ConversationList';
+import {
+  ConversationList,
+  FILTER_MODES,
+  type FilterMode,
+} from './ConversationList';
 import { DirectoryPicker } from './DirectoryPicker';
 import { SettingsDialog } from './SettingsDialog';
 import type { AppView, SideView } from './AppShell';
@@ -286,8 +289,8 @@ export function WorkspaceSidebar({
   // 会话列表排序 & 筛选
   const [sortMode, setSortMode] = useState<'recent' | 'name'>('recent');
   const [sortMenuOpen, setSortMenuOpen] = useState(false);
-  // 会话归档筛选
-  const [archiveOpen, setArchiveOpen] = useState(false);
+  // 任务筛选(状态/时间)
+  const [filter, setFilter] = useState<FilterMode>('all');
   // 右键上下文菜单位置 + 目标 workspace
   const [ctxMenu, setCtxMenu] = useState<{
     x: number;
@@ -638,7 +641,10 @@ export function WorkspaceSidebar({
               <Button
                 variant="ghost"
                 size="icon-xs"
-                className="shrink-0 text-foreground-subtle hover:text-foreground"
+                className={cn(
+                  'shrink-0 text-foreground-subtle hover:text-foreground',
+                  filter !== 'all' && 'text-brand'
+                )}
                 aria-label="筛选和排序"
                 title="筛选和排序"
                 onClick={(e) => {
@@ -675,22 +681,27 @@ export function WorkspaceSidebar({
                     </button>
                   ))
                   }
+                  <div className="mt-1 border-t border-border px-2 pb-1 pt-1.5 text-xs font-medium text-foreground-subtlest">筛选</div>
+                  {FILTER_MODES.map(([mode, label]) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      className={cn(
+                        'flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left transition-colors hover:bg-surface-hover',
+                        filter === mode && 'text-brand'
+                      )}
+                      onClick={() => {
+                        setFilter(mode);
+                        setSortMenuOpen(false);
+                      }}
+                    >
+                      {label}
+                      {filter === mode && <ChevronDown className="size-3.5 -rotate-90" />}
+                    </button>
+                  ))}
                 </div>
               )}
             </div>
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              className={cn(
-                'shrink-0 text-foreground-subtle hover:text-foreground',
-                archiveOpen && 'text-brand'
-              )}
-              aria-label="归档"
-              title="归档"
-              onClick={() => setArchiveOpen((o) => !o)}
-            >
-              <Archive className="size-3.5" />
-            </Button>
           </div>
         </div>
         {/* 分区列表 */}
@@ -805,7 +816,7 @@ export function WorkspaceSidebar({
               }}
               addLabel="新建任务"
             >
-              <ConversationList onNavigate={onNavigate} sortMode={sortMode} archiveOpen={archiveOpen} />
+              <ConversationList onNavigate={onNavigate} sortMode={sortMode} filter={filter} />
             </Section>
           )}
         </div>
