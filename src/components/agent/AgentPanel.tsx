@@ -10,7 +10,6 @@ import { cancelAgent, sendAgentMessage, answerQuestion, clearSession, getFileCon
 import type { Api } from '../../lib/api/types';
 import type { SlashCommandDef } from '../../lib/slashCommands';
 import { useSessionHistory } from '../../hooks/useSessions';
-import { useWorkspaceEvents } from '../../hooks/useWorkspaceEvents';
 import { useAgentMode } from '../../hooks/useAgentMode';
 import { useWorkspaces } from '../../hooks/useWorkspaces';
 import { useSessions, markRunStarted } from '../../hooks/useSessions';
@@ -50,7 +49,8 @@ export function AgentPanel({
   /** 跳转编辑器视图(诊断列表点击跳转用,setView('editor'))。 */
   onOpenEditorView?: () => void;
 }) {
-  useWorkspaceEvents(workspaceId);
+  // SSE 订阅由 AppShell 的 WorkspaceEventsManager 统一接管(覆盖全部项目,
+  // 后台项目的事件也要触发通知),此处不再单独订阅。
   useAgentMode(workspaceId);
   const qc = useQueryClient();
   const sessionId = useAgentStore((s) => s.activeSessionId);
@@ -64,6 +64,7 @@ export function AgentPanel({
     (s) => (sessionId ? s.subagents[sessionId] : undefined) ?? EMPTY_SUBAGENTS
   );
   const questionQueue = useAgentStore((s) => s.questionQueue);
+  const questionWorkspaces = useAgentStore((s) => s.questionWorkspaces);
   const dismissQuestionBatch = useAgentStore((s) => s.dismissQuestionBatch);
   const hydrateMessages = useAgentStore((s) => s.hydrateMessages);
   const setQueued = useAgentStore((s) => s.setQueued);
@@ -555,12 +556,14 @@ export function AgentPanel({
         )}
         {/* 任务列表 */}
         {sessionId && todos.length > 0 && <TodoList todos={todos} />}
-        {/* 问题卡片(question 工具):非模态,显示在任务列表下方、输入坞上方 */}
+        {/* 问题卡片(question 工具):非模态,显示在任务列表下方、输入坞上方。
+            批次可能来自其他项目(聚合订阅),回答时按记录的来源 workspace 路由。 */}
         {questionQueue[0] && workspaceId && (
           <QuestionCard
             batch={questionQueue[0]}
             onResolve={async (answer) => {
-              await answerQuestion(workspaceId, answer);
+              const wid = questionWorkspaces[questionQueue[0].id] ?? workspaceId;
+              await answerQuestion(wid, answer);
               dismissQuestionBatch(questionQueue[0].id);
             }}
           />

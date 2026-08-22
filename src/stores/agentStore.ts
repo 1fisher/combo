@@ -82,6 +82,8 @@ interface AgentState {
   bySession: Record<string, SessionRuntime>;
   permissionQueue: Api.PermissionRequest[];
   questionQueue: Api.QuestionRequest[];
+  /** batch_id → 来源 workspace id(question 卡片回答时按此路由,支持跨项目提问) */
+  questionWorkspaces: Record<string, string>;
   /** 每个 session 的任务列表(todo_write 工具推送,实时更新) */
   todos: Record<string, Api.TodoItem[]>;
   /** 每个 session 的子 agent 任务进度(agent 工具派发,subagent_update 推送) */
@@ -115,7 +117,7 @@ interface AgentState {
   setRetryNotice: (sessionId: string, text: string) => void;
   enqueuePermission: (p: Api.PermissionRequest) => void;
   resolvePermission: (toolCallId: string) => void;
-  enqueueQuestionBatch: (b: Api.QuestionRequest) => void;
+  enqueueQuestionBatch: (b: Api.QuestionRequest, workspaceId?: string) => void;
   dismissQuestionBatch: (batchId: string) => void;
   setTodos: (sessionId: string, todos: Api.TodoItem[]) => void;
   clearTodos: (sessionId: string) => void;
@@ -237,6 +239,7 @@ export const useAgentStore = create<AgentState>()(
   bySession: {},
   permissionQueue: [],
   questionQueue: [],
+  questionWorkspaces: {},
   todos: {},
   subagents: {},
   apiCallsBySession: {},
@@ -468,9 +471,21 @@ export const useAgentStore = create<AgentState>()(
     set((st) => ({
       permissionQueue: st.permissionQueue.filter((p) => p.tool_call_id !== toolCallId),
     })),
-  enqueueQuestionBatch: (b) => set((st) => ({ questionQueue: [...st.questionQueue, b] })),
+  enqueueQuestionBatch: (b, workspaceId) =>
+    set((st) => ({
+      questionQueue: [...st.questionQueue, b],
+      questionWorkspaces: workspaceId
+        ? { ...st.questionWorkspaces, [b.id]: workspaceId }
+        : st.questionWorkspaces,
+    })),
   dismissQuestionBatch: (batchId) =>
-    set((st) => ({ questionQueue: st.questionQueue.filter((b) => b.id !== batchId) })),
+    set((st) => {
+      const { [batchId]: _drop, ...questionWorkspaces } = st.questionWorkspaces;
+      return {
+        questionQueue: st.questionQueue.filter((b) => b.id !== batchId),
+        questionWorkspaces,
+      };
+    }),
   setTodos: (sessionId, todos) =>
     set((st) => ({ todos: { ...st.todos, [sessionId]: todos } })),
   setApiCalls: (sessionId, n) =>

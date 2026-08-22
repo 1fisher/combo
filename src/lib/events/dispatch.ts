@@ -15,7 +15,7 @@ function ts() {
   return new Date().toISOString().slice(11, 23);
 }
 
-export function applyEvent(s: Store, env: EventEnvelope): void {
+export function applyEvent(s: Store, env: EventEnvelope, workspaceId?: string): void {
   switch (env.type) {
     case 'message': {
       const inner = env.payload as { type: string; payload: unknown };
@@ -89,6 +89,9 @@ export function applyEvent(s: Store, env: EventEnvelope): void {
     }
     case 'permission_request': {
       const p = unwrap<Api.PermissionRequest>(env);
+      // 去重:多 workspace 聚合订阅下,切换项目瞬间新旧两条连接可能并存,
+      // 同一请求会经两条连接各送达一次,弹窗与通知都只应出现一次。
+      if (s.permissionQueue.some((q) => q.tool_call_id === p.tool_call_id)) break;
       s.enqueuePermission(p);
       notifyPermissionRequest(p);
       break;
@@ -100,7 +103,10 @@ export function applyEvent(s: Store, env: EventEnvelope): void {
     }
     case 'question_batch_request': {
       const p = unwrap<Api.QuestionRequest>(env);
-      s.enqueueQuestionBatch(p);
+      // 去重:同上(聚合订阅切换瞬间的双连接竞态)
+      if (s.questionQueue.some((b) => b.id === p.id)) break;
+      // 记录来源 workspace:问题卡片可能跨项目展示,回答时按此路由
+      s.enqueueQuestionBatch(p, workspaceId);
       notifyQuestionRequest(p);
       break;
     }

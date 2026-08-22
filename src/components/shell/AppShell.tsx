@@ -22,6 +22,7 @@ import { McpView } from './McpView';
 import { LspView } from './LspView';
 import { ShortcutsView } from './ShortcutsView';
 import { AgentPanel } from '../agent/AgentPanel';
+import { WorkspaceEventsManager } from '../../hooks/useWorkspaceEvents';
 // xterm / CodeMirror / recharts 体量大,按需加载并各自独立成 chunk
 const TerminalPanel = lazy(() =>
   import('./TerminalPanel').then((m) => ({ default: m.TerminalPanel })),
@@ -355,6 +356,8 @@ function AppShellInner() {
         </div>
       </div>
       {workspaceId && <ModalQueue workspaceId={workspaceId} />}
+      {/* 全项目 SSE 事件聚合:后台项目的 question/权限/任务完成也要触发通知 */}
+      <WorkspaceEventsManager />
       <HelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
     </div>
   );

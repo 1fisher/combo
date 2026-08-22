@@ -1,9 +1,10 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { useEffect } from 'react';
+import { createElement, Fragment, useEffect } from 'react';
 import { applyEvent } from '../lib/events/dispatch';
 import { WorkspaceEventSource } from '../lib/events/sse';
 import { notifyRunComplete, runCompleteSummary } from '../lib/notify';
 import { useAgentStore } from '../stores/agentStore';
+import { useWorkspaces } from './useWorkspaces';
 
 /**
  * 会话事件负载:run 启动/结束时 serve 广播(含 SSE 订阅快照),
@@ -18,6 +19,15 @@ interface SessionEventPayload {
   cleared?: boolean;
 }
 
+/**
+ * 单个 workspace 的 SSE 订阅与事件处理。
+ *
+ * 由 {@link WorkspaceEventsManager} 对**每个**项目各挂一个(而非只订阅当前
+ * 活跃项目):后台项目的 question / 权限请求 / 任务完成同样能触发通知与
+ * 卡片(如自动化任务在其他项目里提问)。store 的全部状态都按 session_id
+ * 键控,跨 workspace 派发天然安全;切换项目瞬间新旧连接短暂并存产生的
+ * 重复帧由 dispatch 按 batch/tool_call id 与运行态守卫去重。
+ */
 export function useWorkspaceEvents(workspaceId: string | null) {
   const qc = useQueryClient();
   const setActiveWorkspace = useAgentStore((s) => s.setActiveWorkspace);
@@ -71,17 +81,47 @@ export function useWorkspaceEvents(workspaceId: string | null) {
           }
           return;
         }
-        applyEvent(st, env);
+        applyEvent(st, env, workspaceId);
         // run 结束后刷新会话列表(token/cost/is_busy 已更新)
         if (env.type === 'run_complete') {
           void qc.invalidateQueries({ queryKey: ['sessions', workspaceId] });
         }
       },
       {
-        onGone: () => setActiveWorkspace(null),
+        onGone: () => {
+          // 项目被删除(任何一端):刷新列表;若删的是当前选中项则清空选中态
+          void qc.invalidateQueries({ queryKey: ['workspaces'] });
+          if (useAgentStore.getState().activeWorkspaceId === workspaceId) {
+            setActiveWorkspace(null);
+          }
+        },
       }
     );
     source.start();
     return () => source.stop();
   }, [workspaceId, qc, setActiveWorkspace]);
+}
+
+/** 单项目订阅节点:manager 对列表中每个项目渲染一个,互不依赖。 */
+function WorkspaceEventsNode({ workspaceId }: { workspaceId: string }) {
+  useWorkspaceEvents(workspaceId);
+  return null;
+}
+
+/**
+ * 全量 workspace 事件聚合:对项目列表中的每个项目各维持一条 SSE 连接,
+ * 替代旧「仅当前活跃项目订阅」——后台项目(agent 运行/自动化任务)的
+ * 提问、权限请求、任务完成才能到达前端并触发通知。
+ * 项目增删经 `['workspaces']` 查询自动增减订阅;删除项目(404)时
+ * onGone 会 invalidate 列表,对应订阅随重渲染自动摘除。
+ */
+export function WorkspaceEventsManager() {
+  const { workspaces } = useWorkspaces();
+  return createElement(
+    Fragment,
+    null,
+    (workspaces ?? []).map((w) =>
+      createElement(WorkspaceEventsNode, { key: w.id, workspaceId: w.id })
+    )
+  );
 }

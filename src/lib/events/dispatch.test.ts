@@ -19,6 +19,7 @@ describe('applyEvent', () => {
       bySession: {},
       permissionQueue: [],
       questionQueue: [],
+      questionWorkspaces: {},
       todos: {},
     });
   });
@@ -120,7 +121,47 @@ describe('applyEvent', () => {
       type: 'question_batch_notification',
       payload: { type: 'updated', payload: { batch_id: 'q1' } },
     });
-    expect(useAgentStore.getState().questionQueue).toEqual([]);
+    const after = useAgentStore.getState();
+    expect(after.questionQueue).toEqual([]);
+    expect(after.questionWorkspaces['q1']).toBeUndefined();
+  });
+
+  it('question 批次去重(聚合订阅双连接竞态)并记录来源 workspace', () => {
+    const s = useAgentStore.getState();
+    const env = {
+      type: 'question_batch_request',
+      payload: {
+        type: 'created',
+        payload: { id: 'q9', session_id: 's9', tool_call_id: 'tc9', questions: [] },
+      },
+    } as Parameters<typeof applyEvent>[1];
+    // 同一批次经两条连接各送达一次(切换项目瞬间新旧订阅短暂并存)
+    applyEvent(s, env, 'w2');
+    applyEvent(useAgentStore.getState(), env, 'w2');
+    const after = useAgentStore.getState();
+    expect(after.questionQueue).toHaveLength(1);
+    expect(after.questionWorkspaces['q9']).toBe('w2');
+  });
+
+  it('permission 请求按 tool_call_id 去重', () => {
+    const s = useAgentStore.getState();
+    const env = {
+      type: 'permission_request',
+      payload: {
+        type: 'created',
+        payload: {
+          id: 'p9',
+          tool_call_id: 'tc9',
+          tool_name: 'bash',
+          description: 'run ls',
+          action: '',
+          path: '',
+        },
+      },
+    } as Parameters<typeof applyEvent>[1];
+    applyEvent(s, env, 'w1');
+    applyEvent(useAgentStore.getState(), env, 'w1');
+    expect(useAgentStore.getState().permissionQueue).toHaveLength(1);
   });
 
   it('sets and clears todos via todo_update events', () => {

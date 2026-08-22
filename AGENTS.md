@@ -363,6 +363,16 @@ crate;真实前端只经 `bundle.resources`(`{"../dist/": "dist/"}`)随包分发
   ignored (`run_complete` marks the run done, `message` upserts, permission/question
   types feed the modal queues). `useWorkspaceEvents` intercepts `session` events to
   invalidate the TanStack sessions query instead.
+- **全项目事件聚合订阅**(`useWorkspaceEvents.ts::WorkspaceEventsManager`,挂
+  AppShell):对项目列表中**每个**项目各维持一条 SSE 连接(替代旧「仅当前活跃项目
+  订阅」),后台项目(agent 运行/自动化任务)的 question/权限请求/任务完成才能到
+  达前端并触发通知与卡片。store 全部状态按 session_id 键控,跨 workspace 派发天然
+  安全;AgentPanel 不再自行订阅。question 批次入队时记录来源 workspace
+  (agentStore `questionWorkspaces`:batch_id → ws_id),问题卡片可能跨项目展示,
+  回答时 `answerQuestion(来源ws)` 按此路由;question/permission 事件在 dispatch
+  按 batch_id/tool_call_id 去重(切换项目瞬间新旧连接短暂并存会重复送达同一帧);
+  项目删除(404)时 onGone invalidate `['workspaces']` 并在删除的是选中项时清空
+  选中态。
 - **Run lifecycle:** `AgentPanel.doSend` generates a `runId` (UUID), optimistically
   inserts a user message with id `` `local-${runId}` `` (fake `created_at` via
   `Date.now()`), POSTs `/v1/workspaces/{id}/agent`, then marks the run `running`.
