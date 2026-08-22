@@ -1,6 +1,7 @@
 import { isTauri } from './connection';
 import { useUIPreferences } from '../stores/uiPreferencesStore';
 import { useAgentStore } from '../stores/agentStore';
+import { useNavStore } from '../stores/navStore';
 import { playNotifyAttention, playNotifyCancel, playNotifyDone, playNotifyError } from './sfx';
 import {
   pickVoicePhrase,
@@ -72,10 +73,15 @@ function windowFocused(): boolean {
 // 模块加载即订阅,避免首个交互事件早于异步订阅完成而踩回旧信号
 initNativeFocusTracking();
 
-/** 当前是否值得为该会话发交互通知:窗口未聚焦,或看的不是这个会话 */
+/**
+ * 当前是否值得为该会话发交互通知:窗口未聚焦、看的不是这个会话,
+ * 或当前主内容区不在会话视图(终端/编辑器/图谱等全页视图下 question
+ * 卡片被隐藏,用户根本看不见,必须提醒)。
+ */
 function sessionNeedsNotification(sessionId?: string | null): boolean {
   if (typeof document !== 'undefined' && !windowFocused()) return true;
   if (sessionId && sessionId !== useAgentStore.getState().activeSessionId) return true;
+  if (useNavStore.getState().view !== 'agent') return true;
   return false;
 }
 

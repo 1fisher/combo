@@ -7,6 +7,21 @@ import type { Api } from '../../lib/api/types';
 const base = { session_id: 's1', tool_call_id: 'tc1' } as const;
 
 describe('QuestionCard', () => {
+  it('yes_no 渲染为单选框(是/否),而非按钮', () => {
+    const batch: Api.QuestionRequest = {
+      ...base,
+      id: 'q7',
+      questions: [{ id: 'qq1', type: 'yes_no', question: '是否继续?' }],
+    };
+    render(<QuestionCard batch={batch} onResolve={() => {}} />);
+    const yes = screen.getByRole('radio', { name: '是' }) as HTMLInputElement;
+    const no = screen.getByRole('radio', { name: '否' }) as HTMLInputElement;
+    expect(yes.type).toBe('radio');
+    expect(no.type).toBe('radio');
+    expect(screen.queryByRole('button', { name: '是' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '否' })).toBeNull();
+  });
+
   it('从 yes_no / 单选 / 多选构造回答(未用「其他」时不携带 fill_in_text)', async () => {
     const batch: Api.QuestionRequest = {
       ...base,

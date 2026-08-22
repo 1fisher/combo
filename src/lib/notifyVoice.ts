@@ -101,8 +101,20 @@ export function speakNotifyVoice(text: string): void {
 async function speakStream(text: string, retry: boolean): Promise<void> {
   const ctx = getSharedAudioContext();
   if (!ctx) return;
+  // 挂起的上下文(切后台/休眠唤醒后)里排期的音频不会出声,源也永不结束,
+  // 会把串行播报队列堵死——先尝试在手势外 resume,仍挂起则放弃本次播报
+  // (队列不被阻塞,下次播报自然生效)。
+  if (ctx.state === 'suspended') {
+    try {
+      await ctx.resume();
+    } catch {
+      return;
+    }
+    if ((ctx.state as string) !== 'running') return;
+  }
   let nextAt = 0;
   const sources = new Set<AudioBufferSourceNode>();
+  let expected = 0;
   try {
     await streamSpeech(text, {
       test: true,
@@ -115,15 +127,19 @@ async function speakStream(text: string, retry: boolean): Promise<void> {
         const startAt = Math.max(ctx.currentTime + 0.03, nextAt);
         src.start(startAt);
         markAudioScheduled();
+        expected = startAt + buffer.duration - ctx.currentTime;
         nextAt = startAt + buffer.duration + (hard ? HARD_GAP_SEC : SOFT_GAP_SEC);
         sources.add(src);
         src.onended = () => sources.delete(src);
       },
     });
-    // 等最后一段播完,下一条播报才能开始(串行)
+    // 等最后一段播完,下一条播报才能开始(串行)。兜底超时:预期播放时长的
+    // 余量等待后强制放行——上下文中途被挂起时源不会触发 onended,无超时会
+    // 永久卡死播报队列,后续所有语音提示全部静默。
     await new Promise<void>((resolve) => {
+      const deadline = Date.now() + Math.max(expected * 1000 + 5_000, 10_000);
       const check = () => {
-        if (sources.size === 0) resolve();
+        if (sources.size === 0 || Date.now() > deadline) resolve();
         else setTimeout(check, 80);
       };
       check();

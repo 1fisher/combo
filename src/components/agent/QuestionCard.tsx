@@ -125,21 +125,27 @@ export function QuestionCard({
               </div>
               <div className="mt-1.5 flex flex-col gap-1 pl-4">
                 {kind === 'yes_no' && (
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant={sel[0] === 'yes' ? 'default' : 'outline'}
-                      onClick={() => setSelected((s) => ({ ...s, [q.id]: ['yes'] }))}
-                    >
-                      是
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant={sel[0] === 'no' ? 'default' : 'outline'}
-                      onClick={() => setSelected((s) => ({ ...s, [q.id]: ['no'] }))}
-                    >
-                      否
-                    </Button>
+                  <div className="flex flex-col gap-1">
+                    {(
+                      [
+                        { id: 'yes', label: '是' },
+                        { id: 'no', label: '否' },
+                      ] as const
+                    ).map((c) => {
+                      const on = sel[0] === c.id;
+                      return (
+                        <label key={c.id} className={choiceRow(on)}>
+                          <input
+                            type="radio"
+                            name={`q-${q.id}`}
+                            className="mt-0.5"
+                            checked={on}
+                            onChange={() => setSelected((s) => ({ ...s, [q.id]: [c.id] }))}
+                          />
+                          <span className="flex-1 font-medium leading-relaxed">{c.label}</span>
+                        </label>
+                      );
+                    })}
                   </div>
                 )}
                 {(kind === 'single' || kind === 'multi') && (
