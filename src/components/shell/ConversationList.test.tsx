@@ -69,11 +69,11 @@ function intersect(observer: FakeIntersectionObserver, isIntersecting: boolean) 
   });
 }
 
-function renderList() {
+function renderList(props: Parameters<typeof ConversationList>[0] = {}) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <ConversationList />
+      <ConversationList {...props} />
     </QueryClientProvider>,
   );
 }
@@ -196,6 +196,48 @@ describe('ConversationList', () => {
     // 空闲会话行不带标记
     const idleRow = screen.getByText('空闲会话').closest('div')!;
     expect(idleRow.getAttribute('title')).toBeNull();
+  });
+
+  it('query 按标题过滤(不区分大小写),无匹配显示提示', async () => {
+    sessions.length = 0;
+    sessions.push(
+      { id: 'q1', title: 'Fix Login Bug', created_at: 1_700_000_000 },
+      { id: 'q2', title: '重构首页', created_at: 1_700_000_100 },
+    );
+    useAgentStore.setState({ activeWorkspaceId: 'w1', activeSessionId: null });
+    // 命中一个(大小写不敏感)
+    const { rerender } = renderList({ query: 'login' });
+    expect(await screen.findByText('Fix Login Bug')).toBeTruthy();
+    expect(screen.queryByText('重构首页')).toBeNull();
+    // 无匹配 → 提示文案
+    rerender(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <ConversationList query="不存在的关键词" />
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText('没有匹配「不存在的关键词」的任务')).toBeTruthy();
+    sessions.length = 0;
+    sessions.push(
+      { id: 's1', title: '会话一', created_at: 1_700_000_000 },
+      { id: 's2', title: '会话二', created_at: 1_700_000_100 },
+    );
+  });
+
+  it('filter=busy 只显示运行中的任务', async () => {
+    sessions.length = 0;
+    sessions.push(
+      { id: 'f1', title: '运行中会话', created_at: 1_700_000_000, is_busy: true },
+      { id: 'f2', title: '空闲会话', created_at: 1_700_000_100 },
+    );
+    useAgentStore.setState({ activeWorkspaceId: 'w1', activeSessionId: null });
+    renderList({ filter: 'busy' });
+    expect(await screen.findByText('运行中会话')).toBeTruthy();
+    expect(screen.queryByText('空闲会话')).toBeNull();
+    sessions.length = 0;
+    sessions.push(
+      { id: 's1', title: '会话一', created_at: 1_700_000_000 },
+      { id: 's2', title: '会话二', created_at: 1_700_000_100 },
+    );
   });
 
   it('未读会话带角标与高亮,点开该会话后清除', async () => {
