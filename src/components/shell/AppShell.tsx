@@ -12,6 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import { connectLoop } from '../../lib/connection';
+import { ensureP2pConnected } from '../../lib/p2p/transport';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { useSpeechOutput } from '../../hooks/useSpeechOutput';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
@@ -60,6 +61,10 @@ const SIDEBAR_DEFAULT = 372;
 export function AppShell() {
   useEffect(() => {
     void connectLoop();
+    // 移动端连接屏流程:module 级 ensureP2pConnected 在无 token 时是 no-op,
+    // 连接成功挂载到工作台后这里再触发一次(幂等),以便经中转信令建立 WebRTC
+    // P2P 直连;失败静默回退中转。
+    void ensureP2pConnected();
   }, []);
 
   return (
